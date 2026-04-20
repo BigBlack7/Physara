@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <glad/glad.h>
@@ -8,6 +8,9 @@
 #include <imgui/ImGuizmo.h>
 #include <nlohmann/json.hpp>
 #include <tinygltf/tiny_gltf_v3.h>
+#include <stb/stb_image.h>
+#include <tinyexr/tinyexr_v3.hh>
+#include <spdlog/spdlog.h>
 
 int main()
 {
@@ -18,6 +21,13 @@ int main()
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
     nlohmann::json json;
+    auto stbloader = []()
+    {
+        stbi_set_flip_vertically_on_load(true);
+    };
+    spdlog::info("Hello, {}!", "world");
+    const std::vector<uint8_t> data(10, 0.f);
+    tinyexr::v3::load(data);
     std::cout << l[0][0] << std::endl;
     return 0;
 }

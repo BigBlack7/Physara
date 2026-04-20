@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(Physara)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Release)
@@ -7,9 +8,12 @@ set(CMAKE_BUILD_TYPE Release)
 # compiler options
 if(MSVC)
     add_compile_options(/MP)
+    add_compile_options(/utf-8)
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 endif()
+
+add_compile_definitions(ROOT_PATH="${CMAKE_SOURCE_DIR}/")
 
 # output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

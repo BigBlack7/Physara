@@ -53,3 +53,24 @@ add_library(tinygltf tinygltf/src/tinygltf/tinygltf_v3_impl.cpp)
 target_include_directories(tinygltf PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/tinygltf/src
 )
+
+# stb
+add_library(stb stb/src/stb/stb_impl.cpp)
+target_include_directories(stb PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/stb/src
+)
+
+# spdlog
+add_library(spdlog INTERFACE)
+target_include_directories(spdlog INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/spdlog/include
+)
+
+# tinyexr
+add_library(tinyexr STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/tinyexr_c_impl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/deps/miniz/miniz.c
+)
+target_include_directories(tinyexr PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src
+)
