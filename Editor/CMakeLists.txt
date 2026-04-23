@@ -6,7 +6,7 @@ file(GLOB_RECURSE EDITOR_SOURCES
 add_library(Editor STATIC ${EDITOR_SOURCES})
 
 target_include_directories(Editor PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
 target_link_libraries(Editor PUBLIC

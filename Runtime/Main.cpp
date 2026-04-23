@@ -1,33 +1,17 @@
-#include <iostream>
-#include <filesystem>
-#include <glm/glm.hpp>
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <entt/entt.hpp>
-#include <imgui/imgui.h>
-#include <imgui/ImGuizmo.h>
-#include <nlohmann/json.hpp>
-#include <tinygltf/tiny_gltf_v3.h>
-#include <stb/stb_image.h>
-#include <tinyexr/tinyexr_v3.hh>
-#include <spdlog/spdlog.h>
+#include <Engine/Core/Log.hpp>
 
 int main()
 {
-    glm::mat4 l(1.f);
-    entt::registry registry;
-    ImGui::CreateContext();
-    GLFWwindow *window = glfwCreateWindow(800, 600, "Hello World", nullptr, nullptr);
-    glfwMakeContextCurrent(window);
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-    nlohmann::json json;
-    auto stbloader = []()
-    {
-        stbi_set_flip_vertically_on_load(true);
-    };
-    spdlog::info("Hello, {}!", "world");
-    const std::vector<uint8_t> data(10, 0.f);
-    tinyexr::v3::load(data);
-    std::cout << l[0][0] << std::endl;
+    Physara::Engine::Log::Init();
+
+    PHYSARA_CORE_WARN("Renderer fallback to default material. id={}", 42);
+    PHYSARA_CORE_ERROR("Shader compile failed: {}", "pbr.frag");
+
+    PHYSARA_CORE_TRACE("Frame dt = {} ms", 16.67f);
+    PHYSARA_CORE_INFO("Selected entity id={}", 1001);
+
+    PHYSARA_CORE_FATAL("RHI init failed: {}", "OpenGL 4.6 unsupported");
+
+    Physara::Engine::Log::Shutdown();
     return 0;
 }

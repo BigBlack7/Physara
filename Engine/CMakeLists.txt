@@ -6,11 +6,12 @@ file(GLOB_RECURSE ENGINE_SOURCES
 add_library(Engine STATIC ${ENGINE_SOURCES})
 
 target_include_directories(Engine PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
+target_compile_definitions(Engine PUBLIC PHYSARA_DEBUG)
 
 target_link_libraries(Engine PUBLIC
-    Platform
+    # Platform
     glm
     entt
     spdlog
