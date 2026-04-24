@@ -10,6 +10,7 @@ target_include_directories(Platform PUBLIC
 )
 
 target_link_libraries(Platform PUBLIC
+    glm
     glad
     glfw3
 )
