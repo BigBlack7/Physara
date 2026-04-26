@@ -1,5 +1,8 @@
+#include <memory>
+
 #include <Engine/Core/Log.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
+#include <Platform/Window/GLFWWindowOpenGL.hpp>
 
 int main()
 {
@@ -8,32 +11,29 @@ int main()
     {
         Physara::Platform::FileSystem::Init(ASSETS_PATH);
 
-        if (!Physara::Platform::FileSystem::Exists("Icons"))
-        {
-            PHYSARA_CORE_ERROR("Icons directory does not exist under Assets.");
-        }
-        else if (!Physara::Platform::FileSystem::IsDirectory("Icons"))
-        {
-            PHYSARA_CORE_ERROR("Icons exists but is not a directory.");
-        }
-        else
-        {
-            const auto& list = Physara::Platform::FileSystem::ListDirectory("Icons");
-            PHYSARA_CORE_INFO("Icons entry count = {}", list.size());
+        std::unique_ptr<Physara::Platform::IWindow> window = std::make_unique<Physara::Platform::GLFWWindowOpenGL>();
+        window->Create("Physara", 1960, 1080);
+        window->SetResizeCallback([](int w, int h)
+                                 {
+                                     PHYSARA_CORE_INFO("Window resized: {} x {}", w, h);
+                                     // End
+                                 });
+        PHYSARA_CORE_INFO("Window created: {} x {}", window->GetWidth(), window->GetHeight());
 
-            if (!list.empty())
-            {
-                PHYSARA_CORE_INFO("First entry = {}", list.front());
-            }
-            else
-            {
-                PHYSARA_CORE_WARN("Icons directory is empty.");
-            }
+        while (!window->IsCloseRequested())
+        {
+            window->PollEvents();
+
+            // 当前阶段仅验证窗口生命周期与事件循环, 不做任何GL调用
+            // 等OpenGLDevice::Init(window.GetNativeHandle())接入后, 再在循环里执行SwapBuffers
+            window->SwapBuffers();
         }
+
+        window->Destroy();
     }
     catch (const std::exception &e)
     {
-        PHYSARA_CORE_ERROR("Exception: {}", e.what());
+        PHYSARA_CORE_ERROR("Fatal exception: {}", e.what());
     }
     Physara::Engine::Log::Shutdown();
     return 0;
