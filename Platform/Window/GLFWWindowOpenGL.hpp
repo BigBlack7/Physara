@@ -31,9 +31,9 @@ namespace Physara::Platform
         void *GetNativeHandle() const override;
 
     private:
-        GLFWwindow *m_window{nullptr};
-        int m_width{0};
-        int m_height{0};
-        ResizeCallback m_resizeCallback{nullptr};
+        GLFWwindow *m_Window{nullptr};
+        int m_Width{0};
+        int m_Height{0};
+        ResizeCallback m_ResizeCallback{nullptr};
     };
 }

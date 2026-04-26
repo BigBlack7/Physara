@@ -17,7 +17,7 @@ namespace Physara::Platform
 
     bool GLFWWindowOpenGL::Create(std::string_view title, int width, int height)
     {
-        if (m_window != nullptr)
+        if (m_Window != nullptr)
         {
             Destroy();
         }
@@ -32,18 +32,18 @@ namespace Physara::Platform
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-        m_window = glfwCreateWindow(width, height, std::string(title).c_str(), nullptr, nullptr);
-        if (m_window == nullptr)
+        m_Window = glfwCreateWindow(width, height, std::string(title).c_str(), nullptr, nullptr);
+        if (m_Window == nullptr)
         {
             glfwTerminate();
             throw std::runtime_error("GLFWWindowOpenGL::Create failed: glfwCreateWindow() returned null.");
         }
 
-        m_width = width;
-        m_height = height;
+        m_Width = width;
+        m_Height = height;
 
-        glfwSetWindowUserPointer(m_window, this);
-        glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow *window, int w, int h)
+        glfwSetWindowUserPointer(m_Window, this);
+        glfwSetFramebufferSizeCallback(m_Window, [](GLFWwindow *window, int w, int h)
                                        {
                                            auto *self = static_cast<GLFWWindowOpenGL *>(glfwGetWindowUserPointer(window));
                                            if (self == nullptr)
@@ -51,12 +51,12 @@ namespace Physara::Platform
                                                return;
                                            }
 
-                                           self->m_width = w;
-                                           self->m_height = h;
+                                           self->m_Width = w;
+                                           self->m_Height = h;
 
-                                           if (self->m_resizeCallback)
+                                           if (self->m_ResizeCallback)
                                            {
-                                               self->m_resizeCallback(w, h);
+                                               self->m_ResizeCallback(w, h);
                                            }
                                            // End
                                        });
@@ -69,13 +69,13 @@ namespace Physara::Platform
             int iconChannels = 0;
             unsigned char *pixels = stbi_load(iconPath.c_str(), &iconWidth, &iconHeight, &iconChannels, 4);
 
-            if(pixels != nullptr)
+            if (pixels != nullptr)
             {
                 GLFWimage icon{};
                 icon.width = iconWidth;
                 icon.height = iconHeight;
                 icon.pixels = pixels;
-                glfwSetWindowIcon(m_window, 1, &icon);
+                glfwSetWindowIcon(m_Window, 1, &icon);
                 stbi_image_free(pixels);
             }
         }
@@ -87,9 +87,9 @@ namespace Physara::Platform
             glfwGetMonitorWorkarea(monitor, &mx, &my, &mw, &mh);
 
             int ww = 0, wh = 0;
-            glfwGetWindowSize(m_window, &ww, &wh);
+            glfwGetWindowSize(m_Window, &ww, &wh);
 
-            glfwSetWindowPos(m_window, mx + (mw - ww) / 2, my + (mh - wh) / 2);
+            glfwSetWindowPos(m_Window, mx + (mw - ww) / 2, my + (mh - wh) / 2);
         }
 
         return true;
@@ -97,22 +97,22 @@ namespace Physara::Platform
 
     void GLFWWindowOpenGL::Destroy()
     {
-        if (m_window!=nullptr)
+        if (m_Window != nullptr)
         {
-            glfwDestroyWindow(m_window);
-            m_window = nullptr;
+            glfwDestroyWindow(m_Window);
+            m_Window = nullptr;
         }
 
         glfwTerminate();
 
-        m_width = 0;
-        m_height = 0;
-        m_resizeCallback = nullptr;
+        m_Width = 0;
+        m_Height = 0;
+        m_ResizeCallback = nullptr;
     }
 
     bool GLFWWindowOpenGL::IsCloseRequested() const
     {
-        return (m_window == nullptr) ? true : (glfwWindowShouldClose(m_window) != 0);
+        return (m_Window == nullptr) ? true : (glfwWindowShouldClose(m_Window) != 0);
     }
 
     void GLFWWindowOpenGL::PollEvents()
@@ -122,22 +122,22 @@ namespace Physara::Platform
 
     void GLFWWindowOpenGL::SwapBuffers()
     {
-        if (m_window == nullptr)
+        if (m_Window == nullptr)
         {
             throw std::runtime_error("GLFWWindowOpenGL::SwapBuffers failed: window is null.");
         }
 
-        glfwSwapBuffers(m_window);
+        glfwSwapBuffers(m_Window);
     }
 
     int GLFWWindowOpenGL::GetWidth() const
     {
-        return m_width;
+        return m_Width;
     }
 
     int GLFWWindowOpenGL::GetHeight() const
     {
-        return m_height;
+        return m_Height;
     }
 
     void GLFWWindowOpenGL::SetVSync(bool enabled)
@@ -147,21 +147,21 @@ namespace Physara::Platform
 
     void GLFWWindowOpenGL::SetTitle(std::string_view title)
     {
-        if (m_window == nullptr)
+        if (m_Window == nullptr)
         {
             throw std::runtime_error("GLFWWindowOpenGL::SetTitle failed: window is null.");
         }
 
-        glfwSetWindowTitle(m_window, std::string(title).c_str());
+        glfwSetWindowTitle(m_Window, std::string(title).c_str());
     }
 
     void GLFWWindowOpenGL::SetResizeCallback(ResizeCallback callback)
     {
-        m_resizeCallback = std::move(callback);
+        m_ResizeCallback = std::move(callback);
     }
 
     void *GLFWWindowOpenGL::GetNativeHandle() const
     {
-        return m_window;
+        return m_Window;
     }
 }
