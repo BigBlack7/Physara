@@ -11,6 +11,7 @@ namespace Physara::Platform
 namespace Physara::RHI
 {
     class RHIDevice;
+    class IImGuiBackend;
 }
 
 namespace Physara::Engine
@@ -23,7 +24,7 @@ namespace Physara::Engine
         Application() = default;
         ~Application() = default;
 
-        void Init(Platform::IWindow *window, Platform::IInput *input, RHI::RHIDevice *device);
+        void Init(Platform::IWindow *window, Platform::IInput *input, RHI::RHIDevice *device, RHI::IImGuiBackend *imguiBackend);
         void Run();
         void PushLayer(Layer *layer);
         void Shutdown();
@@ -32,6 +33,7 @@ namespace Physara::Engine
         Platform::IWindow *m_Window{nullptr};
         Platform::IInput *m_Input{nullptr};
         RHI::RHIDevice *m_Device{nullptr};
+        RHI::IImGuiBackend *m_ImGuiBackend{nullptr};
 
         LayerStack m_LayerStack{};
 

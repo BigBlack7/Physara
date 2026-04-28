@@ -9,7 +9,4 @@ target_include_directories(Backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
-target_link_libraries(Backend PUBLIC
-    Engine
-    glad
-)
+target_link_libraries(Backend PUBLIC glad Engine)

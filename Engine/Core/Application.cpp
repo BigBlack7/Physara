@@ -5,12 +5,13 @@
 #include <Engine/Core/Layer.hpp>
 #include <Engine/Core/Log.hpp>
 #include <Engine/Core/Time.hpp>
+#include <Engine/RHI/Core/IImGuiBackend.hpp>
 #include <Platform/Input/IInput.hpp>
 #include <Platform/Window/IWindow.hpp>
 
 namespace Physara::Engine
 {
-    void Application::Init(Platform::IWindow *window, Platform::IInput *input, RHI::RHIDevice *device)
+    void Application::Init(Platform::IWindow *window, Platform::IInput *input, RHI::RHIDevice *device, RHI::IImGuiBackend *imguiBackend)
     {
         if (m_Initialized)
         {
@@ -27,10 +28,15 @@ namespace Physara::Engine
         m_Window = window;
         m_Input = input;
         m_Device = device;
+        m_ImGuiBackend = imguiBackend;
 
         if (m_Device == nullptr)
         {
             PHYSARA_CORE_WARN("Application initialized without RHIDevice. UI backend calls are skipped.");
+        }
+        if (m_ImGuiBackend == nullptr)
+        {
+            PHYSARA_CORE_WARN("Application initialized without ImGui backend. UI calls are skipped.");
         }
 
         m_Initialized = true;
@@ -68,11 +74,15 @@ namespace Physara::Engine
                 }
             }
 
-            // 5) Device::BeginImGuiFrame + ImplGlfw::NewFrame
-            // TODO: RHIDevice 接口落地后在这里调用BeginImGuiFrame/ImplGlfw::NewFrame
+            // 5) ImGui backend begin frame (platform + renderer)
+            // TODO: IImGuiBackend实现后在这里调用BeginFrame()
             if (m_Device != nullptr)
             {
                 // Reserved call site
+            }
+            if (m_ImGuiBackend != nullptr)
+            {
+                m_ImGuiBackend->BeginFrame();
             }
 
             // 6) LayerStack::OnUIRender
@@ -85,11 +95,16 @@ namespace Physara::Engine
                 }
             }
 
-            // 7) Device::EndImGuiFrame
-            // TODO: RHIDevice 接口落地后在这里调用EndImGuiFrame
+            // 7) ImGui backend end frame + render draw data
+            // TODO: IImGuiBackend实现后在这里调用EndFrame()/RenderDrawData()
             if (m_Device != nullptr)
             {
                 // Reserved call site
+            }
+            if (m_ImGuiBackend != nullptr)
+            {
+                m_ImGuiBackend->EndFrame();
+                m_ImGuiBackend->RenderDrawData();
             }
 
             // 8) Window::SwapBuffers
@@ -129,6 +144,7 @@ namespace Physara::Engine
         m_Initialized = false;
 
         m_Device = nullptr;
+        m_ImGuiBackend = nullptr;
         m_Input = nullptr;
         m_Window = nullptr;
     }

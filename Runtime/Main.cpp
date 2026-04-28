@@ -44,9 +44,10 @@ int main()
 
         // TODO: RHIDevice接口与OpenGLDevice实现后在这里创建真实device
         Physara::RHI::RHIDevice *device = nullptr;
+        Physara::RHI::IImGuiBackend *backend = nullptr;
 
         Physara::Engine::Application app;
-        app.Init(window.get(), &input, device);
+        app.Init(window.get(), &input, device, nullptr);
 
         std::unique_ptr<Physara::Engine::Layer> editorLayer = std::make_unique<TODO::EditorLayerStub>();
         app.PushLayer(editorLayer.get());

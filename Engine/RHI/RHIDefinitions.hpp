@@ -32,6 +32,8 @@ namespace Physara::RHI
         RGBA32F,
         RG16F,
         R8,
+        BC6H_UF16,
+        BC7_UNORM,
         Depth24Stencil8,
         Depth32F
     };
