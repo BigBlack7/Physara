@@ -10,6 +10,8 @@
 
 namespace Physara::Platform
 {
+    struct GLFWWindowContext;
+
     class GLFWInput final : public IInput
     {
     public:
@@ -40,6 +42,7 @@ namespace Physara::Platform
 
     private:
         GLFWwindow *m_Window{nullptr};
+        GLFWWindowContext *m_Context{nullptr};
         CursorMode m_CursorMode{CursorMode::Normal};
 
         std::array<bool, kKeyCount> m_CurrentKeys{};

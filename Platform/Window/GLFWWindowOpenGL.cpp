@@ -42,15 +42,19 @@ namespace Physara::Platform
         m_Width = width;
         m_Height = height;
 
-        glfwSetWindowUserPointer(m_Window, this);
+        m_Context.Window = this;
+        m_Context.Input = nullptr;
+
+        glfwSetWindowUserPointer(m_Window, &m_Context);
         glfwSetFramebufferSizeCallback(m_Window, [](GLFWwindow *window, int w, int h)
                                        {
-                                           auto *self = static_cast<GLFWWindowOpenGL *>(glfwGetWindowUserPointer(window));
-                                           if (self == nullptr)
+                                           auto *ctx = static_cast<GLFWWindowContext *>(glfwGetWindowUserPointer(window));
+                                           if (ctx == nullptr || ctx->Window == nullptr)
                                            {
                                                return;
                                            }
 
+                                           auto *self = ctx->Window;
                                            self->m_Width = w;
                                            self->m_Height = h;
 

@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include <Platform/Window/IWindow.hpp>
+#include <Platform/Window/GLFWWindowContext.hpp>
 
 struct GLFWwindow;
 
@@ -32,6 +33,7 @@ namespace Physara::Platform
 
     private:
         GLFWwindow *m_Window{nullptr};
+        GLFWWindowContext m_Context{};
         int m_Width{0};
         int m_Height{0};
         ResizeCallback m_ResizeCallback{nullptr};
