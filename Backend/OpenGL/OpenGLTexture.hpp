@@ -23,7 +23,7 @@ namespace Physara::RHI
         TextureDimension GetDimension() const override;
         TextureUsageFlags GetUsage() const override;
 
-        GLuint GetGLID()const { return m_ID; }
+        GLuint GetGLID() const { return m_ID; }
         GLenum GetGLTarget() const { return m_Target; }
 
         void Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize);
