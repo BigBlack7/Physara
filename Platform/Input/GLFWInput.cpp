@@ -19,7 +19,7 @@ namespace Physara::Platform
             throw std::invalid_argument("GLFWInput requires a valid GLFWWindowContext.");
         }
 
-        m_Context->Input = this;
+        m_Context->input = this;
         m_PreviousScrollCallback = glfwSetScrollCallback(m_Window, &GLFWInput::ScrollCallback); // 鼠标滚轮回调
 
         // 获取初始鼠标位置
@@ -35,9 +35,9 @@ namespace Physara::Platform
         {
             glfwSetScrollCallback(m_Window, m_PreviousScrollCallback);
         }
-        if (m_Context && m_Context->Input == this)
+        if (m_Context && m_Context->input == this)
         {
-            m_Context->Input = nullptr;
+            m_Context->input = nullptr;
         }
     }
 
@@ -191,12 +191,12 @@ namespace Physara::Platform
         }
 
         auto *ctx = static_cast<GLFWWindowContext *>(glfwGetWindowUserPointer(window));
-        if (ctx == nullptr || ctx->Input == nullptr)
+        if (ctx == nullptr || ctx->input == nullptr)
         {
             return;
         }
 
-        auto *self = ctx->Input;
+        auto *self = ctx->input;
         self->m_ScrollDelta += static_cast<float>(yOffset);
 
         // 如果外部之前设置过callback, 这里继续链式调用, 避免吞掉别人的逻辑

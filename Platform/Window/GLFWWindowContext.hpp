@@ -7,7 +7,7 @@ namespace Physara::Platform
 
     struct GLFWWindowContext
     {
-        GLFWWindowOpenGL *Window{nullptr};
-        GLFWInput *Input{nullptr};
+        GLFWWindowOpenGL *window{nullptr};
+        GLFWInput *input{nullptr};
     };
 }
