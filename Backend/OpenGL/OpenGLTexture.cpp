@@ -14,6 +14,7 @@ namespace Physara::RHI
         assert(m_Desc.mipLevels > 0);
         assert(m_Desc.samples == 1 && "MSAA textures are not supported yet."); // MSAA纹理暂不支持
 
+        // 确定纹理目标类型
         if (m_Desc.dimension == TextureDimension::Tex2D)
         {
             m_Target = GL_TEXTURE_2D;
@@ -35,11 +36,11 @@ namespace Physara::RHI
         }
 
         glCreateTextures(m_Target, 1, &m_ID);
-
         const auto fmt = ToGLTextureFormat(m_Desc.format);
 
         if (m_Target == GL_TEXTURE_2D || m_Target == GL_TEXTURE_CUBE_MAP)
         {
+            // 不可变存储: 一次声明所有mip级别, 内存布局固定, 驱动优化更好
             glTextureStorage2D(
                 m_ID,
                 static_cast<GLsizei>(m_Desc.mipLevels),
@@ -111,6 +112,7 @@ namespace Physara::RHI
         const auto fmt = ToGLTextureFormat(m_Desc.format);
         const bool compressed = IsCompressedTextureFormat(m_Desc.format);
 
+        // 根据mipmap层级计算对应的宽度和高度
         const std::uint32_t w = std::max(1u, m_Desc.width >> mip);
         const std::uint32_t h = std::max(1u, m_Desc.height >> mip);
 
@@ -121,7 +123,7 @@ namespace Physara::RHI
             if (compressed)
             {
                 assert(dataSize > 0);
-                glCompressedTextureSubImage2D(
+                glCompressedTextureSubImage2D( // 上传压缩纹理数据到2D纹理
                     m_ID,
                     static_cast<GLint>(mip),
                     0, 0,
@@ -133,7 +135,7 @@ namespace Physara::RHI
             }
             else
             {
-                glTextureSubImage2D(
+                glTextureSubImage2D( // 更新2D纹理的指定区域
                     m_ID,
                     static_cast<GLint>(mip),
                     0, 0,
