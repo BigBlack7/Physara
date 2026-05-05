@@ -90,9 +90,9 @@ namespace Physara::RHI
             GLenum indexType = GL_UNSIGNED_INT;
         };
 
-        GLState m_state{};
-        const RHIRenderPassDesc *m_currentPassDesc{nullptr};
-        const RHIPipelineStateDesc *m_currentPipelineDesc{nullptr};
+        GLState m_State{};
+        const RHIRenderPassDesc *m_CurrentPassDesc{nullptr};
+        const RHIPipelineStateDesc *m_CurrentPipelineDesc{nullptr};
 
         GLuint m_PushConstantsBuffer{0};
     };

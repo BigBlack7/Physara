@@ -79,27 +79,27 @@ namespace Physara::RHI
             return;
         }
 
-        if (m_state.program != gl->GetProgram())
+        if (m_State.program != gl->GetProgram())
         {
             glUseProgram(gl->GetProgram());
-            m_state.program = gl->GetProgram();
+            m_State.program = gl->GetProgram();
         }
 
-        if (!gl->IsCompute() && m_state.vao != gl->GetVAO())
+        if (!gl->IsCompute() && m_State.vao != gl->GetVAO())
         {
             glBindVertexArray(gl->GetVAO());
-            m_state.vao = gl->GetVAO();
+            m_State.vao = gl->GetVAO();
         }
 
         const auto &desc = gl->GetDesc();
-        m_currentPipelineDesc = &desc;
+        m_CurrentPipelineDesc = &desc;
 
         if (gl->IsCompute())
         {
             return;
         }
 
-        if (m_state.cullMode != desc.rasterizerState.cullMode)
+        if (m_State.cullMode != desc.rasterizerState.cullMode)
         {
             if (desc.rasterizerState.cullMode == CullMode::None)
             {
@@ -110,17 +110,17 @@ namespace Physara::RHI
                 glEnable(GL_CULL_FACE);
                 glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
             }
-            m_state.cullMode = desc.rasterizerState.cullMode;
+            m_State.cullMode = desc.rasterizerState.cullMode;
         }
 
-        if (m_state.polygonMode != desc.rasterizerState.polygonMode)
+        if (m_State.polygonMode != desc.rasterizerState.polygonMode)
         {
             glPolygonMode(GL_FRONT_AND_BACK, ToGLPolygonMode(desc.rasterizerState.polygonMode));
-            m_state.polygonMode = desc.rasterizerState.polygonMode;
+            m_State.polygonMode = desc.rasterizerState.polygonMode;
         }
 
-        if (m_state.depthBias != desc.rasterizerState.depthBias ||
-            m_state.depthBiasSlope != desc.rasterizerState.depthBiasSlope)
+        if (m_State.depthBias != desc.rasterizerState.depthBias ||
+            m_State.depthBiasSlope != desc.rasterizerState.depthBiasSlope)
         {
             if (desc.rasterizerState.depthBias != 0.0f || desc.rasterizerState.depthBiasSlope != 0.0f)
             {
@@ -131,11 +131,11 @@ namespace Physara::RHI
             {
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
-            m_state.depthBias = desc.rasterizerState.depthBias;
-            m_state.depthBiasSlope = desc.rasterizerState.depthBiasSlope;
+            m_State.depthBias = desc.rasterizerState.depthBias;
+            m_State.depthBiasSlope = desc.rasterizerState.depthBiasSlope;
         }
 
-        if (m_state.depthTest != desc.depthStencilState.depthTest)
+        if (m_State.depthTest != desc.depthStencilState.depthTest)
         {
             if (desc.depthStencilState.depthTest)
             {
@@ -145,19 +145,19 @@ namespace Physara::RHI
             {
                 glDisable(GL_DEPTH_TEST);
             }
-            m_state.depthTest = desc.depthStencilState.depthTest;
+            m_State.depthTest = desc.depthStencilState.depthTest;
         }
 
-        if (m_state.depthWrite != desc.depthStencilState.depthWrite)
+        if (m_State.depthWrite != desc.depthStencilState.depthWrite)
         {
             glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
-            m_state.depthWrite = desc.depthStencilState.depthWrite;
+            m_State.depthWrite = desc.depthStencilState.depthWrite;
         }
 
-        if (m_state.depthFunc != desc.depthStencilState.compareOp)
+        if (m_State.depthFunc != desc.depthStencilState.compareOp)
         {
             glDepthFunc(ToGLDepthFunc(desc.depthStencilState.compareOp));
-            m_state.depthFunc = desc.depthStencilState.compareOp;
+            m_State.depthFunc = desc.depthStencilState.compareOp;
         }
 
         for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
@@ -168,7 +168,7 @@ namespace Physara::RHI
                 target = desc.blendStates[i];
             }
 
-            if (!Internal::BlendStateEqual(m_state.blendStates[i], target))
+            if (!Internal::BlendStateEqual(m_State.blendStates[i], target))
             {
                 if (target.blendEnable)
                 {
@@ -189,16 +189,16 @@ namespace Physara::RHI
                     glDisablei(GL_BLEND, i);
                 }
 
-                m_state.blendStates[i] = target;
+                m_State.blendStates[i] = target;
             }
         }
 
-        m_state.topology = ToGLTopology(desc.topology);
+        m_State.topology = ToGLTopology(desc.topology);
     }
 
     void OpenGLCommandList::SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset)
     {
-        if (m_state.vao == 0)
+        if (m_State.vao == 0)
         {
             PHYSARA_CORE_ERROR("SetVertexBuffer called without a bound VAO.");
             return;
@@ -212,9 +212,9 @@ namespace Physara::RHI
         }
 
         std::uint32_t stride = 0;
-        if (m_currentPipelineDesc)
+        if (m_CurrentPipelineDesc)
         {
-            for (const auto &b : m_currentPipelineDesc->vertexBindings)
+            for (const auto &b : m_CurrentPipelineDesc->vertexBindings)
             {
                 if (b.binding == binding)
                 {
@@ -225,7 +225,7 @@ namespace Physara::RHI
         }
 
         glVertexArrayVertexBuffer(
-            m_state.vao,
+            m_State.vao,
             binding,
             id,
             static_cast<GLintptr>(offset),
@@ -234,7 +234,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset)
     {
-        if (m_state.vao == 0)
+        if (m_State.vao == 0)
         {
             PHYSARA_CORE_ERROR("SetIndexBuffer called without a bound VAO.");
             return;
@@ -247,9 +247,9 @@ namespace Physara::RHI
             id = glBuffer->GetGLID();
         }
 
-        glVertexArrayElementBuffer(m_state.vao, id);
-        m_state.indexOffset = offset;
-        m_state.indexType = GL_UNSIGNED_INT;
+        glVertexArrayElementBuffer(m_State.vao, id);
+        m_State.indexOffset = offset;
+        m_State.indexType = GL_UNSIGNED_INT;
     }
 
     void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer)
@@ -359,13 +359,13 @@ namespace Physara::RHI
             fboID = glFbo->GetID();
         }
 
-        if (m_state.framebuffer != fboID)
+        if (m_State.framebuffer != fboID)
         {
             glBindFramebuffer(GL_FRAMEBUFFER, fboID);
-            m_state.framebuffer = fboID;
+            m_State.framebuffer = fboID;
         }
 
-        m_currentPassDesc = &desc;
+        m_CurrentPassDesc = &desc;
 
         const std::uint32_t colorCount = static_cast<std::uint32_t>(desc.colorAttachments.size());
         for (std::uint32_t i = 0; i < colorCount; ++i)
@@ -420,28 +420,28 @@ namespace Physara::RHI
 
     void OpenGLCommandList::EndRenderPass()
     {
-        if (!m_currentPassDesc)
+        if (!m_CurrentPassDesc)
         {
             return;
         }
 
-        if (m_state.framebuffer != 0)
+        if (m_State.framebuffer != 0)
         {
             std::vector<GLenum> attachments;
 
-            const std::uint32_t colorCount = static_cast<std::uint32_t>(m_currentPassDesc->colorAttachments.size());
+            const std::uint32_t colorCount = static_cast<std::uint32_t>(m_CurrentPassDesc->colorAttachments.size());
             for (std::uint32_t i = 0; i < colorCount; ++i)
             {
-                if (m_currentPassDesc->colorAttachments[i].storeOp == StoreOp::DontCare)
+                if (m_CurrentPassDesc->colorAttachments[i].storeOp == StoreOp::DontCare)
                 {
                     attachments.push_back(ToGLAttachmentPoint(i));
                 }
             }
 
-            if (m_currentPassDesc->hasDepth && m_currentPassDesc->depthAttachment.storeOp == StoreOp::DontCare)
+            if (m_CurrentPassDesc->hasDepth && m_CurrentPassDesc->depthAttachment.storeOp == StoreOp::DontCare)
             {
                 attachments.push_back(
-                    Internal::IsDepthStencilFormat(m_currentPassDesc->depthAttachment.format)
+                    Internal::IsDepthStencilFormat(m_CurrentPassDesc->depthAttachment.format)
                         ? GL_DEPTH_STENCIL_ATTACHMENT
                         : GL_DEPTH_ATTACHMENT);
             }
@@ -449,13 +449,13 @@ namespace Physara::RHI
             if (!attachments.empty())
             {
                 glInvalidateNamedFramebufferData(
-                    m_state.framebuffer,
+                    m_State.framebuffer,
                     static_cast<GLsizei>(attachments.size()),
                     attachments.data());
             }
         }
 
-        m_currentPassDesc = nullptr;
+        m_CurrentPassDesc = nullptr;
     }
 
     void OpenGLCommandList::DrawIndexed(
@@ -465,15 +465,15 @@ namespace Physara::RHI
         std::int32_t vertexOffset,
         std::uint32_t firstInstance)
     {
-        const std::uint32_t indexStride = Internal::GetIndexStride(m_state.indexType);
+        const std::uint32_t indexStride = Internal::GetIndexStride(m_State.indexType);
         const std::uintptr_t offset =
-            static_cast<std::uintptr_t>(m_state.indexOffset) +
+            static_cast<std::uintptr_t>(m_State.indexOffset) +
             static_cast<std::uintptr_t>(firstIndex) * indexStride;
 
         glDrawElementsInstancedBaseVertexBaseInstance(
-            m_state.topology,
+            m_State.topology,
             static_cast<GLsizei>(indexCount),
-            m_state.indexType,
+            m_State.indexType,
             reinterpret_cast<const void *>(offset),
             static_cast<GLsizei>(instanceCount),
             vertexOffset,
@@ -487,7 +487,7 @@ namespace Physara::RHI
         std::uint32_t firstInstance)
     {
         glDrawArraysInstancedBaseInstance(
-            m_state.topology,
+            m_State.topology,
             static_cast<GLint>(firstVertex),
             static_cast<GLsizei>(vertexCount),
             static_cast<GLsizei>(instanceCount),
@@ -508,15 +508,15 @@ namespace Physara::RHI
             return;
         }
 
-        if (m_state.indexOffset != 0)
+        if (m_State.indexOffset != 0)
         {
             PHYSARA_CORE_WARN("DrawIndexedIndirect ignores indexOffset for now.");
         }
 
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, glBuffer->GetGLID());
         glMultiDrawElementsIndirect(
-            m_state.topology,
-            m_state.indexType,
+            m_State.topology,
+            m_State.indexType,
             nullptr,
             static_cast<GLsizei>(drawCount),
             static_cast<GLsizei>(stride));
