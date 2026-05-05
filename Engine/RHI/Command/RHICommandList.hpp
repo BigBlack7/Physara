@@ -66,6 +66,12 @@ namespace Physara::RHI
             std::int32_t vertexOffset = 0,
             std::uint32_t firstInstance = 0) = 0;
 
+        // MDI(Multi-Draw Indirect)
+        virtual void DrawIndexedIndirect(
+            RHIBuffer *indirectBuffer,
+            std::uint32_t drawCount,
+            std::uint32_t stride = sizeof(std::uint32_t) * 5) = 0;
+
         // 顺序绘制(支持实例起始偏移)
         virtual void Draw(
             std::uint32_t vertexCount,
