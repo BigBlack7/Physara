@@ -18,7 +18,7 @@ namespace Physara::RHI
         std::uint32_t width = 0;
         std::uint32_t height = 0;
 
-        std::uint32_t mipLevel = 0; // 绑定特定mip层(IBL 预计算等)
+        std::uint32_t mipLevel = 0; // 绑定特定mip层(IBL预计算等)
 
         // Vulkan创建Framebuffer时需要兼容的RenderPass描述
         const RHIRenderPassDesc *renderPassDesc = nullptr;

@@ -14,7 +14,7 @@ namespace Physara::RHI
     {
         std::uint32_t location = 0; // shader location
         std::uint32_t binding = 0;  // 对应哪个顶点流绑定点
-        TextureFormat format = TextureFormat::RGBA32F;
+        VertexFormat format = VertexFormat::RGBA32F;
         std::uint32_t offset = 0; // 顶点结构体内字节偏移
     };
 

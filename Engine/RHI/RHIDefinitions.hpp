@@ -25,6 +25,15 @@ namespace Physara::RHI
         constexpr BufferUsageFlags Storage = 1u << 3; // 存储缓冲
     }
 
+    enum class VertexFormat : std::uint8_t
+    {
+        RGBA32F = 0,
+        RGBA16F,
+        RG16F,
+        RGBA8,
+        R8
+    };
+
     enum class TextureFormat : std::uint8_t
     {
         RGBA8 = 0,
