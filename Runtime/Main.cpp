@@ -1,6 +1,8 @@
 #include <memory>
 #include <stdexcept>
 
+#include <Backend/OpenGL/OpenGLDevice.hpp>
+#include <Backend/OpenGL/OpenGLImGuiBackend.hpp>
 #include <Engine/Core/Application.hpp>
 #include <Engine/Core/Layer.hpp>
 #include <Engine/Core/Log.hpp>
@@ -42,12 +44,20 @@ int main()
 
         Physara::Platform::GLFWInput input(nativeWindow);
 
-        // TODO: RHIDevice接口与OpenGLDevice实现后在这里创建真实device
-        Physara::RHI::RHIDevice *device = nullptr;
-        Physara::RHI::IImGuiBackend *backend = nullptr;
+        auto device = std::make_unique<Physara::RHI::OpenGLDevice>();
+        if (!device->Init(nativeWindow))
+        {
+            throw std::runtime_error("Failed to initialize OpenGL device.");
+        }
+
+        auto imguiBackend = std::make_unique<Physara::RHI::OpenGLImGuiBackend>();
+        if (!imguiBackend->Initialize(device.get(), nativeWindow))
+        {
+            throw std::runtime_error("Failed to initialize OpenGL ImGui backend.");
+        }
 
         Physara::Engine::Application app;
-        app.Init(window.get(), &input, device, nullptr);
+        app.Init(window.get(), &input, device.get(), imguiBackend.get());
 
         std::unique_ptr<Physara::Engine::Layer> editorLayer = std::make_unique<TODO::EditorLayerStub>();
         app.PushLayer(editorLayer.get());
@@ -55,6 +65,8 @@ int main()
         app.Run();
         app.Shutdown();
 
+        imguiBackend->Shutdown();
+        device->Shutdown();
         window->Destroy();
     }
     catch (const std::exception &e)

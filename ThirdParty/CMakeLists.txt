@@ -27,6 +27,7 @@ target_include_directories(entt INTERFACE
 add_library(imgui STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui_draw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui_demo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui_widgets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src/imgui/imgui_impl_glfw.cpp
@@ -40,6 +41,9 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/imgui/src
 )
+if(MSVC)
+    target_compile_options(imgui PRIVATE /MP1 /bigobj)
+endif()
 target_link_libraries(imgui PRIVATE glfw3 glad)
 
 # nlohmann json

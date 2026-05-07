@@ -15,6 +15,9 @@
 
 namespace Physara::RHI
 {
+    OpenGLDevice::OpenGLDevice() = default;
+    OpenGLDevice::~OpenGLDevice() = default;
+
     namespace Internal
     {
         static void APIENTRY GLDebugCallback(
@@ -77,7 +80,7 @@ namespace Physara::RHI
         m_CommandList = std::make_unique<OpenGLCommandList>();
 
 #if defined(PHYSARA_DEBUG)
-        if (GLAD_GL_KHR_debug)
+        if (GLAD_GL_VERSION_4_3 && glDebugMessageCallback != nullptr)
         {
             glEnable(GL_DEBUG_OUTPUT);
             glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);

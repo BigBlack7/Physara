@@ -11,8 +11,8 @@ namespace Physara::RHI
     class OpenGLDevice final : public RHIDevice
     {
     public:
-        OpenGLDevice() = default;
-        ~OpenGLDevice() override = default;
+        OpenGLDevice();
+        ~OpenGLDevice() override;
 
         bool Init(void *windowHandle) override;
         void Shutdown() override;

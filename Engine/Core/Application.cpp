@@ -8,6 +8,7 @@
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 #include <Platform/Input/IInput.hpp>
 #include <Platform/Window/IWindow.hpp>
+#include <imgui/imgui.h>
 
 namespace Physara::Engine
 {
@@ -83,6 +84,7 @@ namespace Physara::Engine
             if (m_ImGuiBackend != nullptr)
             {
                 m_ImGuiBackend->BeginFrame();
+                ImGui::NewFrame();
             }
 
             // 6) LayerStack::OnUIRender

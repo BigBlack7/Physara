@@ -14,6 +14,7 @@ target_link_libraries(Engine PUBLIC
     Platform
     entt
     spdlog
+    imgui
     nlohmann
     tinygltf
     tinyexr
