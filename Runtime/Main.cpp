@@ -3,20 +3,13 @@
 
 #include <Backend/OpenGL/OpenGLDevice.hpp>
 #include <Backend/OpenGL/OpenGLImGuiBackend.hpp>
+#include <Editor/Core/EditorLayer.hpp>
 #include <Engine/Core/Application.hpp>
 #include <Engine/Core/Layer.hpp>
 #include <Engine/Core/Log.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 #include <Platform/Input/GLFWInput.hpp>
 #include <Platform/Window/GLFWWindowOpenGL.hpp>
-
-namespace TODO
-{
-    // TODO: 替换为EditorLayer, 如Physara::Editor::EditorLayer
-    class EditorLayerStub final : public Physara::Engine::Layer
-    {
-    };
-}
 
 int main()
 {
@@ -57,9 +50,10 @@ int main()
         }
 
         Physara::Engine::Application app;
-        app.Init(window.get(), &input, device.get(), imguiBackend.get());
+        app.Init(window.get(), &input, device.get(), nullptr);
 
-        std::unique_ptr<Physara::Engine::Layer> editorLayer = std::make_unique<TODO::EditorLayerStub>();
+        std::unique_ptr<Physara::Engine::Layer> editorLayer =
+            std::make_unique<Physara::Editor::EditorLayer>(imguiBackend.get());
         app.PushLayer(editorLayer.get());
 
         app.Run();

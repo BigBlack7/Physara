@@ -15,5 +15,9 @@ namespace Physara::RHI
         void EndFrame() override;
         void RenderDrawData() override;
         void Shutdown() override;
+
+    private:
+        bool m_Initialized{false};
+        bool m_OwnsContext{false};
     };
 }
