@@ -58,6 +58,13 @@ namespace Physara::RHI
                 static_cast<GLsizei>(m_Desc.height),
                 static_cast<GLsizei>(m_Desc.arrayLayers));
         }
+
+        if (m_Desc.initialData != nullptr)
+        {
+            assert(!IsCompressedTextureFormat(m_Desc.format) &&
+                   "Compressed initialData requires an explicit byte size; call Upload() instead.");
+            Upload(0, 0, m_Desc.initialData, 0);
+        }
     }
 
     OpenGLTexture::~OpenGLTexture()

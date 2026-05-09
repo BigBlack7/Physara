@@ -26,8 +26,10 @@ namespace Physara::RHI
 
         RHICommandList *GetCommandList() override;
         void SubmitCommandList() override;
+        void WaitIdle() override;
 
         int GetMaxAnisotropy() const override { return m_MaxAnisotropy; }
+        const char *GetBackendName() const override { return "OpenGL 4.6"; }
 
     private:
         std::unique_ptr<OpenGLCommandList> m_CommandList{};

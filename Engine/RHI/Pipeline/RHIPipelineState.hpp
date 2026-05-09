@@ -22,6 +22,7 @@ namespace Physara::RHI
     {
         std::uint32_t binding = 0;
         std::uint32_t stride = 0; // 单顶点字节跨度
+        std::uint32_t instanceDivisor = 0; // 0=per-vertex, 1+=per-instance
     };
 
     struct RHIRasterizerState

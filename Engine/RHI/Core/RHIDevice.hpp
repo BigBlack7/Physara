@@ -20,6 +20,13 @@
 
 namespace Physara::RHI
 {
+    struct RHIShaderDesc
+    {
+        ShaderStage stage = ShaderStage::Vertex;
+        std::string source;
+        std::string debugName;
+    };
+
     class RHIDevice
     {
     public:
@@ -34,14 +41,20 @@ namespace Physara::RHI
         virtual std::unique_ptr<RHITexture> CreateTexture(const RHITextureDesc &desc) = 0;
         virtual std::unique_ptr<RHISampler> CreateSampler(const RHISamplerDesc &desc) = 0;
         virtual std::unique_ptr<RHIShader> CreateShader(ShaderStage stage, const std::string &source) = 0;
+        virtual std::unique_ptr<RHIShader> CreateShader(const RHIShaderDesc &desc)
+        {
+            return CreateShader(desc.stage, desc.source);
+        }
         virtual std::unique_ptr<RHIPipelineState> CreatePipelineState(const RHIPipelineStateDesc &desc) = 0;
         virtual std::unique_ptr<RHIFramebuffer> CreateFramebuffer(const RHIFramebufferDesc &desc) = 0;
 
         // CommandList(Device持有命令列表对象)
         virtual RHICommandList *GetCommandList() = 0;
         virtual void SubmitCommandList() = 0;
+        virtual void WaitIdle() {}
 
         // 查询
         virtual int GetMaxAnisotropy() const = 0; // 纹理各向异性上限, Sampler创建时用
+        virtual const char *GetBackendName() const { return "Unknown"; }
     };
 }

@@ -55,6 +55,8 @@ namespace Physara::RHI
 
         void TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage) override;
         void BufferBarrier(RHIBuffer *buffer, ShaderStage srcStage, ShaderStage dstStage) override;
+        void TextureBarrier(RHITexture *texture, const RHIResourceBarrier &barrier) override;
+        void BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier) override;
 
         void CopyTextureToTexture(RHITexture *src, RHITexture *dst) override;
         void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) override;

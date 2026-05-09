@@ -1,6 +1,8 @@
 #include "OpenGLBuffer.hpp"
 
 #include <cassert>
+#include <cstddef>
+#include <cstring>
 
 namespace Physara::RHI
 {
@@ -10,13 +12,13 @@ namespace Physara::RHI
 
         glCreateBuffers(1, &m_ID);
 
-        GLbitfield storageFlags = 0;
+        GLbitfield storageFlags = GL_DYNAMIC_STORAGE_BIT;
         if (m_Dynamic)
         {
             // 允许对映射区域进行写操作
             // 创建持久化映射, 映射在整个缓冲区生命周期内保持有效, 避免反复映射/取消映射的开销
             // 确保写入操作对GPU立即可见, 提供更简单的同步机制, 但可能影响性能
-            storageFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+            storageFlags |= GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
         }
 
         // 创建并初始化缓冲区对象的不可变数据存储, 分配缓冲区内存空间, 设置访问权限和优化策略
@@ -83,7 +85,14 @@ namespace Physara::RHI
     {
         assert(data != nullptr);
         assert((offset + size) <= m_Size);
-        // 更新命名缓冲区对象的一个数据子区域
+
+        if (m_Dynamic && m_PersistentPtr != nullptr)
+        {
+            auto *dst = static_cast<std::byte *>(m_PersistentPtr) + offset;
+            std::memcpy(dst, data, size);
+            return;
+        }
+
         glNamedBufferSubData(m_ID, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size), data);
     }
 }

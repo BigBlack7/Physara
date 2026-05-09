@@ -6,6 +6,8 @@ namespace Physara::RHI
 {
     using TextureUsageFlags = std::uint32_t;
     using BufferUsageFlags = std::uint32_t;
+    using ShaderStageFlags = std::uint32_t;
+    using ResourceAccessFlags = std::uint32_t;
 
     namespace TextureUsage
     {
@@ -84,6 +86,54 @@ namespace Physara::RHI
         Compute
     };
 
+    namespace ShaderStageBit
+    {
+        constexpr ShaderStageFlags None = 0u;
+        constexpr ShaderStageFlags Vertex = 1u << 0;
+        constexpr ShaderStageFlags Fragment = 1u << 1;
+        constexpr ShaderStageFlags Compute = 1u << 2;
+        constexpr ShaderStageFlags AllGraphics = Vertex | Fragment;
+        constexpr ShaderStageFlags All = Vertex | Fragment | Compute;
+    }
+
+    enum class ResourceState : std::uint8_t
+    {
+        Undefined = 0,
+        Common,
+        VertexBuffer,
+        IndexBuffer,
+        ConstantBuffer,
+        ShaderResource,
+        UnorderedAccess,
+        RenderTarget,
+        DepthWrite,
+        DepthRead,
+        CopySource,
+        CopyDest,
+        Present
+    };
+
+    namespace ResourceAccess
+    {
+        constexpr ResourceAccessFlags None = 0u;
+        constexpr ResourceAccessFlags IndirectCommandRead = 1u << 0;
+        constexpr ResourceAccessFlags IndexRead = 1u << 1;
+        constexpr ResourceAccessFlags VertexAttributeRead = 1u << 2;
+        constexpr ResourceAccessFlags UniformRead = 1u << 3;
+        constexpr ResourceAccessFlags ShaderRead = 1u << 4;
+        constexpr ResourceAccessFlags ShaderWrite = 1u << 5;
+        constexpr ResourceAccessFlags ColorAttachmentRead = 1u << 6;
+        constexpr ResourceAccessFlags ColorAttachmentWrite = 1u << 7;
+        constexpr ResourceAccessFlags DepthStencilRead = 1u << 8;
+        constexpr ResourceAccessFlags DepthStencilWrite = 1u << 9;
+        constexpr ResourceAccessFlags TransferRead = 1u << 10;
+        constexpr ResourceAccessFlags TransferWrite = 1u << 11;
+        constexpr ResourceAccessFlags HostRead = 1u << 12;
+        constexpr ResourceAccessFlags HostWrite = 1u << 13;
+        constexpr ResourceAccessFlags MemoryRead = 1u << 14;
+        constexpr ResourceAccessFlags MemoryWrite = 1u << 15;
+    }
+
     enum class CullMode : std::uint8_t
     {
         None = 0,
@@ -144,5 +194,40 @@ namespace Physara::RHI
     {
         Store = 0,
         DontCare
+    };
+
+    struct RHIViewport
+    {
+        float x = 0.f;
+        float y = 0.f;
+        float width = 0.f;
+        float height = 0.f;
+        float minDepth = 0.f;
+        float maxDepth = 1.f;
+    };
+
+    struct RHIRect2D
+    {
+        std::int32_t x = 0;
+        std::int32_t y = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+    };
+
+    struct RHIClearValue
+    {
+        float color[4]{0.f, 0.f, 0.f, 1.f};
+        float depth = 1.f;
+        std::uint32_t stencil = 0;
+    };
+
+    struct RHIResourceBarrier
+    {
+        ResourceState before = ResourceState::Undefined;
+        ResourceState after = ResourceState::Common;
+        ShaderStageFlags srcStages = ShaderStageBit::None;
+        ShaderStageFlags dstStages = ShaderStageBit::None;
+        ResourceAccessFlags srcAccess = ResourceAccess::None;
+        ResourceAccessFlags dstAccess = ResourceAccess::None;
     };
 }

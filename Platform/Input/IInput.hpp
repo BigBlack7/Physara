@@ -27,7 +27,9 @@ namespace Physara::Platform
         virtual bool IsMouseButtonPressed(Mouse button) const = 0;
         virtual glm::vec2 GetMousePos() const = 0;
         virtual glm::vec2 GetMouseDelta() const = 0;
-        virtual float GetScrollDelta() const = 0;
+        virtual float PeekScrollDelta() const = 0;
+        virtual float ConsumeScrollDelta() = 0;
+        virtual float GetScrollDelta() const { return PeekScrollDelta(); }
 
         // 光标控制
         virtual void SetCursorMode(CursorMode mode) = 0;

@@ -20,6 +20,32 @@ namespace Physara::RHI
 
     namespace Internal
     {
+        static bool CheckRequiredCapabilities()
+        {
+            if (!GLAD_GL_VERSION_4_6)
+            {
+                PHYSARA_CORE_ERROR("Physara OpenGL backend requires OpenGL 4.6 core profile.");
+                return false;
+            }
+            if (!GLAD_GL_VERSION_4_5)
+            {
+                PHYSARA_CORE_ERROR("OpenGL 4.5 DSA support is required.");
+                return false;
+            }
+            if (!GLAD_GL_VERSION_4_3)
+            {
+                PHYSARA_CORE_ERROR("OpenGL 4.3 MDI/SSBO support is required.");
+                return false;
+            }
+            if (!GLAD_GL_VERSION_4_2)
+            {
+                PHYSARA_CORE_ERROR("OpenGL 4.2 BPTC BC6H/BC7 support is required.");
+                return false;
+            }
+
+            return true;
+        }
+
         static void APIENTRY GLDebugCallback(
             GLenum source,
             GLenum type,
@@ -64,6 +90,11 @@ namespace Physara::RHI
 
         PHYSARA_CORE_INFO("OpenGL {}", reinterpret_cast<const char *>(glGetString(GL_VERSION)));
         PHYSARA_CORE_INFO("GPU: {}", reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
+
+        if (!Internal::CheckRequiredCapabilities())
+        {
+            return false;
+        }
 
         GLint maxAniso = 1;
 #if defined(GL_MAX_TEXTURE_MAX_ANISOTROPY)
@@ -134,5 +165,10 @@ namespace Physara::RHI
     void OpenGLDevice::SubmitCommandList()
     {
         // OpenGL immediate mode: no submit required.
+    }
+
+    void OpenGLDevice::WaitIdle()
+    {
+        glFinish();
     }
 }

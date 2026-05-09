@@ -43,6 +43,79 @@ namespace Physara::RHI
             }
             return 4u;
         }
+
+        static GLbitfield ToGLMemoryBarrierBits(const RHIResourceBarrier &barrier)
+        {
+            GLbitfield bits = 0;
+
+            auto hasBeforeOrAfter = [&barrier](ResourceState state)
+            {
+                return barrier.before == state || barrier.after == state;
+            };
+
+            if ((barrier.dstAccess & ResourceAccess::ShaderRead) != 0u ||
+                (barrier.srcAccess & ResourceAccess::ShaderWrite) != 0u ||
+                hasBeforeOrAfter(ResourceState::ShaderResource))
+            {
+                bits |= GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT;
+            }
+
+            if ((barrier.srcAccess & ResourceAccess::ShaderWrite) != 0u ||
+                (barrier.dstAccess & ResourceAccess::ShaderWrite) != 0u ||
+                hasBeforeOrAfter(ResourceState::UnorderedAccess))
+            {
+                bits |= GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT;
+            }
+
+            if ((barrier.dstAccess & ResourceAccess::VertexAttributeRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::VertexBuffer))
+            {
+                bits |= GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT;
+            }
+
+            if ((barrier.dstAccess & ResourceAccess::IndexRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::IndexBuffer))
+            {
+                bits |= GL_ELEMENT_ARRAY_BARRIER_BIT;
+            }
+
+            if ((barrier.dstAccess & ResourceAccess::UniformRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::ConstantBuffer))
+            {
+                bits |= GL_UNIFORM_BARRIER_BIT;
+            }
+
+            if ((barrier.srcAccess & (ResourceAccess::TransferWrite | ResourceAccess::ColorAttachmentWrite)) != 0u ||
+                (barrier.dstAccess & (ResourceAccess::TransferRead | ResourceAccess::TransferWrite)) != 0u ||
+                hasBeforeOrAfter(ResourceState::CopySource) ||
+                hasBeforeOrAfter(ResourceState::CopyDest))
+            {
+                bits |= GL_TEXTURE_UPDATE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT;
+            }
+
+            if ((barrier.srcAccess & ResourceAccess::ColorAttachmentWrite) != 0u ||
+                (barrier.dstAccess & ResourceAccess::ColorAttachmentRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::RenderTarget))
+            {
+                bits |= GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT;
+            }
+
+            if ((barrier.srcAccess & ResourceAccess::DepthStencilWrite) != 0u ||
+                (barrier.dstAccess & ResourceAccess::DepthStencilRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::DepthWrite) ||
+                hasBeforeOrAfter(ResourceState::DepthRead))
+            {
+                bits |= GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT;
+            }
+
+            if ((barrier.srcAccess & ResourceAccess::HostWrite) != 0u ||
+                (barrier.dstAccess & ResourceAccess::HostRead) != 0u)
+            {
+                bits |= GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
+            }
+
+            return bits != 0 ? bits : GL_ALL_BARRIER_BITS;
+        }
     }
 
     OpenGLCommandList::OpenGLCommandList()
@@ -520,6 +593,7 @@ namespace Physara::RHI
             nullptr,
             static_cast<GLsizei>(drawCount),
             static_cast<GLsizei>(stride));
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     }
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage)
@@ -543,6 +617,18 @@ namespace Physara::RHI
         glMemoryBarrier(
             GL_SHADER_STORAGE_BARRIER_BIT |
             GL_BUFFER_UPDATE_BARRIER_BIT);
+    }
+
+    void OpenGLCommandList::TextureBarrier(RHITexture *texture, const RHIResourceBarrier &barrier)
+    {
+        (void)texture;
+        glMemoryBarrier(Internal::ToGLMemoryBarrierBits(barrier));
+    }
+
+    void OpenGLCommandList::BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier)
+    {
+        (void)buffer;
+        glMemoryBarrier(Internal::ToGLMemoryBarrierBits(barrier));
     }
 
     void OpenGLCommandList::CopyTextureToTexture(RHITexture *src, RHITexture *dst)

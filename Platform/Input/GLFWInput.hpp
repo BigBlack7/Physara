@@ -3,10 +3,11 @@
 #include <array>
 #include <cstddef>
 
-#include <GLFW/glfw3.h>
 #include <glm/vec2.hpp>
 
 #include <Platform/Input/IInput.hpp>
+
+struct GLFWwindow;
 
 namespace Physara::Platform
 {
@@ -15,7 +16,7 @@ namespace Physara::Platform
     class GLFWInput final : public IInput
     {
     public:
-        explicit GLFWInput(GLFWwindow *window);
+        explicit GLFWInput(void *windowHandle);
         ~GLFWInput() override;
 
         bool IsKeyDown(Key key) const override;
@@ -26,7 +27,8 @@ namespace Physara::Platform
 
         glm::vec2 GetMousePos() const override;
         glm::vec2 GetMouseDelta() const override;
-        float GetScrollDelta() const override;
+        float PeekScrollDelta() const override;
+        float ConsumeScrollDelta() override;
 
         void SetCursorMode(CursorMode mode) override;
         void BeginFrame() override;
@@ -34,6 +36,7 @@ namespace Physara::Platform
     private:
         static constexpr std::size_t kKeyCount = 349; // GLFW_KEY_LAST + 1
         static constexpr std::size_t kMouseCount = 3; // Left/Right/Middle
+        using ScrollCallbackFn = void (*)(GLFWwindow *, double, double);
 
         static void ScrollCallback(GLFWwindow *window, double xOffset, double yOffset);
 
@@ -55,9 +58,9 @@ namespace Physara::Platform
         glm::vec2 m_PreviousMousePos{0.f, 0.f};
         glm::vec2 m_MouseDelta{0.f, 0.f};
 
-        mutable float m_ScrollDelta{0.f};
+        float m_ScrollDelta{0.f};
 
         bool m_FirstFrame{true};
-        GLFWscrollfun m_PreviousScrollCallback{nullptr};
+        ScrollCallbackFn m_PreviousScrollCallback{nullptr};
     };
 }

@@ -152,6 +152,11 @@ namespace Physara::RHI
 
                 glVertexArrayAttribBinding(m_VAO, attr.location, attr.binding);
             }
+
+            for (const auto &binding : m_Desc.vertexBindings)
+            {
+                glVertexArrayBindingDivisor(m_VAO, binding.binding, binding.instanceDivisor);
+            }
         }
     }
 

@@ -2,11 +2,13 @@
 
 #include <stdexcept>
 
+#include <GLFW/glfw3.h>
+
 #include <Platform/Window/GLFWWindowContext.hpp>
 
 namespace Physara::Platform
 {
-    GLFWInput::GLFWInput(GLFWwindow *window) : m_Window(window)
+    GLFWInput::GLFWInput(void *windowHandle) : m_Window(static_cast<GLFWwindow *>(windowHandle))
     {
         if (m_Window == nullptr)
         {
@@ -93,7 +95,12 @@ namespace Physara::Platform
         return m_MouseDelta;
     }
 
-    float GLFWInput::GetScrollDelta() const
+    float GLFWInput::PeekScrollDelta() const
+    {
+        return m_ScrollDelta;
+    }
+
+    float GLFWInput::ConsumeScrollDelta()
     {
         const float delta = m_ScrollDelta;
         m_ScrollDelta = 0.f;

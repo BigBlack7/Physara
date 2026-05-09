@@ -43,6 +43,16 @@ namespace Physara::RHI
             std::uint32_t width,
             std::uint32_t height) = 0;
 
+        void SetViewport(const RHIViewport &viewport)
+        {
+            SetViewport(viewport.x, viewport.y, viewport.width, viewport.height, viewport.minDepth, viewport.maxDepth);
+        }
+
+        void SetScissor(const RHIRect2D &rect)
+        {
+            SetScissor(rect.x, rect.y, rect.width, rect.height);
+        }
+
         virtual void PushConstants(
             ShaderStage stage,
             const void *data,
@@ -55,6 +65,28 @@ namespace Physara::RHI
             const RHIRenderPassDesc &desc,
             const std::vector<glm::vec4> &clearColors,
             float clearDepth = 1.f) = 0;
+
+        void BeginRenderPass(
+            RHIFramebuffer *framebuffer,
+            const RHIRenderPassDesc &desc,
+            const std::vector<RHIClearValue> &clearValues)
+        {
+            std::vector<glm::vec4> clearColors;
+            clearColors.reserve(clearValues.size());
+            float clearDepth = 1.f;
+
+            for (const RHIClearValue &clearValue : clearValues)
+            {
+                clearColors.emplace_back(
+                    clearValue.color[0],
+                    clearValue.color[1],
+                    clearValue.color[2],
+                    clearValue.color[3]);
+                clearDepth = clearValue.depth;
+            }
+
+            BeginRenderPass(framebuffer, desc, clearColors, clearDepth);
+        }
 
         virtual void EndRenderPass() = 0;
 
@@ -89,6 +121,16 @@ namespace Physara::RHI
         virtual void TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage) = 0;
         virtual void BufferBarrier(RHIBuffer *buffer, ShaderStage srcStage, ShaderStage dstStage) = 0;
 
+        virtual void TextureBarrier(RHITexture *texture, const RHIResourceBarrier &barrier)
+        {
+            TextureBarrier(texture, FirstStage(barrier.srcStages), FirstStage(barrier.dstStages));
+        }
+
+        virtual void BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier)
+        {
+            BufferBarrier(buffer, FirstStage(barrier.srcStages), FirstStage(barrier.dstStages));
+        }
+
         // 工具
         virtual void CopyTextureToTexture(RHITexture *src, RHITexture *dst) = 0;
         virtual void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) = 0;
@@ -96,5 +138,19 @@ namespace Physara::RHI
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;
+
+    private:
+        static ShaderStage FirstStage(ShaderStageFlags stages)
+        {
+            if ((stages & ShaderStageBit::Vertex) != 0u)
+            {
+                return ShaderStage::Vertex;
+            }
+            if ((stages & ShaderStageBit::Fragment) != 0u)
+            {
+                return ShaderStage::Fragment;
+            }
+            return ShaderStage::Compute;
+        }
     };
 }

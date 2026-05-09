@@ -61,9 +61,13 @@ namespace Physara::RHI
         if (m_Desc.depthAttachment)
         {
             auto *glDepth = static_cast<OpenGLTexture *>(m_Desc.depthAttachment);
+            const GLenum attachmentPoint =
+                glDepth->GetFormat() == TextureFormat::Depth24Stencil8
+                    ? GL_DEPTH_STENCIL_ATTACHMENT
+                    : GL_DEPTH_ATTACHMENT;
             glNamedFramebufferTexture(
                 m_ID,
-                GL_DEPTH_ATTACHMENT,
+                attachmentPoint,
                 glDepth->GetGLID(),
                 static_cast<GLint>(m_Desc.mipLevel));
         }
