@@ -177,7 +177,7 @@ namespace Physara::Platform
         else
         {
             // 普通模式下清零, 避免切回锁定时跳变
-            m_MouseDelta = glm::vec2(0.0f, 0.0f);
+            m_MouseDelta = glm::vec2(0.f, 0.f);
         }
 
         m_PreviousMousePos = m_MousePos;

@@ -1,4 +1,5 @@
 #include "EditorApp.hpp"
+#include "EditorTheme.hpp"
 
 #include <filesystem>
 
@@ -36,6 +37,8 @@ namespace Physara::Editor
         m_DockspaceId = 0;
         m_Context.assetsRootPath = Physara::Platform::FileSystem::GetAssetsRootPath();
         m_Context.currentContentPath = m_Context.assetsRootPath;
+
+        EditorTheme::Apply();
     }
 
     void EditorApp::OnUIRender()

@@ -39,8 +39,6 @@ namespace Physara::RHI
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-        ImGui::StyleColorsDark();
-
         if (!ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow *>(windowHandle), true))
         {
             PHYSARA_CORE_ERROR("ImGui_ImplGlfw_InitForOpenGL failed.");

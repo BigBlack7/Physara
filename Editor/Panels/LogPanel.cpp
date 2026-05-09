@@ -43,15 +43,15 @@ namespace Physara::Editor
             switch (level)
             {
             case LogPanelLevel::Trace:
-                return ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+                return ImVec4(0.34f, 0.39f, 0.36f, 1.f);
             case LogPanelLevel::Info:
-                return ImVec4(0.68f, 0.92f, 0.72f, 1.0f);
+                return ImVec4(0.05f, 0.32f, 0.20f, 1.f);
             case LogPanelLevel::Warning:
-                return ImVec4(1.0f, 0.78f, 0.28f, 1.0f);
+                return ImVec4(0.58f, 0.36f, 0.03f, 1.f);
             case LogPanelLevel::Error:
-                return ImVec4(1.0f, 0.34f, 0.32f, 1.0f);
+                return ImVec4(0.70f, 0.12f, 0.10f, 1.f);
             case LogPanelLevel::Critical:
-                return ImVec4(1.0f, 0.18f, 0.18f, 1.0f);
+                return ImVec4(0.58f, 0.04f, 0.05f, 1.f);
             case LogPanelLevel::Unknown:
                 return ImGui::GetStyleColorVec4(ImGuiCol_Text);
             }
@@ -120,7 +120,7 @@ namespace Physara::Editor
         ImGui::Checkbox("Auto Scroll", &m_AutoScroll);
 
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(220.f);
         ImGui::InputText("Search", m_SearchBuffer, sizeof(m_SearchBuffer));
     }
 
@@ -128,7 +128,7 @@ namespace Physara::Editor
     {
         Refresh();
 
-        ImGui::BeginChild(Internal::ScrollRegionName, ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::BeginChild(Internal::ScrollRegionName, ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar);
 
         for (const LogPanelLine &line : m_CachedLogs)
         {
@@ -144,7 +144,7 @@ namespace Physara::Editor
 
         if (m_AutoScroll)
         {
-            ImGui::SetScrollHereY(1.0f);
+            ImGui::SetScrollHereY(1.f);
         }
 
         ImGui::EndChild();

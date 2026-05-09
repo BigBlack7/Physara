@@ -75,8 +75,8 @@ namespace Physara::RHI
 
             CullMode cullMode = CullMode::Back;
             PolygonMode polygonMode = PolygonMode::Fill;
-            float depthBias = 0.0f;
-            float depthBiasSlope = 0.0f;
+            float depthBias = 0.f;
+            float depthBiasSlope = 0.f;
 
             bool depthTest = true;
             bool depthWrite = true;

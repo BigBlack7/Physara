@@ -122,7 +122,7 @@ namespace Physara::RHI
         if (m_State.depthBias != desc.rasterizerState.depthBias ||
             m_State.depthBiasSlope != desc.rasterizerState.depthBiasSlope)
         {
-            if (desc.rasterizerState.depthBias != 0.0f || desc.rasterizerState.depthBiasSlope != 0.0f)
+            if (desc.rasterizerState.depthBias != 0.f || desc.rasterizerState.depthBiasSlope != 0.f)
             {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(desc.rasterizerState.depthBiasSlope, desc.rasterizerState.depthBias);
@@ -375,7 +375,7 @@ namespace Physara::RHI
                 continue;
             }
 
-            glm::vec4 color(0.0f);
+            glm::vec4 color(0.f);
             if (i < clearColors.size())
             {
                 color = clearColors[i];
