@@ -11,7 +11,6 @@ target_include_directories(Editor PUBLIC
 
 target_link_libraries(Editor PUBLIC
     Engine
-    Backend
     Platform
     imgui
 )

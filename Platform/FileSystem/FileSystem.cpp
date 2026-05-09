@@ -123,6 +123,11 @@ namespace Physara::Platform
         return Internal::ToGenericString(absPath.parent_path());
     }
 
+    std::string FileSystem::GetAssetsRootPath()
+    {
+        return s_AssetsRootPath;
+    }
+
     std::vector<std::uint8_t> FileSystem::ReadBinaryFile(std::string_view path)
     {
         const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);

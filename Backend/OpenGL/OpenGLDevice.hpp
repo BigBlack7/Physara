@@ -31,6 +31,6 @@ namespace Physara::RHI
 
     private:
         std::unique_ptr<OpenGLCommandList> m_CommandList{};
-        int m_MaxAnisotropy = 1;
+        int m_MaxAnisotropy{1};
     };
 }

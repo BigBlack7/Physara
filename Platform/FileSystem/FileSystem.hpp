@@ -18,6 +18,7 @@ namespace Physara::Platform
         static std::string GetExtension(std::string_view path);
         static std::string GetFileName(std::string_view path);
         static std::string GetParentDir(std::string_view path);
+        static std::string GetAssetsRootPath();
 
         // 文件读写
         static std::vector<std::uint8_t> ReadBinaryFile(std::string_view path);

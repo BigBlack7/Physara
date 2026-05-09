@@ -50,7 +50,7 @@ int main()
         }
 
         Physara::Engine::Application app;
-        app.Init(window.get(), &input, device.get(), nullptr);
+        app.Init(window.get(), &input, device.get());
 
         std::unique_ptr<Physara::Engine::Layer> editorLayer =
             std::make_unique<Physara::Editor::EditorLayer>(imguiBackend.get());
