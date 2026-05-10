@@ -1,5 +1,8 @@
 #include "RendererSettingsPanel.hpp"
 
+#include <algorithm>
+
+#include <Engine/Core/Log.hpp>
 #include <imgui/imgui.h>
 
 namespace Physara::Editor
@@ -26,6 +29,11 @@ namespace Physara::Editor
             "GBufferAO",
             "GBufferEmissive",
             "ShadowMap"};
+
+        static constexpr const char *CaptureFormatLabels[] = {
+            "PNG",
+            "JPG",
+            "EXR (planned)"};
     }
 
     RendererSettingsPanel::RendererSettingsPanel(EditorContext &context) : m_Context(context) {}
@@ -50,6 +58,25 @@ namespace Physara::Editor
         {
             ImGui::TextUnformatted("Editor camera exposure and physical camera parameters will appear here.");
             ImGui::TextUnformatted("Reserved: focal length, aperture, shutter, ISO, near/far planes.");
+            ImGui::SeparatorText("Capture");
+
+            ImGui::InputText("File Prefix",
+                             m_Context.settings.capture.fileNamePrefix.data(),
+                             m_Context.settings.capture.fileNamePrefix.size());
+            ImGui::Combo("Format", &m_Context.settings.capture.fileFormatIndex,
+                         Internal::CaptureFormatLabels, IM_ARRAYSIZE(Internal::CaptureFormatLabels));
+            m_Context.settings.capture.resolutionScale =
+                std::clamp(m_Context.settings.capture.resolutionScale, 0.25f, 4.f);
+            ImGui::SliderFloat("Resolution Scale", &m_Context.settings.capture.resolutionScale, 0.25f, 4.f, "%.2fx");
+            ImGui::Checkbox("Include Debug View", &m_Context.settings.capture.includeDebugView);
+
+            if (ImGui::Button("Capture Current View"))
+            {
+                m_Context.settings.capture.captureRequested = true;
+                PHYSARA_INFO("Capture requested from Renderer Settings. Renderer capture output will be connected in Phase 4.");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("Shortcut: F12");
         }
     }
 

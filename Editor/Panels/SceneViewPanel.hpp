@@ -3,7 +3,10 @@
 #include <cstdint>
 #include <functional>
 
+#include <imgui/imgui.h>
+
 #include <Editor/Core/EditorContext.hpp>
+#include <Editor/Core/ShortcutRegistry.hpp>
 
 namespace Physara::Editor
 {
@@ -24,7 +27,7 @@ namespace Physara::Editor
         using ViewportResizeCallback = std::function<void(std::uint32_t width, std::uint32_t height)>;
         using InputForwardCallback = std::function<void(const SceneViewInputSnapshot &input)>;
 
-        explicit SceneViewPanel(EditorContext &context);
+        SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry);
 
         void Draw();
         void SetPreviewTextureId(void *textureId);
@@ -32,14 +35,16 @@ namespace Physara::Editor
         void SetInputForwardCallback(InputForwardCallback callback);
 
     private:
-        void DrawToolbar();
         void DrawViewport();
         void DrawPlaceholder(float width, float height);
+        void DrawOverlay(const ImVec2 &origin, float width, float height);
+        void DrawViewportToolbar(const ImVec2 &origin, float width);
         void UpdateSceneViewState(float width, float height);
         void ForwardInput();
 
     private:
         EditorContext &m_Context;
+        const ShortcutRegistry &m_ShortcutRegistry;
         void *m_PreviewTextureId{nullptr};
         ViewportResizeCallback m_ResizeCallback{};
         InputForwardCallback m_InputCallback{};

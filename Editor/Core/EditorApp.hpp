@@ -5,6 +5,8 @@
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
 #include <Editor/Core/EditorContext.hpp>
+#include <Editor/Core/ShortcutRegistry.hpp>
+#include <Editor/Panels/HelpShortcutsPanel.hpp>
 #include <Editor/Panels/HierarchyPanel.hpp>
 #include <Editor/Panels/InspectorPanel.hpp>
 #include <Editor/Panels/SceneViewPanel.hpp>
@@ -27,18 +29,24 @@ namespace Physara::Editor
 
     private:
         void InitDefaultLayout();
+        void HandleGlobalShortcuts();
         void DrawMainDockSpace();
         void DrawPanels();
+        void DrawDockedPanels();
+        void DrawPresentationPanels();
+        void RequestCapture();
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
         EditorContext m_Context{};
+        ShortcutRegistry m_ShortcutRegistry{};
         HierarchyPanel m_HierarchyPanel;
         InspectorPanel m_InspectorPanel;
         SceneViewPanel m_SceneViewPanel;
         ContentBrowserPanel m_ContentBrowserPanel;
         LogPanel m_LogPanel;
         RendererSettingsPanel m_RendererSettingsPanel;
+        HelpShortcutsPanel m_HelpShortcutsPanel;
 
         bool m_LayoutInitialized{false};
         std::uint32_t m_DockspaceId{0};
