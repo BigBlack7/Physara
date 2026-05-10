@@ -46,6 +46,8 @@ namespace Physara::RHI
 
         static GLbitfield ToGLMemoryBarrierBits(const RHIResourceBarrier &barrier)
         {
+            // OpenGL没有Vulkan那种显式layout/state transition; 这里把RHI的资源状态语义
+            // 翻译成glMemoryBarrier的可见性bit, 保证前序shader/FBO/copy写入对后续读写可见
             GLbitfield bits = 0;
 
             auto hasBeforeOrAfter = [&barrier](ResourceState state)
@@ -120,6 +122,8 @@ namespace Physara::RHI
 
     OpenGLCommandList::OpenGLCommandList()
     {
+        // 用一个小UBO模拟push constants. OpenGL没有原生push constant;
+        // 这里固定绑定到slot 0, 后续shader约定一个小uniform block即可读取
         glCreateBuffers(1, &m_PushConstantsBuffer);
         if (m_PushConstantsBuffer == 0)
         {
@@ -145,6 +149,8 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetPipelineState(RHIPipelineState *pso)
     {
+        // PipelineState在OpenGL下拆成program + VAO + 固定函数状态
+        // 这里做轻量状态缓存, 避免每次draw前重复glUseProgram/glBindVertexArray/glEnable
         auto *gl = static_cast<OpenGLPipeline *>(pso);
         if (gl == nullptr || !gl->IsValid())
         {
@@ -169,6 +175,7 @@ namespace Physara::RHI
 
         if (gl->IsCompute())
         {
+            // Compute pipeline只需要program, 后面的raster/depth/blend状态对compute无意义
             return;
         }
 
@@ -271,6 +278,8 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset)
     {
+        // DSA 路径: 直接把buffer绑定到VAO的vertex binding slot,
+        // 不需要先glBindVertexArray + glBindBuffer(GL_ARRAY_BUFFER)
         if (m_State.vao == 0)
         {
             PHYSARA_CORE_ERROR("SetVertexBuffer called without a bound VAO.");
@@ -307,6 +316,8 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset)
     {
+        // DSA路径: Element buffer是VAO状态的一部分, 直接写入当前 VAO
+        // indexOffset由DrawIndexed转成byte offset
         if (m_State.vao == 0)
         {
             PHYSARA_CORE_ERROR("SetIndexBuffer called without a bound VAO.");
@@ -327,6 +338,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer)
     {
+        // UBO仍然是binding point语义; glBindBufferBase把buffer暴露给shader的layout(binding=N)
         GLuint id = 0;
         if (buffer)
         {
@@ -339,6 +351,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler)
     {
+        // DSA风格的texture unit绑定. Texture和Sampler分离, 便于复用同一纹理配不同采样器
         GLuint texID = 0;
         GLuint samplerID = 0;
 
@@ -360,6 +373,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer)
     {
+        // SSBO用于大块结构化数据, 例如object data、light list、tile light indices
         GLuint id = 0;
         if (buffer)
         {
@@ -372,6 +386,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
     {
+        // Viewport和depth range是动态状态; OpenGL坐标原点在左下
         glViewport(
             static_cast<GLint>(x),
             static_cast<GLint>(y),
@@ -382,6 +397,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetScissor(std::int32_t x, std::int32_t y, std::uint32_t width, std::uint32_t height)
     {
+        // 当前RHI只有设置scissor, 没有禁用接口; 设置时确保GL_SCISSOR_TEST开启
         glEnable(GL_SCISSOR_TEST);
         glScissor(
             static_cast<GLint>(x),
@@ -392,6 +408,8 @@ namespace Physara::RHI
 
     void OpenGLCommandList::PushConstants(ShaderStage stage, const void *data, std::uint32_t size, std::uint32_t offset)
     {
+        // OpenGL fallback: 把小块常量写入固定大小UBO, 再绑定到slot 0
+        // stage参数保留RHI语义, OpenGL UBO绑定本身不区分shader stage
         (void)stage;
 
         if (data == nullptr || size == 0)
@@ -425,6 +443,8 @@ namespace Physara::RHI
         const std::vector<glm::vec4> &clearColors,
         float clearDepth)
     {
+        // OpenGL没有render pass对象. 这里把RHI RenderPassDesc翻译为:
+        // 1) 绑定目标FBO; 2) 按loadOp清除attachment; 3)记录desc供EndRenderPass处理storeOp
         GLuint fboID = 0;
         if (framebuffer)
         {
@@ -456,6 +476,7 @@ namespace Physara::RHI
 
             if (fboID != 0)
             {
+                // DSA清FBO attachment, 不依赖当前GL_FRAMEBUFFER绑定点
                 glClearNamedFramebufferfv(fboID, GL_COLOR, static_cast<GLint>(i), &color.x);
             }
             else
@@ -493,6 +514,8 @@ namespace Physara::RHI
 
     void OpenGLCommandList::EndRenderPass()
     {
+        // storeOp=DontCare的attachment用invalidate告诉驱动内容不再需要,
+        // tile-based或带压缩的实现可以避免无意义store/resolve
         if (!m_CurrentPassDesc)
         {
             return;
@@ -538,6 +561,8 @@ namespace Physara::RHI
         std::int32_t vertexOffset,
         std::uint32_t firstInstance)
     {
+        // 现代indexed draw: 一次调用同时支持instancing、baseVertex、baseInstance
+        // firstIndex和SetIndexBuffer(offset) 都以byte offset合并传入indices参数
         const std::uint32_t indexStride = Internal::GetIndexStride(m_State.indexType);
         const std::uintptr_t offset =
             static_cast<std::uintptr_t>(m_State.indexOffset) +
@@ -559,6 +584,7 @@ namespace Physara::RHI
         std::uint32_t firstVertex,
         std::uint32_t firstInstance)
     {
+        // 非索引draw, 同样使用baseInstance版本, 方便后续object data用gl_InstanceID/baseInstance索引
         glDrawArraysInstancedBaseInstance(
             m_State.topology,
             static_cast<GLint>(firstVertex),
@@ -569,11 +595,14 @@ namespace Physara::RHI
 
     void OpenGLCommandList::Dispatch(std::uint32_t groupX, std::uint32_t groupY, std::uint32_t groupZ)
     {
+        // Compute dispatch只提交workgroup数量; 资源可见性由后续BufferBarrier/TextureBarrier控制
         glDispatchCompute(groupX, groupY, groupZ);
     }
 
     void OpenGLCommandList::DrawIndexedIndirect(RHIBuffer *indirectBuffer, std::uint32_t drawCount, std::uint32_t stride)
     {
+        // MDI: GPU/CPU准备一组DrawElementsIndirectCommand,
+        // glMultiDrawElementsIndirect一次提交多draw, 减少CPU driver overhead
         auto *glBuffer = static_cast<OpenGLBuffer *>(indirectBuffer);
         if (!glBuffer)
         {
@@ -598,6 +627,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage)
     {
+        // 旧接口保守同步: 适合纹理更新、image store、后续采样之间的通用可见性
         (void)texture;
         (void)srcStage;
         (void)dstStage;
@@ -610,6 +640,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::BufferBarrier(RHIBuffer *buffer, ShaderStage srcStage, ShaderStage dstStage)
     {
+        // 旧接口保守同步: 覆盖SSBO写入和buffer update后续可见性
         (void)buffer;
         (void)srcStage;
         (void)dstStage;
@@ -621,6 +652,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, const RHIResourceBarrier &barrier)
     {
+        // 新接口按RHIResourceBarrier映射barrier bits, 后续RenderGraph可直接走这里
         (void)texture;
         glMemoryBarrier(Internal::ToGLMemoryBarrierBits(barrier));
     }
@@ -633,6 +665,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::CopyTextureToTexture(RHITexture *src, RHITexture *dst)
     {
+        // DSA image copy: 跨texture object直接拷贝, 不需要绑定FBO或纹理到context
         auto *glSrc = static_cast<OpenGLTexture *>(src);
         auto *glDst = static_cast<OpenGLTexture *>(dst);
         if (!glSrc || !glDst)
@@ -664,6 +697,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::CopyBufferToTexture(RHIBuffer *src, RHITexture *dst)
     {
+        // 通过PBO(GL_PIXEL_UNPACK_BUFFER)上传到texture, 这里data=nullptr表示从当前PBO的offset 0读取
         auto *glBuffer = static_cast<OpenGLBuffer *>(src);
         auto *glTex = static_cast<OpenGLTexture *>(dst);
         if (!glBuffer || !glTex)
@@ -696,6 +730,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::GenerateMipmaps(RHITexture *texture)
     {
+        // DSA mip生成, 不需要glBindTexture
         auto *glTex = static_cast<OpenGLTexture *>(texture);
         if (!glTex)
         {
@@ -708,6 +743,7 @@ namespace Physara::RHI
 
     void OpenGLCommandList::BeginDebugLabel(const char *label)
     {
+        // KHR_debug debug group, RenderDoc/Nsight中会显示为命令分组
         glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, label ? label : "");
     }
 

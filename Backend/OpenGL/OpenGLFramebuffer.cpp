@@ -37,9 +37,10 @@ namespace Physara::RHI
     OpenGLFramebuffer::OpenGLFramebuffer(const RHIFramebufferDesc &desc)
         : m_Desc(desc), m_Width(desc.width), m_Height(desc.height)
     {
+        // DSA创 FBO. Attachment直接通过glNamedFramebufferTexture绑定, 不需要glBindFramebuffer
         glCreateFramebuffers(1, &m_ID);
 
-        // 绑定颜色附件
+        // 绑定颜色附件. colorAttachments[i]对应GL_COLOR_ATTACHMENTi
         const std::uint32_t colorCount = static_cast<std::uint32_t>(m_Desc.colorAttachments.size());
         for (std::uint32_t i = 0; i < colorCount; ++i)
         {
@@ -57,7 +58,7 @@ namespace Physara::RHI
                 static_cast<GLint>(m_Desc.mipLevel));
         }
 
-        // 绑定深度附件
+        // 绑定深度/模板附件. Depth24Stencil8必须使用GL_DEPTH_STENCIL_ATTACHMENT
         if (m_Desc.depthAttachment)
         {
             auto *glDepth = static_cast<OpenGLTexture *>(m_Desc.depthAttachment);
@@ -72,7 +73,7 @@ namespace Physara::RHI
                 static_cast<GLint>(m_Desc.mipLevel));
         }
 
-        // Draw buffers
+        // 指定fragment shader输出写入哪些color attachment. 纯深度FBO则设置0个draw buffer
         if (colorCount > 0)
         {
             std::vector<GLenum> drawBuffers;
@@ -88,6 +89,7 @@ namespace Physara::RHI
             glNamedFramebufferDrawBuffers(m_ID, 0, nullptr);
         }
 
+        // 创建期立即检查完整性, 尽早暴露attachment尺寸/格式/组合错误
         const GLenum status = glCheckNamedFramebufferStatus(m_ID, GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE)
         {

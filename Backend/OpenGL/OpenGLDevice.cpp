@@ -22,6 +22,8 @@ namespace Physara::RHI
     {
         static bool CheckRequiredCapabilities()
         {
+            // 后端明确以现代OpenGL为基线: DSA, MDI/SSBO/debug, BPTC BC6H/BC7
+            // Runtime创建4.6 context; 这里再用glad的运行时标记确认驱动实际能力
             if (!GLAD_GL_VERSION_4_6)
             {
                 PHYSARA_CORE_ERROR("Physara OpenGL backend requires OpenGL 4.6 core profile.");
@@ -73,6 +75,7 @@ namespace Physara::RHI
 
     bool OpenGLDevice::Init(void *windowHandle)
     {
+        // Runtime只传native window handle; 真正的GLFW/OpenGL context绑定留在Backend内部
         auto *window = static_cast<GLFWwindow *>(windowHandle);
         if (!window)
         {
@@ -80,6 +83,7 @@ namespace Physara::RHI
             return false;
         }
 
+        // glad加载函数指针前必须先make current, 否则glfwGetProcAddress没有目标context
         glfwMakeContextCurrent(window);
 
         if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)))
@@ -108,6 +112,7 @@ namespace Physara::RHI
         }
         m_MaxAnisotropy = maxAniso;
 
+        // 当前OpenGL command list是immediate translation: RHI调用立即变成GL调用
         m_CommandList = std::make_unique<OpenGLCommandList>();
 
 #if defined(PHYSARA_DEBUG)
@@ -169,6 +174,7 @@ namespace Physara::RHI
 
     void OpenGLDevice::WaitIdle()
     {
+        // 用于shutdown或显式同步. 正常每帧不应频繁调用glFinish, 否则会强 CPU/GPU同步, 降低性能.
         glFinish();
     }
 }

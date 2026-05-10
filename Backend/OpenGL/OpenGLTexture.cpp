@@ -14,7 +14,8 @@ namespace Physara::RHI
         assert(m_Desc.mipLevels > 0);
         assert(m_Desc.samples == 1 && "MSAA textures are not supported yet."); // MSAA纹理暂不支持
 
-        // 确定纹理目标类型
+        // RHI texture dimension -> OpenGL texture target. Cube map在 OpenGL下仍然是2D storage,
+        // 但上传单面时使用3D-like subimage(layer = face index)的DSA接口
         if (m_Desc.dimension == TextureDimension::Tex2D)
         {
             m_Target = GL_TEXTURE_2D;
@@ -35,6 +36,7 @@ namespace Physara::RHI
             m_Target = GL_TEXTURE_2D;
         }
 
+        // DSA创建texture object, 不需要 glBindTexture
         glCreateTextures(m_Target, 1, &m_ID);
         const auto fmt = ToGLTextureFormat(m_Desc.format);
 
@@ -61,6 +63,7 @@ namespace Physara::RHI
 
         if (m_Desc.initialData != nullptr)
         {
+            // RHITextureDesc目前没有initialDataSize, 因此压缩纹理不能安全走构造期上传
             assert(!IsCompressedTextureFormat(m_Desc.format) &&
                    "Compressed initialData requires an explicit byte size; call Upload() instead.");
             Upload(0, 0, m_Desc.initialData, 0);
@@ -113,6 +116,8 @@ namespace Physara::RHI
 
     void OpenGLTexture::Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize)
     {
+        // 上传一个完整subresource: mip指定mip level, layer指cube face/array slice
+        // BC6H/BC7走glCompressedTextureSubImage*, 普通格式走glTextureSubImage*
         assert(data != nullptr);
         assert(mip < m_Desc.mipLevels);
 
@@ -190,6 +195,7 @@ namespace Physara::RHI
 
     void OpenGLTexture::GenerateMipmaps()
     {
+        // DSA mipmap generation要求texture storage已经包含完整mip chain或至少可生成目标levels
         glGenerateTextureMipmap(m_ID);
     }
 }

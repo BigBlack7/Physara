@@ -27,6 +27,7 @@ namespace Physara::RHI
 
     OpenGLShader::OpenGLShader(ShaderStage stage, const std::string &source) : m_Stage(stage)
     {
+        // 这里只负责编译单个 shader stage；真正的 program link 在 OpenGLPipeline 中完成。
         const GLenum glStage = ToGLShaderStage(stage);
         m_ID = glCreateShader(glStage);
 
@@ -36,6 +37,7 @@ namespace Physara::RHI
             return;
         }
 
+        // glShaderSource 接收 C 字符串数组；源码生命周期只需覆盖此调用，驱动会复制内容。
         const char *src = source.c_str();
         glShaderSource(m_ID, 1, &src, nullptr);
         glCompileShader(m_ID);

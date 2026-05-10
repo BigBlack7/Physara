@@ -16,6 +16,7 @@ namespace Physara::RHI
 
         static GLenum ToGLMinFilter(FilterMode minFilter, FilterMode mipFilter)
         {
+            // OpenGL把minification和mip filtering合成一个枚举, RHI则拆成min/mip两个维度
             const bool minLinear = (minFilter != FilterMode::Nearest);
             const bool mipLinear = (mipFilter != FilterMode::Nearest);
 
@@ -39,6 +40,7 @@ namespace Physara::RHI
 
     OpenGLSampler::OpenGLSampler(const RHISamplerDesc &desc) : m_Desc(desc)
     {
+        // Sampler object独立于texture object, 可让同一纹理用不同采样/寻址状态重复绑定
         glCreateSamplers(1, &m_ID);
 
         // 过滤模式设置(Min/Mag Filter)

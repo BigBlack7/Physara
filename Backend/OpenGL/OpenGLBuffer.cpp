@@ -10,8 +10,11 @@ namespace Physara::RHI
     {
         assert(m_Size > 0);
 
+        // DSA创建buffer object; 后续所有写入都通过named buffer API, 不依赖GL_ARRAY_BUFFER等绑定点
         glCreateBuffers(1, &m_ID);
 
+        // glNamedBufferStorage创建immutable storage. GL_DYNAMIC_STORAGE_BIT表示允许后续
+        // glNamedBufferSubData; dynamic=true时额外启用persistent mapping作为高频更新路径
         GLbitfield storageFlags = GL_DYNAMIC_STORAGE_BIT;
         if (m_Dynamic)
         {
@@ -65,6 +68,7 @@ namespace Physara::RHI
 
     void *OpenGLBuffer::Map()
     {
+        // 当前只允许dynamic buffer map, 因为静态buffer没有创建MAP_*权限
         assert(m_Dynamic && "Map() only allowed for dynamic buffers.");
         return m_PersistentPtr;
     }
@@ -88,11 +92,13 @@ namespace Physara::RHI
 
         if (m_Dynamic && m_PersistentPtr != nullptr)
         {
+            // Persistent coherent mapping: CPU直接写映射地址, GPU可见性由coherent bit保证
             auto *dst = static_cast<std::byte *>(m_PersistentPtr) + offset;
             std::memcpy(dst, data, size);
             return;
         }
 
+        // 静态/非映射buffer走DSA sub data更新. storage创建时必须带GL_DYNAMIC_STORAGE_BIT
         glNamedBufferSubData(m_ID, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size), data);
     }
 }

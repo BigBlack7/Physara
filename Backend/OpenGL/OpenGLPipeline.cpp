@@ -13,6 +13,8 @@ namespace Physara::RHI
     {
         static void GetVertexFormat(VertexFormat format, GLint &components, GLenum &type, GLboolean &normalized)
         {
+            // RHI vertex format -> glVertexArrayAttribFormat参数
+            // 目前只覆盖常用float/normalized byte格式, 整数属性后续需要glVertexArrayAttribIFormat
             switch (format)
             {
             case VertexFormat::RGBA32F:
@@ -71,6 +73,8 @@ namespace Physara::RHI
 
     OpenGLPipeline::OpenGLPipeline(const RHIPipelineStateDesc &desc) : m_Desc(desc)
     {
+        // OpenGL pipeline object由program + VAO + CommandList中的固定函数状态共同组成
+        // 这里负责shader link和VAO vertex layout, raster/depth/blend在SetPipelineState时应用
         m_IsCompute = (m_Desc.computeShader != nullptr);
         if (m_IsCompute)
         {
@@ -87,6 +91,7 @@ namespace Physara::RHI
             }
         }
 
+        // Program是shader stage的链接产物. OpenGL没有独立PSO对象, 所以program只覆盖shader部分
         m_Program = glCreateProgram();
         if (m_Program == 0)
         {
@@ -131,6 +136,8 @@ namespace Physara::RHI
 
         if (!m_IsCompute)
         {
+            // DSA VAO: 记录attribute format, attribute->binding映射和instance divisor
+            // 具体vertex/index buffer object在CommandList::SetVertexBuffer/SetIndexBuffer绑定到此VAO
             glCreateVertexArrays(1, &m_VAO);
 
             for (const auto &attr : m_Desc.vertexAttributes)
@@ -155,6 +162,7 @@ namespace Physara::RHI
 
             for (const auto &binding : m_Desc.vertexBindings)
             {
+                // instanceDivisor=0表示per-vertex; 1表示每实例前进一次, 适合instancing/MDI
                 glVertexArrayBindingDivisor(m_VAO, binding.binding, binding.instanceDivisor);
             }
         }

@@ -146,7 +146,7 @@ namespace Physara::Platform
 
     void GLFWWindowOpenGL::SetVSync(bool enabled)
     {
-        glfwSwapInterval(enabled ? 1 : 0);
+        glfwSwapInterval(enabled ? 1 : 0); // 垂直同步
     }
 
     void GLFWWindowOpenGL::SetTitle(std::string_view title)
