@@ -27,7 +27,7 @@ namespace Physara::Editor
             return;
         }
 
-        if (m_Context.selectedEntity == entt::null)
+        if (m_Context.selectedEntity == Engine::NullEntity)
         {
             ImGui::TextUnformatted("No entity selected.");
             ImGui::End();

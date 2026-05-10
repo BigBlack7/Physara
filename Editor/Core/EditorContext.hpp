@@ -2,7 +2,7 @@
 
 #include <filesystem>
 
-#include <entt/entt.hpp>
+#include <Engine/Scene/EntityId.hpp>
 
 namespace Physara::Engine
 {
@@ -67,7 +67,7 @@ namespace Physara::Editor
     struct EditorContext
     {
         Engine::Scene *activeScene{nullptr};     // non-owning
-        entt::entity selectedEntity{entt::null}; // temporary id before Engine::Entity
+        Engine::EntityId selectedEntity{Engine::NullEntity};
 
         std::filesystem::path assetsRootPath{};
         std::filesystem::path currentContentPath{};

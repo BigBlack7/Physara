@@ -2,22 +2,22 @@
 
 #include <cstdint>
 
-#include <entt/entt.hpp>
+#include <Engine/Scene/EntityId.hpp>
 
 namespace Physara::Engine
 {
     struct RelationshipComponent
     {
-        entt::entity parent{entt::null};
-        entt::entity firstChild{entt::null};
-        entt::entity nextSibling{entt::null};
-        entt::entity previousSibling{entt::null};
+        EntityId parent{NullEntity};
+        EntityId firstChild{NullEntity};
+        EntityId nextSibling{NullEntity};
+        EntityId previousSibling{NullEntity};
         std::uint32_t childCount{0};
 
-        [[nodiscard]] bool HasParent() const { return parent != entt::null; }
-        [[nodiscard]] bool HasChildren() const { return firstChild != entt::null; }
-        [[nodiscard]] bool HasNextSibling() const { return nextSibling != entt::null; }
-        [[nodiscard]] bool HasPreviousSibling() const { return previousSibling != entt::null; }
-        [[nodiscard]] bool IsRoot() const { return parent == entt::null; }
+        [[nodiscard]] bool HasParent() const { return parent != NullEntity; }
+        [[nodiscard]] bool HasChildren() const { return firstChild != NullEntity; }
+        [[nodiscard]] bool HasNextSibling() const { return nextSibling != NullEntity; }
+        [[nodiscard]] bool HasPreviousSibling() const { return previousSibling != NullEntity; }
+        [[nodiscard]] bool IsRoot() const { return parent == NullEntity; }
     };
 }
