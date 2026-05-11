@@ -7,6 +7,7 @@
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/ShortcutRegistry.hpp>
+#include <Engine/RHI/Core/IImGuiBackend.hpp>
 
 namespace Physara::Editor
 {
@@ -21,6 +22,16 @@ namespace Physara::Editor
         float mouseWheel{0.f};
     };
 
+    struct SceneViewIconSet
+    {
+        RHI::ImGuiTextureHandle translate{0};
+        RHI::ImGuiTextureHandle rotate{0};
+        RHI::ImGuiTextureHandle scale{0};
+        RHI::ImGuiTextureHandle panel{0};
+        RHI::ImGuiTextureHandle shortcut{0};
+        RHI::ImGuiTextureHandle info{0};
+    };
+
     class SceneViewPanel final
     {
     public:
@@ -31,6 +42,7 @@ namespace Physara::Editor
 
         void Draw();
         void SetPreviewTextureId(void *textureId);
+        void SetIconSet(const SceneViewIconSet &icons);
         void SetViewportResizeCallback(ViewportResizeCallback callback);
         void SetInputForwardCallback(InputForwardCallback callback);
 
@@ -39,6 +51,12 @@ namespace Physara::Editor
         void DrawPlaceholder(float width, float height);
         void DrawOverlay(const ImVec2 &origin, float width, float height);
         void DrawViewportToolbar(const ImVec2 &origin, float width);
+        void DrawLeftToolbar(const ImVec2 &origin);
+        void DrawRightToolbar(const ImVec2 &origin, float width);
+        void DrawPanelMenu(const ImVec2 &origin, float width);
+        void DrawCompactCheckbox(const char *label, bool &value);
+        bool DrawIconButton(const char *id, RHI::ImGuiTextureHandle icon, const char *fallback,
+                            const char *tooltip, bool active);
         void UpdateSceneViewState(float width, float height);
         void ForwardInput();
 
@@ -46,6 +64,7 @@ namespace Physara::Editor
         EditorContext &m_Context;
         const ShortcutRegistry &m_ShortcutRegistry;
         void *m_PreviewTextureId{nullptr};
+        SceneViewIconSet m_Icons{};
         ViewportResizeCallback m_ResizeCallback{};
         InputForwardCallback m_InputCallback{};
     };

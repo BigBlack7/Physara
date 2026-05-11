@@ -2,6 +2,7 @@
 
 #include <Engine/Core/Log.hpp>
 
+#include <glad/glad.h>
 #include <imgui/imgui_impl_glfw.h>
 #include <imgui/imgui_impl_opengl3.h>
 #include <imgui/imgui.h>
@@ -103,6 +104,38 @@ namespace Physara::RHI
             // 将ImGui draw lists翻译为OpenGL draw calls. 此处是唯一接触imgui_impl_opengl3的位置, 其他地方只依赖imgui_impl_glfw和imgui核心接口
             ImGui_ImplOpenGL3_RenderDrawData(drawData);
         }
+    }
+
+    ImGuiTextureHandle OpenGLImGuiBackend::CreateTextureRGBA(std::uint32_t width, std::uint32_t height, const void *pixels)
+    {
+        if (!m_Initialized || pixels == nullptr || width == 0 || height == 0)
+        {
+            return 0;
+        }
+
+        // 纹理创建和销毁接口由Backend实现, Editor只持有ImGuiTextureHandle, 通过Backend上传像素数据并获取对应的ImGuiTextureHandle, 后续UI渲染时将该handle传回ImGui作为纹理ID使用
+        GLuint texture = 0;
+        glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+        glTextureStorage2D(texture, 1, GL_RGBA8, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        glTextureSubImage2D(texture, 0, 0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height),
+                            GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        return static_cast<ImGuiTextureHandle>(texture);
+    }
+
+    void OpenGLImGuiBackend::DestroyTexture(ImGuiTextureHandle texture)
+    {
+        if (texture == 0)
+        {
+            return;
+        }
+
+        const GLuint glTexture = static_cast<GLuint>(texture);
+        glDeleteTextures(1, &glTexture);
     }
 
     void OpenGLImGuiBackend::Shutdown()

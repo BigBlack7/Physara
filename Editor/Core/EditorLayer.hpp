@@ -13,6 +13,7 @@ namespace Physara::Editor
         explicit EditorLayer(RHI::IImGuiBackend *backend);
 
         void OnAttach() override;
+        void OnDetach() override;
         void OnUIRender() override;
 
     private:

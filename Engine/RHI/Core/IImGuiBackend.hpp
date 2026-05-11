@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cstdint>
+
 namespace Physara::RHI
 {
     class RHIDevice;
+
+    using ImGuiTextureHandle = std::uint64_t;
 
     class IImGuiBackend
     {
@@ -13,6 +17,8 @@ namespace Physara::RHI
         virtual void BeginFrame() = 0;
         virtual void EndFrame() = 0;
         virtual void RenderDrawData() = 0;
+        virtual ImGuiTextureHandle CreateTextureRGBA(std::uint32_t width, std::uint32_t height, const void *pixels) = 0;
+        virtual void DestroyTexture(ImGuiTextureHandle texture) = 0;
         virtual void Shutdown() = 0;
     };
 }

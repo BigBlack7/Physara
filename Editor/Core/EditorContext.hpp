@@ -14,6 +14,7 @@ namespace Physara::Editor
 {
     enum class GizmoOperation
     {
+        None,
         Translate,
         Rotate,
         Scale
@@ -87,6 +88,9 @@ namespace Physara::Editor
         EditorDisplayMode displayMode{EditorDisplayMode::Docked};
         PanelVisibilityState panels{};
         bool showHelpShortcuts{false};
+        bool showSceneViewInfo{true};
+        bool showSceneViewPanelMenu{false};
+        bool cleanSceneView{false};
     };
 
     struct EditorSettings

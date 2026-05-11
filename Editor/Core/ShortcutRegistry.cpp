@@ -62,6 +62,8 @@ namespace Physara::Editor
     {
         Register({"help.shortcuts", "Help / Shortcuts", "Global", "F1", ShortcutContext::Global,
                   "Show every available editor shortcut.", ImGuiKey_F1, false, false, false, true});
+        Register({"viewport.clean.toggle", "Clean Viewport", "Global", "F10", ShortcutContext::Global,
+                  "Toggle clean Scene View mode without viewport overlays.", ImGuiKey_F10, false, false, false, true});
         Register({"viewport.presentation.toggle", "Presentation Mode", "Global", "F11", ShortcutContext::Global,
                   "Toggle pure viewport presentation mode.", ImGuiKey_F11, false, false, false, true});
         Register({"capture.current_view", "Capture Current View", "Global", "F12", ShortcutContext::Global,

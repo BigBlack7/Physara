@@ -12,6 +12,11 @@ namespace Physara::Editor
         m_App.Init(m_Backend);
     }
 
+    void EditorLayer::OnDetach()
+    {
+        m_App.Shutdown();
+    }
+
     void EditorLayer::OnUIRender()
     {
         m_App.OnUIRender();

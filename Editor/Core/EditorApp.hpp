@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
@@ -22,6 +23,7 @@ namespace Physara::Editor
         EditorApp();
 
         void Init(RHI::IImGuiBackend *backend);
+        void Shutdown();
         void OnUIRender();
 
         EditorContext &GetContext() { return m_Context; }
@@ -35,6 +37,8 @@ namespace Physara::Editor
         void DrawDockedPanels();
         void DrawPresentationPanels();
         void RequestCapture();
+        void LoadSceneViewIcons();
+        void DestroySceneViewIcons();
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
@@ -50,5 +54,6 @@ namespace Physara::Editor
 
         bool m_LayoutInitialized{false};
         std::uint32_t m_DockspaceId{0};
+        std::vector<RHI::ImGuiTextureHandle> m_IconTextures{};
     };
 }

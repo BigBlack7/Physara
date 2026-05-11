@@ -15,10 +15,27 @@ namespace Physara::Editor
         constexpr const char *PresentationPanelName = "Scene View##Presentation";
         constexpr const char *ViewportChildName = "SceneViewViewport";
         constexpr float MinViewportSize = 1.f;
+        constexpr float OverlayPadding = 12.f;
+        constexpr float IconSize = 18.f;
+        constexpr float IconButtonSize = 26.f;
 
         void AddOverlayText(ImDrawList *drawList, const ImVec2 &pos, const char *text)
         {
             drawList->AddText(pos, IM_COL32(232, 244, 230, 255), text);
+        }
+
+        void ShowTooltip(const char *text)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(9.f, 6.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 6.f);
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(8, 14, 15, 245));
+            ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(112, 184, 207, 190));
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(238, 250, 255, 255));
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(text);
+            ImGui::EndTooltip();
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar(2);
         }
     }
 
@@ -58,6 +75,11 @@ namespace Physara::Editor
     void SceneViewPanel::SetPreviewTextureId(void *textureId)
     {
         m_PreviewTextureId = textureId;
+    }
+
+    void SceneViewPanel::SetIconSet(const SceneViewIconSet &icons)
+    {
+        m_Icons = icons;
     }
 
     void SceneViewPanel::SetViewportResizeCallback(ViewportResizeCallback callback)
@@ -118,76 +140,98 @@ namespace Physara::Editor
 
     void SceneViewPanel::DrawOverlay(const ImVec2 &origin, float width, float height)
     {
+        if (m_Context.ui.cleanSceneView || !m_Context.ui.showSceneViewInfo)
+        {
+            return;
+        }
+
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const bool presentation = m_Context.ui.displayMode == EditorDisplayMode::ViewportPresentation;
-        const float overlayWidth = std::min(presentation ? 520.f : 390.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = presentation ? 150.f : 134.f;
-        if (overlayWidth > 120.f && height > overlayHeight + 24.f)
+        constexpr float paddingX = 14.f;
+        constexpr float paddingY = 13.f;
+        const float lineHeight = ImGui::GetTextLineHeight() + 5.f;
+
+        char sizeLine[128]{};
+        char fpsLine[128]{};
+        char hoveredLine[128]{};
+        char focusedLine[128]{};
+        char keysLine[160]{};
+
+        std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
+        std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
+        std::snprintf(hoveredLine, sizeof(hoveredLine), "Hovered: %s", m_Context.sceneView.hovered ? "true" : "false");
+        std::snprintf(focusedLine, sizeof(focusedLine), "Focused: %s", m_Context.sceneView.focused ? "true" : "false");
+
+        float maxTextWidth = std::max({ImGui::CalcTextSize(sizeLine).x,
+                                       ImGui::CalcTextSize(fpsLine).x,
+                                       ImGui::CalcTextSize(hoveredLine).x,
+                                       ImGui::CalcTextSize(focusedLine).x});
+
+        if (presentation)
         {
-            const ImVec2 overlayMin(origin.x + 12.f, origin.y + (presentation ? 12.f : 54.f));
+            const ShortcutAction *toggle = m_ShortcutRegistry.FindAction("viewport.presentation.toggle");
+            const ShortcutAction *exit = m_ShortcutRegistry.FindAction("viewport.presentation.exit");
+            const ShortcutAction *capture = m_ShortcutRegistry.FindAction("capture.current_view");
+            const ShortcutAction *help = m_ShortcutRegistry.FindAction("help.shortcuts");
+
+            std::snprintf(keysLine, sizeof(keysLine), "Keys: %s help, %s toggle, %s exit, %s capture",
+                          help != nullptr ? help->keyChord.c_str() : "F1",
+                          toggle != nullptr ? toggle->keyChord.c_str() : "F11",
+                          exit != nullptr ? exit->keyChord.c_str() : "Esc",
+                          capture != nullptr ? capture->keyChord.c_str() : "F12");
+            maxTextWidth = std::max(maxTextWidth, ImGui::CalcTextSize(keysLine).x);
+        }
+
+        const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 5.f : 4.f);
+        if (overlayWidth > 80.f && height > overlayHeight + 24.f)
+        {
+            const ImVec2 overlayMin(origin.x + width - Internal::OverlayPadding - overlayWidth,
+                                    origin.y + (presentation ? 50.f : 50.f));
             const ImVec2 overlayMax(overlayMin.x + overlayWidth, overlayMin.y + overlayHeight);
             drawList->AddRectFilled(overlayMin, overlayMax, IM_COL32(14, 20, 18, 192), 8.f);
             drawList->AddRect(overlayMin, overlayMax, IM_COL32(143, 164, 151, 120), 8.f);
 
-            char line[128]{};
-            float y = overlayMin.y + 13.f;
-            const float x = overlayMin.x + 14.f;
-            const float lineHeight = ImGui::GetTextLineHeight() + 5.f;
+            float y = overlayMin.y + paddingY;
+            const float x = overlayMin.x + paddingX;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), "Scene View");
+            Internal::AddOverlayText(drawList, ImVec2(x, y), sizeLine);
             y += lineHeight;
 
-            std::snprintf(line, sizeof(line), "Size: %.f x %.f", width, height);
-            Internal::AddOverlayText(drawList, ImVec2(x, y), line);
+            Internal::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
             y += lineHeight;
 
-            std::snprintf(line, sizeof(line), "FPS: %.1f", ImGui::GetIO().Framerate);
-            Internal::AddOverlayText(drawList, ImVec2(x, y), line);
+            Internal::AddOverlayText(drawList, ImVec2(x, y), hoveredLine);
             y += lineHeight;
 
-            std::snprintf(line, sizeof(line), "Hovered: %s", m_Context.sceneView.hovered ? "true" : "false");
-            Internal::AddOverlayText(drawList, ImVec2(x, y), line);
-            y += lineHeight;
-
-            std::snprintf(line, sizeof(line), "Focused: %s", m_Context.sceneView.focused ? "true" : "false");
-            Internal::AddOverlayText(drawList, ImVec2(x, y), line);
+            Internal::AddOverlayText(drawList, ImVec2(x, y), focusedLine);
 
             if (presentation)
             {
                 y += lineHeight;
-                const ShortcutAction *toggle = m_ShortcutRegistry.FindAction("viewport.presentation.toggle");
-                const ShortcutAction *exit = m_ShortcutRegistry.FindAction("viewport.presentation.exit");
-                const ShortcutAction *capture = m_ShortcutRegistry.FindAction("capture.current_view");
-
-                const ShortcutAction *help = m_ShortcutRegistry.FindAction("help.shortcuts");
-
-                std::snprintf(line, sizeof(line), "Keys: %s help, %s toggle, %s exit, %s capture",
-                              help != nullptr ? help->keyChord.c_str() : "F1",
-                              toggle != nullptr ? toggle->keyChord.c_str() : "F11",
-                              exit != nullptr ? exit->keyChord.c_str() : "Esc",
-                              capture != nullptr ? capture->keyChord.c_str() : "F12");
-                Internal::AddOverlayText(drawList, ImVec2(x, y), line);
+                Internal::AddOverlayText(drawList, ImVec2(x, y), keysLine);
             }
         }
     }
 
     void SceneViewPanel::DrawViewportToolbar(const ImVec2 &origin, float width)
     {
-        if (m_Context.ui.displayMode == EditorDisplayMode::ViewportPresentation || width < 500.f)
+        if (m_Context.ui.cleanSceneView || width < 180.f)
         {
             return;
         }
 
-        constexpr float toolbarWidth = 660.f;
-        constexpr float toolbarHeight = 30.f;
-        const ImVec2 toolbarPos(origin.x + 12.f, origin.y + 12.f);
-        const ImVec2 toolbarSize(std::min(toolbarWidth, std::max(width - 24.f, 0.f)), toolbarHeight);
+        DrawLeftToolbar(origin);
+        DrawRightToolbar(origin, width);
+        DrawPanelMenu(origin, width);
+    }
 
-        ImGui::SetNextWindowPos(toolbarPos);
-        ImGui::SetNextWindowSize(toolbarSize);
+    void SceneViewPanel::DrawLeftToolbar(const ImVec2 &origin)
+    {
+        ImGui::SetNextWindowPos(ImVec2(origin.x + Internal::OverlayPadding, origin.y + Internal::OverlayPadding));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f, 4.f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.f, 3.f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.f, 2.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 3.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 4.f));
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(14, 20, 18, 205));
         ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(143, 164, 151, 130));
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 244, 230, 255));
@@ -199,97 +243,198 @@ namespace Physara::Editor
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoDocking |
                                  ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
                                  ImGuiWindowFlags_NoFocusOnAppearing |
                                  ImGuiWindowFlags_NoNav;
 
-        if (ImGui::Begin("SceneViewToolbarOverlay", nullptr, flags))
+        if (ImGui::Begin("SceneViewTransformOverlay", nullptr, flags))
         {
-            ImGui::TextUnformatted("Gizmo");
-            ImGui::SameLine();
-
-            auto drawOperationButton = [this](const char *label, GizmoOperation operation)
+            auto drawOperationButton = [this](const char *id, RHI::ImGuiTextureHandle icon, const char *fallback,
+                                              const char *tooltip, GizmoOperation operation)
             {
-                if (m_Context.settings.gizmoOperation == operation)
+                const bool active = m_Context.settings.gizmoOperation == operation;
+                if (DrawIconButton(id, icon, fallback, tooltip, active))
                 {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(101, 145, 117, 255));
-                }
-                if (ImGui::SmallButton(label))
-                {
-                    m_Context.settings.gizmoOperation = operation;
-                }
-                if (m_Context.settings.gizmoOperation == operation)
-                {
-                    ImGui::PopStyleColor();
+                    m_Context.settings.gizmoOperation = active ? GizmoOperation::None : operation;
                 }
             };
 
-            drawOperationButton("Move", GizmoOperation::Translate);
+            drawOperationButton("##TranslateTool", m_Icons.translate, "T", "Translate", GizmoOperation::Translate);
             ImGui::SameLine();
-            drawOperationButton("Rotate", GizmoOperation::Rotate);
+            drawOperationButton("##RotateTool", m_Icons.rotate, "R", "Rotate", GizmoOperation::Rotate);
             ImGui::SameLine();
-            drawOperationButton("Scale", GizmoOperation::Scale);
+            drawOperationButton("##ScaleTool", m_Icons.scale, "S", "Scale", GizmoOperation::Scale);
 
-            ImGui::SameLine(0.f, 14.f);
-            ImGui::TextUnformatted("Space");
-            ImGui::SameLine();
-
-            auto drawSpaceButton = [this](const char *label, GizmoSpace space)
+            ImGui::SameLine(0.f, 8.f);
+            const bool localSpace = m_Context.settings.gizmoSpace == GizmoSpace::Local;
+            if (DrawIconButton("##SpaceToggle", 0, localSpace ? "L" : "W",
+                               localSpace ? "Local Space. Click to switch to World." : "World Space. Click to switch to Local.",
+                               true))
             {
-                if (m_Context.settings.gizmoSpace == space)
-                {
-                    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(101, 145, 117, 255));
-                }
-                if (ImGui::SmallButton(label))
-                {
-                    m_Context.settings.gizmoSpace = space;
-                }
-                if (m_Context.settings.gizmoSpace == space)
-                {
-                    ImGui::PopStyleColor();
-                }
-            };
-
-            drawSpaceButton("Local", GizmoSpace::Local);
-            ImGui::SameLine();
-            drawSpaceButton("World", GizmoSpace::World);
-
-            ImGui::SameLine(0.f, 14.f);
-            if (ImGui::SmallButton("Panels"))
-            {
-                ImGui::OpenPopup("SceneViewPanelsPopup");
-            }
-
-            ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(18, 28, 24, 245));
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 244, 230, 255));
-            ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(58, 85, 70, 255));
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(78, 112, 92, 255));
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(101, 145, 117, 255));
-            ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(199, 232, 203, 255));
-            if (ImGui::BeginPopup("SceneViewPanelsPopup"))
-            {
-                ImGui::MenuItem("Hierarchy", nullptr, &m_Context.ui.panels.hierarchy);
-                ImGui::MenuItem("Renderer Settings", nullptr, &m_Context.ui.panels.rendererSettings);
-                ImGui::MenuItem("Inspector", nullptr, &m_Context.ui.panels.inspector);
-                ImGui::MenuItem("Content Browser", nullptr, &m_Context.ui.panels.contentBrowser);
-                ImGui::MenuItem("Log", nullptr, &m_Context.ui.panels.log);
-                ImGui::EndPopup();
-            }
-            ImGui::PopStyleColor(6);
-
-            ImGui::SameLine();
-            if (ImGui::SmallButton("F1"))
-            {
-                m_Context.ui.showHelpShortcuts = true;
-            }
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("Help / Shortcuts");
+                m_Context.settings.gizmoSpace = localSpace ? GizmoSpace::World : GizmoSpace::Local;
             }
         }
         ImGui::End();
 
         ImGui::PopStyleColor(7);
         ImGui::PopStyleVar(3);
+    }
+
+    void SceneViewPanel::DrawRightToolbar(const ImVec2 &origin, float width)
+    {
+        ImGui::SetNextWindowPos(ImVec2(origin.x + width - Internal::OverlayPadding, origin.y + Internal::OverlayPadding),
+                                ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f, 4.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 3.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 4.f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(14, 20, 18, 205));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(143, 164, 151, 130));
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 244, 230, 255));
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, IM_COL32(169, 187, 174, 255));
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 66, 56, 230));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(72, 102, 84, 240));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(95, 134, 110, 255));
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_NoDocking |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoFocusOnAppearing |
+                                 ImGuiWindowFlags_NoNav;
+
+        if (ImGui::Begin("SceneViewUtilityOverlay", nullptr, flags))
+        {
+            if (DrawIconButton("##PanelToggle", m_Icons.panel, "P", "Panels", m_Context.ui.showSceneViewPanelMenu))
+            {
+                m_Context.ui.showSceneViewPanelMenu = !m_Context.ui.showSceneViewPanelMenu;
+            }
+            ImGui::SameLine();
+            if (DrawIconButton("##ShortcutToggle", m_Icons.shortcut, "F1", "Help / Shortcuts", m_Context.ui.showHelpShortcuts))
+            {
+                m_Context.ui.showHelpShortcuts = !m_Context.ui.showHelpShortcuts;
+            }
+            ImGui::SameLine();
+            if (DrawIconButton("##InfoToggle", m_Icons.info, "i", "Viewport Info", m_Context.ui.showSceneViewInfo))
+            {
+                m_Context.ui.showSceneViewInfo = !m_Context.ui.showSceneViewInfo;
+            }
+        }
+        ImGui::End();
+
+        ImGui::PopStyleColor(7);
+        ImGui::PopStyleVar(3);
+    }
+
+    void SceneViewPanel::DrawPanelMenu(const ImVec2 &origin, float width)
+    {
+        if (!m_Context.ui.showSceneViewPanelMenu)
+        {
+            return;
+        }
+
+        const float panelMenuY = m_Context.ui.showSceneViewInfo ? 194.f : 48.f;
+        ImGui::SetNextWindowPos(ImVec2(origin.x + width - Internal::OverlayPadding, origin.y + panelMenuY),
+                                ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 5.f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(14, 20, 18, 230));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(143, 164, 151, 130));
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 244, 230, 255));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(45, 66, 56, 230));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(199, 232, 203, 255));
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_NoDocking |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoFocusOnAppearing |
+                                 ImGuiWindowFlags_NoNav;
+
+        if (ImGui::Begin("SceneViewPanelMenuOverlay", nullptr, flags))
+        {
+            DrawCompactCheckbox("Hierarchy", m_Context.ui.panels.hierarchy);
+            DrawCompactCheckbox("Renderer Settings", m_Context.ui.panels.rendererSettings);
+            DrawCompactCheckbox("Inspector", m_Context.ui.panels.inspector);
+            DrawCompactCheckbox("Content Browser", m_Context.ui.panels.contentBrowser);
+            DrawCompactCheckbox("Log", m_Context.ui.panels.log);
+        }
+        ImGui::End();
+
+        ImGui::PopStyleColor(5);
+        ImGui::PopStyleVar(2);
+    }
+
+    void SceneViewPanel::DrawCompactCheckbox(const char *label, bool &value)
+    {
+        const float boxSize = ImGui::GetTextLineHeight();
+        const float rowHeight = boxSize + 4.f;
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        const ImVec2 textSize = ImGui::CalcTextSize(label);
+        const ImVec2 rowSize(boxSize + 8.f + textSize.x, rowHeight);
+
+        ImGui::InvisibleButton(label, rowSize);
+        if (ImGui::IsItemClicked())
+        {
+            value = !value;
+        }
+
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
+        const ImVec2 boxMin(rowMin.x, rowMin.y + (rowHeight - boxSize) * 0.5f);
+        const ImVec2 boxMax(boxMin.x + boxSize, boxMin.y + boxSize);
+        const ImU32 fillColor = value ? IM_COL32(82, 126, 104, 245) : IM_COL32(29, 44, 39, 230);
+        const ImU32 borderColor = ImGui::IsItemHovered() ? IM_COL32(139, 205, 224, 230) : IM_COL32(143, 164, 151, 150);
+        drawList->AddRectFilled(boxMin, boxMax, fillColor, 4.f);
+        drawList->AddRect(boxMin, boxMax, borderColor, 4.f);
+
+        if (value)
+        {
+            const float x0 = boxMin.x + boxSize * 0.25f;
+            const float y0 = boxMin.y + boxSize * 0.53f;
+            const float x1 = boxMin.x + boxSize * 0.43f;
+            const float y1 = boxMin.y + boxSize * 0.70f;
+            const float x2 = boxMin.x + boxSize * 0.76f;
+            const float y2 = boxMin.y + boxSize * 0.30f;
+            drawList->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(238, 250, 242, 255), 2.f);
+            drawList->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(238, 250, 242, 255), 2.f);
+        }
+
+        drawList->AddText(ImVec2(boxMax.x + 8.f, rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f),
+                          IM_COL32(232, 244, 230, 255), label);
+    }
+
+    bool SceneViewPanel::DrawIconButton(const char *id, RHI::ImGuiTextureHandle icon, const char *fallback,
+                                        const char *tooltip, bool active)
+    {
+        if (active)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(91, 133, 149, 245));
+        }
+
+        bool pressed = false;
+        const ImVec2 buttonSize(Internal::IconButtonSize, Internal::IconButtonSize);
+        if (icon != 0)
+        {
+            pressed = ImGui::ImageButton(id, static_cast<ImTextureID>(icon),
+                                         ImVec2(Internal::IconSize, Internal::IconSize),
+                                         ImVec2(0.f, 0.f), ImVec2(1.f, 1.f),
+                                         ImVec4(0.f, 0.f, 0.f, 0.f), ImVec4(0.68f, 0.86f, 0.96f, 1.f));
+        }
+        else
+        {
+            pressed = ImGui::Button(fallback, buttonSize);
+        }
+
+        if (active)
+        {
+            ImGui::PopStyleColor();
+        }
+
+        if (ImGui::IsItemHovered())
+        {
+            Internal::ShowTooltip(tooltip);
+        }
+
+        return pressed;
     }
 
     void SceneViewPanel::UpdateSceneViewState(float width, float height)

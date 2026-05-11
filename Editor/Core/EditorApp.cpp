@@ -5,6 +5,7 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <stb/stb_image.h>
 
 #include <Engine/Core/Log.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
@@ -20,6 +21,37 @@ namespace Physara::Editor
         constexpr const char *InspectorName = "Inspector";
         constexpr const char *ContentBrowserName = "Content Browser";
         constexpr const char *LogName = "Log";
+
+        RHI::ImGuiTextureHandle LoadIconTexture(RHI::IImGuiBackend *backend, const std::filesystem::path &path)
+        {
+            if (backend == nullptr)
+            {
+                return 0;
+            }
+
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+            if (pixels == nullptr)
+            {
+                PHYSARA_WARN("Failed to load editor icon: {}", path.string());
+                return 0;
+            }
+
+            const RHI::ImGuiTextureHandle texture =
+                backend->CreateTextureRGBA(static_cast<std::uint32_t>(width),
+                                           static_cast<std::uint32_t>(height),
+                                           pixels);
+            stbi_image_free(pixels);
+
+            if (texture == 0)
+            {
+                PHYSARA_WARN("Failed to upload editor icon: {}", path.string());
+            }
+
+            return texture;
+        }
     }
 
     EditorApp::EditorApp() : m_HierarchyPanel(m_Context),
@@ -41,6 +73,13 @@ namespace Physara::Editor
         m_Context.settings.capture.outputDirectory = m_Context.assetsRootPath / "Gallery";
 
         EditorTheme::Apply();
+        LoadSceneViewIcons();
+    }
+
+    void EditorApp::Shutdown()
+    {
+        DestroySceneViewIcons();
+        m_Backend = nullptr;
     }
 
     void EditorApp::OnUIRender()
@@ -86,6 +125,11 @@ namespace Physara::Editor
             m_Context.ui.displayMode = m_Context.ui.displayMode == EditorDisplayMode::Docked
                                            ? EditorDisplayMode::ViewportPresentation
                                            : EditorDisplayMode::Docked;
+        }
+
+        if (!textInputActive && m_ShortcutRegistry.IsPressed("viewport.clean.toggle"))
+        {
+            m_Context.ui.cleanSceneView = !m_Context.ui.cleanSceneView;
         }
 
         if (!textInputActive && m_Context.ui.displayMode == EditorDisplayMode::ViewportPresentation &&
@@ -194,5 +238,37 @@ namespace Physara::Editor
     {
         m_Context.settings.capture.captureRequested = true;
         PHYSARA_INFO("Capture requested. Renderer capture output will be connected in Phase 4.");
+    }
+
+    void EditorApp::LoadSceneViewIcons()
+    {
+        DestroySceneViewIcons();
+
+        const std::filesystem::path iconsRoot = m_Context.assetsRootPath / "Icons";
+        SceneViewIconSet icons{};
+
+        icons.translate = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_translate.png");
+        icons.rotate = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_rotation.png");
+        icons.scale = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_scale.png");
+        icons.panel = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_panel.png");
+        icons.shortcut = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_shortcut.png");
+        icons.info = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_info.png");
+
+        m_IconTextures = {icons.translate, icons.rotate, icons.scale, icons.panel, icons.shortcut, icons.info};
+        m_SceneViewPanel.SetIconSet(icons);
+    }
+
+    void EditorApp::DestroySceneViewIcons()
+    {
+        if (m_Backend != nullptr)
+        {
+            for (RHI::ImGuiTextureHandle texture : m_IconTextures)
+            {
+                m_Backend->DestroyTexture(texture);
+            }
+        }
+
+        m_IconTextures.clear();
+        m_SceneViewPanel.SetIconSet({});
     }
 }
