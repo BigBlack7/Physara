@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
@@ -21,6 +22,7 @@ namespace Physara::Editor
     {
     public:
         EditorApp();
+        ~EditorApp();
 
         void Init(RHI::IImGuiBackend *backend);
         void Shutdown();
@@ -39,9 +41,12 @@ namespace Physara::Editor
         void RequestCapture();
         void LoadSceneViewIcons();
         void DestroySceneViewIcons();
+        void CreateDefaultScene();
+        void DeleteSelectedEntity();
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
+        std::unique_ptr<Engine::Scene> m_EditorScene{};
         EditorContext m_Context{};
         ShortcutRegistry m_ShortcutRegistry{};
         HierarchyPanel m_HierarchyPanel;

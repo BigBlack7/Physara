@@ -1,8 +1,11 @@
 #include "InspectorPanel.hpp"
+#include "ComponentDrawer.hpp"
 
 #include <cstdint>
 
 #include <imgui/imgui.h>
+
+#include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
 {
@@ -27,19 +30,32 @@ namespace Physara::Editor
             return;
         }
 
-        if (m_Context.selectedEntity == Engine::NullEntity)
+        if (m_Context.selectedEntity == Engine::NullEntity ||
+            !m_Context.activeScene->IsValid(m_Context.selectedEntity))
         {
+            m_Context.selectedEntity = Engine::NullEntity;
             ImGui::TextUnformatted("No entity selected.");
             ImGui::End();
             return;
         }
 
-        ImGui::Text("Selected Entity: %u",
-                    static_cast<std::uint32_t>(m_Context.selectedEntity));
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Components will appear here.");
+        DrawEntity(m_Context.activeScene->GetEntity(m_Context.selectedEntity));
 
         ImGui::End();
+    }
+
+    void InspectorPanel::DrawEntity(Engine::Entity entity)
+    {
+        if (!entity)
+        {
+            ImGui::TextUnformatted("No entity selected.");
+            return;
+        }
+
+        ImGui::Text("Entity ID: %u", static_cast<std::uint32_t>(entity.GetHandle()));
+        ImGui::Separator();
+
+        TryDrawComponent<Engine::TagComponent>(entity, "Tag");
+        TryDrawComponent<Engine::TransformComponent>(entity, "Transform");
     }
 }

@@ -8,6 +8,7 @@
 #include <stb/stb_image.h>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Scene/Scene.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
@@ -63,6 +64,8 @@ namespace Physara::Editor
     {
     }
 
+    EditorApp::~EditorApp() = default;
+
     void EditorApp::Init(RHI::IImGuiBackend *backend)
     {
         m_Backend = backend;
@@ -73,12 +76,16 @@ namespace Physara::Editor
         m_Context.settings.capture.outputDirectory = m_Context.assetsRootPath / "Gallery";
 
         EditorTheme::Apply();
+        CreateDefaultScene();
         LoadSceneViewIcons();
     }
 
     void EditorApp::Shutdown()
     {
         DestroySceneViewIcons();
+        m_Context.activeScene = nullptr;
+        m_Context.selectedEntity = Engine::NullEntity;
+        m_EditorScene.reset();
         m_Backend = nullptr;
     }
 
@@ -106,6 +113,11 @@ namespace Physara::Editor
         }
 
         DrawPanels();
+
+        if (m_Context.activeScene != nullptr)
+        {
+            m_Context.activeScene->UpdateTransforms();
+        }
 
         m_Backend->EndFrame();
         m_Backend->RenderDrawData();
@@ -141,6 +153,11 @@ namespace Physara::Editor
         if (!textInputActive && m_ShortcutRegistry.IsPressed("capture.current_view"))
         {
             RequestCapture();
+        }
+
+        if (!textInputActive && m_ShortcutRegistry.IsPressed("scene.delete"))
+        {
+            DeleteSelectedEntity();
         }
     }
 
@@ -270,5 +287,25 @@ namespace Physara::Editor
 
         m_IconTextures.clear();
         m_SceneViewPanel.SetIconSet({});
+    }
+
+    void EditorApp::CreateDefaultScene()
+    {
+        m_EditorScene = std::make_unique<Engine::Scene>();
+        Engine::Entity entity = m_EditorScene->CreateEntity("Entity");
+        m_Context.activeScene = m_EditorScene.get();
+        m_Context.selectedEntity = entity.GetHandle();
+    }
+
+    void EditorApp::DeleteSelectedEntity()
+    {
+        if (m_Context.activeScene == nullptr || !m_Context.activeScene->IsValid(m_Context.selectedEntity))
+        {
+            m_Context.selectedEntity = Engine::NullEntity;
+            return;
+        }
+
+        m_Context.activeScene->DestroyEntity(m_Context.selectedEntity);
+        m_Context.selectedEntity = Engine::NullEntity;
     }
 }
