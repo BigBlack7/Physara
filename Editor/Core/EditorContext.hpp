@@ -109,6 +109,7 @@ namespace Physara::Editor
 
         std::filesystem::path assetsRootPath{};
         std::filesystem::path currentContentPath{};
+        std::filesystem::path currentScenePath{};
 
         SceneViewState sceneView{};
         EditorUIState ui{};

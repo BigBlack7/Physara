@@ -1,7 +1,12 @@
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -9,6 +14,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Scene/Scene.hpp>
+#include <Engine/Scene/SceneSerializer.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
@@ -22,6 +28,23 @@ namespace Physara::Editor
         constexpr const char *InspectorName = "Inspector";
         constexpr const char *ContentBrowserName = "Content Browser";
         constexpr const char *LogName = "Log";
+        constexpr const char *SceneSuffix = ".scene.json";
+
+        std::string SceneNameFromPath(const std::filesystem::path &path)
+        {
+            std::string name = path.filename().string();
+            std::string lower = name;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+
+            constexpr std::string_view suffix = SceneSuffix;
+            if (lower.size() > suffix.size() && lower.ends_with(suffix))
+            {
+                name.resize(name.size() - suffix.size());
+            }
+
+            return name.empty() ? "Untitled" : name;
+        }
 
         RHI::ImGuiTextureHandle LoadIconTexture(RHI::IImGuiBackend *backend, const std::filesystem::path &path)
         {
@@ -73,7 +96,9 @@ namespace Physara::Editor
         m_DockspaceId = 0;
         m_Context.assetsRootPath = Physara::Platform::FileSystem::GetAssetsRootPath();
         m_Context.currentContentPath = m_Context.assetsRootPath;
+        m_Context.currentScenePath.clear();
         m_Context.settings.capture.outputDirectory = m_Context.assetsRootPath / "Gallery";
+        std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", "Untitled");
 
         EditorTheme::Apply();
         CreateDefaultScene();
@@ -113,6 +138,7 @@ namespace Physara::Editor
         }
 
         DrawPanels();
+        DrawSaveScenePopup();
 
         if (m_Context.activeScene != nullptr)
         {
@@ -158,6 +184,11 @@ namespace Physara::Editor
         if (!textInputActive && m_ShortcutRegistry.IsPressed("scene.delete"))
         {
             DeleteSelectedEntity();
+        }
+
+        if (!textInputActive && m_ShortcutRegistry.IsPressed("scene.save"))
+        {
+            RequestSaveScene();
         }
     }
 
@@ -255,6 +286,109 @@ namespace Physara::Editor
     {
         m_Context.settings.capture.captureRequested = true;
         PHYSARA_INFO("Capture requested. Renderer capture output will be connected in Phase 4.");
+    }
+
+    void EditorApp::RequestSaveScene()
+    {
+        if (m_Context.activeScene == nullptr)
+        {
+            PHYSARA_WARN("No active scene to save.");
+            return;
+        }
+
+        const std::string currentName = Internal::SceneNameFromPath(m_Context.currentScenePath);
+        m_SaveSceneName.fill('\0');
+        std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", currentName.c_str());
+        m_OpenSaveScenePopup = true;
+    }
+
+    void EditorApp::DrawSaveScenePopup()
+    {
+        if (m_OpenSaveScenePopup)
+        {
+            ImGui::OpenPopup("Save Scene");
+            m_OpenSaveScenePopup = false;
+        }
+
+        if (ImGui::BeginPopupModal("Save Scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextUnformatted("Save scene to Assets/Scenes");
+            ImGui::InputText("Name", m_SaveSceneName.data(), m_SaveSceneName.size());
+            ImGui::TextDisabled(".scene.json will be appended automatically");
+            ImGui::Separator();
+
+            const bool confirm = ImGui::Button("Save", ImVec2(96.f, 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Enter);
+            ImGui::SameLine();
+            const bool cancel = ImGui::Button("Cancel", ImVec2(96.f, 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape);
+
+            if (confirm)
+            {
+                SaveCurrentScene(BuildSceneSavePath(m_SaveSceneName.data()));
+                ImGui::CloseCurrentPopup();
+            }
+            else if (cancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+
+    void EditorApp::SaveCurrentScene(const std::filesystem::path &path)
+    {
+        if (m_Context.activeScene == nullptr)
+        {
+            PHYSARA_WARN("No active scene to save.");
+            return;
+        }
+
+        if (Engine::SceneSerializer::Serialize(*m_Context.activeScene, path))
+        {
+            m_Context.currentScenePath = path;
+            PHYSARA_INFO("Saved scene: {}", path.string());
+        }
+        else
+        {
+            PHYSARA_ERROR("Failed to save scene: {}", path.string());
+        }
+    }
+
+    std::filesystem::path EditorApp::BuildSceneSavePath(std::string name) const
+    {
+        std::string sanitized;
+        sanitized.reserve(name.size());
+        for (char c : name)
+        {
+            const unsigned char value = static_cast<unsigned char>(c);
+            if (std::isalnum(value) || c == '_' || c == '-' || c == ' ')
+            {
+                sanitized.push_back(c);
+            }
+            else if (c == '.')
+            {
+                sanitized.push_back(c);
+            }
+            else
+            {
+                sanitized.push_back('_');
+            }
+        }
+
+        if (sanitized.empty())
+        {
+            sanitized = "Untitled";
+        }
+
+        std::string lower = sanitized;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+                       { return static_cast<char>(std::tolower(c)); });
+        if (lower.ends_with(Internal::SceneSuffix))
+        {
+            sanitized.resize(sanitized.size() - std::string_view(Internal::SceneSuffix).size());
+        }
+
+        return m_Context.assetsRootPath / "Scenes" / (sanitized + Internal::SceneSuffix);
     }
 
     void EditorApp::LoadSceneViewIcons()

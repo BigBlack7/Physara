@@ -8,7 +8,7 @@ namespace Physara::RHI
     {
     public:
         OpenGLImGuiBackend() = default;
-        ~OpenGLImGuiBackend() override = default;
+        ~OpenGLImGuiBackend() override;
 
         bool Initialize(RHIDevice *device, void *windowHandle) override;
         void BeginFrame() override;

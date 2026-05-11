@@ -9,6 +9,11 @@
 
 namespace Physara::RHI
 {
+    OpenGLImGuiBackend::~OpenGLImGuiBackend()
+    {
+        Shutdown();
+    }
+
     bool OpenGLImGuiBackend::Initialize(RHIDevice *device, void *windowHandle)
     {
         // Editor只依赖IImGuiBackend; 具体imgui_impl_glfw/opengl3适配器封装在Backend内

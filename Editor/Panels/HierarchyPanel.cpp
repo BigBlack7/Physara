@@ -100,7 +100,7 @@ namespace Physara::Editor
             {
                 OpenRenamePopup(entity);
             }
-            if (ImGui::MenuItem("Delete", "Delete"))
+            if (ImGui::MenuItem("Delete", "Backspace"))
             {
                 const bool shouldPopTree = open && hasChildren;
                 m_Context.activeScene->DestroyEntity(entity);

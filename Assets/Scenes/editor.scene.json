@@ -1,0 +1,162 @@
+{
+    "entities": [
+        {
+            "id": 1,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "lz"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 2,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "hx"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 3,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "abc"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 4,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "xjf"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 5,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "zmh"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 6,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "hx"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        }
+    ],
+    "format": "PhysaraScene",
+    "version": 1
+}

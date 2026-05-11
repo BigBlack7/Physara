@@ -49,6 +49,11 @@ namespace Physara::Engine
         m_Registry.destroy(entity);
     }
 
+    void Scene::Clear()
+    {
+        m_Registry.clear();
+    }
+
     bool Scene::SetParent(Entity child, Entity parent)
     {
         return SetParent(child.GetHandle(), parent.GetHandle());

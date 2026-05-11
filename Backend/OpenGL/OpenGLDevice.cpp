@@ -16,7 +16,11 @@
 namespace Physara::RHI
 {
     OpenGLDevice::OpenGLDevice() = default;
-    OpenGLDevice::~OpenGLDevice() = default;
+
+    OpenGLDevice::~OpenGLDevice()
+    {
+        Shutdown();
+    }
 
     namespace Internal
     {

@@ -8,6 +8,9 @@
 
 #include <imgui/imgui.h>
 
+#include <Engine/Core/Log.hpp>
+#include <Engine/Scene/Scene.hpp>
+#include <Engine/Scene/SceneSerializer.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
@@ -265,6 +268,7 @@ namespace Physara::Editor
         DrawBrowserToolbar();
         ImGui::Separator();
         DrawEntryGrid();
+        DrawLoadSceneConfirmation();
         ImGui::EndChild();
 
         ImGui::End();
@@ -419,6 +423,7 @@ namespace Physara::Editor
             const ImVec2 tileSize(Internal::TileSize - 8.f, Internal::TileSize);
             ImGui::InvisibleButton("AssetTile", tileSize);
             const bool hovered = ImGui::IsItemHovered();
+            const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
             const bool activated = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
             ImDrawList *drawList = ImGui::GetWindowDrawList();
@@ -458,6 +463,10 @@ namespace Physara::Editor
             {
                 m_Context.currentContentPath = entry.path.lexically_normal();
             }
+            else if (clicked && entry.kind == Internal::AssetKind::Scene)
+            {
+                RequestSceneLoad(entry.path);
+            }
 
             ++column;
             if (column < columns)
@@ -470,6 +479,55 @@ namespace Physara::Editor
             }
 
             ImGui::PopID();
+        }
+    }
+
+    void ContentBrowserPanel::RequestSceneLoad(const std::filesystem::path &path)
+    {
+        m_PendingSceneLoadPath = path.lexically_normal();
+        m_OpenLoadScenePopup = true;
+    }
+
+    void ContentBrowserPanel::DrawLoadSceneConfirmation()
+    {
+        if (m_OpenLoadScenePopup)
+        {
+            ImGui::OpenPopup("Load Scene?");
+            m_OpenLoadScenePopup = false;
+        }
+
+        if (ImGui::BeginPopupModal("Load Scene?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextWrapped("Load this scene and replace the current editor scene?");
+            ImGui::Spacing();
+            ImGui::TextUnformatted(GetRelativeDisplayPath(m_PendingSceneLoadPath, m_Context.assetsRootPath).c_str());
+            ImGui::Separator();
+
+            if (ImGui::Button("Load", ImVec2(96.f, 0.f)))
+            {
+                if (m_Context.activeScene != nullptr)
+                {
+                    if (Engine::SceneSerializer::Deserialize(*m_Context.activeScene, m_PendingSceneLoadPath))
+                    {
+                        m_Context.currentScenePath = m_PendingSceneLoadPath;
+                        m_Context.selectedEntity = Engine::NullEntity;
+                        PHYSARA_INFO("Loaded scene: {}", m_PendingSceneLoadPath.string());
+                    }
+                    else
+                    {
+                        PHYSARA_ERROR("Failed to load scene: {}", m_PendingSceneLoadPath.string());
+                    }
+                }
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(96.f, 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
         }
     }
 

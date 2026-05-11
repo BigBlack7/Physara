@@ -95,10 +95,10 @@ namespace Physara::Editor
         Register({"camera.roam", "Roam Mode", "Camera Navigation", "` / Right Mouse", ShortcutContext::CameraNavigation,
                   "Enter editor camera roam mode.", ImGuiKey_GraveAccent});
 
-        Register({"scene.delete", "Delete Entity", "Scene Editing", "Delete", ShortcutContext::SceneEditing,
-                  "Delete the selected entity.", ImGuiKey_Delete});
+        Register({"scene.delete", "Delete Entity", "Scene Editing", "Backspace", ShortcutContext::SceneEditing,
+                  "Delete the selected entity.", ImGuiKey_Backspace, false, false, false, true});
         Register({"scene.save", "Save Scene", "Scene Editing", "Ctrl+S", ShortcutContext::SceneEditing,
-                  "Save the active scene.", ImGuiKey_S, true});
+                  "Save the active scene.", ImGuiKey_S, true, false, false, true});
     }
 
     void ShortcutRegistry::Register(ShortcutAction action)

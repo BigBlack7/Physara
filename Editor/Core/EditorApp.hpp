@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
@@ -39,6 +42,10 @@ namespace Physara::Editor
         void DrawDockedPanels();
         void DrawPresentationPanels();
         void RequestCapture();
+        void RequestSaveScene();
+        void DrawSaveScenePopup();
+        void SaveCurrentScene(const std::filesystem::path &path);
+        std::filesystem::path BuildSceneSavePath(std::string name) const;
         void LoadSceneViewIcons();
         void DestroySceneViewIcons();
         void CreateDefaultScene();
@@ -58,7 +65,9 @@ namespace Physara::Editor
         HelpShortcutsPanel m_HelpShortcutsPanel;
 
         bool m_LayoutInitialized{false};
+        bool m_OpenSaveScenePopup{false};
         std::uint32_t m_DockspaceId{0};
+        std::array<char, 128> m_SaveSceneName{};
         std::vector<RHI::ImGuiTextureHandle> m_IconTextures{};
     };
 }

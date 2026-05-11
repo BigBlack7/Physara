@@ -9,7 +9,7 @@ namespace Physara::Editor
 {
     namespace Internal
     {
-        constexpr float FontSize = 16.f;
+        constexpr float FontSize = 17.f;
 
         ImVec4 Color(float r, float g, float b, float a = 1.f)
         {

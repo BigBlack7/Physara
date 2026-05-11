@@ -19,6 +19,7 @@ namespace Physara::Engine
         Entity CreateEntity(std::string_view name = "Entity");
         void DestroyEntity(Entity entity);
         void DestroyEntity(EntityId entity);
+        void Clear();
 
         bool SetParent(Entity child, Entity parent);
         bool SetParent(EntityId child, EntityId parent);

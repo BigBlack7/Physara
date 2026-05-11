@@ -22,6 +22,8 @@ namespace Physara::Editor
         void DrawBrowserToolbar();
         void DrawRelativePath();
         void DrawEntryGrid();
+        void RequestSceneLoad(const std::filesystem::path &path);
+        void DrawLoadSceneConfirmation();
 
         static std::string GetDisplayName(const std::filesystem::path &path);
         static std::string GetRelativeDisplayPath(const std::filesystem::path &path,
@@ -29,5 +31,7 @@ namespace Physara::Editor
 
     private:
         EditorContext &m_Context;
+        std::filesystem::path m_PendingSceneLoadPath{};
+        bool m_OpenLoadScenePopup{false};
     };
 }
