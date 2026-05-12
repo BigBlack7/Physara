@@ -7,6 +7,7 @@
 #include <string>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
+#include <Engine/Resource/AssetManager.hpp>
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/IconManager.hpp>
@@ -58,6 +59,7 @@ namespace Physara::Editor
         EditorContext m_Context{};
         ShortcutRegistry m_ShortcutRegistry{};
         IconManager m_IconManager{};
+        Engine::AssetManager m_AssetManager{};
         EditorCamera m_EditorCamera{};
         HierarchyPanel m_HierarchyPanel;
         InspectorPanel m_InspectorPanel;

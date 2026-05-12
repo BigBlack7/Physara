@@ -8,6 +8,8 @@
 
 #include <Engine/Scene/Components/TagComponent.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
+#include <Engine/Scene/Components/MaterialComponent.hpp>
+#include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Entity.hpp>
 
@@ -102,6 +104,90 @@ namespace Physara::Editor
         }
 
         ImGui::Text("EV100: %.2f", camera.GetEV100());
+        return changed;
+    }
+
+    template <>
+    inline bool DrawComponent<Engine::MeshComponent>(Engine::Entity entity)
+    {
+        auto &mesh = entity.GetComponent<Engine::MeshComponent>();
+        bool changed = false;
+
+        ImGui::TextWrapped("Asset: %s", mesh.primitive.assetPath.c_str());
+        ImGui::Text("Mesh: %u", mesh.primitive.meshIndex);
+        ImGui::Text("Primitive: %u", mesh.primitive.primitiveIndex);
+        changed |= ImGui::Checkbox("Visible", &mesh.visible);
+        changed |= ImGui::Checkbox("Receive Shadows", &mesh.receiveShadows);
+
+        if (mesh.localBounds.valid)
+        {
+            ImGui::Text("Bounds Min: %.3f, %.3f, %.3f", mesh.localBounds.min.x, mesh.localBounds.min.y, mesh.localBounds.min.z);
+            ImGui::Text("Bounds Max: %.3f, %.3f, %.3f", mesh.localBounds.max.x, mesh.localBounds.max.y, mesh.localBounds.max.z);
+            ImGui::Text("Radius: %.3f", mesh.localBounds.radius);
+        }
+
+        if (!mesh.materialSlots.empty())
+        {
+            ImGui::SeparatorText("Material Slots");
+            for (const Engine::MaterialSlotRef &slot : mesh.materialSlots)
+            {
+                ImGui::Text("Slot %u", slot.slotIndex);
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", slot.materialPath.empty() ? "<none>" : slot.materialPath.c_str());
+            }
+        }
+
+        return changed;
+    }
+
+    template <>
+    inline bool DrawComponent<Engine::MaterialComponent>(Engine::Entity entity)
+    {
+        auto &material = entity.GetComponent<Engine::MaterialComponent>();
+        bool changed = false;
+
+        ImGui::TextWrapped("Material: %s", material.materialPath.empty() ? "<embedded>" : material.materialPath.c_str());
+        changed |= ImGui::ColorEdit4("Base Color", &material.baseColor.x);
+        changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.f, 1.f);
+        changed |= ImGui::SliderFloat("Roughness", &material.roughness, 0.045f, 1.f);
+        changed |= ImGui::SliderFloat("AO", &material.ambientOcclusion, 0.f, 1.f);
+        changed |= ImGui::ColorEdit3("Emissive", &material.emissiveColor.x);
+        changed |= ImGui::DragFloat("Emissive Luminance", &material.emissiveLuminance, 1.f, 0.f, 100000.f, "%.1f cd/m2");
+        changed |= ImGui::Checkbox("Double Sided", &material.doubleSided);
+        changed |= ImGui::Checkbox("Cast Shadow", &material.castShadow);
+
+        if (changed)
+        {
+            material.Sanitize();
+        }
+
+        if (material.baseColorTexture.IsBound() || material.normalTexture.IsBound() ||
+            material.metallicRoughnessTexture.IsBound() || material.occlusionTexture.IsBound() ||
+            material.emissiveTexture.IsBound())
+        {
+            ImGui::SeparatorText("Textures");
+            if (material.baseColorTexture.IsBound())
+            {
+                ImGui::TextWrapped("Base Color: %s", material.baseColorTexture.path.c_str());
+            }
+            if (material.metallicRoughnessTexture.IsBound())
+            {
+                ImGui::TextWrapped("Metallic Roughness: %s", material.metallicRoughnessTexture.path.c_str());
+            }
+            if (material.normalTexture.IsBound())
+            {
+                ImGui::TextWrapped("Normal: %s", material.normalTexture.path.c_str());
+            }
+            if (material.occlusionTexture.IsBound())
+            {
+                ImGui::TextWrapped("Occlusion: %s", material.occlusionTexture.path.c_str());
+            }
+            if (material.emissiveTexture.IsBound())
+            {
+                ImGui::TextWrapped("Emissive: %s", material.emissiveTexture.path.c_str());
+            }
+        }
+
         return changed;
     }
 

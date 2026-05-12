@@ -9,6 +9,7 @@
 #include <imgui/imgui.h>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
@@ -88,6 +89,17 @@ namespace Physara::Editor
             return ToLower(path.filename().string()).ends_with(".scene.json");
         }
 
+        bool IsModelFile(const std::filesystem::path &path)
+        {
+            const std::string extension = ToLower(path.extension().string());
+            return extension == ".gltf" || extension == ".glb";
+        }
+
+        bool IsInsideModelsDirectory(const std::filesystem::path &path, const std::filesystem::path &assetsRoot)
+        {
+            return IsPathInsideRoot(path, assetsRoot / "Models");
+        }
+
         AssetKind DetectAssetKind(const std::filesystem::path &path, bool isDirectory)
         {
             if (isDirectory)
@@ -101,7 +113,7 @@ namespace Physara::Editor
             }
 
             const std::string extension = ToLower(path.extension().string());
-            if (extension == ".gltf" || extension == ".glb")
+            if (IsModelFile(path))
             {
                 return AssetKind::Mesh;
             }
@@ -209,8 +221,9 @@ namespace Physara::Editor
         }
     }
 
-    ContentBrowserPanel::ContentBrowserPanel(EditorContext &context, const IconManager &iconManager)
-        : m_Context(context), m_IconManager(iconManager) {}
+    ContentBrowserPanel::ContentBrowserPanel(EditorContext &context, const IconManager &iconManager,
+                                             Engine::AssetManager &assetManager)
+        : m_Context(context), m_IconManager(iconManager), m_AssetManager(assetManager) {}
 
     void ContentBrowserPanel::Draw()
     {
@@ -244,6 +257,7 @@ namespace Physara::Editor
         ImGui::Separator();
         DrawEntryGrid();
         DrawLoadSceneConfirmation();
+        DrawLoadModelConfirmation();
         ImGui::EndChild();
 
         ImGui::End();
@@ -378,7 +392,13 @@ namespace Physara::Editor
 
     void ContentBrowserPanel::DrawEntryGrid()
     {
-        const std::vector<Internal::BrowserEntry> entries = Internal::CollectEntries(m_Context.currentContentPath);
+        std::vector<Internal::BrowserEntry> entries = Internal::CollectEntries(m_Context.currentContentPath);
+        if (Internal::IsInsideModelsDirectory(m_Context.currentContentPath, m_Context.assetsRootPath))
+        {
+            entries.erase(std::remove_if(entries.begin(), entries.end(), [](const Internal::BrowserEntry &entry)
+                                         { return !entry.isDirectory && !Internal::IsModelFile(entry.path); }),
+                          entries.end());
+        }
 
         if (entries.empty())
         {
@@ -448,6 +468,10 @@ namespace Physara::Editor
             {
                 RequestSceneLoad(entry.path);
             }
+            else if (clicked && entry.kind == Internal::AssetKind::Mesh)
+            {
+                RequestModelLoad(entry.path);
+            }
 
             ++column;
             if (column < columns)
@@ -467,6 +491,12 @@ namespace Physara::Editor
     {
         m_PendingSceneLoadPath = path.lexically_normal();
         m_OpenLoadScenePopup = true;
+    }
+
+    void ContentBrowserPanel::RequestModelLoad(const std::filesystem::path &path)
+    {
+        m_PendingModelLoadPath = path.lexically_normal();
+        m_OpenLoadModelPopup = true;
     }
 
     void ContentBrowserPanel::DrawLoadSceneConfirmation()
@@ -497,6 +527,51 @@ namespace Physara::Editor
                     else
                     {
                         PHYSARA_ERROR("Failed to load scene: {}", m_PendingSceneLoadPath.string());
+                    }
+                }
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(96.f, 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+
+    void ContentBrowserPanel::DrawLoadModelConfirmation()
+    {
+        if (m_OpenLoadModelPopup)
+        {
+            ImGui::OpenPopup("Import GLTF?");
+            m_OpenLoadModelPopup = false;
+        }
+
+        if (ImGui::BeginPopupModal("Import GLTF?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextWrapped("Import this GLTF into the current scene?");
+            ImGui::Spacing();
+            ImGui::TextUnformatted(GetRelativeDisplayPath(m_PendingModelLoadPath, m_Context.assetsRootPath).c_str());
+            ImGui::Separator();
+
+            if (ImGui::Button("Import", ImVec2(96.f, 0.f)))
+            {
+                if (m_Context.activeScene != nullptr)
+                {
+                    Engine::Entity root = Engine::GLTFLoader::LoadToScene(*m_Context.activeScene,
+                                                                           m_PendingModelLoadPath,
+                                                                           &m_AssetManager);
+                    if (root)
+                    {
+                        m_Context.selectedEntity = root.GetHandle();
+                        PHYSARA_INFO("Imported GLTF: {}", m_PendingModelLoadPath.string());
+                    }
+                    else
+                    {
+                        PHYSARA_ERROR("Failed to import GLTF: {}", m_PendingModelLoadPath.string());
                     }
                 }
                 ImGui::CloseCurrentPopup();
