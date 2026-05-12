@@ -1,12 +1,11 @@
 #include "IconManager.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
-
-#include <stb/stb_image.h>
+#include <memory>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/AssetPath.hpp>
+#include <Engine/Resource/Loaders/TextureLoader.hpp>
 
 namespace Physara::Editor
 {
@@ -84,17 +83,16 @@ namespace Physara::Editor
             return GetIcon(EditorIcon::Folder);
         }
 
-        if (IsSceneFile(path))
+        if (Engine::AssetPath::IsSceneFile(path))
         {
             return GetIcon(EditorIcon::Scene);
         }
 
-        const std::string extension = ToLower(path.extension().string());
-        if (extension == ".gltf" || extension == ".glb")
+        if (Engine::AssetPath::IsModelFile(path))
         {
             return GetIcon(EditorIcon::Mesh);
         }
-        if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".exr")
+        if (Engine::AssetPath::IsTextureFile(path))
         {
             return GetIcon(EditorIcon::Texture);
         }
@@ -105,22 +103,17 @@ namespace Physara::Editor
     void IconManager::LoadBuiltinIcon(EditorIcon icon, std::string_view fileName)
     {
         const std::filesystem::path path = m_IconsRoot / fileName;
-
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
-        if (pixels == nullptr)
+        const std::shared_ptr<Engine::Texture> textureData = Engine::TextureLoader::LoadRGBA8(path);
+        if (!textureData || !textureData->IsLoaded())
         {
             PHYSARA_WARN("Failed to load editor icon: {}", path.string());
             return;
         }
 
         const RHI::ImGuiTextureHandle texture =
-            m_Backend->CreateTextureRGBA(static_cast<std::uint32_t>(width),
-                                         static_cast<std::uint32_t>(height),
-                                         pixels);
-        stbi_image_free(pixels);
+            m_Backend->CreateTextureRGBA(textureData->width,
+                                         textureData->height,
+                                         textureData->rgba8Pixels.data());
 
         if (texture == 0)
         {
@@ -129,18 +122,5 @@ namespace Physara::Editor
         }
 
         m_Icons[icon] = texture;
-    }
-
-    std::string IconManager::ToLower(std::string_view text)
-    {
-        std::string result{text};
-        std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c)
-                       { return static_cast<char>(std::tolower(c)); });
-        return result;
-    }
-
-    bool IconManager::IsSceneFile(const std::filesystem::path &path)
-    {
-        return ToLower(path.filename().string()).ends_with(".scene.json");
     }
 }

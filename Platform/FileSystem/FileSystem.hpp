@@ -15,7 +15,14 @@ namespace Physara::Platform
 
         // 路径操作
         static std::string ResolvePath(std::string_view relativePath);
+        static std::string NormalizePath(std::string_view path);
+        static std::string NormalizeForCompare(std::string_view path);
+        static bool IsSamePath(std::string_view lhs, std::string_view rhs);
+        static bool IsSubPath(std::string_view root, std::string_view target);
+        static std::string ClampToRoot(std::string_view path, std::string_view root);
+        static std::string ToAssetsRelativePath(std::string_view path);
         static std::string GetExtension(std::string_view path);
+        static std::string GetExtensionLower(std::string_view path);
         static std::string GetFileName(std::string_view path);
         static std::string GetParentDir(std::string_view path);
         static std::string GetAssetsRootPath();

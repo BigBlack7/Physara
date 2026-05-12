@@ -11,17 +11,36 @@ namespace Physara::Platform
 {
     namespace Internal
     {
-        // 将路径规范化为统一的比较格式
-        std::string NormalizeForCompare(const std::filesystem::path &path)
+        std::string ToLower(std::string text)
         {
-            std::string s = path.lexically_normal().generic_string();
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+            return text;
+        }
 
-#ifdef _WIN32 // Windows平台转换为小写
+        std::string ToGenericString(const std::filesystem::path &path)
+        {
+            return path.lexically_normal().generic_string();
+        }
+
+        std::string NormalizePathString(std::string_view path)
+        {
+            return ToGenericString(std::filesystem::path(path));
+        }
+
+        // 将路径规范化为统一的比较格式。
+        std::string NormalizeForCompareString(std::string_view path)
+        {
+            std::string s = NormalizePathString(path);
+
             std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c)
                            { return static_cast<char>(std::tolower(c)); });
-#endif
+            return s;
+        }
 
-            // 统一添加目录前缀斜杠
+        std::string NormalizeDirectoryForCompare(std::string_view path)
+        {
+            std::string s = NormalizeForCompareString(path);
             if (!s.empty() && s.back() != '/')
             {
                 s.push_back('/');
@@ -31,10 +50,10 @@ namespace Physara::Platform
         }
 
         // 判断target路径是否是root路径的子路径
-        bool IsSubPath(const std::filesystem::path &root, const std::filesystem::path &target)
+        bool IsSubPathString(std::string_view root, std::string_view target)
         {
-            const std::string rootNorm = NormalizeForCompare(root);
-            const std::string targetNorm = NormalizeForCompare(target);
+            const std::string rootNorm = NormalizeDirectoryForCompare(root);
+            const std::string targetNorm = NormalizeDirectoryForCompare(target);
 
             return targetNorm.rfind(rootNorm, 0) == 0; // 检查target是否以root开头
         }
@@ -61,18 +80,12 @@ namespace Physara::Platform
                 absPath = (rootPath / inPath).lexically_normal();
             }
 
-            if (!IsSubPath(rootPath, absPath)) // 限制所有路径必须位于Assets根目录内
+            if (!IsSubPathString(rootPath.generic_string(), absPath.generic_string())) // 限制所有路径必须位于Assets根目录内
             {
                 throw std::runtime_error("Path escapes assets root: " + absPath.string());
             }
 
             return absPath;
-        }
-
-        // 将对象转换为跨平台兼容的通用字符串格式
-        std::string ToGenericString(const std::filesystem::path &path)
-        {
-            return path.lexically_normal().generic_string();
         }
     }
 
@@ -107,9 +120,91 @@ namespace Physara::Platform
         return Internal::ToGenericString(absPath);
     }
 
+    std::string FileSystem::NormalizePath(std::string_view path)
+    {
+        return Internal::NormalizePathString(path);
+    }
+
+    std::string FileSystem::NormalizeForCompare(std::string_view path)
+    {
+        return Internal::NormalizeForCompareString(path);
+    }
+
+    bool FileSystem::IsSamePath(std::string_view lhs, std::string_view rhs)
+    {
+        return NormalizeForCompare(lhs) == NormalizeForCompare(rhs);
+    }
+
+    bool FileSystem::IsSubPath(std::string_view root, std::string_view target)
+    {
+        return Internal::IsSubPathString(root, target);
+    }
+
+    std::string FileSystem::ClampToRoot(std::string_view path, std::string_view root)
+    {
+        const std::string normalizedPath = NormalizePath(path);
+        const std::string normalizedRoot = NormalizePath(root);
+        return IsSubPath(normalizedRoot, normalizedPath) ? normalizedPath : normalizedRoot;
+    }
+
+    std::string FileSystem::ToAssetsRelativePath(std::string_view path)
+    {
+        std::filesystem::path input(path);
+        if (input.empty())
+        {
+            return {};
+        }
+
+        input = input.lexically_normal();
+        if (!input.is_absolute())
+        {
+            const auto firstPart = input.begin();
+            if (firstPart != input.end() && Internal::ToLower(firstPart->generic_string()) == "assets")
+            {
+                std::filesystem::path stripped;
+                bool skipFirst = true;
+                for (const std::filesystem::path &part : input)
+                {
+                    if (skipFirst)
+                    {
+                        skipFirst = false;
+                        continue;
+                    }
+                    stripped /= part;
+                }
+                input = stripped.lexically_normal();
+            }
+        }
+
+        if (!s_AssetsRootPath.empty())
+        {
+            const std::filesystem::path assetsRoot = std::filesystem::absolute(std::filesystem::path(s_AssetsRootPath)).lexically_normal();
+            const std::filesystem::path candidate = input.is_absolute()
+                                                        ? input
+                                                        : (assetsRoot / input).lexically_normal();
+
+            if (Internal::IsSubPathString(assetsRoot.generic_string(), candidate.generic_string()))
+            {
+                std::error_code error{};
+                const std::filesystem::path relative = std::filesystem::relative(candidate, assetsRoot, error);
+                if (!error && !relative.empty() && relative != ".")
+                {
+                    return Internal::ToGenericString(relative);
+                }
+            }
+        }
+
+        return Internal::ToGenericString(input);
+    }
+
     std::string FileSystem::GetExtension(std::string_view path)
     {
         return std::filesystem::path(path).extension().string();
+    }
+
+    std::string FileSystem::GetExtensionLower(std::string_view path)
+    {
+        return Internal::ToLower(GetExtension(path));
     }
 
     std::string FileSystem::GetFileName(std::string_view path)

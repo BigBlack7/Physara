@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +17,7 @@
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Entity.hpp>
 #include <Engine/Scene/Scene.hpp>
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
 {
@@ -236,20 +236,10 @@ namespace Physara::Engine
                 root["entities"].push_back(std::move(e));
             }
 
-            if (!path.parent_path().empty())
-            {
-                std::filesystem::create_directories(path.parent_path());
-            }
-
-            std::ofstream file(path, std::ios::out | std::ios::trunc);
-            if (!file.is_open())
-            {
-                PHYSARA_CORE_ERROR("Failed to open scene for write: {}", path.string());
-                return false;
-            }
-
-            file << root.dump(4);
-            return file.good();
+            const std::string sceneText = root.dump(4);
+            Platform::FileSystem::WriteFile(path.string(),
+                                            std::vector<std::uint8_t>(sceneText.begin(), sceneText.end()));
+            return true;
         }
         catch (const std::exception &e)
         {
@@ -262,14 +252,8 @@ namespace Physara::Engine
     {
         try
         {
-            std::ifstream file(path);
-            if (!file.is_open())
-            {
-                PHYSARA_CORE_ERROR("Failed to open scene for read: {}", path.string());
-                return false;
-            }
-
-            const Internal::json root = Internal::json::parse(file);
+            const std::string sceneText = Platform::FileSystem::ReadTextFile(path.string());
+            const Internal::json root = Internal::json::parse(sceneText);
             if (root.value("format", std::string{}) != "PhysaraScene")
             {
                 PHYSARA_CORE_ERROR("Unsupported scene file format: {}", path.string());

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <numbers>
@@ -26,6 +27,7 @@
 #include <Engine/Scene/Components/TagComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
 {
@@ -44,7 +46,7 @@ namespace Physara::Engine
 
         std::string ToGenericPath(const std::filesystem::path &path)
         {
-            return path.lexically_normal().generic_string();
+            return Platform::FileSystem::NormalizePath(path.string());
         }
 
         std::string NormalizeAssetPath(const std::filesystem::path &path, AssetManager *assetManager)
@@ -53,7 +55,7 @@ namespace Physara::Engine
             {
                 return assetManager->NormalizePath(path);
             }
-            return ToGenericPath(path);
+            return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
         }
 
         // 生成glTF内嵌材质的合成路径
@@ -183,8 +185,13 @@ namespace Physara::Engine
         }
 
         // 从纹理信息结构体生成纹理的完整路径
+        std::string NormalizeTexturePath(const std::filesystem::path &path, AssetManager *assetManager)
+        {
+            return NormalizeAssetPath(path, assetManager);
+        }
+
         std::string TexturePathFromInfo(const tg3_model &model, const std::filesystem::path &gltfPath,
-                                        const tg3_texture_info &info)
+                                        const tg3_texture_info &info, AssetManager *assetManager)
         {
             if (info.index < 0 || static_cast<std::uint32_t>(info.index) >= model.textures_count)
             {
@@ -203,11 +210,12 @@ namespace Physara::Engine
                 return {};
             }
 
-            return ToGenericPath(gltfPath.parent_path() / uri);
+            return NormalizeTexturePath(gltfPath.parent_path() / uri, assetManager);
         }
 
         // 从纹理索引生成纹理的完整路径
-        std::string TexturePathFromIndex(const tg3_model &model, const std::filesystem::path &gltfPath, int32_t textureIndex)
+        std::string TexturePathFromIndex(const tg3_model &model, const std::filesystem::path &gltfPath,
+                                         int32_t textureIndex, AssetManager *assetManager)
         {
             if (textureIndex < 0 || static_cast<std::uint32_t>(textureIndex) >= model.textures_count)
             {
@@ -221,7 +229,7 @@ namespace Physara::Engine
             }
 
             const std::string uri = ToString(model.images[texture.source].uri);
-            return uri.empty() ? std::string{} : ToGenericPath(gltfPath.parent_path() / uri);
+            return uri.empty() ? std::string{} : NormalizeTexturePath(gltfPath.parent_path() / uri, assetManager);
         }
 
         Material ConvertMaterial(const tg3_model &model, const std::filesystem::path &gltfPath,
@@ -263,19 +271,19 @@ namespace Physara::Engine
             }
 
             material.baseColorTexture = {
-                TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.base_color_texture),
+                TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.base_color_texture, assetManager),
                 static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.base_color_texture.tex_coord, 0))};
             material.metallicRoughnessTexture = {
-                TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.metallic_roughness_texture),
+                TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.metallic_roughness_texture, assetManager),
                 static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.metallic_roughness_texture.tex_coord, 0))};
             material.normalTexture = {
-                TexturePathFromIndex(model, gltfPath, source.normal_texture.index),
+                TexturePathFromIndex(model, gltfPath, source.normal_texture.index, assetManager),
                 static_cast<std::uint32_t>(std::max(source.normal_texture.tex_coord, 0))};
             material.occlusionTexture = {
-                TexturePathFromIndex(model, gltfPath, source.occlusion_texture.index),
+                TexturePathFromIndex(model, gltfPath, source.occlusion_texture.index, assetManager),
                 static_cast<std::uint32_t>(std::max(source.occlusion_texture.tex_coord, 0))};
             material.emissiveTexture = {
-                TexturePathFromInfo(model, gltfPath, source.emissive_texture),
+                TexturePathFromInfo(model, gltfPath, source.emissive_texture, assetManager),
                 static_cast<std::uint32_t>(std::max(source.emissive_texture.tex_coord, 0))};
 
             return material;
@@ -489,7 +497,24 @@ namespace Physara::Engine
         tg3_parse_options_init(&options);
         options.images_as_is = 1;
 
-        const tg3_error_code result = tinygltf3::parse_file(model, errors, gltfPath.string().c_str(), &options);
+        std::vector<std::uint8_t> fileData;
+        try
+        {
+            fileData = Platform::FileSystem::ReadBinaryFile(gltfPath.string());
+        }
+        catch (const std::exception &error)
+        {
+            PHYSARA_CORE_ERROR("Failed to read GLTF '{}': {}", gltfPath.string(), error.what());
+            return {};
+        }
+
+        const std::string baseDir = Internal::ToGenericPath(gltfPath.parent_path());
+        const tg3_error_code result = tinygltf3::parse(model,
+                                                       errors,
+                                                       fileData.data(),
+                                                       static_cast<std::uint64_t>(fileData.size()),
+                                                       baseDir.c_str(),
+                                                       &options);
         if (result != TG3_OK)
         {
             PHYSARA_CORE_ERROR("Failed to parse GLTF '{}'. Error code: {}", gltfPath.string(), static_cast<int>(result));

@@ -1,7 +1,6 @@
 #include "ContentBrowserPanel.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,6 +8,7 @@
 #include <imgui/imgui.h>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/AssetPath.hpp>
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
@@ -26,124 +26,41 @@ namespace Physara::Editor
         constexpr float TreeArrowWidth = 14.f;
         constexpr float TreeLabelSpacing = 4.f;
 
-        enum class AssetKind
-        {
-            Folder,
-            Scene,
-            Mesh,
-            Texture,
-            Shader,
-            File
-        };
-
         struct BrowserEntry
         {
             std::string name{};
             std::filesystem::path path{};
-            AssetKind kind{AssetKind::File};
+            Engine::AssetPath::AssetKind kind{Engine::AssetPath::AssetKind::File};
             bool isDirectory{false};
         };
-
-        std::string ToLower(std::string_view text)
-        {
-            std::string result{text};
-            std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c)
-                           { return static_cast<char>(std::tolower(c)); });
-            return result;
-        }
-
-        bool IsSamePath(const std::filesystem::path &lhs, const std::filesystem::path &rhs)
-        {
-            return ToLower(lhs.lexically_normal().generic_string()) ==
-                   ToLower(rhs.lexically_normal().generic_string());
-        }
-
-        std::string NormalizeDirectoryForCompare(const std::filesystem::path &path)
-        {
-            std::string result = ToLower(path.lexically_normal().generic_string());
-            if (!result.empty() && result.back() != '/')
-            {
-                result.push_back('/');
-            }
-
-            return result;
-        }
-
-        bool IsPathInsideRoot(const std::filesystem::path &path, const std::filesystem::path &root)
-        {
-            const std::string pathNorm = NormalizeDirectoryForCompare(path);
-            const std::string rootNorm = NormalizeDirectoryForCompare(root);
-            return pathNorm.rfind(rootNorm, 0) == 0;
-        }
 
         std::filesystem::path ClampToAssetsRoot(const std::filesystem::path &path,
                                                 const std::filesystem::path &root)
         {
-            const std::filesystem::path normalizedRoot = root.lexically_normal();
-            const std::filesystem::path normalizedPath = path.lexically_normal();
-            return IsPathInsideRoot(normalizedPath, normalizedRoot) ? normalizedPath : normalizedRoot;
-        }
-
-        bool IsSceneFile(const std::filesystem::path &path)
-        {
-            return ToLower(path.filename().string()).ends_with(".scene.json");
-        }
-
-        bool IsModelFile(const std::filesystem::path &path)
-        {
-            const std::string extension = ToLower(path.extension().string());
-            return extension == ".gltf" || extension == ".glb";
+            return Platform::FileSystem::ClampToRoot(path.string(), root.string());
         }
 
         bool IsInsideModelsDirectory(const std::filesystem::path &path, const std::filesystem::path &assetsRoot)
         {
-            return IsPathInsideRoot(path, assetsRoot / "Models");
+            return Platform::FileSystem::IsSubPath((assetsRoot / "Models").string(), path.string());
         }
 
-        AssetKind DetectAssetKind(const std::filesystem::path &path, bool isDirectory)
+        ImU32 IconColor(Engine::AssetPath::AssetKind kind)
         {
-            if (isDirectory)
-            {
-                return AssetKind::Folder;
-            }
-
-            if (IsSceneFile(path))
-            {
-                return AssetKind::Scene;
-            }
-
-            const std::string extension = ToLower(path.extension().string());
-            if (IsModelFile(path))
-            {
-                return AssetKind::Mesh;
-            }
-            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".exr")
-            {
-                return AssetKind::Texture;
-            }
-            if (extension == ".glsl" || extension == ".vert" || extension == ".frag" || extension == ".comp")
-            {
-                return AssetKind::Shader;
-            }
-
-            return AssetKind::File;
-        }
-
-        ImU32 IconColor(AssetKind kind)
-        {
+            using enum Engine::AssetPath::AssetKind;
             switch (kind)
             {
-            case AssetKind::Folder:
+            case Folder:
                 return IM_COL32(185, 158, 84, 255);
-            case AssetKind::Scene:
+            case Scene:
                 return IM_COL32(96, 139, 119, 255);
-            case AssetKind::Mesh:
+            case Mesh:
                 return IM_COL32(112, 127, 158, 255);
-            case AssetKind::Texture:
+            case Texture:
                 return IM_COL32(139, 120, 160, 255);
-            case AssetKind::Shader:
+            case Shader:
                 return IM_COL32(119, 140, 86, 255);
-            case AssetKind::File:
+            case File:
                 return IM_COL32(118, 128, 121, 255);
             }
 
@@ -175,12 +92,12 @@ namespace Physara::Editor
 
         std::string TileName(const BrowserEntry &entry)
         {
-            if (entry.kind == AssetKind::Scene)
+            if (entry.kind == Engine::AssetPath::AssetKind::Scene)
             {
                 const std::string name = entry.name;
                 constexpr std::string_view sceneSuffix = ".scene.json";
                 if (name.size() > sceneSuffix.size() &&
-                    ToLower(name).ends_with(sceneSuffix))
+                    Platform::FileSystem::NormalizeForCompare(name).ends_with(sceneSuffix))
                 {
                     return name.substr(0, name.size() - sceneSuffix.size());
                 }
@@ -204,7 +121,7 @@ namespace Physara::Editor
                 entries.push_back(BrowserEntry{
                     name,
                     path,
-                    DetectAssetKind(path, isDirectory),
+                    Engine::AssetPath::Classify(path, isDirectory),
                     isDirectory});
             }
 
@@ -214,7 +131,8 @@ namespace Physara::Editor
                           {
                               return lhs.isDirectory;
                           }
-                          return ToLower(lhs.name) < ToLower(rhs.name);
+                          return Platform::FileSystem::NormalizeForCompare(lhs.name) <
+                                 Platform::FileSystem::NormalizeForCompare(rhs.name);
                       });
 
             return entries;
@@ -265,8 +183,8 @@ namespace Physara::Editor
 
     bool ContentBrowserPanel::CanNavigateToParent() const
     {
-        return Internal::IsPathInsideRoot(m_Context.currentContentPath, m_Context.assetsRootPath) &&
-               !Internal::IsSamePath(m_Context.currentContentPath, m_Context.assetsRootPath);
+        return Platform::FileSystem::IsSubPath(m_Context.assetsRootPath.string(), m_Context.currentContentPath.string()) &&
+               !Platform::FileSystem::IsSamePath(m_Context.currentContentPath.string(), m_Context.assetsRootPath.string());
     }
 
     void ContentBrowserPanel::NavigateToParent()
@@ -287,11 +205,11 @@ namespace Physara::Editor
 
     void ContentBrowserPanel::DrawDirectoryNode(const std::filesystem::path &directory, int depth)
     {
-        const bool selected = Internal::IsSamePath(directory, m_Context.currentContentPath);
+        const bool selected = Platform::FileSystem::IsSamePath(directory.string(), m_Context.currentContentPath.string());
         const std::vector<Internal::BrowserEntry> entries = Internal::CollectEntries(directory);
         const bool hasChildDirectories = std::any_of(entries.begin(), entries.end(), [](const Internal::BrowserEntry &entry)
                                                      { return entry.isDirectory; });
-        const bool isRoot = Internal::IsSamePath(directory, m_Context.assetsRootPath);
+        const bool isRoot = Platform::FileSystem::IsSamePath(directory.string(), m_Context.assetsRootPath.string());
         const std::string label = isRoot ? "Assets" : GetDisplayName(directory);
         const std::string id = directory.lexically_normal().generic_string();
 
@@ -396,7 +314,7 @@ namespace Physara::Editor
         if (Internal::IsInsideModelsDirectory(m_Context.currentContentPath, m_Context.assetsRootPath))
         {
             entries.erase(std::remove_if(entries.begin(), entries.end(), [](const Internal::BrowserEntry &entry)
-                                         { return !entry.isDirectory && !Internal::IsModelFile(entry.path); }),
+                                         { return !entry.isDirectory && !Engine::AssetPath::IsModelFile(entry.path); }),
                           entries.end());
         }
 
@@ -464,11 +382,11 @@ namespace Physara::Editor
             {
                 m_Context.currentContentPath = entry.path.lexically_normal();
             }
-            else if (clicked && entry.kind == Internal::AssetKind::Scene)
+            else if (clicked && entry.kind == Engine::AssetPath::AssetKind::Scene)
             {
                 RequestSceneLoad(entry.path);
             }
-            else if (clicked && entry.kind == Internal::AssetKind::Mesh)
+            else if (clicked && entry.kind == Engine::AssetPath::AssetKind::Mesh)
             {
                 RequestModelLoad(entry.path);
             }

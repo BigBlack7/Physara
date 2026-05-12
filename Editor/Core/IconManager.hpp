@@ -41,8 +41,6 @@ namespace Physara::Editor
 
     private:
         void LoadBuiltinIcon(EditorIcon icon, std::string_view fileName);
-        [[nodiscard]] static std::string ToLower(std::string_view text);
-        [[nodiscard]] static bool IsSceneFile(const std::filesystem::path &path);
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};

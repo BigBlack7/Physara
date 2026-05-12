@@ -1,25 +1,22 @@
 #include "TextureLoader.hpp"
 
 #include <algorithm>
-#include <cctype>
+#include <exception>
 #include <string>
+#include <vector>
 
 #include <stb/stb_image.h>
+
+#include <Engine/Core/Log.hpp>
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
 {
     namespace Internal
     {
-        std::string ToLower(std::string text)
-        {
-            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c)
-                           { return static_cast<char>(std::tolower(c)); });
-            return text;
-        }
-
         TextureSourceFormat DetectFormat(const std::filesystem::path &path)
         {
-            const std::string extension = ToLower(path.extension().string());
+            const std::string extension = Platform::FileSystem::GetExtensionLower(path.string());
             if (extension == ".png")
             {
                 return TextureSourceFormat::PNG;
@@ -38,10 +35,26 @@ namespace Physara::Engine
 
     std::shared_ptr<Texture> TextureLoader::LoadRGBA8(const std::filesystem::path &path)
     {
+        std::vector<std::uint8_t> fileData;
+        try
+        {
+            fileData = Platform::FileSystem::ReadBinaryFile(path.string());
+        }
+        catch (const std::exception &error)
+        {
+            PHYSARA_CORE_WARN("Failed to read texture '{}': {}", path.string(), error.what());
+            return {};
+        }
+
         int width = 0;
         int height = 0;
         int channels = 0;
-        unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
+        unsigned char *pixels = stbi_load_from_memory(fileData.data(),
+                                                      static_cast<int>(fileData.size()),
+                                                      &width,
+                                                      &height,
+                                                      &channels,
+                                                      4);
         if (pixels == nullptr)
         {
             return {};

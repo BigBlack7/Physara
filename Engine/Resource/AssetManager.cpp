@@ -1,43 +1,11 @@
 #include "AssetManager.hpp"
 
-#include <algorithm>
-#include <cctype>
-#include <system_error>
 #include <utility>
+
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
 {
-    namespace Internal
-    {
-        std::string ToLower(std::string text)
-        {
-            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c)
-                           { return static_cast<char>(std::tolower(c)); });
-            return text;
-        }
-
-        std::string NormalizeGeneric(const std::filesystem::path &path)
-        {
-            return path.lexically_normal().generic_string();
-        }
-
-        bool StartsWithPath(std::string_view path, std::string_view prefix)
-        {
-            if (prefix.empty())
-            {
-                return false;
-            }
-
-            if (path == prefix)
-            {
-                return true;
-            }
-
-            const std::string prefixWithSlash = std::string(prefix) + "/";
-            return path.rfind(prefixWithSlash, 0) == 0;
-        }
-    }
-
     AssetManager::AssetManager(std::filesystem::path assetsRoot)
     {
         SetAssetsRoot(std::move(assetsRoot));
@@ -45,49 +13,12 @@ namespace Physara::Engine
 
     void AssetManager::SetAssetsRoot(std::filesystem::path assetsRoot)
     {
-        m_AssetsRoot = assetsRoot.lexically_normal();
+        m_AssetsRoot = assetsRoot.empty() ? std::filesystem::path{} : Platform::FileSystem::NormalizePath(assetsRoot.string());
     }
 
     std::string AssetManager::NormalizePath(const std::filesystem::path &path) const
     {
-        std::filesystem::path normalized = path.lexically_normal();
-
-        if (!m_AssetsRoot.empty())
-        {
-            const std::string root = Internal::NormalizeGeneric(m_AssetsRoot);
-            const std::string candidate = Internal::NormalizeGeneric(normalized);
-
-            if (Internal::StartsWithPath(candidate, root))
-            {
-                std::error_code error{};
-                std::filesystem::path relative = std::filesystem::relative(normalized, m_AssetsRoot, error);
-                if (!error && !relative.empty() && relative != ".")
-                {
-                    normalized = relative.lexically_normal();
-                }
-            }
-            else if (!normalized.is_absolute())
-            {
-                const auto firstPart = normalized.begin();
-                if (firstPart != normalized.end() && Internal::ToLower(firstPart->generic_string()) == "assets")
-                {
-                    std::filesystem::path stripped;
-                    bool skipFirst = true;
-                    for (const std::filesystem::path &part : normalized)
-                    {
-                        if (skipFirst)
-                        {
-                            skipFirst = false;
-                            continue;
-                        }
-                        stripped /= part;
-                    }
-                    normalized = stripped.lexically_normal();
-                }
-            }
-        }
-
-        return Internal::ToLower(Internal::NormalizeGeneric(normalized));
+        return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
     }
 
     std::vector<AssetRecordInfo> AssetManager::GetCachedAssets() const
