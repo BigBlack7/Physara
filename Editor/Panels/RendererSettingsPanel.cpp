@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <Engine/Core/Log.hpp>
+#include <glm/vec3.hpp>
 #include <imgui/imgui.h>
 
 namespace Physara::Editor
@@ -36,7 +37,8 @@ namespace Physara::Editor
             "EXR (planned)"};
     }
 
-    RendererSettingsPanel::RendererSettingsPanel(EditorContext &context) : m_Context(context) {}
+    RendererSettingsPanel::RendererSettingsPanel(EditorContext &context, EditorCamera &camera)
+        : m_Context(context), m_Camera(camera) {}
 
     void RendererSettingsPanel::Draw()
     {
@@ -56,8 +58,36 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::TextUnformatted("Editor camera exposure and physical camera parameters will appear here.");
-            ImGui::TextUnformatted("Reserved: focal length, aperture, shutter, ISO, near/far planes.");
+            EditorCameraSettings &camera = m_Camera.GetSettings();
+            glm::vec3 position = m_Camera.GetPosition();
+            if (ImGui::DragFloat3("Position", &position.x, 0.05f))
+            {
+                m_Camera.SetPosition(position);
+            }
+
+            float yawPitch[2] = {m_Camera.GetYawDegrees(), m_Camera.GetPitchDegrees()};
+            if (ImGui::DragFloat2("Yaw / Pitch", yawPitch, 0.25f))
+            {
+                m_Camera.SetYawPitchDegrees(yawPitch[0], yawPitch[1]);
+            }
+
+            ImGui::DragFloat("Focal Length", &camera.focalLengthMillimeters, 0.25f, 1.f, 300.f, "%.1f mm");
+            ImGui::DragFloat("Aperture", &camera.apertureFStop, 0.05f, 0.1f, 64.f, "f/%.1f");
+            ImGui::DragFloat("Shutter", &camera.shutterTimeSeconds, 0.0005f, 1.f / 32000.f, 30.f, "%.4f s");
+            ImGui::DragFloat("ISO", &camera.iso, 1.f, 1.f, 25600.f, "%.0f");
+            ImGui::DragFloat("Near Clip", &camera.nearClipMeters, 0.01f, 0.001f, 100.f, "%.3f m");
+            ImGui::DragFloat("Far Clip", &camera.farClipMeters, 1.f, 0.01f, 100000.f, "%.1f m");
+            ImGui::DragFloat("Fly Speed", &camera.flySpeedMetersPerSecond, 0.1f, 0.1f, 200.f, "%.1f m/s");
+
+            const char *sourceLabels[] = {"Editor Camera", "Scene Camera"};
+            int sourceIndex = static_cast<int>(m_Camera.GetCaptureViewSource());
+            if (ImGui::Combo("Capture View", &sourceIndex, sourceLabels, IM_ARRAYSIZE(sourceLabels)))
+            {
+                m_Camera.SetCaptureViewSource(static_cast<CaptureViewSource>(sourceIndex));
+            }
+
+            ImGui::Text("EV100: %.2f", m_Camera.GetEV100());
+            ImGui::Text("Mode: %s", m_Camera.GetMode() == EditorCameraMode::Fly ? "Fly" : "Orbit");
             ImGui::SeparatorText("Capture");
 
             ImGui::InputText("File Prefix",
@@ -73,7 +103,11 @@ namespace Physara::Editor
             if (ImGui::Button("Capture Current View"))
             {
                 m_Context.settings.capture.captureRequested = true;
-                PHYSARA_INFO("Capture requested from Renderer Settings. Renderer capture output will be connected in Phase 4.");
+                const Engine::RenderView captureView =
+                    m_Camera.BuildCaptureView(m_Context.activeScene, m_Context.selectedEntity,
+                                              m_Camera.GetCaptureViewSource());
+                PHYSARA_INFO("Capture requested from Renderer Settings. Viewport={}x{}, EV100={:.2f}. Renderer capture output will be connected in Phase 4.",
+                             captureView.viewport.width, captureView.viewport.height, captureView.ev100);
             }
             ImGui::SameLine();
             ImGui::TextDisabled("Shortcut: F12");

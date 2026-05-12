@@ -1,12 +1,25 @@
 {
     "entities": [
         {
+            "camera": {
+                "apertureFStop": 2.799999952316284,
+                "farClipMeters": 1000.0,
+                "focalLengthMillimeters": 35.0,
+                "iso": 100.0,
+                "nearClipMeters": 0.10000000149011612,
+                "orthographicHeightMeters": 10.0,
+                "primary": true,
+                "projection": "Perspective",
+                "sensorHeightMillimeters": 24.0,
+                "sensorWidthMillimeters": 36.0,
+                "shutterTimeSeconds": 0.01666666753590107
+            },
             "id": 1,
             "relationship": {
                 "parent": 0
             },
             "tag": {
-                "name": "lz"
+                "name": "Scene Camera"
             },
             "transform": {
                 "position": [
@@ -58,7 +71,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "abc"
+                "name": "zmh"
             },
             "transform": {
                 "position": [
@@ -110,7 +123,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "zmh"
+                "name": "abc"
             },
             "transform": {
                 "position": [
@@ -137,6 +150,32 @@
             },
             "tag": {
                 "name": "hx"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 7,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "lz"
             },
             "transform": {
                 "position": [

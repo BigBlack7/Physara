@@ -362,6 +362,7 @@ namespace Physara::Engine
                 }
             }
 
+            scene.EnsureSceneCamera();
             scene.UpdateTransforms();
             return true;
         }

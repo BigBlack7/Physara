@@ -1,13 +1,14 @@
 #pragma once
 
 #include <Editor/Core/EditorContext.hpp>
+#include <Editor/Camera/EditorCamera.hpp>
 
 namespace Physara::Editor
 {
     class RendererSettingsPanel final
     {
     public:
-        explicit RendererSettingsPanel(EditorContext &context);
+        RendererSettingsPanel(EditorContext &context, EditorCamera &camera);
 
         void Draw();
 
@@ -21,5 +22,6 @@ namespace Physara::Editor
 
     private:
         EditorContext &m_Context;
+        EditorCamera &m_Camera;
     };
 }

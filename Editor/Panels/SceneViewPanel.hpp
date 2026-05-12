@@ -7,21 +7,11 @@
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/ShortcutRegistry.hpp>
+#include <Editor/Camera/EditorCamera.hpp>
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
 namespace Physara::Editor
 {
-    struct SceneViewInputSnapshot
-    {
-        float mouseX{0.f};
-        float mouseY{0.f};
-        bool hovered{false};
-        bool focused{false};
-        bool leftMouseClicked{false};
-        bool rightMouseDown{false};
-        float mouseWheel{0.f};
-    };
-
     struct SceneViewIconSet
     {
         RHI::ImGuiTextureHandle translate{0};
@@ -36,7 +26,7 @@ namespace Physara::Editor
     {
     public:
         using ViewportResizeCallback = std::function<void(std::uint32_t width, std::uint32_t height)>;
-        using InputForwardCallback = std::function<void(const SceneViewInputSnapshot &input)>;
+        using InputForwardCallback = std::function<void(const EditorCameraInputFrame &input)>;
 
         SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry);
 

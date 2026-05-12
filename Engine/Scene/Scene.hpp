@@ -17,6 +17,10 @@ namespace Physara::Engine
         ~Scene() = default;
 
         Entity CreateEntity(std::string_view name = "Entity");
+        Entity EnsureSceneCamera();
+        [[nodiscard]] Entity GetSceneCameraEntity();
+        [[nodiscard]] EntityId GetSceneCameraEntityId() const;
+        [[nodiscard]] bool IsSceneCamera(EntityId entity) const;
         void DestroyEntity(Entity entity);
         void DestroyEntity(EntityId entity);
         void Clear();

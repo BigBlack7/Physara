@@ -1,5 +1,8 @@
 #include "Scene.hpp"
 
+#include <vector>
+
+#include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/RelationshipComponent.hpp>
 #include <Engine/Scene/Components/TagComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
@@ -16,6 +19,98 @@ namespace Physara::Engine
         return Entity(handle, &m_Registry);
     }
 
+    Entity Scene::EnsureSceneCamera()
+    {
+        EntityId sceneCamera = NullEntity;
+        std::vector<EntityId> extraCameras;
+
+        auto cameraView = m_Registry.view<CameraComponent>();
+        for (EntityId entity : cameraView)
+        {
+            const auto &camera = cameraView.get<CameraComponent>(entity);
+            if (camera.primary)
+            {
+                sceneCamera = entity;
+                break;
+            }
+            if (sceneCamera == NullEntity)
+            {
+                sceneCamera = entity;
+            }
+        }
+
+        for (EntityId entity : cameraView)
+        {
+            if (entity != sceneCamera)
+            {
+                extraCameras.push_back(entity);
+            }
+        }
+
+        for (EntityId entity : extraCameras)
+        {
+            m_Registry.remove<CameraComponent>(entity);
+        }
+
+        if (sceneCamera == NullEntity || !IsValid(sceneCamera))
+        {
+            Entity cameraEntity = CreateEntity("Scene Camera");
+            sceneCamera = cameraEntity.GetHandle();
+            cameraEntity.AddComponent<CameraComponent>(true);
+        }
+
+        auto &camera = m_Registry.get<CameraComponent>(sceneCamera);
+        camera.primary = true;
+        camera.Sanitize();
+
+        if (auto *tag = m_Registry.try_get<TagComponent>(sceneCamera); tag != nullptr && tag->name.empty())
+        {
+            tag->name = "Scene Camera";
+        }
+
+        DetachFromParent(sceneCamera);
+
+        std::vector<EntityId> cameraChildren;
+        if (const auto *relationship = m_Registry.try_get<RelationshipComponent>(sceneCamera))
+        {
+            for (EntityId child = relationship->firstChild; child != NullEntity;)
+            {
+                const auto *childRelationship = m_Registry.try_get<RelationshipComponent>(child);
+                const EntityId next = childRelationship != nullptr ? childRelationship->nextSibling : NullEntity;
+                cameraChildren.push_back(child);
+                child = next;
+            }
+        }
+
+        for (EntityId child : cameraChildren)
+        {
+            ClearParent(child);
+        }
+
+        return Entity(sceneCamera, &m_Registry);
+    }
+
+    Entity Scene::GetSceneCameraEntity()
+    {
+        return EnsureSceneCamera();
+    }
+
+    EntityId Scene::GetSceneCameraEntityId() const
+    {
+        auto cameraView = m_Registry.view<const CameraComponent>();
+        for (EntityId entity : cameraView)
+        {
+            return entity;
+        }
+
+        return NullEntity;
+    }
+
+    bool Scene::IsSceneCamera(EntityId entity) const
+    {
+        return entity != NullEntity && entity == GetSceneCameraEntityId();
+    }
+
     void Scene::DestroyEntity(Entity entity)
     {
         DestroyEntity(entity.GetHandle());
@@ -25,6 +120,13 @@ namespace Physara::Engine
     {
         if (!IsValid(entity))
         {
+            return;
+        }
+
+        if (IsSceneCamera(entity))
+        {
+            DetachFromParent(entity);
+            MarkWorldTransformDirty(entity);
             return;
         }
 
@@ -72,7 +174,7 @@ namespace Physara::Engine
             return true;
         }
 
-        if (!IsValid(parent) || child == parent || WouldCreateCycle(child, parent))
+        if (!IsValid(parent) || child == parent || IsSceneCamera(parent) || WouldCreateCycle(child, parent))
         {
             return false;
         }

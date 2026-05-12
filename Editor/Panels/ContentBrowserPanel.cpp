@@ -510,7 +510,7 @@ namespace Physara::Editor
                     if (Engine::SceneSerializer::Deserialize(*m_Context.activeScene, m_PendingSceneLoadPath))
                     {
                         m_Context.currentScenePath = m_PendingSceneLoadPath;
-                        m_Context.selectedEntity = Engine::NullEntity;
+                        m_Context.selectedEntity = m_Context.activeScene->GetSceneCameraEntityId();
                         PHYSARA_INFO("Loaded scene: {}", m_PendingSceneLoadPath.string());
                     }
                     else

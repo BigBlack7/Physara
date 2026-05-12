@@ -11,6 +11,7 @@
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/ShortcutRegistry.hpp>
+#include <Editor/Camera/EditorCamera.hpp>
 #include <Editor/Panels/HelpShortcutsPanel.hpp>
 #include <Editor/Panels/HierarchyPanel.hpp>
 #include <Editor/Panels/InspectorPanel.hpp>
@@ -50,12 +51,14 @@ namespace Physara::Editor
         void DestroySceneViewIcons();
         void CreateDefaultScene();
         void DeleteSelectedEntity();
+        void ConnectSceneViewCameraInput();
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
         std::unique_ptr<Engine::Scene> m_EditorScene{};
         EditorContext m_Context{};
         ShortcutRegistry m_ShortcutRegistry{};
+        EditorCamera m_EditorCamera{};
         HierarchyPanel m_HierarchyPanel;
         InspectorPanel m_InspectorPanel;
         SceneViewPanel m_SceneViewPanel;

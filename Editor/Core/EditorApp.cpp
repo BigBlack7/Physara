@@ -15,6 +15,7 @@
 #include <Engine/Core/Log.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
+#include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
@@ -82,7 +83,7 @@ namespace Physara::Editor
                              m_InspectorPanel(m_Context),
                              m_SceneViewPanel(m_Context, m_ShortcutRegistry),
                              m_ContentBrowserPanel(m_Context),
-                             m_RendererSettingsPanel(m_Context),
+                             m_RendererSettingsPanel(m_Context, m_EditorCamera),
                              m_HelpShortcutsPanel(m_Context, m_ShortcutRegistry)
     {
     }
@@ -103,6 +104,7 @@ namespace Physara::Editor
         EditorTheme::Apply();
         CreateDefaultScene();
         LoadSceneViewIcons();
+        ConnectSceneViewCameraInput();
     }
 
     void EditorApp::Shutdown()
@@ -285,7 +287,11 @@ namespace Physara::Editor
     void EditorApp::RequestCapture()
     {
         m_Context.settings.capture.captureRequested = true;
-        PHYSARA_INFO("Capture requested. Renderer capture output will be connected in Phase 4.");
+        const Engine::RenderView captureView =
+            m_EditorCamera.BuildCaptureView(m_Context.activeScene, m_Context.selectedEntity,
+                                            m_EditorCamera.GetCaptureViewSource());
+        PHYSARA_INFO("Capture requested. Viewport={}x{}, EV100={:.2f}. Renderer capture output will be connected in Phase 4.",
+                     captureView.viewport.width, captureView.viewport.height, captureView.ev100);
     }
 
     void EditorApp::RequestSaveScene()
@@ -343,6 +349,7 @@ namespace Physara::Editor
             return;
         }
 
+        m_Context.activeScene->EnsureSceneCamera();
         if (Engine::SceneSerializer::Serialize(*m_Context.activeScene, path))
         {
             m_Context.currentScenePath = path;
@@ -426,7 +433,8 @@ namespace Physara::Editor
     void EditorApp::CreateDefaultScene()
     {
         m_EditorScene = std::make_unique<Engine::Scene>();
-        Engine::Entity entity = m_EditorScene->CreateEntity("Entity");
+        Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
+        entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
         m_Context.activeScene = m_EditorScene.get();
         m_Context.selectedEntity = entity.GetHandle();
     }
@@ -439,7 +447,25 @@ namespace Physara::Editor
             return;
         }
 
+        if (m_Context.activeScene->IsSceneCamera(m_Context.selectedEntity))
+        {
+            PHYSARA_INFO("Scene Camera is global and cannot be deleted.");
+            return;
+        }
+
         m_Context.activeScene->DestroyEntity(m_Context.selectedEntity);
         m_Context.selectedEntity = Engine::NullEntity;
+    }
+
+    void EditorApp::ConnectSceneViewCameraInput()
+    {
+        m_SceneViewPanel.SetViewportResizeCallback([this](std::uint32_t width, std::uint32_t height)
+                                                   { m_EditorCamera.SetViewportSize(width, height); });
+
+        m_SceneViewPanel.SetInputForwardCallback([this](const EditorCameraInputFrame &input)
+                                                 {
+                                                     const float deltaTime = std::max(ImGui::GetIO().DeltaTime, 0.f);
+                                                     m_EditorCamera.Update(input, deltaTime);
+                                                 });
     }
 }

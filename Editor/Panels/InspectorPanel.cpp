@@ -57,5 +57,6 @@ namespace Physara::Editor
 
         TryDrawComponent<Engine::TagComponent>(entity, "Tag");
         TryDrawComponent<Engine::TransformComponent>(entity, "Transform");
+        TryDrawComponent<Engine::CameraComponent>(entity, "Camera");
     }
 }

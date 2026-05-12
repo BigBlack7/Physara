@@ -64,6 +64,7 @@ namespace Physara::Editor
         auto &tag = entity.GetComponent<Engine::TagComponent>();
         const auto &relationship = entity.GetComponent<Engine::RelationshipComponent>();
         const bool hasChildren = relationship.HasChildren();
+        const bool isSceneCamera = m_Context.activeScene->IsSceneCamera(entity.GetHandle());
 
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                    ImGuiTreeNodeFlags_OpenOnDoubleClick |
@@ -90,7 +91,7 @@ namespace Physara::Editor
         {
             m_Context.selectedEntity = entity.GetHandle();
 
-            if (ImGui::MenuItem("Create Child"))
+            if (ImGui::MenuItem("Create Child", nullptr, false, !isSceneCamera))
             {
                 Engine::Entity child = m_Context.activeScene->CreateEntity("Entity");
                 m_Context.activeScene->SetParent(child, entity);
@@ -100,7 +101,7 @@ namespace Physara::Editor
             {
                 OpenRenamePopup(entity);
             }
-            if (ImGui::MenuItem("Delete", "Backspace"))
+            if (ImGui::MenuItem("Delete", "Backspace", false, !isSceneCamera))
             {
                 const bool shouldPopTree = open && hasChildren;
                 m_Context.activeScene->DestroyEntity(entity);

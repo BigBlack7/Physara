@@ -462,17 +462,24 @@ namespace Physara::Editor
             return;
         }
 
-        const ImVec2 mousePos = ImGui::GetMousePos();
-        const ImVec2 viewportMin = ImGui::GetWindowPos();
+        const ImGuiIO &io = ImGui::GetIO();
 
-        SceneViewInputSnapshot snapshot{};
-        snapshot.mouseX = mousePos.x - viewportMin.x;
-        snapshot.mouseY = mousePos.y - viewportMin.y;
+        EditorCameraInputFrame snapshot{};
+        snapshot.mouseDeltaX = io.MouseDelta.x;
+        snapshot.mouseDeltaY = io.MouseDelta.y;
         snapshot.hovered = m_Context.sceneView.hovered;
         snapshot.focused = m_Context.sceneView.focused;
-        snapshot.leftMouseClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         snapshot.rightMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-        snapshot.mouseWheel = ImGui::GetIO().MouseWheel;
+        snapshot.gravePressed = ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false);
+        snapshot.escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+        snapshot.moveForward = ImGui::IsKeyDown(ImGuiKey_W);
+        snapshot.moveBackward = ImGui::IsKeyDown(ImGuiKey_S);
+        snapshot.moveLeft = ImGui::IsKeyDown(ImGuiKey_A);
+        snapshot.moveRight = ImGui::IsKeyDown(ImGuiKey_D);
+        snapshot.moveUp = ImGui::IsKeyDown(ImGuiKey_E);
+        snapshot.moveDown = ImGui::IsKeyDown(ImGuiKey_Q);
+        snapshot.speedBoost = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
+        snapshot.mouseWheel = io.MouseWheel;
 
         m_InputCallback(snapshot);
     }
