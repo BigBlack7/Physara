@@ -4,13 +4,14 @@
 #include <string>
 
 #include <Editor/Core/EditorContext.hpp>
+#include <Editor/Core/IconManager.hpp>
 
 namespace Physara::Editor
 {
     class ContentBrowserPanel final
     {
     public:
-        explicit ContentBrowserPanel(EditorContext &context);
+        ContentBrowserPanel(EditorContext &context, const IconManager &iconManager);
 
         void Draw();
 
@@ -31,6 +32,7 @@ namespace Physara::Editor
 
     private:
         EditorContext &m_Context;
+        const IconManager &m_IconManager;
         std::filesystem::path m_PendingSceneLoadPath{};
         bool m_OpenLoadScenePopup{false};
     };

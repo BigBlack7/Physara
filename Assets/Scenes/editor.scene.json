@@ -1,25 +1,12 @@
 {
     "entities": [
         {
-            "camera": {
-                "apertureFStop": 2.799999952316284,
-                "farClipMeters": 1000.0,
-                "focalLengthMillimeters": 35.0,
-                "iso": 100.0,
-                "nearClipMeters": 0.10000000149011612,
-                "orthographicHeightMeters": 10.0,
-                "primary": true,
-                "projection": "Perspective",
-                "sensorHeightMillimeters": 24.0,
-                "sensorWidthMillimeters": 36.0,
-                "shutterTimeSeconds": 0.01666666753590107
-            },
             "id": 1,
             "relationship": {
                 "parent": 0
             },
             "tag": {
-                "name": "Scene Camera"
+                "name": "lz"
             },
             "transform": {
                 "position": [
@@ -42,10 +29,10 @@
         {
             "id": 2,
             "relationship": {
-                "parent": 0
+                "parent": 1
             },
             "tag": {
-                "name": "hx"
+                "name": "Entity"
             },
             "transform": {
                 "position": [
@@ -71,7 +58,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "zmh"
+                "name": "hx"
             },
             "transform": {
                 "position": [
@@ -97,7 +84,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "xjf"
+                "name": "abc"
             },
             "transform": {
                 "position": [
@@ -123,7 +110,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "abc"
+                "name": "xjf"
             },
             "transform": {
                 "position": [
@@ -149,7 +136,7 @@
                 "parent": 0
             },
             "tag": {
-                "name": "hx"
+                "name": "zmh"
             },
             "transform": {
                 "position": [
@@ -175,7 +162,46 @@
                 "parent": 0
             },
             "tag": {
-                "name": "lz"
+                "name": "hx"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "camera": {
+                "apertureFStop": 2.799999952316284,
+                "farClipMeters": 1000.0,
+                "focalLengthMillimeters": 35.0,
+                "iso": 100.0,
+                "nearClipMeters": 0.10000000149011612,
+                "orthographicHeightMeters": 10.0,
+                "primary": true,
+                "projection": "Perspective",
+                "sensorHeightMillimeters": 24.0,
+                "sensorWidthMillimeters": 36.0,
+                "shutterTimeSeconds": 0.01666666753590107
+            },
+            "id": 8,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Scene Camera"
             },
             "transform": {
                 "position": [

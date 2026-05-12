@@ -117,27 +117,6 @@ namespace Physara::Editor
             return AssetKind::File;
         }
 
-        const char *IconLabel(AssetKind kind)
-        {
-            switch (kind)
-            {
-            case AssetKind::Folder:
-                return "DIR";
-            case AssetKind::Scene:
-                return "SCN";
-            case AssetKind::Mesh:
-                return "MSH";
-            case AssetKind::Texture:
-                return "TEX";
-            case AssetKind::Shader:
-                return "GLSL";
-            case AssetKind::File:
-                return "FILE";
-            }
-
-            return "FILE";
-        }
-
         ImU32 IconColor(AssetKind kind)
         {
             switch (kind)
@@ -157,11 +136,6 @@ namespace Physara::Editor
             }
 
             return IM_COL32(118, 128, 121, 255);
-        }
-
-        ImU32 IconTextColor()
-        {
-            return IM_COL32(244, 248, 239, 255);
         }
 
         void DrawDisclosureTriangle(ImDrawList *drawList, const ImVec2 &min, float size, bool open, ImU32 color)
@@ -235,7 +209,8 @@ namespace Physara::Editor
         }
     }
 
-    ContentBrowserPanel::ContentBrowserPanel(EditorContext &context) : m_Context(context) {}
+    ContentBrowserPanel::ContentBrowserPanel(EditorContext &context, const IconManager &iconManager)
+        : m_Context(context), m_IconManager(iconManager) {}
 
     void ContentBrowserPanel::Draw()
     {
@@ -437,15 +412,21 @@ namespace Physara::Editor
                 tileMin.x + (tileSize.x - Internal::TileIconSize) * 0.5f,
                 tileMin.y + Internal::TilePadding);
             const ImVec2 iconMax(iconMin.x + Internal::TileIconSize, iconMin.y + Internal::TileIconSize);
-            drawList->AddRectFilled(iconMin, iconMax, Internal::IconColor(entry.kind), 8.f);
-
-            const char *iconLabel = Internal::IconLabel(entry.kind);
-            const ImVec2 iconTextSize = ImGui::CalcTextSize(iconLabel);
-            drawList->AddText(
-                ImVec2(iconMin.x + (Internal::TileIconSize - iconTextSize.x) * 0.5f,
-                       iconMin.y + (Internal::TileIconSize - iconTextSize.y) * 0.5f),
-                Internal::IconTextColor(),
-                iconLabel);
+            const RHI::ImGuiTextureHandle icon = m_IconManager.GetFileIcon(entry.path, entry.isDirectory);
+            if (icon != 0)
+            {
+                drawList->AddImage(
+                    static_cast<ImTextureID>(icon),
+                    iconMin,
+                    iconMax,
+                    ImVec2(0.f, 0.f),
+                    ImVec2(1.f, 1.f),
+                    IM_COL32(255, 255, 255, 255));
+            }
+            else
+            {
+                drawList->AddRectFilled(iconMin, iconMax, Internal::IconColor(entry.kind), 8.f);
+            }
 
             const std::string name = Internal::TileName(entry);
             const ImVec2 textSize = ImGui::CalcTextSize(name.c_str(), nullptr, true, tileSize.x - 8.f);

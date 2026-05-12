@@ -5,11 +5,11 @@
 #include <memory>
 #include <filesystem>
 #include <string>
-#include <vector>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
 #include <Editor/Core/EditorContext.hpp>
+#include <Editor/Core/IconManager.hpp>
 #include <Editor/Core/ShortcutRegistry.hpp>
 #include <Editor/Camera/EditorCamera.hpp>
 #include <Editor/Panels/HelpShortcutsPanel.hpp>
@@ -47,8 +47,7 @@ namespace Physara::Editor
         void DrawSaveScenePopup();
         void SaveCurrentScene(const std::filesystem::path &path);
         std::filesystem::path BuildSceneSavePath(std::string name) const;
-        void LoadSceneViewIcons();
-        void DestroySceneViewIcons();
+        void InitializeIcons();
         void CreateDefaultScene();
         void DeleteSelectedEntity();
         void ConnectSceneViewCameraInput();
@@ -58,6 +57,7 @@ namespace Physara::Editor
         std::unique_ptr<Engine::Scene> m_EditorScene{};
         EditorContext m_Context{};
         ShortcutRegistry m_ShortcutRegistry{};
+        IconManager m_IconManager{};
         EditorCamera m_EditorCamera{};
         HierarchyPanel m_HierarchyPanel;
         InspectorPanel m_InspectorPanel;
@@ -71,6 +71,5 @@ namespace Physara::Editor
         bool m_OpenSaveScenePopup{false};
         std::uint32_t m_DockspaceId{0};
         std::array<char, 128> m_SaveSceneName{};
-        std::vector<RHI::ImGuiTextureHandle> m_IconTextures{};
     };
 }

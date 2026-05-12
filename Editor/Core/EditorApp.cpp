@@ -10,7 +10,6 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
-#include <stb/stb_image.h>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Scene/Scene.hpp>
@@ -47,42 +46,12 @@ namespace Physara::Editor
             return name.empty() ? "Untitled" : name;
         }
 
-        RHI::ImGuiTextureHandle LoadIconTexture(RHI::IImGuiBackend *backend, const std::filesystem::path &path)
-        {
-            if (backend == nullptr)
-            {
-                return 0;
-            }
-
-            int width = 0;
-            int height = 0;
-            int channels = 0;
-            unsigned char *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
-            if (pixels == nullptr)
-            {
-                PHYSARA_WARN("Failed to load editor icon: {}", path.string());
-                return 0;
-            }
-
-            const RHI::ImGuiTextureHandle texture =
-                backend->CreateTextureRGBA(static_cast<std::uint32_t>(width),
-                                           static_cast<std::uint32_t>(height),
-                                           pixels);
-            stbi_image_free(pixels);
-
-            if (texture == 0)
-            {
-                PHYSARA_WARN("Failed to upload editor icon: {}", path.string());
-            }
-
-            return texture;
-        }
     }
 
     EditorApp::EditorApp() : m_HierarchyPanel(m_Context),
                              m_InspectorPanel(m_Context),
                              m_SceneViewPanel(m_Context, m_ShortcutRegistry),
-                             m_ContentBrowserPanel(m_Context),
+                             m_ContentBrowserPanel(m_Context, m_IconManager),
                              m_RendererSettingsPanel(m_Context, m_EditorCamera),
                              m_HelpShortcutsPanel(m_Context, m_ShortcutRegistry)
     {
@@ -103,13 +72,14 @@ namespace Physara::Editor
 
         EditorTheme::Apply();
         CreateDefaultScene();
-        LoadSceneViewIcons();
+        InitializeIcons();
         ConnectSceneViewCameraInput();
     }
 
     void EditorApp::Shutdown()
     {
-        DestroySceneViewIcons();
+        m_SceneViewPanel.SetIconSet({});
+        m_IconManager.Shutdown();
         m_Context.activeScene = nullptr;
         m_Context.selectedEntity = Engine::NullEntity;
         m_EditorScene.reset();
@@ -398,36 +368,19 @@ namespace Physara::Editor
         return m_Context.assetsRootPath / "Scenes" / (sanitized + Internal::SceneSuffix);
     }
 
-    void EditorApp::LoadSceneViewIcons()
+    void EditorApp::InitializeIcons()
     {
-        DestroySceneViewIcons();
+        m_IconManager.Initialize(m_Backend, m_Context.assetsRootPath / "Icons");
 
-        const std::filesystem::path iconsRoot = m_Context.assetsRootPath / "Icons";
         SceneViewIconSet icons{};
+        icons.translate = m_IconManager.GetIcon(EditorIcon::Translate);
+        icons.rotate = m_IconManager.GetIcon(EditorIcon::Rotate);
+        icons.scale = m_IconManager.GetIcon(EditorIcon::Scale);
+        icons.panel = m_IconManager.GetIcon(EditorIcon::Panel);
+        icons.shortcut = m_IconManager.GetIcon(EditorIcon::Shortcut);
+        icons.info = m_IconManager.GetIcon(EditorIcon::Info);
 
-        icons.translate = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_translate.png");
-        icons.rotate = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_rotation.png");
-        icons.scale = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_scale.png");
-        icons.panel = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_panel.png");
-        icons.shortcut = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_shortcut.png");
-        icons.info = Internal::LoadIconTexture(m_Backend, iconsRoot / "icon_info.png");
-
-        m_IconTextures = {icons.translate, icons.rotate, icons.scale, icons.panel, icons.shortcut, icons.info};
         m_SceneViewPanel.SetIconSet(icons);
-    }
-
-    void EditorApp::DestroySceneViewIcons()
-    {
-        if (m_Backend != nullptr)
-        {
-            for (RHI::ImGuiTextureHandle texture : m_IconTextures)
-            {
-                m_Backend->DestroyTexture(texture);
-            }
-        }
-
-        m_IconTextures.clear();
-        m_SceneViewPanel.SetIconSet({});
     }
 
     void EditorApp::CreateDefaultScene()

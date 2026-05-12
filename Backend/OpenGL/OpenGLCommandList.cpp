@@ -35,6 +35,7 @@ namespace Physara::RHI
             return fmt == TextureFormat::Depth24Stencil8;
         }
 
+        // OpenGL的索引类型只能是GL_UNSIGNED_SHORT或GL_UNSIGNED_INT, 这里根据当前绑定的indexType计算每个索引的字节大小
         static std::uint32_t GetIndexStride(GLenum indexType)
         {
             if (indexType == GL_UNSIGNED_SHORT)
@@ -59,6 +60,7 @@ namespace Physara::RHI
                 (barrier.srcAccess & ResourceAccess::ShaderWrite) != 0u ||
                 hasBeforeOrAfter(ResourceState::ShaderResource))
             {
+                // 纹理采样、image load/store、SSBO读写都属于shader可见性
                 bits |= GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT;
             }
 
@@ -66,24 +68,28 @@ namespace Physara::RHI
                 (barrier.dstAccess & ResourceAccess::ShaderWrite) != 0u ||
                 hasBeforeOrAfter(ResourceState::UnorderedAccess))
             {
+                // image store和SSBO写入后续shader可见性, 包括同样的shader write和后续的shader read/write
                 bits |= GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT;
             }
 
             if ((barrier.dstAccess & ResourceAccess::VertexAttributeRead) != 0u ||
                 hasBeforeOrAfter(ResourceState::VertexBuffer))
             {
+                // 顶点输入的可见性, 包括顶点属性和实例属性
                 bits |= GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT;
             }
 
             if ((barrier.dstAccess & ResourceAccess::IndexRead) != 0u ||
                 hasBeforeOrAfter(ResourceState::IndexBuffer))
             {
+                // 索引缓冲的可见性
                 bits |= GL_ELEMENT_ARRAY_BARRIER_BIT;
             }
 
             if ((barrier.dstAccess & ResourceAccess::UniformRead) != 0u ||
                 hasBeforeOrAfter(ResourceState::ConstantBuffer))
             {
+                // Uniform缓冲的可见性
                 bits |= GL_UNIFORM_BARRIER_BIT;
             }
 
@@ -92,6 +98,7 @@ namespace Physara::RHI
                 hasBeforeOrAfter(ResourceState::CopySource) ||
                 hasBeforeOrAfter(ResourceState::CopyDest))
             {
+                // 复制和渲染目标的可见性, 包括纹理更新、缓冲更新、以及对copy source/dest的读写
                 bits |= GL_TEXTURE_UPDATE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT;
             }
 
@@ -99,6 +106,7 @@ namespace Physara::RHI
                 (barrier.dstAccess & ResourceAccess::ColorAttachmentRead) != 0u ||
                 hasBeforeOrAfter(ResourceState::RenderTarget))
             {
+                // 渲染目标的可见性, 包括对当前绑定FBO的读写以及后续shader对渲染结果的采样/读写
                 bits |= GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT;
             }
 
@@ -107,15 +115,18 @@ namespace Physara::RHI
                 hasBeforeOrAfter(ResourceState::DepthWrite) ||
                 hasBeforeOrAfter(ResourceState::DepthRead))
             {
+                // 深度模板的可见性, 包括对当前绑定FBO的深度写入以及后续shader对深度纹理的采样/读写
                 bits |= GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT;
             }
 
             if ((barrier.srcAccess & ResourceAccess::HostWrite) != 0u ||
                 (barrier.dstAccess & ResourceAccess::HostRead) != 0u)
             {
+                // CPU写入后GPU可见
                 bits |= GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
             }
 
+            // OpenGL没有Vulkan那种显式layout/state transition, 如果RHI层没有明确指定访问类型和资源状态, 就当作全能barrier
             return bits != 0 ? bits : GL_ALL_BARRIER_BITS;
         }
     }
@@ -252,6 +263,8 @@ namespace Physara::RHI
             {
                 if (target.blendEnable)
                 {
+                    // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0, 以此类推;
+                    // 如果某个attachment没有blend state, 就当作blend disabled
                     glEnablei(GL_BLEND, i);
                     glBlendFuncSeparatei(
                         i,
@@ -381,6 +394,7 @@ namespace Physara::RHI
             id = glBuffer->GetGLID();
         }
 
+        // glBindBufferBase把buffer暴露给shader的layout(binding=N)
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
     }
 
@@ -423,12 +437,14 @@ namespace Physara::RHI
             return;
         }
 
+        // DSA路径更新UBO内容, 不依赖当前GL_UNIFORM_BUFFER绑定点; 然后绑定到slot 0供shader读取
         glNamedBufferSubData(
             m_PushConstantsBuffer,
             static_cast<GLintptr>(offset),
             static_cast<GLsizeiptr>(size),
             data);
 
+        // 直接绑定到slot 0, 后续shader约定一个小uniform block即可读取
         glBindBufferRange(
             GL_UNIFORM_BUFFER,
             0,
@@ -481,6 +497,7 @@ namespace Physara::RHI
             }
             else
             {
+                // 直接glClear清默认帧缓冲, 只支持清第0个color attachment
                 glClearBufferfv(GL_COLOR, static_cast<GLint>(i), &color.x);
             }
         }
@@ -544,6 +561,7 @@ namespace Physara::RHI
 
             if (!attachments.empty())
             {
+                // DSA路径invalidate framebuffer, 不依赖当前GL_FRAMEBUFFER绑定点; 也可以直接glInvalidateFramebuffer, 但需要再次指定target
                 glInvalidateNamedFramebufferData(
                     m_State.framebuffer,
                     static_cast<GLsizei>(attachments.size()),
@@ -568,6 +586,7 @@ namespace Physara::RHI
             static_cast<std::uintptr_t>(m_State.indexOffset) +
             static_cast<std::uintptr_t>(firstIndex) * indexStride;
 
+        // 非常规draw, 需要同时指定instance count、base vertex和base instance; 方便后续object data用gl_InstanceID/baseInstance索引
         glDrawElementsInstancedBaseVertexBaseInstance(
             m_State.topology,
             static_cast<GLsizei>(indexCount),
