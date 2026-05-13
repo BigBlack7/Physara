@@ -5,6 +5,7 @@
 namespace Physara::RHI
 {
     class RHIDevice;
+    class RHITexture;
 
     using ImGuiTextureHandle = std::uint64_t;
 
@@ -19,6 +20,7 @@ namespace Physara::RHI
         virtual void RenderDrawData() = 0;
         virtual ImGuiTextureHandle CreateTextureRGBA(std::uint32_t width, std::uint32_t height, const void *pixels) = 0;
         virtual void DestroyTexture(ImGuiTextureHandle texture) = 0;
+        virtual ImGuiTextureHandle GetTextureHandle(RHITexture *texture) = 0;
         virtual void Shutdown() = 0;
     };
 }

@@ -72,9 +72,9 @@ namespace Physara::Editor
         ImGui::End();
     }
 
-    void SceneViewPanel::SetPreviewTextureId(void *textureId)
+    void SceneViewPanel::SetPreviewTexture(RHI::ImGuiTextureHandle texture)
     {
-        m_PreviewTextureId = textureId;
+        m_PreviewTexture = texture;
     }
 
     void SceneViewPanel::SetIconSet(const SceneViewIconSet &icons)
@@ -103,11 +103,10 @@ namespace Physara::Editor
 
         UpdateSceneViewState(width, height);
 
-        if (m_PreviewTextureId != nullptr && width >= Internal::MinViewportSize && height >= Internal::MinViewportSize)
+        if (m_PreviewTexture != 0 && width >= Internal::MinViewportSize && height >= Internal::MinViewportSize)
         {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
-            const ImTextureID textureId =
-                static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(m_PreviewTextureId));
+            const ImTextureID textureId = static_cast<ImTextureID>(m_PreviewTexture);
             ImGui::Image(textureId, ImVec2(width, height));
             DrawViewportToolbar(origin, width);
             DrawOverlay(origin, width, height);

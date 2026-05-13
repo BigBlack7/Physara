@@ -7,6 +7,8 @@
 #include <string>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
+#include <Engine/RHI/Core/RHIDevice.hpp>
+#include <Engine/Renderer/Renderer.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 
 #include <Editor/Core/EditorContext.hpp>
@@ -29,7 +31,7 @@ namespace Physara::Editor
         EditorApp();
         ~EditorApp();
 
-        void Init(RHI::IImGuiBackend *backend);
+        void Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend);
         void Shutdown();
         void OnUIRender();
 
@@ -43,6 +45,8 @@ namespace Physara::Editor
         void DrawPanels();
         void DrawDockedPanels();
         void DrawPresentationPanels();
+        void RenderSceneView();
+        void RefreshSceneViewTexture();
         void RequestCapture();
         void RequestSaveScene();
         void DrawSaveScenePopup();
@@ -55,7 +59,9 @@ namespace Physara::Editor
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
+        RHI::RHIDevice *m_Device{nullptr};
         std::unique_ptr<Engine::Scene> m_EditorScene{};
+        std::unique_ptr<Engine::Renderer> m_Renderer{};
         EditorContext m_Context{};
         ShortcutRegistry m_ShortcutRegistry{};
         IconManager m_IconManager{};

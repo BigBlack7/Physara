@@ -59,9 +59,11 @@ namespace Physara::Editor
 
     EditorApp::~EditorApp() = default;
 
-    void EditorApp::Init(RHI::IImGuiBackend *backend)
+    void EditorApp::Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend)
     {
+        m_Device = device;
         m_Backend = backend;
+        m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
         m_LayoutInitialized = false;
         m_DockspaceId = 0;
         m_Context.assetsRootPath = Physara::Platform::FileSystem::GetAssetsRootPath();
@@ -80,10 +82,13 @@ namespace Physara::Editor
     void EditorApp::Shutdown()
     {
         m_SceneViewPanel.SetIconSet({});
+        m_SceneViewPanel.SetPreviewTexture(0);
         m_IconManager.Shutdown();
+        m_Renderer.reset();
         m_Context.activeScene = nullptr;
         m_Context.selectedEntity = Engine::NullEntity;
         m_EditorScene.reset();
+        m_Device = nullptr;
         m_Backend = nullptr;
     }
 
@@ -98,6 +103,7 @@ namespace Physara::Editor
         ImGui::NewFrame();
 
         HandleGlobalShortcuts();
+        RenderSceneView();
 
         if (m_Context.ui.displayMode == EditorDisplayMode::Docked)
         {
@@ -253,6 +259,36 @@ namespace Physara::Editor
     void EditorApp::DrawPresentationPanels()
     {
         m_SceneViewPanel.Draw();
+    }
+
+    void EditorApp::RenderSceneView()
+    {
+        if (m_Renderer == nullptr)
+        {
+            return;
+        }
+
+        if (m_Context.sceneView.width < 1.f || m_Context.sceneView.height < 1.f)
+        {
+            return;
+        }
+
+        const auto width = static_cast<std::uint32_t>(std::max(m_Context.sceneView.width, 1.f));
+        const auto height = static_cast<std::uint32_t>(std::max(m_Context.sceneView.height, 1.f));
+        m_Renderer->ResizeViewport(width, height);
+        m_Renderer->RenderClear();
+        RefreshSceneViewTexture();
+    }
+
+    void EditorApp::RefreshSceneViewTexture()
+    {
+        if (m_Backend == nullptr || m_Renderer == nullptr)
+        {
+            m_SceneViewPanel.SetPreviewTexture(0);
+            return;
+        }
+
+        m_SceneViewPanel.SetPreviewTexture(m_Backend->GetTextureHandle(m_Renderer->GetSceneColorTexture()));
     }
 
     void EditorApp::RequestCapture()
@@ -414,7 +450,15 @@ namespace Physara::Editor
     void EditorApp::ConnectSceneViewCameraInput()
     {
         m_SceneViewPanel.SetViewportResizeCallback([this](std::uint32_t width, std::uint32_t height)
-                                                   { m_EditorCamera.SetViewportSize(width, height); });
+                                                   {
+                                                       m_EditorCamera.SetViewportSize(width, height);
+                                                       if (m_Renderer != nullptr)
+                                                       {
+                                                           m_Renderer->ResizeViewport(width, height);
+                                                           m_Renderer->RenderClear();
+                                                           RefreshSceneViewTexture();
+                                                       }
+                                                   });
 
         m_SceneViewPanel.SetInputForwardCallback([this](const EditorCameraInputFrame &input)
                                                  {

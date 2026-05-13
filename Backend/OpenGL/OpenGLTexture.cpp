@@ -61,6 +61,13 @@ namespace Physara::RHI
                 static_cast<GLsizei>(m_Desc.arrayLayers));
         }
 
+        glTextureParameteri(m_ID, GL_TEXTURE_MIN_FILTER, m_Desc.mipLevels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+        glTextureParameteri(m_ID, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(m_ID, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(m_ID, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(m_ID, GL_TEXTURE_BASE_LEVEL, 0);
+        glTextureParameteri(m_ID, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(m_Desc.mipLevels - 1));
+
         if (m_Desc.initialData != nullptr)
         {
             // RHITextureDesc目前没有initialDataSize, 因此压缩纹理不能安全走构造期上传

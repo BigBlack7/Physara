@@ -31,7 +31,7 @@ namespace Physara::Editor
         SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry);
 
         void Draw();
-        void SetPreviewTextureId(void *textureId);
+        void SetPreviewTexture(RHI::ImGuiTextureHandle texture);
         void SetIconSet(const SceneViewIconSet &icons);
         void SetViewportResizeCallback(ViewportResizeCallback callback);
         void SetInputForwardCallback(InputForwardCallback callback);
@@ -53,7 +53,7 @@ namespace Physara::Editor
     private:
         EditorContext &m_Context;
         const ShortcutRegistry &m_ShortcutRegistry;
-        void *m_PreviewTextureId{nullptr};
+        RHI::ImGuiTextureHandle m_PreviewTexture{0};
         SceneViewIconSet m_Icons{};
         ViewportResizeCallback m_ResizeCallback{};
         InputForwardCallback m_InputCallback{};

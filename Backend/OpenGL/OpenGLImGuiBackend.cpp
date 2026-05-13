@@ -1,5 +1,6 @@
 #include "OpenGLImGuiBackend.hpp"
 
+#include <Backend/OpenGL/OpenGLTexture.hpp>
 #include <Engine/Core/Log.hpp>
 
 #include <glad/glad.h>
@@ -141,6 +142,17 @@ namespace Physara::RHI
 
         const GLuint glTexture = static_cast<GLuint>(texture);
         glDeleteTextures(1, &glTexture);
+    }
+
+    ImGuiTextureHandle OpenGLImGuiBackend::GetTextureHandle(RHITexture *texture)
+    {
+        if (texture == nullptr)
+        {
+            return 0;
+        }
+
+        auto *glTexture = static_cast<OpenGLTexture *>(texture);
+        return static_cast<ImGuiTextureHandle>(glTexture->GetGLID());
     }
 
     void OpenGLImGuiBackend::Shutdown()

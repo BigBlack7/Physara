@@ -16,6 +16,7 @@ namespace Physara::RHI
         void RenderDrawData() override;
         ImGuiTextureHandle CreateTextureRGBA(std::uint32_t width, std::uint32_t height, const void *pixels) override;
         void DestroyTexture(ImGuiTextureHandle texture) override;
+        ImGuiTextureHandle GetTextureHandle(RHITexture *texture) override;
         void Shutdown() override;
 
     private:
