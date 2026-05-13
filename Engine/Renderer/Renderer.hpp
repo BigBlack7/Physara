@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/RendererCapture.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
@@ -34,6 +36,8 @@ namespace Physara::Engine
         void BeginFrame(const RenderView &view, float deltaTimeSeconds = 0.f);
         void Render(const RenderView &view, float deltaTimeSeconds = 0.f);
         void RenderClear();
+        CaptureResult CaptureCurrentView(const CaptureDesc &desc);
+        void RequestCapture(const CaptureDesc &desc);
 
         void SetClearColor(const glm::vec4 &color) { m_ClearColor = color; }
         [[nodiscard]] const glm::vec4 &GetClearColor() const { return m_ClearColor; }
@@ -46,6 +50,7 @@ namespace Physara::Engine
 
     private:
         void RecreateRenderTarget();
+        void ProcessPendingCapture();
 
     private:
         RHI::RHIDevice *m_Device{nullptr};
@@ -53,6 +58,7 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
         FrameData m_FrameData{};
+        std::optional<CaptureDesc> m_PendingCapture{};
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};
         std::uint64_t m_FrameIndex{0};
         std::uint32_t m_ViewportWidth{0};

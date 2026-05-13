@@ -100,8 +100,7 @@ namespace Physara::Editor
         {
             m_Context.settings.capture.captureRequested = true;
             const auto &camera = entity.GetComponent<Engine::CameraComponent>();
-            PHYSARA_INFO("Capture requested from Scene Camera Inspector. EV100={:.2f}. Renderer capture output will be connected in Phase 4.",
-                         camera.GetEV100());
+            PHYSARA_INFO("Capture requested from Scene Camera Inspector. EV100={:.2f}.", camera.GetEV100());
         }
         ImGui::SameLine();
         ImGui::TextDisabled("Shortcut: F12");

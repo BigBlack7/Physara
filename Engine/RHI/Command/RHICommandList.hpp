@@ -16,6 +16,17 @@ namespace Physara::RHI
     class RHIFramebuffer;
     struct RHIRenderPassDesc;
 
+    struct RHITextureReadbackDesc
+    {
+        std::uint32_t x{0};
+        std::uint32_t y{0};
+        std::uint32_t width{0};
+        std::uint32_t height{0};
+        std::uint32_t mipLevel{0};
+        std::uint32_t arrayLayer{0};
+        TextureFormat format{TextureFormat::RGBA8};
+    };
+
     class RHICommandList
     {
     public:
@@ -135,6 +146,7 @@ namespace Physara::RHI
         virtual void CopyTextureToTexture(RHITexture *src, RHITexture *dst) = 0;
         virtual void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) = 0;
         virtual void GenerateMipmaps(RHITexture *texture) = 0;
+        virtual std::vector<std::uint8_t> ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc) = 0;
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;

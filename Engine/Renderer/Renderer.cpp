@@ -73,6 +73,7 @@ namespace Physara::Engine
     {
         BeginFrame(view, deltaTimeSeconds);
         RenderClear();
+        ProcessPendingCapture();
     }
 
     void Renderer::RenderClear()
@@ -99,9 +100,51 @@ namespace Physara::Engine
         m_Device->SubmitCommandList();
     }
 
+    CaptureResult Renderer::CaptureCurrentView(const CaptureDesc &desc)
+    {
+        if (m_Device == nullptr || !HasValidRenderTarget())
+        {
+            return CaptureResult{false, desc.outputPath, "Renderer has no valid render target."};
+        }
+
+        RHI::RHICommandList *commandList = m_Device->GetCommandList();
+        if (commandList == nullptr)
+        {
+            return CaptureResult{false, desc.outputPath, "Renderer command list is null."};
+        }
+
+        return RendererCapture::CaptureTexture(*commandList, *m_SceneColor, desc);
+    }
+
+    void Renderer::RequestCapture(const CaptureDesc &desc)
+    {
+        m_PendingCapture = desc;
+    }
+
     bool Renderer::HasValidRenderTarget() const
     {
         return m_SceneColor != nullptr && m_Framebuffer != nullptr && m_ViewportWidth > 0 && m_ViewportHeight > 0;
+    }
+
+    void Renderer::ProcessPendingCapture()
+    {
+        if (!m_PendingCapture.has_value())
+        {
+            return;
+        }
+
+        CaptureDesc desc = *m_PendingCapture;
+        m_PendingCapture.reset();
+
+        CaptureResult result = CaptureCurrentView(desc);
+        if (result.success)
+        {
+            PHYSARA_CORE_INFO("Renderer capture saved: {}", result.outputPath.string());
+        }
+        else
+        {
+            PHYSARA_CORE_ERROR("Renderer capture failed: {}", result.message);
+        }
     }
 
     void Renderer::RecreateRenderTarget()

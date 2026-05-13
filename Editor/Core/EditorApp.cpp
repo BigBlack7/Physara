@@ -2,9 +2,13 @@
 #include "EditorTheme.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
+#include <ctime>
 #include <cstdio>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -44,6 +48,74 @@ namespace Physara::Editor
             }
 
             return name.empty() ? "Untitled" : name;
+        }
+
+        std::string SanitizeFileStem(std::string_view value)
+        {
+            std::string sanitized;
+            sanitized.reserve(value.size());
+
+            for (char c : value)
+            {
+                const unsigned char ch = static_cast<unsigned char>(c);
+                if (std::isalnum(ch) || c == '_' || c == '-' || c == ' ')
+                {
+                    sanitized.push_back(c);
+                }
+                else
+                {
+                    sanitized.push_back('_');
+                }
+            }
+
+            return sanitized.empty() ? "Physara_Capture" : sanitized;
+        }
+
+        std::string TimestampForFileName()
+        {
+            const auto now = std::chrono::system_clock::now();
+            const std::time_t time = std::chrono::system_clock::to_time_t(now);
+            const auto milliseconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+
+            std::tm localTime{};
+#if defined(_WIN32)
+            localtime_s(&localTime, &time);
+#else
+            localtime_r(&time, &localTime);
+#endif
+
+            std::ostringstream stream;
+            stream << std::put_time(&localTime, "%Y%m%d_%H%M%S") << '_' << std::setw(3) << std::setfill('0') << milliseconds;
+            return stream.str();
+        }
+
+        const char *CaptureExtension(Engine::CaptureFormat format)
+        {
+            switch (format)
+            {
+            case Engine::CaptureFormat::JPG:
+                return ".jpg";
+            case Engine::CaptureFormat::EXR:
+                return ".exr";
+            case Engine::CaptureFormat::PNG:
+            default:
+                return ".png";
+            }
+        }
+
+        Engine::CaptureFormat CaptureFormatFromIndex(int index)
+        {
+            switch (index)
+            {
+            case 1:
+                return Engine::CaptureFormat::JPG;
+            case 2:
+                return Engine::CaptureFormat::EXR;
+            case 0:
+            default:
+                return Engine::CaptureFormat::PNG;
+            }
         }
 
     }
@@ -117,6 +189,7 @@ namespace Physara::Editor
         }
 
         DrawPanels();
+        ProcessCaptureRequests();
         DrawSaveScenePopup();
 
         if (m_Context.activeScene != nullptr)
@@ -295,12 +368,47 @@ namespace Physara::Editor
 
     void EditorApp::RequestCapture()
     {
-        m_Context.settings.capture.captureRequested = true;
-        const Engine::RenderView captureView =
-            m_EditorCamera.BuildCaptureView(m_Context.activeScene, m_Context.selectedEntity,
-                                            m_EditorCamera.GetCaptureViewSource());
-        PHYSARA_INFO("Capture requested. Viewport={}x{}, EV100={:.2f}. Renderer capture output will be connected in Phase 4.",
-                     captureView.viewport.width, captureView.viewport.height, captureView.ev100);
+        if (m_Renderer == nullptr)
+        {
+            PHYSARA_WARN("Capture skipped because renderer is not initialized.");
+            return;
+        }
+
+        Engine::CaptureDesc desc = BuildCaptureDesc();
+        m_Renderer->RequestCapture(desc);
+        PHYSARA_INFO("Capture queued: {}", desc.outputPath.string());
+    }
+
+    void EditorApp::ProcessCaptureRequests()
+    {
+        if (!m_Context.settings.capture.captureRequested)
+        {
+            return;
+        }
+
+        m_Context.settings.capture.captureRequested = false;
+        RequestCapture();
+    }
+
+    Engine::CaptureDesc EditorApp::BuildCaptureDesc() const
+    {
+        const Engine::CaptureFormat format =
+            Internal::CaptureFormatFromIndex(m_Context.settings.capture.fileFormatIndex);
+        const std::string prefix =
+            Internal::SanitizeFileStem(m_Context.settings.capture.fileNamePrefix.data());
+        const std::filesystem::path directory =
+            m_Context.settings.capture.outputDirectory.empty()
+                ? m_Context.assetsRootPath / "Gallery"
+                : m_Context.settings.capture.outputDirectory;
+
+        Engine::CaptureDesc desc{};
+        desc.format = format;
+        desc.outputPath = directory / (prefix + "_" + Internal::TimestampForFileName() + Internal::CaptureExtension(format));
+        desc.resolutionScale = m_Context.settings.capture.resolutionScale;
+        desc.includeDebugView = m_Context.settings.capture.includeDebugView;
+        desc.usePostExposureOutput = true;
+        desc.jpgQuality = 95;
+        return desc;
     }
 
     void EditorApp::RequestSaveScene()

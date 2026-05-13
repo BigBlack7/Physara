@@ -61,6 +61,7 @@ namespace Physara::RHI
         void CopyTextureToTexture(RHITexture *src, RHITexture *dst) override;
         void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) override;
         void GenerateMipmaps(RHITexture *texture) override;
+        std::vector<std::uint8_t> ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc) override;
 
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;

@@ -48,6 +48,8 @@ namespace Physara::Editor
         void RenderSceneView();
         void RefreshSceneViewTexture();
         void RequestCapture();
+        void ProcessCaptureRequests();
+        Engine::CaptureDesc BuildCaptureDesc() const;
         void RequestSaveScene();
         void DrawSaveScenePopup();
         void SaveCurrentScene(const std::filesystem::path &path);

@@ -760,6 +760,58 @@ namespace Physara::RHI
         glGenerateTextureMipmap(glTex->GetGLID());
     }
 
+    std::vector<std::uint8_t> OpenGLCommandList::ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc)
+    {
+        auto *glTex = static_cast<OpenGLTexture *>(texture);
+        if (!glTex)
+        {
+            PHYSARA_CORE_ERROR("ReadTextureToCPU called with null texture.");
+            return {};
+        }
+
+        if (glTex->GetGLTarget() != GL_TEXTURE_2D)
+        {
+            PHYSARA_CORE_WARN("ReadTextureToCPU supports GL_TEXTURE_2D only.");
+            return {};
+        }
+
+        if (desc.format != RHI::TextureFormat::RGBA8 || glTex->GetFormat() != RHI::TextureFormat::RGBA8)
+        {
+            PHYSARA_CORE_WARN("ReadTextureToCPU currently supports RGBA8 readback only.");
+            return {};
+        }
+
+        const std::uint32_t readWidth = desc.width != 0 ? desc.width : glTex->GetWidth();
+        const std::uint32_t readHeight = desc.height != 0 ? desc.height : glTex->GetHeight();
+        if (readWidth == 0 || readHeight == 0)
+        {
+            return {};
+        }
+
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(readWidth) * readHeight * 4u);
+
+        GLint previousPackAlignment = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1); // 以字节为单位紧密存储, 避免默认4字节对齐导致的行末padding
+
+        glGetTextureSubImage(
+            glTex->GetGLID(),
+            static_cast<GLint>(desc.mipLevel),
+            static_cast<GLint>(desc.x),
+            static_cast<GLint>(desc.y),
+            static_cast<GLint>(desc.arrayLayer),
+            static_cast<GLsizei>(readWidth),
+            static_cast<GLsizei>(readHeight),
+            1,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            static_cast<GLsizei>(pixels.size()),
+            pixels.data());
+
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);// 恢复之前的pack alignment状态
+        return pixels;
+    }
+
     void OpenGLCommandList::BeginDebugLabel(const char *label)
     {
         // KHR_debug debug group, RenderDoc/Nsight中会显示为命令分组
