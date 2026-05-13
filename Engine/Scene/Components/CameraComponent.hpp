@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/mat4x4.hpp>
@@ -14,6 +15,16 @@ namespace Physara::Engine
         Perspective,
         Orthographic
     };
+
+    [[nodiscard]] inline constexpr std::string_view ToString(CameraProjectionType type)
+    {
+        return type == CameraProjectionType::Orthographic ? "Orthographic" : "Perspective";
+    }
+
+    [[nodiscard]] inline constexpr CameraProjectionType CameraProjectionTypeFromString(std::string_view type)
+    {
+        return type == "Orthographic" ? CameraProjectionType::Orthographic : CameraProjectionType::Perspective;
+    }
 
     struct CameraComponent
     {

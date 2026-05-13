@@ -70,51 +70,6 @@ namespace Physara::Engine
             return {value.at(0).get<float>(), value.at(1).get<float>(), value.at(2).get<float>(), value.at(3).get<float>()};
         }
 
-        std::string ToString(LightType type)
-        {
-            switch (type)
-            {
-            case LightType::Directional:
-                return "Directional";
-            case LightType::Point:
-                return "Point";
-            case LightType::Spot:
-                return "Spot";
-            case LightType::Area:
-                return "Area";
-            }
-
-            return "Directional";
-        }
-
-        LightType LightTypeFromString(const std::string &type)
-        {
-            if (type == "Point")
-            {
-                return LightType::Point;
-            }
-            if (type == "Spot")
-            {
-                return LightType::Spot;
-            }
-            if (type == "Area")
-            {
-                return LightType::Area;
-            }
-
-            return LightType::Directional;
-        }
-
-        std::string ToString(CameraProjectionType type)
-        {
-            return type == CameraProjectionType::Orthographic ? "Orthographic" : "Perspective";
-        }
-
-        CameraProjectionType CameraProjectionFromString(const std::string &type)
-        {
-            return type == "Orthographic" ? CameraProjectionType::Orthographic : CameraProjectionType::Perspective;
-        }
-
         void CollectEntityRecursive(const Scene &scene, EntityId entity, std::vector<EntityId> &out)
         {
             const auto &registry = scene.GetRegistry();
@@ -199,7 +154,7 @@ namespace Physara::Engine
                 if (const auto *camera = registry.try_get<CameraComponent>(entity))
                 {
                     e["camera"] = {
-                        {"projection", Internal::ToString(camera->projectionType)},
+                    {"projection", std::string(ToString(camera->projectionType))},
                         {"primary", camera->primary},
                         {"sensorWidthMillimeters", camera->sensorWidthMillimeters},
                         {"sensorHeightMillimeters", camera->sensorHeightMillimeters},
@@ -215,7 +170,7 @@ namespace Physara::Engine
                 if (const auto *light = registry.try_get<LightComponent>(entity))
                 {
                     e["light"] = {
-                        {"type", Internal::ToString(light->type)},
+                    {"type", std::string(ToString(light->type))},
                         {"color", Internal::Vec3ToJson(light->color)},
                         {"colorTemperatureKelvin", light->colorTemperatureKelvin},
                         {"useColorTemperature", light->useColorTemperature},
@@ -291,7 +246,7 @@ namespace Physara::Engine
                 {
                     const Internal::json &c = serialized.at("camera");
                     CameraComponent camera{};
-                    camera.projectionType = Internal::CameraProjectionFromString(c.value("projection", std::string{"Perspective"}));
+                    camera.projectionType = CameraProjectionTypeFromString(c.value("projection", std::string{"Perspective"}));
                     camera.primary = c.value("primary", false);
                     camera.sensorWidthMillimeters = c.value("sensorWidthMillimeters", camera.sensorWidthMillimeters);
                     camera.sensorHeightMillimeters = c.value("sensorHeightMillimeters", camera.sensorHeightMillimeters);
@@ -310,7 +265,7 @@ namespace Physara::Engine
                 {
                     const Internal::json &l = serialized.at("light");
                     LightComponent light{};
-                    light.type = Internal::LightTypeFromString(l.value("type", std::string{"Directional"}));
+                    light.type = LightTypeFromString(l.value("type", std::string{"Directional"}));
                     light.color = Internal::JsonToVec3(l.value("color", Internal::json::array()), glm::vec3(1.f));
                     light.colorTemperatureKelvin = l.value("colorTemperatureKelvin", light.colorTemperatureKelvin);
                     light.useColorTemperature = l.value("useColorTemperature", light.useColorTemperature);

@@ -184,38 +184,7 @@ namespace Physara::Engine
             return result;
         }
 
-        // 从纹理信息结构体生成纹理的完整路径
-        std::string NormalizeTexturePath(const std::filesystem::path &path, AssetManager *assetManager)
-        {
-            return NormalizeAssetPath(path, assetManager);
-        }
-
-        std::string TexturePathFromInfo(const tg3_model &model, const std::filesystem::path &gltfPath,
-                                        const tg3_texture_info &info, AssetManager *assetManager)
-        {
-            if (info.index < 0 || static_cast<std::uint32_t>(info.index) >= model.textures_count)
-            {
-                return {};
-            }
-
-            const tg3_texture &texture = model.textures[info.index];
-            if (texture.source < 0 || static_cast<std::uint32_t>(texture.source) >= model.images_count)
-            {
-                return {};
-            }
-
-            const std::string uri = ToString(model.images[texture.source].uri);
-            if (uri.empty())
-            {
-                return {};
-            }
-
-            return NormalizeTexturePath(gltfPath.parent_path() / uri, assetManager);
-        }
-
-        // 从纹理索引生成纹理的完整路径
-        std::string TexturePathFromIndex(const tg3_model &model, const std::filesystem::path &gltfPath,
-                                         int32_t textureIndex, AssetManager *assetManager)
+        std::string ImageUriFromTextureIndex(const tg3_model &model, int32_t textureIndex)
         {
             if (textureIndex < 0 || static_cast<std::uint32_t>(textureIndex) >= model.textures_count)
             {
@@ -228,8 +197,23 @@ namespace Physara::Engine
                 return {};
             }
 
-            const std::string uri = ToString(model.images[texture.source].uri);
-            return uri.empty() ? std::string{} : NormalizeTexturePath(gltfPath.parent_path() / uri, assetManager);
+            return ToString(model.images[texture.source].uri);
+        }
+
+        // 从纹理信息结构体生成纹理的完整路径
+        std::string TexturePathFromInfo(const tg3_model &model, const std::filesystem::path &gltfPath,
+                                        const tg3_texture_info &info, AssetManager *assetManager)
+        {
+            const std::string uri = ImageUriFromTextureIndex(model, info.index);
+            return uri.empty() ? std::string{} : NormalizeAssetPath(gltfPath.parent_path() / uri, assetManager);
+        }
+
+        // 从纹理索引生成纹理的完整路径
+        std::string TexturePathFromIndex(const tg3_model &model, const std::filesystem::path &gltfPath,
+                                         int32_t textureIndex, AssetManager *assetManager)
+        {
+            const std::string uri = ImageUriFromTextureIndex(model, textureIndex);
+            return uri.empty() ? std::string{} : NormalizeAssetPath(gltfPath.parent_path() / uri, assetManager);
         }
 
         Material ConvertMaterial(const tg3_model &model, const std::filesystem::path &gltfPath,
@@ -270,21 +254,21 @@ namespace Physara::Engine
                 material.castShadow = false;
             }
 
-            material.baseColorTexture = {
+            material.baseColorTexture = TextureSlot(
                 TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.base_color_texture, assetManager),
-                static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.base_color_texture.tex_coord, 0))};
-            material.metallicRoughnessTexture = {
+                static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.base_color_texture.tex_coord, 0)));
+            material.metallicRoughnessTexture = TextureSlot(
                 TexturePathFromInfo(model, gltfPath, source.pbr_metallic_roughness.metallic_roughness_texture, assetManager),
-                static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.metallic_roughness_texture.tex_coord, 0))};
-            material.normalTexture = {
+                static_cast<std::uint32_t>(std::max(source.pbr_metallic_roughness.metallic_roughness_texture.tex_coord, 0)));
+            material.normalTexture = TextureSlot(
                 TexturePathFromIndex(model, gltfPath, source.normal_texture.index, assetManager),
-                static_cast<std::uint32_t>(std::max(source.normal_texture.tex_coord, 0))};
-            material.occlusionTexture = {
+                static_cast<std::uint32_t>(std::max(source.normal_texture.tex_coord, 0)));
+            material.occlusionTexture = TextureSlot(
                 TexturePathFromIndex(model, gltfPath, source.occlusion_texture.index, assetManager),
-                static_cast<std::uint32_t>(std::max(source.occlusion_texture.tex_coord, 0))};
-            material.emissiveTexture = {
+                static_cast<std::uint32_t>(std::max(source.occlusion_texture.tex_coord, 0)));
+            material.emissiveTexture = TextureSlot(
                 TexturePathFromInfo(model, gltfPath, source.emissive_texture, assetManager),
-                static_cast<std::uint32_t>(std::max(source.emissive_texture.tex_coord, 0))};
+                static_cast<std::uint32_t>(std::max(source.emissive_texture.tex_coord, 0)));
 
             return material;
         }

@@ -50,7 +50,7 @@ namespace Physara::Editor
             return name.empty() ? "Untitled" : name;
         }
 
-        std::string SanitizeFileStem(std::string_view value)
+        std::string SanitizeFileStem(std::string_view value, bool allowDot = false, std::string_view fallback = "Physara_Capture")
         {
             std::string sanitized;
             sanitized.reserve(value.size());
@@ -58,7 +58,7 @@ namespace Physara::Editor
             for (char c : value)
             {
                 const unsigned char ch = static_cast<unsigned char>(c);
-                if (std::isalnum(ch) || c == '_' || c == '-' || c == ' ')
+                if (std::isalnum(ch) || c == '_' || c == '-' || c == ' ' || (allowDot && c == '.'))
                 {
                     sanitized.push_back(c);
                 }
@@ -68,7 +68,7 @@ namespace Physara::Editor
                 }
             }
 
-            return sanitized.empty() ? "Physara_Capture" : sanitized;
+            return sanitized.empty() ? std::string(fallback) : sanitized;
         }
 
         std::string TimestampForFileName()
@@ -88,20 +88,6 @@ namespace Physara::Editor
             std::ostringstream stream;
             stream << std::put_time(&localTime, "%Y%m%d_%H%M%S") << '_' << std::setw(3) << std::setfill('0') << milliseconds;
             return stream.str();
-        }
-
-        const char *CaptureExtension(Engine::CaptureFormat format)
-        {
-            switch (format)
-            {
-            case Engine::CaptureFormat::JPG:
-                return ".jpg";
-            case Engine::CaptureFormat::EXR:
-                return ".exr";
-            case Engine::CaptureFormat::PNG:
-            default:
-                return ".png";
-            }
         }
 
         Engine::CaptureFormat CaptureFormatFromIndex(int index)
@@ -403,7 +389,7 @@ namespace Physara::Editor
 
         Engine::CaptureDesc desc{};
         desc.format = format;
-        desc.outputPath = directory / (prefix + "_" + Internal::TimestampForFileName() + Internal::CaptureExtension(format));
+        desc.outputPath = directory / (prefix + "_" + Internal::TimestampForFileName() + std::string(Engine::GetCaptureFormatExtension(format)));
         desc.resolutionScale = m_Context.settings.capture.resolutionScale;
         desc.includeDebugView = m_Context.settings.capture.includeDebugView;
         desc.usePostExposureOutput = true;
@@ -480,29 +466,7 @@ namespace Physara::Editor
 
     std::filesystem::path EditorApp::BuildSceneSavePath(std::string name) const
     {
-        std::string sanitized;
-        sanitized.reserve(name.size());
-        for (char c : name)
-        {
-            const unsigned char value = static_cast<unsigned char>(c);
-            if (std::isalnum(value) || c == '_' || c == '-' || c == ' ')
-            {
-                sanitized.push_back(c);
-            }
-            else if (c == '.')
-            {
-                sanitized.push_back(c);
-            }
-            else
-            {
-                sanitized.push_back('_');
-            }
-        }
-
-        if (sanitized.empty())
-        {
-            sanitized = "Untitled";
-        }
+        std::string sanitized = Internal::SanitizeFileStem(name, true, "Untitled");
 
         std::string lower = sanitized;
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)

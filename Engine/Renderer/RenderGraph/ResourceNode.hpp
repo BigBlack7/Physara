@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 
@@ -32,19 +33,16 @@ namespace Physara::Engine
     {
     public:
         ResourceNode() = default;
-        ResourceNode(std::string name, RHI::RHITextureDesc desc, RHI::RHITexture *texture, bool imported);
+        ResourceNode(std::string name, RHI::RHITextureDesc desc, RHI::RHITexture *texture)
+            : m_Name(std::move(name)), m_TextureDesc(desc), m_Texture(texture) {}
 
         [[nodiscard]] const std::string &GetName() const { return m_Name; }
         [[nodiscard]] const RHI::RHITextureDesc &GetTextureDesc() const { return m_TextureDesc; }
         [[nodiscard]] RHI::RHITexture *GetTexture() const { return m_Texture; }
-        [[nodiscard]] bool IsImported() const { return m_Imported; }
-
-        void SetTexture(RHI::RHITexture *texture) { m_Texture = texture; }
 
     private:
         std::string m_Name{};
         RHI::RHITextureDesc m_TextureDesc{};
         RHI::RHITexture *m_Texture{nullptr};
-        bool m_Imported{false};
     };
 }

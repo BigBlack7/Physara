@@ -2,7 +2,6 @@
 
 #include <utility>
 
-#include <Engine/Core/Log.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 
@@ -27,27 +26,8 @@ namespace Physara::Engine
         desc.samples = 1;
 
         const std::uint32_t index = static_cast<std::uint32_t>(m_Resources.size());
-        m_Resources.emplace_back(std::move(name), desc, &texture, true);
+        m_Resources.emplace_back(std::move(name), desc, &texture);
         return {index};
-    }
-
-    RenderGraphResourceHandle RenderGraph::CreateTexture(std::string name, const RHI::RHITextureDesc &desc)
-    {
-        const std::uint32_t index = static_cast<std::uint32_t>(m_Resources.size());
-        m_Resources.emplace_back(std::move(name), desc, nullptr, false);
-        return {index};
-    }
-
-    void RenderGraph::SetResourceTexture(RenderGraphResourceHandle handle, RHI::RHITexture *texture)
-    {
-        ResourceNode *resource = GetResource(handle);
-        if (resource == nullptr)
-        {
-            PHYSARA_CORE_WARN("RenderGraph::SetResourceTexture called with invalid resource handle.");
-            return;
-        }
-
-        resource->SetTexture(texture);
     }
 
     RGBuilder RenderGraph::AddPass(std::string name)

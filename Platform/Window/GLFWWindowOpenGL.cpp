@@ -4,9 +4,13 @@
 #include <GLFW/glfw3.h>
 #include <stb/stb_image.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
+
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Platform
 {
@@ -67,11 +71,27 @@ namespace Physara::Platform
 
         // Physara Logo: Assets/Icons/icon_physara.png(失败时跳过, 不阻止窗口创建)
         {
-            const std::string iconPath = std::string(ASSETS_PATH) + "Icons/icon_physara.png";
+            std::vector<std::uint8_t> iconData{};
+            try
+            {
+                iconData = FileSystem::ReadBinaryFile("Icons/icon_physara.png");
+            }
+            catch (const std::exception &)
+            {
+                iconData.clear();
+            }
+
             int iconWidth = 0;
             int iconHeight = 0;
             int iconChannels = 0;
-            unsigned char *pixels = stbi_load(iconPath.c_str(), &iconWidth, &iconHeight, &iconChannels, 4);
+            unsigned char *pixels = iconData.empty()
+                                        ? nullptr
+                                        : stbi_load_from_memory(iconData.data(),
+                                                                static_cast<int>(iconData.size()),
+                                                                &iconWidth,
+                                                                &iconHeight,
+                                                                &iconChannels,
+                                                                4);
 
             if (pixels != nullptr)
             {

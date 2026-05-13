@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace Physara::RHI
 {
@@ -18,6 +19,20 @@ namespace Physara::Engine
         JPG,
         EXR
     };
+
+    [[nodiscard]] inline constexpr std::string_view GetCaptureFormatExtension(CaptureFormat format)
+    {
+        switch (format)
+        {
+        case CaptureFormat::JPG:
+            return ".jpg";
+        case CaptureFormat::EXR:
+            return ".exr";
+        case CaptureFormat::PNG:
+        default:
+            return ".png";
+        }
+    }
 
     struct CaptureDesc
     {

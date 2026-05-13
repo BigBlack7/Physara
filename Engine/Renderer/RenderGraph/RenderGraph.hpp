@@ -22,16 +22,12 @@ namespace Physara::Engine
         void Reset();
 
         RenderGraphResourceHandle ImportTexture(std::string name, RHI::RHITexture &texture);
-        RenderGraphResourceHandle CreateTexture(std::string name, const RHI::RHITextureDesc &desc);
-        void SetResourceTexture(RenderGraphResourceHandle handle, RHI::RHITexture *texture);
 
         RGBuilder AddPass(std::string name);
         void Execute(RHI::RHICommandList &commandList);
 
         [[nodiscard]] const ResourceNode *GetResource(RenderGraphResourceHandle handle) const;
         [[nodiscard]] ResourceNode *GetResource(RenderGraphResourceHandle handle);
-        [[nodiscard]] const std::vector<PassNode> &GetPasses() const { return m_Passes; }
-        [[nodiscard]] const std::vector<ResourceNode> &GetResources() const { return m_Resources; }
 
     private:
         friend class RGBuilder;

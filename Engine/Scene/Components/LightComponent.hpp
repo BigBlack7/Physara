@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numbers>
 #include <string>
+#include <string_view>
 
 #include <glm/common.hpp>
 #include <glm/trigonometric.hpp>
@@ -18,6 +19,41 @@ namespace Physara::Engine
         Spot,
         Area
     };
+
+    [[nodiscard]] inline constexpr std::string_view ToString(LightType type)
+    {
+        switch (type)
+        {
+        case LightType::Directional:
+            return "Directional";
+        case LightType::Point:
+            return "Point";
+        case LightType::Spot:
+            return "Spot";
+        case LightType::Area:
+            return "Area";
+        }
+
+        return "Directional";
+    }
+
+    [[nodiscard]] inline constexpr LightType LightTypeFromString(std::string_view type)
+    {
+        if (type == "Point")
+        {
+            return LightType::Point;
+        }
+        if (type == "Spot")
+        {
+            return LightType::Spot;
+        }
+        if (type == "Area")
+        {
+            return LightType::Area;
+        }
+
+        return LightType::Directional;
+    }
 
     /*
         1000K-2000K: 暖红色(蜡烛、日出日落)

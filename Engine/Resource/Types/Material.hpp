@@ -10,12 +10,6 @@
 
 namespace Physara::Engine
 {
-    struct MaterialTextureRef
-    {
-        std::string path{};
-        std::uint32_t texCoord{0};
-    };
-
     struct Material
     {
         std::string path{};
@@ -35,10 +29,10 @@ namespace Physara::Engine
         glm::vec3 emissiveColor{0.f};
         float normalScale{1.f};
 
-        MaterialTextureRef baseColorTexture{};
-        MaterialTextureRef metallicRoughnessTexture{};
-        MaterialTextureRef normalTexture{};
-        MaterialTextureRef occlusionTexture{};
-        MaterialTextureRef emissiveTexture{};
+        TextureSlot baseColorTexture{};
+        TextureSlot metallicRoughnessTexture{};
+        TextureSlot normalTexture{};
+        TextureSlot occlusionTexture{};
+        TextureSlot emissiveTexture{};
     };
 }
