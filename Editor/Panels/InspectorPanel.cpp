@@ -1,10 +1,13 @@
 #include "InspectorPanel.hpp"
 #include "ComponentDrawer.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 #include <imgui/imgui.h>
 
+#include <Engine/Core/Log.hpp>
+#include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
@@ -12,6 +15,11 @@ namespace Physara::Editor
     namespace Internal
     {
         constexpr const char *PanelName = "Inspector";
+
+        static constexpr const char *CaptureFormatLabels[] = {
+            "PNG",
+            "JPG",
+            "EXR (planned)"};
     }
 
     InspectorPanel::InspectorPanel(EditorContext &context)
@@ -58,7 +66,46 @@ namespace Physara::Editor
         TryDrawComponent<Engine::TagComponent>(entity, "Tag");
         TryDrawComponent<Engine::TransformComponent>(entity, "Transform");
         TryDrawComponent<Engine::CameraComponent>(entity, "Camera");
+        DrawCameraCaptureSection(entity);
         TryDrawComponent<Engine::MeshComponent>(entity, "Mesh");
         TryDrawComponent<Engine::MaterialComponent>(entity, "Material");
+    }
+
+    void InspectorPanel::DrawCameraCaptureSection(Engine::Entity entity)
+    {
+        if (!entity.HasComponent<Engine::CameraComponent>())
+        {
+            return;
+        }
+
+        if (!ImGui::CollapsingHeader("Capture", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            return;
+        }
+
+        ImGui::PushID("CameraCapture");
+
+        ImGui::InputText("File Prefix",
+                         m_Context.settings.capture.fileNamePrefix.data(),
+                         m_Context.settings.capture.fileNamePrefix.size());
+        ImGui::Combo("Format", &m_Context.settings.capture.fileFormatIndex,
+                     Internal::CaptureFormatLabels, IM_ARRAYSIZE(Internal::CaptureFormatLabels));
+
+        m_Context.settings.capture.resolutionScale =
+            std::clamp(m_Context.settings.capture.resolutionScale, 0.25f, 4.f);
+        ImGui::SliderFloat("Resolution Scale", &m_Context.settings.capture.resolutionScale, 0.25f, 4.f, "%.2fx");
+        ImGui::Checkbox("Include Debug View", &m_Context.settings.capture.includeDebugView);
+
+        if (ImGui::Button("Capture Current View"))
+        {
+            m_Context.settings.capture.captureRequested = true;
+            const auto &camera = entity.GetComponent<Engine::CameraComponent>();
+            PHYSARA_INFO("Capture requested from Scene Camera Inspector. EV100={:.2f}. Renderer capture output will be connected in Phase 4.",
+                         camera.GetEV100());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Shortcut: F12");
+
+        ImGui::PopID();
     }
 }

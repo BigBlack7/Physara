@@ -14,6 +14,7 @@ namespace Physara::Editor
 
     private:
         void DrawEntity(Engine::Entity entity);
+        void DrawCameraCaptureSection(Engine::Entity entity);
 
     private:
         EditorContext &m_Context;

@@ -114,7 +114,7 @@ namespace Physara::Editor
         std::uint32_t m_ViewportHeight{1};
         bool m_ToggleFlyMode{false};
         EditorCameraMode m_Mode{EditorCameraMode::Orbit};
-        CaptureViewSource m_CaptureViewSource{CaptureViewSource::EditorCamera};
+        CaptureViewSource m_CaptureViewSource{CaptureViewSource::SceneCamera};
         EditorCameraSettings m_Settings{};
     };
 }

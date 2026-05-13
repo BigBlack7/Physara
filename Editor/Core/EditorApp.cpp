@@ -52,7 +52,7 @@ namespace Physara::Editor
                              m_InspectorPanel(m_Context),
                              m_SceneViewPanel(m_Context, m_ShortcutRegistry),
                              m_ContentBrowserPanel(m_Context, m_IconManager, m_AssetManager),
-                             m_RendererSettingsPanel(m_Context, m_EditorCamera),
+                             m_RendererSettingsPanel(m_Context),
                              m_HelpShortcutsPanel(m_Context, m_ShortcutRegistry)
     {
     }
