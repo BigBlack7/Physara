@@ -275,8 +275,10 @@ namespace Physara::Editor
 
         const auto width = static_cast<std::uint32_t>(std::max(m_Context.sceneView.width, 1.f));
         const auto height = static_cast<std::uint32_t>(std::max(m_Context.sceneView.height, 1.f));
-        m_Renderer->ResizeViewport(width, height);
-        m_Renderer->RenderClear();
+        Engine::RenderView view = m_EditorCamera.BuildRenderView();
+        view.viewport.width = width;
+        view.viewport.height = height;
+        m_Renderer->Render(view, std::max(ImGui::GetIO().DeltaTime, 0.f));
         RefreshSceneViewTexture();
     }
 

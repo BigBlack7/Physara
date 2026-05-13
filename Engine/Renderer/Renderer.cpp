@@ -63,6 +63,18 @@ namespace Physara::Engine
         RecreateRenderTarget();
     }
 
+    void Renderer::BeginFrame(const RenderView &view, float deltaTimeSeconds)
+    {
+        ResizeViewport(view.viewport.width, view.viewport.height);
+        m_FrameData.Reset(view, ++m_FrameIndex, deltaTimeSeconds);
+    }
+
+    void Renderer::Render(const RenderView &view, float deltaTimeSeconds)
+    {
+        BeginFrame(view, deltaTimeSeconds);
+        RenderClear();
+    }
+
     void Renderer::RenderClear()
     {
         if (m_Device == nullptr || !HasValidRenderTarget())
