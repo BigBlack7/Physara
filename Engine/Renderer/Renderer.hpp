@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/RenderGraph/RenderGraph.hpp>
 #include <Engine/Renderer/RendererCapture.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
@@ -50,6 +51,7 @@ namespace Physara::Engine
 
     private:
         void RecreateRenderTarget();
+        void BuildRenderGraph();
         void ProcessPendingCapture();
 
     private:
@@ -57,6 +59,7 @@ namespace Physara::Engine
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
+        RenderGraph m_RenderGraph{};
         FrameData m_FrameData{};
         std::optional<CaptureDesc> m_PendingCapture{};
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};

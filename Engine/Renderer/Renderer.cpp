@@ -41,6 +41,7 @@ namespace Physara::Engine
 
     void Renderer::Shutdown()
     {
+        m_RenderGraph.Reset();
         m_Framebuffer.reset();
         m_SceneColor.reset();
         m_ViewportWidth = 0;
@@ -90,13 +91,8 @@ namespace Physara::Engine
             return;
         }
 
-        commandList->BeginDebugLabel("Renderer.ClearSceneColor");
-        commandList->SetViewport(0.f, 0.f, static_cast<float>(m_ViewportWidth), static_cast<float>(m_ViewportHeight));
-        commandList->SetScissor(0, 0, m_ViewportWidth, m_ViewportHeight);
-        commandList->BeginRenderPass(m_Framebuffer.get(), m_RenderPassDesc, std::vector<glm::vec4>{m_ClearColor});
-        commandList->EndRenderPass();
-        commandList->EndDebugLabel();
-
+        BuildRenderGraph();
+        m_RenderGraph.Execute(*commandList);
         m_Device->SubmitCommandList();
     }
 
@@ -149,6 +145,7 @@ namespace Physara::Engine
 
     void Renderer::RecreateRenderTarget()
     {
+        m_RenderGraph.Reset();
         m_Framebuffer.reset();
         m_SceneColor.reset();
 
@@ -186,5 +183,32 @@ namespace Physara::Engine
             PHYSARA_CORE_ERROR("Renderer failed to create SceneColor framebuffer.");
             m_SceneColor.reset();
         }
+    }
+
+    void Renderer::BuildRenderGraph()
+    {
+        m_RenderGraph.Reset();
+        if (!HasValidRenderTarget())
+        {
+            return;
+        }
+
+        RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
+        m_RenderGraph.AddPass("ClearSceneColor")
+            .Write(sceneColor)
+            .SetExecute([this](RenderGraphContext &context)
+                        {
+                            context.commandList.SetViewport(
+                                0.f,
+                                0.f,
+                                static_cast<float>(m_ViewportWidth),
+                                static_cast<float>(m_ViewportHeight));
+                            context.commandList.SetScissor(0, 0, m_ViewportWidth, m_ViewportHeight);
+                            context.commandList.BeginRenderPass(
+                                m_Framebuffer.get(),
+                                m_RenderPassDesc,
+                                std::vector<glm::vec4>{m_ClearColor});
+                            context.commandList.EndRenderPass();
+                        });
     }
 }
