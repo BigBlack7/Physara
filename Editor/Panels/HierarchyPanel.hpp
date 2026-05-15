@@ -16,8 +16,22 @@ namespace Physara::Editor
         void Draw();
 
     private:
+        enum class CreateEntityKind
+        {
+            Empty,
+            DirectionalLight,
+            PointLight,
+            SpotLight,
+            AreaLight,
+            Cube,
+            Sphere,
+            Plane
+        };
+
         void DrawEntityNode(Engine::Entity entity);
         void DrawEmptySceneContextMenu();
+        void DrawCreateMenu(Engine::Entity parent);
+        Engine::Entity CreateEntity(CreateEntityKind kind, Engine::Entity parent = {});
         void OpenRenamePopup(Engine::Entity entity);
         void DrawRenamePopup();
 

@@ -3,11 +3,15 @@
 #include <array>
 #include <cstdio>
 
+#include <glm/geometric.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/trigonometric.hpp>
+#include <glm/vec4.hpp>
 #include <imgui/imgui.h>
 
 #include <Engine/Scene/Components/TagComponent.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
+#include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
@@ -186,6 +190,98 @@ namespace Physara::Editor
             {
                 ImGui::TextWrapped("Emissive: %s", material.emissiveTexture.path.c_str());
             }
+        }
+
+        return changed;
+    }
+
+    template <>
+    inline bool DrawComponent<Engine::LightComponent>(Engine::Entity entity)
+    {
+        auto &light = entity.GetComponent<Engine::LightComponent>();
+        bool changed = false;
+
+        int typeIndex = static_cast<int>(light.type);
+        const char *typeLabels[] = {"Directional", "Point", "Spot", "Area"};
+        if (ImGui::Combo("Type", &typeIndex, typeLabels, IM_ARRAYSIZE(typeLabels)))
+        {
+            light.type = static_cast<Engine::LightType>(typeIndex);
+            changed = true;
+        }
+
+        changed |= ImGui::ColorEdit3("Color", &light.color.x);
+        changed |= ImGui::Checkbox("Use Color Temperature", &light.useColorTemperature);
+        if (light.useColorTemperature)
+        {
+            changed |= ImGui::DragFloat("Temperature", &light.colorTemperatureKelvin, 25.f, 1000.f, 40000.f, "%.0f K");
+        }
+
+        if (light.type == Engine::LightType::Directional || light.type == Engine::LightType::Spot)
+        {
+            ImGui::TextDisabled("Direction comes from Transform rotation (-Z forward).");
+            if (entity.HasComponent<Engine::TransformComponent>())
+            {
+                const glm::mat4 &world = entity.GetComponent<Engine::TransformComponent>().GetWorldMatrix();
+                const glm::vec3 direction = glm::normalize(glm::vec3(world * glm::vec4(0.f, 0.f, -1.f, 0.f)));
+                ImGui::Text("Direction: %.2f, %.2f, %.2f", direction.x, direction.y, direction.z);
+            }
+        }
+
+        switch (light.type)
+        {
+        case Engine::LightType::Directional:
+            changed |= ImGui::DragFloat("Illuminance", &light.directionalIlluminanceLux, 100.f, 0.f, 200000.f, "%.0f lx");
+            break;
+        case Engine::LightType::Point:
+            changed |= ImGui::DragFloat("Power", &light.pointLuminousPowerLumens, 10.f, 0.f, 200000.f, "%.0f lm");
+            changed |= ImGui::DragFloat("Range", &light.rangeMeters, 0.1f, 0.001f, 1000.f, "%.2f m");
+            changed |= ImGui::DragFloat("Source Radius", &light.sourceRadiusMeters, 0.01f, 0.f, 100.f, "%.3f m");
+            ImGui::Text("Intensity: %.2f cd", light.GetEffectiveLuminousIntensityCandela());
+            break;
+        case Engine::LightType::Spot:
+        {
+            changed |= ImGui::DragFloat("Intensity", &light.spotLuminousIntensityCandela, 10.f, 0.f, 200000.f, "%.0f cd");
+            changed |= ImGui::DragFloat("Range", &light.rangeMeters, 0.1f, 0.001f, 1000.f, "%.2f m");
+            float innerDegrees = glm::degrees(light.innerConeAngleRadians);
+            float outerDegrees = glm::degrees(light.outerConeAngleRadians);
+            if (ImGui::DragFloat("Inner Cone", &innerDegrees, 0.25f, 0.f, 179.f, "%.1f deg"))
+            {
+                light.innerConeAngleRadians = glm::radians(innerDegrees);
+                changed = true;
+            }
+            if (ImGui::DragFloat("Outer Cone", &outerDegrees, 0.25f, 0.f, 179.f, "%.1f deg"))
+            {
+                light.outerConeAngleRadians = glm::radians(outerDegrees);
+                changed = true;
+            }
+            break;
+        }
+        case Engine::LightType::Area:
+            changed |= ImGui::DragFloat("Luminance", &light.areaLuminanceCandelaPerSquareMeter, 10.f, 0.f, 200000.f, "%.0f cd/m2");
+            changed |= ImGui::DragFloat2("Size", &light.areaSizeMeters.x, 0.01f, 0.001f, 100.f, "%.2f m");
+            break;
+        }
+
+        changed |= ImGui::Checkbox("Cast Shadows", &light.castsShadow);
+        if (light.castsShadow)
+        {
+            changed |= ImGui::DragFloat("Shadow Bias", &light.shadowBias, 0.0001f, 0.f, 1.f, "%.5f");
+        }
+
+        if (light.type == Engine::LightType::Spot)
+        {
+            std::array<char, 260> iesPath{};
+            std::snprintf(iesPath.data(), iesPath.size(), "%s", light.iesProfilePath.c_str());
+            if (ImGui::InputText("IES Profile", iesPath.data(), iesPath.size()))
+            {
+                light.iesProfilePath = iesPath.data();
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            light.Sanitize();
         }
 
         return changed;

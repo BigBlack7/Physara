@@ -4,10 +4,15 @@
 #include <cstdio>
 #include <string>
 
+#include <glm/trigonometric.hpp>
 #include <imgui/imgui.h>
 
+#include <Engine/Scene/Components/LightComponent.hpp>
+#include <Engine/Scene/Components/MaterialComponent.hpp>
+#include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/RelationshipComponent.hpp>
 #include <Engine/Scene/Components/TagComponent.hpp>
+#include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
@@ -29,14 +34,6 @@ namespace Physara::Editor
             ImGui::End();
             return;
         }
-
-        if (ImGui::Button("Create Entity"))
-        {
-            Engine::Entity entity = m_Context.activeScene->CreateEntity("Entity");
-            m_Context.selectedEntity = entity.GetHandle();
-        }
-
-        ImGui::Separator();
 
         for (Engine::Entity root : m_Context.activeScene->GetRootEntities())
         {
@@ -80,7 +77,7 @@ namespace Physara::Editor
         }
 
         const bool open = ImGui::TreeNodeEx(reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity.GetHandle())),
-                                           flags, "%s", tag.name.c_str());
+                                            flags, "%s", tag.name.c_str());
 
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
@@ -91,11 +88,10 @@ namespace Physara::Editor
         {
             m_Context.selectedEntity = entity.GetHandle();
 
-            if (ImGui::MenuItem("Create Child", nullptr, false, !isSceneCamera))
+            if (ImGui::BeginMenu("Create Child", !isSceneCamera))
             {
-                Engine::Entity child = m_Context.activeScene->CreateEntity("Entity");
-                m_Context.activeScene->SetParent(child, entity);
-                m_Context.selectedEntity = child.GetHandle();
+                DrawCreateMenu(entity);
+                ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Rename"))
             {
@@ -137,14 +133,150 @@ namespace Physara::Editor
     {
         if (ImGui::BeginPopupContextWindow("HierarchyContextMenu", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
         {
-            if (ImGui::MenuItem("Create Entity"))
+            if (ImGui::BeginMenu("Create"))
             {
-                Engine::Entity entity = m_Context.activeScene->CreateEntity("Entity");
-                m_Context.selectedEntity = entity.GetHandle();
+                DrawCreateMenu({});
+                ImGui::EndMenu();
             }
 
             ImGui::EndPopup();
         }
+    }
+
+    void HierarchyPanel::DrawCreateMenu(Engine::Entity parent)
+    {
+        if (ImGui::MenuItem("Empty Entity"))
+        {
+            CreateEntity(CreateEntityKind::Empty, parent);
+        }
+
+        if (ImGui::BeginMenu("Light"))
+        {
+            if (ImGui::MenuItem("Directional Light"))
+            {
+                CreateEntity(CreateEntityKind::DirectionalLight, parent);
+            }
+            if (ImGui::MenuItem("Point Light"))
+            {
+                CreateEntity(CreateEntityKind::PointLight, parent);
+            }
+            if (ImGui::MenuItem("Spot Light"))
+            {
+                CreateEntity(CreateEntityKind::SpotLight, parent);
+            }
+            if (ImGui::MenuItem("Area Light"))
+            {
+                CreateEntity(CreateEntityKind::AreaLight, parent);
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Primitive"))
+        {
+            if (ImGui::MenuItem("Cube"))
+            {
+                CreateEntity(CreateEntityKind::Cube, parent);
+            }
+            if (ImGui::MenuItem("Sphere"))
+            {
+                CreateEntity(CreateEntityKind::Sphere, parent);
+            }
+            if (ImGui::MenuItem("Plane"))
+            {
+                CreateEntity(CreateEntityKind::Plane, parent);
+            }
+            ImGui::EndMenu();
+        }
+    }
+
+    Engine::Entity HierarchyPanel::CreateEntity(CreateEntityKind kind, Engine::Entity parent)
+    {
+        if (m_Context.activeScene == nullptr)
+        {
+            return {};
+        }
+
+        const char *name = "Entity";
+        switch (kind)
+        {
+        case CreateEntityKind::Empty:
+            name = "Empty Entity";
+            break;
+        case CreateEntityKind::DirectionalLight:
+            name = "Directional Light";
+            break;
+        case CreateEntityKind::PointLight:
+            name = "Point Light";
+            break;
+        case CreateEntityKind::SpotLight:
+            name = "Spot Light";
+            break;
+        case CreateEntityKind::AreaLight:
+            name = "Area Light";
+            break;
+        case CreateEntityKind::Cube:
+            name = "Cube";
+            break;
+        case CreateEntityKind::Sphere:
+            name = "Sphere";
+            break;
+        case CreateEntityKind::Plane:
+            name = "Plane";
+            break;
+        }
+
+        Engine::Entity entity = m_Context.activeScene->CreateEntity(name);
+        if (parent)
+        {
+            m_Context.activeScene->SetParent(entity, parent);
+        }
+
+        auto addLight = [&entity](Engine::LightType type)
+        {
+            entity.AddComponent<Engine::LightComponent>(type);
+            if (type == Engine::LightType::Directional)
+            {
+                entity.GetComponent<Engine::TransformComponent>().SetLocalEulerRotation({glm::radians(-45.f), glm::radians(35.f), 0.f});
+            }
+        };
+
+        auto addPrimitive = [&entity](const char *path, const Engine::MeshBounds &bounds)
+        {
+            auto &mesh = entity.AddComponent<Engine::MeshComponent>(path);
+            mesh.localBounds = bounds;
+            mesh.materialSlots.emplace_back(0u);
+            entity.AddComponent<Engine::MaterialComponent>();
+        };
+
+        switch (kind)
+        {
+        case CreateEntityKind::DirectionalLight:
+            addLight(Engine::LightType::Directional);
+            break;
+        case CreateEntityKind::PointLight:
+            addLight(Engine::LightType::Point);
+            break;
+        case CreateEntityKind::SpotLight:
+            addLight(Engine::LightType::Spot);
+            break;
+        case CreateEntityKind::AreaLight:
+            addLight(Engine::LightType::Area);
+            break;
+        case CreateEntityKind::Cube:
+            addPrimitive("Builtin/Primitives/Cube", {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}, {0.f, 0.f, 0.f}, 0.866f, true});
+            break;
+        case CreateEntityKind::Sphere:
+            addPrimitive("Builtin/Primitives/Sphere", {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}, {0.f, 0.f, 0.f}, 0.5f, true});
+            break;
+        case CreateEntityKind::Plane:
+            addPrimitive("Builtin/Primitives/Plane", {{-0.5f, 0.f, -0.5f}, {0.5f, 0.f, 0.5f}, {0.f, 0.f, 0.f}, 0.707f, true});
+            break;
+        case CreateEntityKind::Empty:
+            break;
+        }
+
+        m_Context.selectedEntity = entity.GetHandle();
+        return entity;
     }
 
     void HierarchyPanel::OpenRenamePopup(Engine::Entity entity)

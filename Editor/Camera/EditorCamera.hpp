@@ -19,7 +19,8 @@ namespace Physara::Editor
     enum class EditorCameraMode
     {
         Orbit,
-        Fly
+        ViewportNavigate,
+        PlayFly
     };
 
     enum class CaptureViewSource
@@ -96,6 +97,8 @@ namespace Physara::Editor
         [[nodiscard]] EditorCameraMode GetMode() const { return m_Mode; }
         [[nodiscard]] CaptureViewSource GetCaptureViewSource() const { return m_CaptureViewSource; }
         void SetCaptureViewSource(CaptureViewSource source) { m_CaptureViewSource = source; }
+        [[nodiscard]] bool IsPlayFlyModeActive() const { return m_PlayFlyMode; }
+        [[nodiscard]] bool WantsLockedCursor() const { return m_PlayFlyMode; }
 
         EditorCameraSettings &GetSettings() { return m_Settings; }
         [[nodiscard]] const EditorCameraSettings &GetSettings() const { return m_Settings; }
@@ -112,7 +115,7 @@ namespace Physara::Editor
         float m_PitchDegrees{-12.f};
         std::uint32_t m_ViewportWidth{1};
         std::uint32_t m_ViewportHeight{1};
-        bool m_ToggleFlyMode{false};
+        bool m_PlayFlyMode{false};
         EditorCameraMode m_Mode{EditorCameraMode::Orbit};
         CaptureViewSource m_CaptureViewSource{CaptureViewSource::SceneCamera};
         EditorCameraSettings m_Settings{};

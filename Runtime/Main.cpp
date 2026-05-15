@@ -63,7 +63,7 @@ int main()
         app = std::make_unique<Physara::Engine::Application>();
         app->Init(window.get(), input.get(), device.get());
 
-        editorLayer = std::make_unique<Physara::Editor::EditorLayer>(device.get(), imguiBackend.get());
+        editorLayer = std::make_unique<Physara::Editor::EditorLayer>(device.get(), imguiBackend.get(), input.get());
         app->PushLayer(editorLayer.get());
 
         app->Run();

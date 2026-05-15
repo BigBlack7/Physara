@@ -19,6 +19,7 @@
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
+#include <Editor/Camera/EditorCamera.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
@@ -117,11 +118,13 @@ namespace Physara::Editor
 
     EditorApp::~EditorApp() = default;
 
-    void EditorApp::Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend)
+    void EditorApp::Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Platform::IInput *input)
     {
         m_Device = device;
         m_Backend = backend;
+        m_Input = input;
         m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
+        m_Renderer->SetClearColor({0.16f, 0.22f, 0.20f, 1.f});
         m_LayoutInitialized = false;
         m_DockspaceId = 0;
         m_Context.assetsRootPath = Physara::Platform::FileSystem::GetAssetsRootPath();
@@ -139,6 +142,12 @@ namespace Physara::Editor
 
     void EditorApp::Shutdown()
     {
+        if (m_Input != nullptr)
+        {
+            m_Input->SetCursorMode(Platform::CursorMode::Normal);
+            m_CurrentCursorMode = Platform::CursorMode::Normal;
+        }
+
         m_SceneViewPanel.SetIconSet({});
         m_SceneViewPanel.SetPreviewTexture(0);
         m_IconManager.Shutdown();
@@ -148,6 +157,7 @@ namespace Physara::Editor
         m_EditorScene.reset();
         m_Device = nullptr;
         m_Backend = nullptr;
+        m_Input = nullptr;
     }
 
     void EditorApp::OnUIRender()
@@ -161,7 +171,7 @@ namespace Physara::Editor
         ImGui::NewFrame();
 
         HandleGlobalShortcuts();
-        RenderSceneView();
+        RefreshSceneViewTexture();
 
         if (m_Context.ui.displayMode == EditorDisplayMode::Docked)
         {
@@ -182,6 +192,8 @@ namespace Physara::Editor
         {
             m_Context.activeScene->UpdateTransforms();
         }
+
+        RenderSceneView();
 
         m_Backend->EndFrame();
         m_Backend->RenderDrawData();
@@ -538,6 +550,20 @@ namespace Physara::Editor
                                                  {
                                                      const float deltaTime = std::max(ImGui::GetIO().DeltaTime, 0.f);
                                                      m_EditorCamera.Update(input, deltaTime);
+                                                     m_Context.sceneView.flyCameraMode = m_EditorCamera.GetMode() != EditorCameraMode::Orbit;
+                                                     m_Context.sceneView.playFlyMode = m_EditorCamera.IsPlayFlyModeActive();
+                                                     if (m_Input != nullptr)
+                                                     {
+                                                         const Platform::CursorMode desiredCursorMode =
+                                                             m_EditorCamera.WantsLockedCursor()
+                                                                 ? Platform::CursorMode::Locked
+                                                                 : Platform::CursorMode::Normal;
+                                                         if (m_CurrentCursorMode != desiredCursorMode)
+                                                         {
+                                                             m_Input->SetCursorMode(desiredCursorMode);
+                                                             m_CurrentCursorMode = desiredCursorMode;
+                                                         }
+                                                     }
                                                  });
     }
 }

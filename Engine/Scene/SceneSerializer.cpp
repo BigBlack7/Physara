@@ -153,39 +153,41 @@ namespace Physara::Engine
 
                 if (const auto *camera = registry.try_get<CameraComponent>(entity))
                 {
-                    e["camera"] = {
-                    {"projection", std::string(ToString(camera->projectionType))},
-                        {"primary", camera->primary},
-                        {"sensorWidthMillimeters", camera->sensorWidthMillimeters},
-                        {"sensorHeightMillimeters", camera->sensorHeightMillimeters},
-                        {"focalLengthMillimeters", camera->focalLengthMillimeters},
-                        {"apertureFStop", camera->apertureFStop},
-                        {"shutterTimeSeconds", camera->shutterTimeSeconds},
-                        {"iso", camera->iso},
-                        {"nearClipMeters", camera->nearClipMeters},
-                        {"farClipMeters", camera->farClipMeters},
-                        {"orthographicHeightMeters", camera->orthographicHeightMeters}};
+                    Internal::json cameraJson;
+                    cameraJson["projection"] = std::string(ToString(camera->projectionType));
+                    cameraJson["primary"] = camera->primary;
+                    cameraJson["sensorWidthMillimeters"] = camera->sensorWidthMillimeters;
+                    cameraJson["sensorHeightMillimeters"] = camera->sensorHeightMillimeters;
+                    cameraJson["focalLengthMillimeters"] = camera->focalLengthMillimeters;
+                    cameraJson["apertureFStop"] = camera->apertureFStop;
+                    cameraJson["shutterTimeSeconds"] = camera->shutterTimeSeconds;
+                    cameraJson["iso"] = camera->iso;
+                    cameraJson["nearClipMeters"] = camera->nearClipMeters;
+                    cameraJson["farClipMeters"] = camera->farClipMeters;
+                    cameraJson["orthographicHeightMeters"] = camera->orthographicHeightMeters;
+                    e["camera"] = std::move(cameraJson);
                 }
 
                 if (const auto *light = registry.try_get<LightComponent>(entity))
                 {
-                    e["light"] = {
-                    {"type", std::string(ToString(light->type))},
-                        {"color", Internal::Vec3ToJson(light->color)},
-                        {"colorTemperatureKelvin", light->colorTemperatureKelvin},
-                        {"useColorTemperature", light->useColorTemperature},
-                        {"directionalIlluminanceLux", light->directionalIlluminanceLux},
-                        {"pointLuminousPowerLumens", light->pointLuminousPowerLumens},
-                        {"spotLuminousIntensityCandela", light->spotLuminousIntensityCandela},
-                        {"areaLuminanceCandelaPerSquareMeter", light->areaLuminanceCandelaPerSquareMeter},
-                        {"rangeMeters", light->rangeMeters},
-                        {"sourceRadiusMeters", light->sourceRadiusMeters},
-                        {"areaSizeMeters", Internal::Vec2ToJson(light->areaSizeMeters)},
-                        {"innerConeAngleDegrees", glm::degrees(light->innerConeAngleRadians)},
-                        {"outerConeAngleDegrees", glm::degrees(light->outerConeAngleRadians)},
-                        {"castsShadow", light->castsShadow},
-                        {"shadowBias", light->shadowBias},
-                        {"iesProfilePath", light->iesProfilePath}};
+                    Internal::json lightJson;
+                    lightJson["type"] = std::string(ToString(light->type));
+                    lightJson["color"] = Internal::Vec3ToJson(light->color);
+                    lightJson["colorTemperatureKelvin"] = light->colorTemperatureKelvin;
+                    lightJson["useColorTemperature"] = light->useColorTemperature;
+                    lightJson["directionalIlluminanceLux"] = light->directionalIlluminanceLux;
+                    lightJson["pointLuminousPowerLumens"] = light->pointLuminousPowerLumens;
+                    lightJson["spotLuminousIntensityCandela"] = light->spotLuminousIntensityCandela;
+                    lightJson["areaLuminanceCandelaPerSquareMeter"] = light->areaLuminanceCandelaPerSquareMeter;
+                    lightJson["rangeMeters"] = light->rangeMeters;
+                    lightJson["sourceRadiusMeters"] = light->sourceRadiusMeters;
+                    lightJson["areaSizeMeters"] = Internal::Vec2ToJson(light->areaSizeMeters);
+                    lightJson["innerConeAngleDegrees"] = glm::degrees(light->innerConeAngleRadians);
+                    lightJson["outerConeAngleDegrees"] = glm::degrees(light->outerConeAngleRadians);
+                    lightJson["castsShadow"] = light->castsShadow;
+                    lightJson["shadowBias"] = light->shadowBias;
+                    lightJson["iesProfilePath"] = light->iesProfilePath;
+                    e["light"] = std::move(lightJson);
                 }
 
                 root["entities"].push_back(std::move(e));

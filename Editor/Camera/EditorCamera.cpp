@@ -30,17 +30,17 @@ namespace Physara::Editor
     {
         UpdateMode(input);
 
-        if (!input.hovered && !input.focused && m_Mode != EditorCameraMode::Fly)
+        if (!input.hovered && !input.focused && m_Mode != EditorCameraMode::PlayFly)
         {
             return;
         }
 
-        if (input.rightMouseDown)
+        if (m_Mode == EditorCameraMode::ViewportNavigate || m_Mode == EditorCameraMode::PlayFly)
         {
             Rotate(input.mouseDeltaX, input.mouseDeltaY);
         }
 
-        if (m_Mode == EditorCameraMode::Fly)
+        if (m_Mode == EditorCameraMode::ViewportNavigate || m_Mode == EditorCameraMode::PlayFly)
         {
             Fly(input, deltaTimeSeconds);
         }
@@ -221,13 +221,24 @@ namespace Physara::Editor
     {
         if (input.escapePressed)
         {
-            m_ToggleFlyMode = false;
+            m_PlayFlyMode = false;
         }
-        else if (input.gravePressed)
+        else if (input.gravePressed && (input.hovered || input.focused || m_PlayFlyMode))
         {
-            m_ToggleFlyMode = !m_ToggleFlyMode;
+            m_PlayFlyMode = !m_PlayFlyMode;
         }
 
-        m_Mode = (m_ToggleFlyMode || input.rightMouseDown) ? EditorCameraMode::Fly : EditorCameraMode::Orbit;
+        if (m_PlayFlyMode)
+        {
+            m_Mode = EditorCameraMode::PlayFly;
+        }
+        else if (input.rightMouseDown && (input.hovered || input.focused))
+        {
+            m_Mode = EditorCameraMode::ViewportNavigate;
+        }
+        else
+        {
+            m_Mode = EditorCameraMode::Orbit;
+        }
     }
 }

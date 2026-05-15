@@ -2,14 +2,14 @@
 
 namespace Physara::Editor
 {
-    EditorLayer::EditorLayer(RHI::RHIDevice *device, RHI::IImGuiBackend *backend)
-        : m_Backend(backend), m_Device(device)
+    EditorLayer::EditorLayer(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Platform::IInput *input)
+        : m_Backend(backend), m_Device(device), m_Input(input)
     {
     }
 
     void EditorLayer::OnAttach()
     {
-        m_App.Init(m_Device, m_Backend);
+        m_App.Init(m_Device, m_Backend, m_Input);
     }
 
     void EditorLayer::OnDetach()

@@ -152,17 +152,29 @@ namespace Physara::Editor
 
         char sizeLine[128]{};
         char fpsLine[128]{};
+        char cameraLine[128]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
         char keysLine[160]{};
 
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
+        const char *cameraMode = "Orbit";
+        if (m_Context.sceneView.playFlyMode)
+        {
+            cameraMode = "Play Fly";
+        }
+        else if (m_Context.sceneView.flyCameraMode)
+        {
+            cameraMode = "RMB Navigate";
+        }
+        std::snprintf(cameraLine, sizeof(cameraLine), "Camera: %s", cameraMode);
         std::snprintf(hoveredLine, sizeof(hoveredLine), "Hovered: %s", m_Context.sceneView.hovered ? "true" : "false");
         std::snprintf(focusedLine, sizeof(focusedLine), "Focused: %s", m_Context.sceneView.focused ? "true" : "false");
 
         float maxTextWidth = std::max({ImGui::CalcTextSize(sizeLine).x,
                                        ImGui::CalcTextSize(fpsLine).x,
+                                       ImGui::CalcTextSize(cameraLine).x,
                                        ImGui::CalcTextSize(hoveredLine).x,
                                        ImGui::CalcTextSize(focusedLine).x});
 
@@ -182,7 +194,7 @@ namespace Physara::Editor
         }
 
         const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 5.f : 4.f);
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 6.f : 5.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
             const ImVec2 overlayMin(origin.x + width - Internal::OverlayPadding - overlayWidth,
@@ -198,6 +210,9 @@ namespace Physara::Editor
             y += lineHeight;
 
             Internal::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
+            y += lineHeight;
+
+            Internal::AddOverlayText(drawList, ImVec2(x, y), cameraLine);
             y += lineHeight;
 
             Internal::AddOverlayText(drawList, ImVec2(x, y), hoveredLine);

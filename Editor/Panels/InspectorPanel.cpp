@@ -8,6 +8,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
+#include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
@@ -67,6 +68,7 @@ namespace Physara::Editor
         TryDrawComponent<Engine::TransformComponent>(entity, "Transform");
         TryDrawComponent<Engine::CameraComponent>(entity, "Camera");
         DrawCameraCaptureSection(entity);
+        TryDrawComponent<Engine::LightComponent>(entity, "Light");
         TryDrawComponent<Engine::MeshComponent>(entity, "Mesh");
         TryDrawComponent<Engine::MaterialComponent>(entity, "Material");
     }
