@@ -9,4 +9,12 @@ target_include_directories(Backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
-target_link_libraries(Backend PUBLIC glad glfw3 imgui Engine)
+target_link_libraries(Backend PUBLIC
+    glad
+    Engine
+)
+
+target_link_libraries(Backend PRIVATE
+    glfw3
+    imgui
+)

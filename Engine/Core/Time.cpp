@@ -5,7 +5,7 @@
 
 namespace Physara::Engine
 {
-    namespace Internal
+    namespace TimeDetail
     {
         using Clock = std::chrono::steady_clock;
         using Seconds = std::chrono::duration<double>;
@@ -22,33 +22,33 @@ namespace Physara::Engine
 
     void Time::Tick()
     {
-        const Internal::Clock::time_point now = Internal::Clock::now();
+        const TimeDetail::Clock::time_point now = TimeDetail::Clock::now();
 
-        if (!Internal::g_HasTicked)
+        if (!TimeDetail::g_HasTicked)
         {
-            Internal::g_HasTicked = true;
-            Internal::g_lastFrameTime = now;
-            Internal::g_DeltaTime = 0.;
-            Internal::g_TotalTime = Internal::Seconds(now - Internal::g_StartTime).count();
+            TimeDetail::g_HasTicked = true;
+            TimeDetail::g_lastFrameTime = now;
+            TimeDetail::g_DeltaTime = 0.;
+            TimeDetail::g_TotalTime = TimeDetail::Seconds(now - TimeDetail::g_StartTime).count();
             return;
         }
 
-        const double rawDelta = Internal::Seconds(now - Internal::g_lastFrameTime).count();
+        const double rawDelta = TimeDetail::Seconds(now - TimeDetail::g_lastFrameTime).count();
         const double nonNegativeDelta = std::max(0., rawDelta);
 
-        Internal::g_DeltaTime = std::min(nonNegativeDelta, Internal::kMaxDeltaTime);
-        Internal::g_TotalTime = Internal::Seconds(now - Internal::g_StartTime).count();
+        TimeDetail::g_DeltaTime = std::min(nonNegativeDelta, TimeDetail::kMaxDeltaTime);
+        TimeDetail::g_TotalTime = TimeDetail::Seconds(now - TimeDetail::g_StartTime).count();
 
-        Internal::g_lastFrameTime = now;
+        TimeDetail::g_lastFrameTime = now;
     }
 
     double Time::GetDeltaTime()
     {
-        return Internal::g_DeltaTime;
+        return TimeDetail::g_DeltaTime;
     }
 
     double Time::GetTotalTime()
     {
-        return Internal::g_TotalTime;
+        return TimeDetail::g_TotalTime;
     }
 }

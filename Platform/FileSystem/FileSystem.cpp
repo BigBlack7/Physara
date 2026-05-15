@@ -9,7 +9,7 @@
 
 namespace Physara::Platform
 {
-    namespace Internal
+    namespace FileSystemDetail
     {
         std::string ToLower(std::string text)
         {
@@ -111,23 +111,23 @@ namespace Physara::Platform
             throw std::runtime_error("Assets root is not a directory: " + root.string());
         }
 
-        s_AssetsRootPath = Internal::ToGenericString(root);
+        s_AssetsRootPath = FileSystemDetail::ToGenericString(root);
     }
 
     std::string FileSystem::ResolvePath(std::string_view relativePath)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(relativePath, s_AssetsRootPath);
-        return Internal::ToGenericString(absPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(relativePath, s_AssetsRootPath);
+        return FileSystemDetail::ToGenericString(absPath);
     }
 
     std::string FileSystem::NormalizePath(std::string_view path)
     {
-        return Internal::NormalizePathString(path);
+        return FileSystemDetail::NormalizePathString(path);
     }
 
     std::string FileSystem::NormalizeForCompare(std::string_view path)
     {
-        return Internal::NormalizeForCompareString(path);
+        return FileSystemDetail::NormalizeForCompareString(path);
     }
 
     bool FileSystem::IsSamePath(std::string_view lhs, std::string_view rhs)
@@ -137,7 +137,7 @@ namespace Physara::Platform
 
     bool FileSystem::IsSubPath(std::string_view root, std::string_view target)
     {
-        return Internal::IsSubPathString(root, target);
+        return FileSystemDetail::IsSubPathString(root, target);
     }
 
     std::string FileSystem::ClampToRoot(std::string_view path, std::string_view root)
@@ -159,7 +159,7 @@ namespace Physara::Platform
         if (!input.is_absolute())
         {
             const auto firstPart = input.begin();
-            if (firstPart != input.end() && Internal::ToLower(firstPart->generic_string()) == "assets")
+            if (firstPart != input.end() && FileSystemDetail::ToLower(firstPart->generic_string()) == "assets")
             {
                 std::filesystem::path stripped;
                 bool skipFirst = true;
@@ -183,18 +183,18 @@ namespace Physara::Platform
                                                         ? input
                                                         : (assetsRoot / input).lexically_normal();
 
-            if (Internal::IsSubPathString(assetsRoot.generic_string(), candidate.generic_string()))
+            if (FileSystemDetail::IsSubPathString(assetsRoot.generic_string(), candidate.generic_string()))
             {
                 std::error_code error{};
                 const std::filesystem::path relative = std::filesystem::relative(candidate, assetsRoot, error);
                 if (!error && !relative.empty() && relative != ".")
                 {
-                    return Internal::ToGenericString(relative);
+                    return FileSystemDetail::ToGenericString(relative);
                 }
             }
         }
 
-        return Internal::ToGenericString(input);
+        return FileSystemDetail::ToGenericString(input);
     }
 
     std::string FileSystem::GetExtension(std::string_view path)
@@ -204,7 +204,7 @@ namespace Physara::Platform
 
     std::string FileSystem::GetExtensionLower(std::string_view path)
     {
-        return Internal::ToLower(GetExtension(path));
+        return FileSystemDetail::ToLower(GetExtension(path));
     }
 
     std::string FileSystem::GetFileName(std::string_view path)
@@ -214,8 +214,8 @@ namespace Physara::Platform
 
     std::string FileSystem::GetParentDir(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
-        return Internal::ToGenericString(absPath.parent_path());
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
+        return FileSystemDetail::ToGenericString(absPath.parent_path());
     }
 
     std::string FileSystem::GetAssetsRootPath()
@@ -225,7 +225,7 @@ namespace Physara::Platform
 
     std::vector<std::uint8_t> FileSystem::ReadBinaryFile(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
 
         std::ifstream file(absPath, std::ios::binary | std::ios::ate);
         if (!file.is_open())
@@ -252,7 +252,7 @@ namespace Physara::Platform
 
     std::string FileSystem::ReadTextFile(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
 
         std::ifstream file(absPath, std::ios::in);
 
@@ -266,7 +266,7 @@ namespace Physara::Platform
 
     void FileSystem::WriteFile(std::string_view path, const std::vector<std::uint8_t> &data)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
 
         if (!absPath.parent_path().empty()) // 创建父目录
         {
@@ -291,19 +291,19 @@ namespace Physara::Platform
 
     bool FileSystem::Exists(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
         return std::filesystem::exists(absPath);
     }
 
     bool FileSystem::IsDirectory(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
         return std::filesystem::is_directory(absPath);
     }
 
     std::vector<std::string> FileSystem::ListDirectory(std::string_view path)
     {
-        const std::filesystem::path absPath = Internal::ToAbsolutePath(path, s_AssetsRootPath);
+        const std::filesystem::path absPath = FileSystemDetail::ToAbsolutePath(path, s_AssetsRootPath);
 
         std::vector<std::string> entries{};
         if (!std::filesystem::exists(absPath) || !std::filesystem::is_directory(absPath))

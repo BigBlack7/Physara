@@ -9,7 +9,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace SceneViewPanelDetail
     {
         constexpr const char *PanelName = "Scene View";
         constexpr const char *PresentationPanelName = "Scene View##Presentation";
@@ -48,7 +48,7 @@ namespace Physara::Editor
     {
         const bool presentation = m_Context.ui.displayMode == EditorDisplayMode::ViewportPresentation;
         ImGuiWindowFlags windowFlags = ImGuiWindowFlags_None;
-        const char *windowName = Internal::PanelName;
+        const char *windowName = SceneViewPanelDetail::PanelName;
 
         if (presentation)
         {
@@ -62,7 +62,7 @@ namespace Physara::Editor
                           ImGuiWindowFlags_NoMove |
                           ImGuiWindowFlags_NoDocking |
                           ImGuiWindowFlags_NoBringToFrontOnFocus;
-            windowName = Internal::PresentationPanelName;
+            windowName = SceneViewPanelDetail::PresentationPanelName;
         }
 
         ImGui::Begin(windowName, nullptr, windowFlags);
@@ -94,7 +94,7 @@ namespace Physara::Editor
 
     void SceneViewPanel::DrawViewport()
     {
-        ImGui::BeginChild(Internal::ViewportChildName, ImVec2(0.f, 0.f), false,
+        ImGui::BeginChild(SceneViewPanelDetail::ViewportChildName, ImVec2(0.f, 0.f), false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -103,7 +103,7 @@ namespace Physara::Editor
 
         UpdateSceneViewState(width, height);
 
-        if (m_PreviewTexture != 0 && width >= Internal::MinViewportSize && height >= Internal::MinViewportSize)
+        if (m_PreviewTexture != 0 && width >= SceneViewPanelDetail::MinViewportSize && height >= SceneViewPanelDetail::MinViewportSize)
         {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             const ImTextureID textureId = static_cast<ImTextureID>(m_PreviewTexture);
@@ -197,7 +197,7 @@ namespace Physara::Editor
         const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 6.f : 5.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
-            const ImVec2 overlayMin(origin.x + width - Internal::OverlayPadding - overlayWidth,
+            const ImVec2 overlayMin(origin.x + width - SceneViewPanelDetail::OverlayPadding - overlayWidth,
                                     origin.y + (presentation ? 50.f : 50.f));
             const ImVec2 overlayMax(overlayMin.x + overlayWidth, overlayMin.y + overlayHeight);
             drawList->AddRectFilled(overlayMin, overlayMax, IM_COL32(14, 20, 18, 192), 8.f);
@@ -206,24 +206,24 @@ namespace Physara::Editor
             float y = overlayMin.y + paddingY;
             const float x = overlayMin.x + paddingX;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), sizeLine);
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), sizeLine);
             y += lineHeight;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
             y += lineHeight;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), cameraLine);
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), cameraLine);
             y += lineHeight;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), hoveredLine);
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), hoveredLine);
             y += lineHeight;
 
-            Internal::AddOverlayText(drawList, ImVec2(x, y), focusedLine);
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), focusedLine);
 
             if (presentation)
             {
                 y += lineHeight;
-                Internal::AddOverlayText(drawList, ImVec2(x, y), keysLine);
+                SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), keysLine);
             }
         }
     }
@@ -242,7 +242,7 @@ namespace Physara::Editor
 
     void SceneViewPanel::DrawLeftToolbar(const ImVec2 &origin)
     {
-        ImGui::SetNextWindowPos(ImVec2(origin.x + Internal::OverlayPadding, origin.y + Internal::OverlayPadding));
+        ImGui::SetNextWindowPos(ImVec2(origin.x + SceneViewPanelDetail::OverlayPadding, origin.y + SceneViewPanelDetail::OverlayPadding));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f, 4.f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 3.f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 4.f));
@@ -296,7 +296,7 @@ namespace Physara::Editor
 
     void SceneViewPanel::DrawRightToolbar(const ImVec2 &origin, float width)
     {
-        ImGui::SetNextWindowPos(ImVec2(origin.x + width - Internal::OverlayPadding, origin.y + Internal::OverlayPadding),
+        ImGui::SetNextWindowPos(ImVec2(origin.x + width - SceneViewPanelDetail::OverlayPadding, origin.y + SceneViewPanelDetail::OverlayPadding),
                                 ImGuiCond_Always, ImVec2(1.f, 0.f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f, 4.f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 3.f));
@@ -347,7 +347,7 @@ namespace Physara::Editor
         }
 
         const float panelMenuY = m_Context.ui.showSceneViewInfo ? 194.f : 48.f;
-        ImGui::SetNextWindowPos(ImVec2(origin.x + width - Internal::OverlayPadding, origin.y + panelMenuY),
+        ImGui::SetNextWindowPos(ImVec2(origin.x + width - SceneViewPanelDetail::OverlayPadding, origin.y + panelMenuY),
                                 ImGuiCond_Always, ImVec2(1.f, 0.f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 5.f));
@@ -425,11 +425,11 @@ namespace Physara::Editor
         }
 
         bool pressed = false;
-        const ImVec2 buttonSize(Internal::IconButtonSize, Internal::IconButtonSize);
+        const ImVec2 buttonSize(SceneViewPanelDetail::IconButtonSize, SceneViewPanelDetail::IconButtonSize);
         if (icon != 0)
         {
             pressed = ImGui::ImageButton(id, static_cast<ImTextureID>(icon),
-                                         ImVec2(Internal::IconSize, Internal::IconSize),
+                                         ImVec2(SceneViewPanelDetail::IconSize, SceneViewPanelDetail::IconSize),
                                          ImVec2(0.f, 0.f), ImVec2(1.f, 1.f),
                                          ImVec4(0.f, 0.f, 0.f, 0.f), ImVec4(0.68f, 0.86f, 0.96f, 1.f));
         }
@@ -445,7 +445,7 @@ namespace Physara::Editor
 
         if (ImGui::IsItemHovered())
         {
-            Internal::ShowTooltip(tooltip);
+            SceneViewPanelDetail::ShowTooltip(tooltip);
         }
 
         return pressed;
@@ -463,7 +463,7 @@ namespace Physara::Editor
         m_Context.sceneView.focused = ImGui::IsWindowFocused();
 
         if (m_Context.sceneView.sizeChanged && m_ResizeCallback &&
-            width >= Internal::MinViewportSize && height >= Internal::MinViewportSize)
+            width >= SceneViewPanelDetail::MinViewportSize && height >= SceneViewPanelDetail::MinViewportSize)
         {
             m_ResizeCallback(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
         }

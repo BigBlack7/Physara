@@ -10,7 +10,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace LogPanelDetail
     {
         constexpr const char *PanelName = "Log";
         constexpr const char *ScrollRegionName = "LogScrollRegion";
@@ -62,7 +62,7 @@ namespace Physara::Editor
 
     void LogPanel::Draw()
     {
-        ImGui::Begin(Internal::PanelName);
+        ImGui::Begin(LogPanelDetail::PanelName);
 
         DrawToolbar();
         ImGui::Separator();
@@ -128,7 +128,7 @@ namespace Physara::Editor
     {
         Refresh();
 
-        ImGui::BeginChild(Internal::ScrollRegionName, ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::BeginChild(LogPanelDetail::ScrollRegionName, ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar);
 
         for (const LogPanelLine &line : m_CachedLogs)
         {
@@ -137,7 +137,7 @@ namespace Physara::Editor
                 continue;
             }
 
-            ImGui::PushStyleColor(ImGuiCol_Text, Internal::LevelColor(line.level));
+            ImGui::PushStyleColor(ImGuiCol_Text, LogPanelDetail::LevelColor(line.level));
             ImGui::TextUnformatted(line.text.c_str());
             ImGui::PopStyleColor();
         }
@@ -152,7 +152,7 @@ namespace Physara::Editor
 
     bool LogPanel::PassesSearch(const LogPanelLine &line) const
     {
-        return Internal::ContainsIgnoreCase(line.text, m_SearchBuffer);
+        return LogPanelDetail::ContainsIgnoreCase(line.text, m_SearchBuffer);
     }
 
     LogPanelLevel LogPanel::DetectLevel(std::string_view line)

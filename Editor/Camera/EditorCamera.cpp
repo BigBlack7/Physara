@@ -14,7 +14,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace EditorCameraDetail
     {
         constexpr glm::vec3 WorldUp{0.f, 1.f, 0.f};
 
@@ -134,7 +134,7 @@ namespace Physara::Editor
 
     glm::vec3 EditorCamera::GetRight() const
     {
-        return glm::normalize(glm::cross(GetForward(), Internal::WorldUp));
+        return glm::normalize(glm::cross(GetForward(), EditorCameraDetail::WorldUp));
     }
 
     glm::vec3 EditorCamera::GetUp() const
@@ -156,13 +156,13 @@ namespace Physara::Editor
     Engine::CameraComponent EditorCamera::ToCameraComponent() const
     {
         Engine::CameraComponent camera{};
-        camera.sensorWidthMillimeters = Internal::SafePositive(m_Settings.sensorWidthMillimeters, 36.f);
-        camera.sensorHeightMillimeters = Internal::SafePositive(m_Settings.sensorHeightMillimeters, 24.f);
-        camera.focalLengthMillimeters = Internal::SafePositive(m_Settings.focalLengthMillimeters, 35.f);
-        camera.apertureFStop = Internal::SafePositive(m_Settings.apertureFStop, 2.8f);
-        camera.shutterTimeSeconds = Internal::SafePositive(m_Settings.shutterTimeSeconds, 1.f / 60.f);
-        camera.iso = Internal::SafePositive(m_Settings.iso, 100.f);
-        camera.nearClipMeters = Internal::SafePositive(m_Settings.nearClipMeters, 0.1f);
+        camera.sensorWidthMillimeters = EditorCameraDetail::SafePositive(m_Settings.sensorWidthMillimeters, 36.f);
+        camera.sensorHeightMillimeters = EditorCameraDetail::SafePositive(m_Settings.sensorHeightMillimeters, 24.f);
+        camera.focalLengthMillimeters = EditorCameraDetail::SafePositive(m_Settings.focalLengthMillimeters, 35.f);
+        camera.apertureFStop = EditorCameraDetail::SafePositive(m_Settings.apertureFStop, 2.8f);
+        camera.shutterTimeSeconds = EditorCameraDetail::SafePositive(m_Settings.shutterTimeSeconds, 1.f / 60.f);
+        camera.iso = EditorCameraDetail::SafePositive(m_Settings.iso, 100.f);
+        camera.nearClipMeters = EditorCameraDetail::SafePositive(m_Settings.nearClipMeters, 0.1f);
         camera.farClipMeters = std::max(m_Settings.farClipMeters, camera.nearClipMeters + 0.001f);
         camera.Sanitize();
         return camera;
@@ -200,11 +200,11 @@ namespace Physara::Editor
         }
         if (input.moveUp)
         {
-            direction += Internal::WorldUp;
+            direction += EditorCameraDetail::WorldUp;
         }
         if (input.moveDown)
         {
-            direction -= Internal::WorldUp;
+            direction -= EditorCameraDetail::WorldUp;
         }
 
         if (glm::dot(direction, direction) <= 0.f)

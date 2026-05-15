@@ -31,7 +31,7 @@
 
 namespace Physara::Engine
 {
-    namespace Internal
+    namespace GLTFLoaderDetail
     {
         std::string ToString(tg3_str value)
         {
@@ -42,11 +42,6 @@ namespace Physara::Engine
         {
             // 比较 tg3_str 与 C 字符串是否相等
             return tg3_str_equals_cstr(value, text) != 0;
-        }
-
-        std::string ToGenericPath(const std::filesystem::path &path)
-        {
-            return Platform::FileSystem::NormalizePath(path.string());
         }
 
         std::string NormalizeAssetPath(const std::filesystem::path &path, AssetManager *assetManager)
@@ -492,7 +487,7 @@ namespace Physara::Engine
             return {};
         }
 
-        const std::string baseDir = Internal::ToGenericPath(gltfPath.parent_path());
+        const std::string baseDir = Platform::FileSystem::NormalizePath(gltfPath.parent_path().string());
         const tg3_error_code result = tinygltf3::parse(model,
                                                        errors,
                                                        fileData.data(),
@@ -514,12 +509,12 @@ namespace Physara::Engine
         }
 
         const tg3_model &gltf = *model.get();
-        Internal::RegisterResources(gltf, gltfPath, assetManager);
+        GLTFLoaderDetail::RegisterResources(gltf, gltfPath, assetManager);
 
         const std::string rootName = gltfPath.stem().string().empty() ? "GLTF Scene" : gltfPath.stem().string();
         Entity importRoot = scene.CreateEntity(rootName);
 
-        const std::string assetPath = Internal::NormalizeAssetPath(gltfPath, assetManager);
+        const std::string assetPath = GLTFLoaderDetail::NormalizeAssetPath(gltfPath, assetManager);
         std::vector<int32_t> rootNodes;
         if (gltf.default_scene >= 0 && static_cast<std::uint32_t>(gltf.default_scene) < gltf.scenes_count)
         {
@@ -533,12 +528,12 @@ namespace Physara::Engine
         }
         else
         {
-            rootNodes = Internal::FindFallbackRootNodes(gltf);
+            rootNodes = GLTFLoaderDetail::FindFallbackRootNodes(gltf);
         }
 
         for (int32_t nodeIndex : rootNodes)
         {
-            Internal::ImportNode(scene, gltf, gltfPath, assetPath, nodeIndex, importRoot, assetManager);
+            GLTFLoaderDetail::ImportNode(scene, gltf, gltfPath, assetPath, nodeIndex, importRoot, assetManager);
         }
 
         scene.UpdateTransforms();

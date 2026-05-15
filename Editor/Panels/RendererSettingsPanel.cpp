@@ -4,7 +4,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace RendererSettingsPanelDetail
     {
         constexpr const char *PanelName = "Renderer Settings";
 
@@ -34,7 +34,7 @@ namespace Physara::Editor
 
     void RendererSettingsPanel::Draw()
     {
-        ImGui::Begin(Internal::PanelName);
+        ImGui::Begin(RendererSettingsPanelDetail::PanelName);
 
         DrawShadowSection();
         DrawPostProcessSection();
@@ -71,7 +71,7 @@ namespace Physara::Editor
         }
 
         int pipelineIndex = static_cast<int>(m_Context.settings.pipelineMode);
-        if (ImGui::Combo("Mode", &pipelineIndex, Internal::PipelineLabels, IM_ARRAYSIZE(Internal::PipelineLabels)))
+        if (ImGui::Combo("Mode", &pipelineIndex, RendererSettingsPanelDetail::PipelineLabels, IM_ARRAYSIZE(RendererSettingsPanelDetail::PipelineLabels)))
         {
             m_Context.settings.pipelineMode = static_cast<RenderPipelineMode>(pipelineIndex);
         }
@@ -87,7 +87,7 @@ namespace Physara::Editor
         }
 
         int debugIndex = static_cast<int>(m_Context.settings.debugViewMode);
-        if (ImGui::Combo("View", &debugIndex, Internal::DebugViewLabels, IM_ARRAYSIZE(Internal::DebugViewLabels)))
+        if (ImGui::Combo("View", &debugIndex, RendererSettingsPanelDetail::DebugViewLabels, IM_ARRAYSIZE(RendererSettingsPanelDetail::DebugViewLabels)))
         {
             m_Context.settings.debugViewMode = static_cast<DebugViewMode>(debugIndex);
         }

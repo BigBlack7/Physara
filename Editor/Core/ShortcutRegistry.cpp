@@ -4,7 +4,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace ShortcutRegistryDetail
     {
         bool ModifiersMatch(const ShortcutAction &action)
         {
@@ -55,7 +55,7 @@ namespace Physara::Editor
             return false;
         }
 
-        return Internal::ModifiersMatch(*action) && ImGui::IsKeyPressed(action->primaryKey, false);
+        return ShortcutRegistryDetail::ModifiersMatch(*action) && ImGui::IsKeyPressed(action->primaryKey, false);
     }
 
     void ShortcutRegistry::RegisterDefaults()

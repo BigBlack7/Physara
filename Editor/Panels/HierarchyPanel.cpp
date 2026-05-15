@@ -17,7 +17,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace HierarchyPanelDetail
     {
         constexpr const char *PanelName = "Hierarchy";
     }
@@ -26,7 +26,7 @@ namespace Physara::Editor
 
     void HierarchyPanel::Draw()
     {
-        ImGui::Begin(Internal::PanelName);
+        ImGui::Begin(HierarchyPanelDetail::PanelName);
 
         if (m_Context.activeScene == nullptr)
         {

@@ -24,7 +24,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace EditorAppDetail
     {
         constexpr const char *DockspaceName = "MainDockSpace";
         constexpr const char *SceneViewName = "Scene View";
@@ -252,7 +252,7 @@ namespace Physara::Editor
 
         ImGuiID dockspace = m_DockspaceId != 0
                                 ? static_cast<ImGuiID>(m_DockspaceId)
-                                : ImGui::GetID(Internal::DockspaceName);
+                                : ImGui::GetID(EditorAppDetail::DockspaceName);
 
         ImGui::DockBuilderRemoveNode(dockspace);
         ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -271,19 +271,19 @@ namespace Physara::Editor
         ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightRatio, &right, &center);
         ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, bottomRatio, &bottom, &center);
 
-        ImGui::DockBuilderDockWindow(Internal::HierarchyName, left);
-        ImGui::DockBuilderDockWindow(Internal::RendererSettingsName, left);
-        ImGui::DockBuilderDockWindow(Internal::SceneViewName, center);
-        ImGui::DockBuilderDockWindow(Internal::InspectorName, right);
-        ImGui::DockBuilderDockWindow(Internal::ContentBrowserName, bottom);
-        ImGui::DockBuilderDockWindow(Internal::LogName, bottom);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::HierarchyName, left);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::RendererSettingsName, left);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::SceneViewName, center);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::InspectorName, right);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::ContentBrowserName, bottom);
+        ImGui::DockBuilderDockWindow(EditorAppDetail::LogName, bottom);
 
         ImGui::DockBuilderFinish(dockspace);
     }
 
     void EditorApp::DrawMainDockSpace()
     {
-        const ImGuiID dockspaceId = ImGui::GetID(Internal::DockspaceName);
+        const ImGuiID dockspaceId = ImGui::GetID(EditorAppDetail::DockspaceName);
         ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(), ImGuiDockNodeFlags_None);
         m_DockspaceId = static_cast<std::uint32_t>(dockspaceId);
     }
@@ -391,9 +391,9 @@ namespace Physara::Editor
     Engine::CaptureDesc EditorApp::BuildCaptureDesc() const
     {
         const Engine::CaptureFormat format =
-            Internal::CaptureFormatFromIndex(m_Context.settings.capture.fileFormatIndex);
+            EditorAppDetail::CaptureFormatFromIndex(m_Context.settings.capture.fileFormatIndex);
         const std::string prefix =
-            Internal::SanitizeFileStem(m_Context.settings.capture.fileNamePrefix.data());
+            EditorAppDetail::SanitizeFileStem(m_Context.settings.capture.fileNamePrefix.data());
         const std::filesystem::path directory =
             m_Context.settings.capture.outputDirectory.empty()
                 ? m_Context.assetsRootPath / "Gallery"
@@ -401,7 +401,7 @@ namespace Physara::Editor
 
         Engine::CaptureDesc desc{};
         desc.format = format;
-        desc.outputPath = directory / (prefix + "_" + Internal::TimestampForFileName() + std::string(Engine::GetCaptureFormatExtension(format)));
+        desc.outputPath = directory / (prefix + "_" + EditorAppDetail::TimestampForFileName() + std::string(Engine::GetCaptureFormatExtension(format)));
         desc.resolutionScale = m_Context.settings.capture.resolutionScale;
         desc.includeDebugView = m_Context.settings.capture.includeDebugView;
         desc.usePostExposureOutput = true;
@@ -417,7 +417,7 @@ namespace Physara::Editor
             return;
         }
 
-        const std::string currentName = Internal::SceneNameFromPath(m_Context.currentScenePath);
+        const std::string currentName = EditorAppDetail::SceneNameFromPath(m_Context.currentScenePath);
         m_SaveSceneName.fill('\0');
         std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", currentName.c_str());
         m_OpenSaveScenePopup = true;
@@ -478,17 +478,17 @@ namespace Physara::Editor
 
     std::filesystem::path EditorApp::BuildSceneSavePath(std::string name) const
     {
-        std::string sanitized = Internal::SanitizeFileStem(name, true, "Untitled");
+        std::string sanitized = EditorAppDetail::SanitizeFileStem(name, true, "Untitled");
 
         std::string lower = sanitized;
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
                        { return static_cast<char>(std::tolower(c)); });
-        if (lower.ends_with(Internal::SceneSuffix))
+        if (lower.ends_with(EditorAppDetail::SceneSuffix))
         {
-            sanitized.resize(sanitized.size() - std::string_view(Internal::SceneSuffix).size());
+            sanitized.resize(sanitized.size() - std::string_view(EditorAppDetail::SceneSuffix).size());
         }
 
-        return m_Context.assetsRootPath / "Scenes" / (sanitized + Internal::SceneSuffix);
+        return m_Context.assetsRootPath / "Scenes" / (sanitized + EditorAppDetail::SceneSuffix);
     }
 
     void EditorApp::InitializeIcons()

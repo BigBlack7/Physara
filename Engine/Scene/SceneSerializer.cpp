@@ -21,7 +21,7 @@
 
 namespace Physara::Engine
 {
-    namespace Internal
+    namespace SceneSerializerDetail
     {
         using json = nlohmann::json;
 
@@ -108,7 +108,7 @@ namespace Physara::Engine
                 const auto &relationship = rootView.get<RelationshipComponent>(rootEntity);
                 if (relationship.IsRoot())
                 {
-                    Internal::CollectEntityRecursive(scene, rootEntity, orderedEntities);
+                    SceneSerializerDetail::CollectEntityRecursive(scene, rootEntity, orderedEntities);
                 }
             }
 
@@ -119,15 +119,15 @@ namespace Physara::Engine
                 ids.emplace(orderedEntities[i], static_cast<std::uint64_t>(i + 1));
             }
 
-            Internal::json root;
+            SceneSerializerDetail::json root;
             root["format"] = "PhysaraScene";
             root["version"] = 1;
-            root["entities"] = Internal::json::array();
+            root["entities"] = SceneSerializerDetail::json::array();
 
             const auto &registry = scene.GetRegistry();
             for (EntityId entity : orderedEntities)
             {
-                Internal::json e;
+                SceneSerializerDetail::json e;
                 e["id"] = ids.at(entity);
 
                 if (const auto *tag = registry.try_get<TagComponent>(entity))
@@ -146,14 +146,14 @@ namespace Physara::Engine
                 if (const auto *transform = registry.try_get<TransformComponent>(entity))
                 {
                     e["transform"] = {
-                        {"position", Internal::Vec3ToJson(transform->localPosition)},
-                        {"rotationDegrees", Internal::Vec3ToJson(glm::degrees(transform->GetLocalEulerRotation()))},
-                        {"scale", Internal::Vec3ToJson(transform->localScale)}};
+                        {"position", SceneSerializerDetail::Vec3ToJson(transform->localPosition)},
+                        {"rotationDegrees", SceneSerializerDetail::Vec3ToJson(glm::degrees(transform->GetLocalEulerRotation()))},
+                        {"scale", SceneSerializerDetail::Vec3ToJson(transform->localScale)}};
                 }
 
                 if (const auto *camera = registry.try_get<CameraComponent>(entity))
                 {
-                    Internal::json cameraJson;
+                    SceneSerializerDetail::json cameraJson;
                     cameraJson["projection"] = std::string(ToString(camera->projectionType));
                     cameraJson["primary"] = camera->primary;
                     cameraJson["sensorWidthMillimeters"] = camera->sensorWidthMillimeters;
@@ -170,9 +170,9 @@ namespace Physara::Engine
 
                 if (const auto *light = registry.try_get<LightComponent>(entity))
                 {
-                    Internal::json lightJson;
+                    SceneSerializerDetail::json lightJson;
                     lightJson["type"] = std::string(ToString(light->type));
-                    lightJson["color"] = Internal::Vec3ToJson(light->color);
+                    lightJson["color"] = SceneSerializerDetail::Vec3ToJson(light->color);
                     lightJson["colorTemperatureKelvin"] = light->colorTemperatureKelvin;
                     lightJson["useColorTemperature"] = light->useColorTemperature;
                     lightJson["directionalIlluminanceLux"] = light->directionalIlluminanceLux;
@@ -181,7 +181,7 @@ namespace Physara::Engine
                     lightJson["areaLuminanceCandelaPerSquareMeter"] = light->areaLuminanceCandelaPerSquareMeter;
                     lightJson["rangeMeters"] = light->rangeMeters;
                     lightJson["sourceRadiusMeters"] = light->sourceRadiusMeters;
-                    lightJson["areaSizeMeters"] = Internal::Vec2ToJson(light->areaSizeMeters);
+                    lightJson["areaSizeMeters"] = SceneSerializerDetail::Vec2ToJson(light->areaSizeMeters);
                     lightJson["innerConeAngleDegrees"] = glm::degrees(light->innerConeAngleRadians);
                     lightJson["outerConeAngleDegrees"] = glm::degrees(light->outerConeAngleRadians);
                     lightJson["castsShadow"] = light->castsShadow;
@@ -210,14 +210,14 @@ namespace Physara::Engine
         try
         {
             const std::string sceneText = Platform::FileSystem::ReadTextFile(path.string());
-            const Internal::json root = Internal::json::parse(sceneText);
+            const SceneSerializerDetail::json root = SceneSerializerDetail::json::parse(sceneText);
             if (root.value("format", std::string{}) != "PhysaraScene")
             {
                 PHYSARA_CORE_ERROR("Unsupported scene file format: {}", path.string());
                 return false;
             }
 
-            const Internal::json &entities = root.at("entities");
+            const SceneSerializerDetail::json &entities = root.at("entities");
             if (!entities.is_array())
             {
                 PHYSARA_CORE_ERROR("Scene file has invalid entities array: {}", path.string());
@@ -229,24 +229,24 @@ namespace Physara::Engine
             std::unordered_map<std::uint64_t, Entity> idToEntity;
             idToEntity.reserve(entities.size());
 
-            for (const Internal::json &serialized : entities)
+            for (const SceneSerializerDetail::json &serialized : entities)
             {
                 const std::uint64_t id = serialized.at("id").get<std::uint64_t>();
-                const std::string name = serialized.value("tag", Internal::json::object()).value("name", std::string{"Entity"});
+                const std::string name = serialized.value("tag", SceneSerializerDetail::json::object()).value("name", std::string{"Entity"});
                 Entity entity = scene.CreateEntity(name);
 
                 if (serialized.contains("transform"))
                 {
-                    const Internal::json &t = serialized.at("transform");
+                    const SceneSerializerDetail::json &t = serialized.at("transform");
                     auto &transform = entity.GetComponent<TransformComponent>();
-                    transform.SetLocalTRS(Internal::JsonToVec3(t.value("position", Internal::json::array())),
-                                          glm::radians(Internal::JsonToVec3(t.value("rotationDegrees", Internal::json::array()))),
-                                          Internal::JsonToVec3(t.value("scale", Internal::json::array()), glm::vec3(1.f)));
+                    transform.SetLocalTRS(SceneSerializerDetail::JsonToVec3(t.value("position", SceneSerializerDetail::json::array())),
+                                          glm::radians(SceneSerializerDetail::JsonToVec3(t.value("rotationDegrees", SceneSerializerDetail::json::array()))),
+                                          SceneSerializerDetail::JsonToVec3(t.value("scale", SceneSerializerDetail::json::array()), glm::vec3(1.f)));
                 }
 
                 if (serialized.contains("camera"))
                 {
-                    const Internal::json &c = serialized.at("camera");
+                    const SceneSerializerDetail::json &c = serialized.at("camera");
                     CameraComponent camera{};
                     camera.projectionType = CameraProjectionTypeFromString(c.value("projection", std::string{"Perspective"}));
                     camera.primary = c.value("primary", false);
@@ -265,10 +265,10 @@ namespace Physara::Engine
 
                 if (serialized.contains("light"))
                 {
-                    const Internal::json &l = serialized.at("light");
+                    const SceneSerializerDetail::json &l = serialized.at("light");
                     LightComponent light{};
                     light.type = LightTypeFromString(l.value("type", std::string{"Directional"}));
-                    light.color = Internal::JsonToVec3(l.value("color", Internal::json::array()), glm::vec3(1.f));
+                    light.color = SceneSerializerDetail::JsonToVec3(l.value("color", SceneSerializerDetail::json::array()), glm::vec3(1.f));
                     light.colorTemperatureKelvin = l.value("colorTemperatureKelvin", light.colorTemperatureKelvin);
                     light.useColorTemperature = l.value("useColorTemperature", light.useColorTemperature);
                     light.directionalIlluminanceLux = l.value("directionalIlluminanceLux", light.directionalIlluminanceLux);
@@ -278,7 +278,7 @@ namespace Physara::Engine
                         l.value("areaLuminanceCandelaPerSquareMeter", light.areaLuminanceCandelaPerSquareMeter);
                     light.rangeMeters = l.value("rangeMeters", light.rangeMeters);
                     light.sourceRadiusMeters = l.value("sourceRadiusMeters", light.sourceRadiusMeters);
-                    light.areaSizeMeters = Internal::JsonToVec2(l.value("areaSizeMeters", Internal::json::array()), light.areaSizeMeters);
+                    light.areaSizeMeters = SceneSerializerDetail::JsonToVec2(l.value("areaSizeMeters", SceneSerializerDetail::json::array()), light.areaSizeMeters);
                     light.innerConeAngleRadians = glm::radians(l.value("innerConeAngleDegrees", glm::degrees(light.innerConeAngleRadians)));
                     light.outerConeAngleRadians = glm::radians(l.value("outerConeAngleDegrees", glm::degrees(light.outerConeAngleRadians)));
                     light.castsShadow = l.value("castsShadow", light.castsShadow);
@@ -291,11 +291,11 @@ namespace Physara::Engine
                 idToEntity.emplace(id, entity);
             }
 
-            for (const Internal::json &serialized : entities)
+            for (const SceneSerializerDetail::json &serialized : entities)
             {
                 const std::uint64_t id = serialized.at("id").get<std::uint64_t>();
                 const std::uint64_t parentId =
-                    serialized.value("relationship", Internal::json::object()).value("parent", std::uint64_t{0});
+                    serialized.value("relationship", SceneSerializerDetail::json::object()).value("parent", std::uint64_t{0});
 
                 if (parentId != 0 && idToEntity.contains(id) && idToEntity.contains(parentId))
                 {

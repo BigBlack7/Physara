@@ -3,9 +3,9 @@
 
 #include <Backend/OpenGL/OpenGLDevice.hpp>
 #include <Backend/OpenGL/OpenGLImGuiBackend.hpp>
-#include <Editor/Core/EditorLayer.hpp>
-#include <Engine/Core/Application.hpp>
+#include <Editor/Core/EditorApp.hpp>
 #include <Engine/Core/Log.hpp>
+#include <Engine/Core/Time.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 #include <Platform/Input/GLFWInput.hpp>
 #include <Platform/Window/GLFWWindowOpenGL.hpp>
@@ -20,8 +20,7 @@ int main()
     std::unique_ptr<Physara::Platform::IInput> input;
     std::unique_ptr<Physara::RHI::RHIDevice> device;
     std::unique_ptr<Physara::RHI::IImGuiBackend> imguiBackend;
-    std::unique_ptr<Physara::Engine::Application> app;
-    std::unique_ptr<Physara::Engine::Layer> editorLayer;
+    std::unique_ptr<Physara::Editor::EditorApp> editorApp;
 
     try
     {
@@ -60,13 +59,17 @@ int main()
             throw std::runtime_error("Failed to initialize OpenGL ImGui backend.");
         }
 
-        app = std::make_unique<Physara::Engine::Application>();
-        app->Init(window.get(), input.get(), device.get());
+        editorApp = std::make_unique<Physara::Editor::EditorApp>();
+        editorApp->Init(device.get(), imguiBackend.get(), input.get());
 
-        editorLayer = std::make_unique<Physara::Editor::EditorLayer>(device.get(), imguiBackend.get(), input.get());
-        app->PushLayer(editorLayer.get());
-
-        app->Run();
+        while (!window->IsCloseRequested())
+        {
+            window->PollEvents();
+            input->BeginFrame();
+            Physara::Engine::Time::Tick();
+            editorApp->OnUIRender();
+            window->SwapBuffers();
+        }
     }
     catch (const std::exception &e)
     {
@@ -74,13 +77,11 @@ int main()
         exitCode = 1;
     }
 
-    if (app != nullptr)
+    if (editorApp != nullptr)
     {
-        app->Shutdown();
+        editorApp->Shutdown();
     }
-
-    editorLayer.reset();
-    app.reset();
+    editorApp.reset();
 
     if (imguiBackend != nullptr)
     {

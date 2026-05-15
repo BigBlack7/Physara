@@ -11,6 +11,9 @@ target_include_directories(Platform PUBLIC
 
 target_link_libraries(Platform PUBLIC
     glm
+)
+
+target_link_libraries(Platform PRIVATE
     stb
     glfw3
 )

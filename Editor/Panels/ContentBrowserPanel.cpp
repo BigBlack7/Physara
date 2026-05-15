@@ -16,7 +16,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace ContentBrowserPanelDetail
     {
         constexpr const char *PanelName = "Content Browser";
         constexpr float DirectoryTreeWidth = 100.f;
@@ -145,7 +145,7 @@ namespace Physara::Editor
 
     void ContentBrowserPanel::Draw()
     {
-        ImGui::Begin(Internal::PanelName);
+        ImGui::Begin(ContentBrowserPanelDetail::PanelName);
 
         if (m_Context.assetsRootPath.empty())
         {
@@ -161,10 +161,10 @@ namespace Physara::Editor
         else
         {
             m_Context.currentContentPath =
-                Internal::ClampToAssetsRoot(m_Context.currentContentPath, m_Context.assetsRootPath);
+                ContentBrowserPanelDetail::ClampToAssetsRoot(m_Context.currentContentPath, m_Context.assetsRootPath);
         }
 
-        ImGui::BeginChild("ContentBrowserDirectoryTree", ImVec2(Internal::DirectoryTreeWidth, 0.f), true);
+        ImGui::BeginChild("ContentBrowserDirectoryTree", ImVec2(ContentBrowserPanelDetail::DirectoryTreeWidth, 0.f), true);
         DrawDirectoryTree();
         ImGui::EndChild();
 
@@ -195,7 +195,7 @@ namespace Physara::Editor
         }
 
         const std::filesystem::path parent = m_Context.currentContentPath.parent_path().lexically_normal();
-        m_Context.currentContentPath = Internal::ClampToAssetsRoot(parent, m_Context.assetsRootPath);
+        m_Context.currentContentPath = ContentBrowserPanelDetail::ClampToAssetsRoot(parent, m_Context.assetsRootPath);
     }
 
     void ContentBrowserPanel::DrawDirectoryTree()
@@ -206,8 +206,8 @@ namespace Physara::Editor
     void ContentBrowserPanel::DrawDirectoryNode(const std::filesystem::path &directory, int depth)
     {
         const bool selected = Platform::FileSystem::IsSamePath(directory.string(), m_Context.currentContentPath.string());
-        const std::vector<Internal::BrowserEntry> entries = Internal::CollectEntries(directory);
-        const bool hasChildDirectories = std::any_of(entries.begin(), entries.end(), [](const Internal::BrowserEntry &entry)
+        const std::vector<ContentBrowserPanelDetail::BrowserEntry> entries = ContentBrowserPanelDetail::CollectEntries(directory);
+        const bool hasChildDirectories = std::any_of(entries.begin(), entries.end(), [](const ContentBrowserPanelDetail::BrowserEntry &entry)
                                                      { return entry.isDirectory; });
         const bool isRoot = Platform::FileSystem::IsSamePath(directory.string(), m_Context.assetsRootPath.string());
         const std::string label = isRoot ? "Assets" : GetDisplayName(directory);
@@ -221,12 +221,12 @@ namespace Physara::Editor
 
         const float rowHeight = ImGui::GetTextLineHeight() + 5.f;
         const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
-        const float arrowWidth = hasChildDirectories ? Internal::TreeArrowWidth : 0.f;
-        const float labelOffset = arrowWidth + (hasChildDirectories ? Internal::TreeLabelSpacing : 0.f);
+        const float arrowWidth = hasChildDirectories ? ContentBrowserPanelDetail::TreeArrowWidth : 0.f;
+        const float labelOffset = arrowWidth + (hasChildDirectories ? ContentBrowserPanelDetail::TreeLabelSpacing : 0.f);
         const float rowWidth = labelOffset + labelSize.x + 8.f;
 
         const float baseCursorX = ImGui::GetCursorPosX();
-        ImGui::SetCursorPosX(baseCursorX + static_cast<float>(depth) * Internal::TreeArrowWidth);
+        ImGui::SetCursorPosX(baseCursorX + static_cast<float>(depth) * ContentBrowserPanelDetail::TreeArrowWidth);
 
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("DirectoryTreeRow", ImVec2(rowWidth, rowHeight));
@@ -239,13 +239,13 @@ namespace Physara::Editor
         if (clicked)
         {
             m_Context.currentContentPath = directory.lexically_normal();
-            if (hasChildDirectories && mouseLocalX <= Internal::TreeArrowWidth)
+            if (hasChildDirectories && mouseLocalX <= ContentBrowserPanelDetail::TreeArrowWidth)
             {
                 open = !open;
                 storage->SetBool(openId, open);
             }
         }
-        if (doubleClicked && hasChildDirectories && mouseLocalX > Internal::TreeArrowWidth)
+        if (doubleClicked && hasChildDirectories && mouseLocalX > ContentBrowserPanelDetail::TreeArrowWidth)
         {
             open = !open;
             storage->SetBool(openId, open);
@@ -263,10 +263,10 @@ namespace Physara::Editor
 
         if (hasChildDirectories)
         {
-            Internal::DrawDisclosureTriangle(
+            ContentBrowserPanelDetail::DrawDisclosureTriangle(
                 drawList,
-                ImVec2(rowMin.x, rowMin.y + (rowHeight - Internal::TreeArrowWidth) * 0.5f),
-                Internal::TreeArrowWidth,
+                ImVec2(rowMin.x, rowMin.y + (rowHeight - ContentBrowserPanelDetail::TreeArrowWidth) * 0.5f),
+                ContentBrowserPanelDetail::TreeArrowWidth,
                 open,
                 ImGui::GetColorU32(ImGuiCol_Text));
         }
@@ -280,7 +280,7 @@ namespace Physara::Editor
 
         if (open && hasChildDirectories)
         {
-            for (const Internal::BrowserEntry &entry : entries)
+            for (const ContentBrowserPanelDetail::BrowserEntry &entry : entries)
             {
                 if (entry.isDirectory)
                 {
@@ -310,10 +310,10 @@ namespace Physara::Editor
 
     void ContentBrowserPanel::DrawEntryGrid()
     {
-        std::vector<Internal::BrowserEntry> entries = Internal::CollectEntries(m_Context.currentContentPath);
-        if (Internal::IsInsideModelsDirectory(m_Context.currentContentPath, m_Context.assetsRootPath))
+        std::vector<ContentBrowserPanelDetail::BrowserEntry> entries = ContentBrowserPanelDetail::CollectEntries(m_Context.currentContentPath);
+        if (ContentBrowserPanelDetail::IsInsideModelsDirectory(m_Context.currentContentPath, m_Context.assetsRootPath))
         {
-            entries.erase(std::remove_if(entries.begin(), entries.end(), [](const Internal::BrowserEntry &entry)
+            entries.erase(std::remove_if(entries.begin(), entries.end(), [](const ContentBrowserPanelDetail::BrowserEntry &entry)
                                          { return !entry.isDirectory && !Engine::AssetPath::IsModelFile(entry.path); }),
                           entries.end());
         }
@@ -325,15 +325,15 @@ namespace Physara::Editor
         }
 
         const float contentWidth = ImGui::GetContentRegionAvail().x;
-        const int columns = std::max(1, static_cast<int>(contentWidth / Internal::TileSize));
+        const int columns = std::max(1, static_cast<int>(contentWidth / ContentBrowserPanelDetail::TileSize));
         int column = 0;
 
-        for (const Internal::BrowserEntry &entry : entries)
+        for (const ContentBrowserPanelDetail::BrowserEntry &entry : entries)
         {
             ImGui::PushID(entry.path.lexically_normal().generic_string().c_str());
 
             const ImVec2 tileMin = ImGui::GetCursorScreenPos();
-            const ImVec2 tileSize(Internal::TileSize - 8.f, Internal::TileSize);
+            const ImVec2 tileSize(ContentBrowserPanelDetail::TileSize - 8.f, ContentBrowserPanelDetail::TileSize);
             ImGui::InvisibleButton("AssetTile", tileSize);
             const bool hovered = ImGui::IsItemHovered();
             const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
@@ -347,9 +347,9 @@ namespace Physara::Editor
             }
 
             const ImVec2 iconMin(
-                tileMin.x + (tileSize.x - Internal::TileIconSize) * 0.5f,
-                tileMin.y + Internal::TilePadding);
-            const ImVec2 iconMax(iconMin.x + Internal::TileIconSize, iconMin.y + Internal::TileIconSize);
+                tileMin.x + (tileSize.x - ContentBrowserPanelDetail::TileIconSize) * 0.5f,
+                tileMin.y + ContentBrowserPanelDetail::TilePadding);
+            const ImVec2 iconMax(iconMin.x + ContentBrowserPanelDetail::TileIconSize, iconMin.y + ContentBrowserPanelDetail::TileIconSize);
             const RHI::ImGuiTextureHandle icon = m_IconManager.GetFileIcon(entry.path, entry.isDirectory);
             if (icon != 0)
             {
@@ -363,10 +363,10 @@ namespace Physara::Editor
             }
             else
             {
-                drawList->AddRectFilled(iconMin, iconMax, Internal::IconColor(entry.kind), 8.f);
+                drawList->AddRectFilled(iconMin, iconMax, ContentBrowserPanelDetail::IconColor(entry.kind), 8.f);
             }
 
-            const std::string name = Internal::TileName(entry);
+            const std::string name = ContentBrowserPanelDetail::TileName(entry);
             const ImVec2 textSize = ImGui::CalcTextSize(name.c_str(), nullptr, true, tileSize.x - 8.f);
             drawList->AddText(
                 ImGui::GetFont(),

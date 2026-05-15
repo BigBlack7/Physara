@@ -7,7 +7,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace HelpShortcutsPanelDetail
     {
         constexpr const char *PanelName = "Help / Shortcuts";
 
@@ -49,7 +49,7 @@ namespace Physara::Editor
         }
 
         ImGui::SetNextWindowSize(ImVec2(760.f, 520.f), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin(Internal::PanelName, &m_Context.ui.showHelpShortcuts, ImGuiWindowFlags_NoCollapse))
+        if (!ImGui::Begin(HelpShortcutsPanelDetail::PanelName, &m_Context.ui.showHelpShortcuts, ImGuiWindowFlags_NoCollapse))
         {
             ImGui::End();
             return;
@@ -70,7 +70,7 @@ namespace Physara::Editor
             ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch, 0.55f);
             ImGui::TableHeadersRow();
 
-            const std::vector<std::string> groups = Internal::CollectGroups(m_ShortcutRegistry);
+            const std::vector<std::string> groups = HelpShortcutsPanelDetail::CollectGroups(m_ShortcutRegistry);
             for (const std::string &group : groups)
             {
                 ImGui::TableNextRow();

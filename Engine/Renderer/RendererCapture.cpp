@@ -13,7 +13,7 @@
 
 namespace Physara::Engine
 {
-    namespace Internal
+    namespace RendererCaptureDetail
     {
         static void FlipRowsRGBA8(std::vector<std::uint8_t> &pixels, std::uint32_t width, std::uint32_t height)
         {
@@ -117,12 +117,12 @@ namespace Physara::Engine
             return result;
         }
 
-        Internal::FlipRowsRGBA8(pixels, width, height);
+        RendererCaptureDetail::FlipRowsRGBA8(pixels, width, height);
 
         const float scale = std::clamp(desc.resolutionScale, 0.25f, 4.f);
         const auto outputWidth = std::max(1u, static_cast<std::uint32_t>(std::round(static_cast<float>(width) * scale)));
         const auto outputHeight = std::max(1u, static_cast<std::uint32_t>(std::round(static_cast<float>(height) * scale)));
-        pixels = Internal::ResizeRGBA8(pixels, width, height, outputWidth, outputHeight);
+        pixels = RendererCaptureDetail::ResizeRGBA8(pixels, width, height, outputWidth, outputHeight);
 
         std::error_code ec;
         std::filesystem::create_directories(desc.outputPath.parent_path(), ec);

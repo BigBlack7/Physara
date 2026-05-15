@@ -11,11 +11,15 @@ target_include_directories(Engine PUBLIC
 target_compile_definitions(Engine PUBLIC PHYSARA_DEBUG)
 
 target_link_libraries(Engine PUBLIC
-    Platform
+    glm
     entt
     spdlog
-    imgui
+)
+
+target_link_libraries(Engine PRIVATE
+    Platform
     nlohmann
     tinygltf
     tinyexr
+    stb
 )

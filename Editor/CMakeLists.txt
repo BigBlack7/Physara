@@ -13,5 +13,4 @@ target_link_libraries(Editor PUBLIC
     Engine
     Platform
     imgui
-    stb
 )

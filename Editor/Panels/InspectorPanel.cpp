@@ -13,7 +13,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace InspectorPanelDetail
     {
         constexpr const char *PanelName = "Inspector";
 
@@ -30,7 +30,7 @@ namespace Physara::Editor
 
     void InspectorPanel::Draw()
     {
-        ImGui::Begin(Internal::PanelName);
+        ImGui::Begin(InspectorPanelDetail::PanelName);
 
         if (m_Context.activeScene == nullptr)
         {
@@ -91,7 +91,7 @@ namespace Physara::Editor
                          m_Context.settings.capture.fileNamePrefix.data(),
                          m_Context.settings.capture.fileNamePrefix.size());
         ImGui::Combo("Format", &m_Context.settings.capture.fileFormatIndex,
-                     Internal::CaptureFormatLabels, IM_ARRAYSIZE(Internal::CaptureFormatLabels));
+                     InspectorPanelDetail::CaptureFormatLabels, IM_ARRAYSIZE(InspectorPanelDetail::CaptureFormatLabels));
 
         m_Context.settings.capture.resolutionScale =
             std::clamp(m_Context.settings.capture.resolutionScale, 0.25f, 4.f);

@@ -7,7 +7,7 @@
 
 namespace Physara::Editor
 {
-    namespace Internal
+    namespace EditorThemeDetail
     {
         constexpr float FontSize = 17.f;
 
@@ -180,7 +180,7 @@ namespace Physara::Editor
 
     void EditorTheme::Apply()
     {
-        Internal::ConfigureFonts();
-        Internal::ConfigureStyle();
+        EditorThemeDetail::ConfigureFonts();
+        EditorThemeDetail::ConfigureStyle();
     }
 }

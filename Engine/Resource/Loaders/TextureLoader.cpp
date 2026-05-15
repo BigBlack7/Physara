@@ -12,7 +12,7 @@
 
 namespace Physara::Engine
 {
-    namespace Internal
+    namespace TextureLoaderDetail
     {
         TextureSourceFormat DetectFormat(const std::filesystem::path &path)
         {
@@ -65,7 +65,7 @@ namespace Physara::Engine
         texture->width = static_cast<std::uint32_t>(std::max(width, 0));
         texture->height = static_cast<std::uint32_t>(std::max(height, 0));
         texture->channels = 4;
-        texture->sourceFormat = Internal::DetectFormat(path);
+        texture->sourceFormat = TextureLoaderDetail::DetectFormat(path);
         texture->rgba8Pixels.assign(pixels, pixels + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
 
         stbi_image_free(pixels);

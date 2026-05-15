@@ -8,7 +8,7 @@
 namespace Physara::Engine
 {
 
-    namespace Internal
+    namespace LogDetail
     {
         constexpr std::size_t kRingBufferCapacity = 512;
     }
@@ -28,7 +28,7 @@ namespace Physara::Engine
         consoleSink->set_level(spdlog::level::trace);
         consoleSink->set_pattern("%^[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] [%s:%#] %v%$");
 
-        s_RingBufferSink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(Internal::kRingBufferCapacity);
+        s_RingBufferSink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(LogDetail::kRingBufferCapacity);
         s_RingBufferSink->set_level(spdlog::level::trace);
         s_RingBufferSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] [%s:%#] %v");
 
@@ -89,7 +89,7 @@ namespace Physara::Engine
             return {};
         }
 
-        const std::size_t clamped = std::min(count, Internal::kRingBufferCapacity);
+        const std::size_t clamped = std::min(count, LogDetail::kRingBufferCapacity);
         return s_RingBufferSink->last_formatted(clamped);
     }
 }
