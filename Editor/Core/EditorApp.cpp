@@ -124,7 +124,7 @@ namespace Physara::Editor
         m_Backend = backend;
         m_Input = input;
         m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
-        m_Renderer->SetClearColor({0.16f, 0.22f, 0.20f, 1.f});
+        m_Renderer->SetClearColor({0.16f, 0.22f, 0.2f, 1.f});
         m_LayoutInitialized = false;
         m_DockspaceId = 0;
         m_Context.assetsRootPath = Physara::Platform::FileSystem::GetAssetsRootPath();

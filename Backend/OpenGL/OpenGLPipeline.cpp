@@ -9,7 +9,7 @@
 
 namespace Physara::RHI
 {
-    namespace Internal
+    namespace OpenGLPipelineDetail
     {
         static void GetVertexFormat(VertexFormat format, GLint &components, GLenum &type, GLboolean &normalized)
         {
@@ -128,7 +128,7 @@ namespace Physara::RHI
         glGetProgramiv(m_Program, GL_LINK_STATUS, &success);
         if (success == GL_FALSE)
         {
-            Internal::LogProgramLinkError(m_Program);
+            OpenGLPipelineDetail::LogProgramLinkError(m_Program);
             glDeleteProgram(m_Program);
             m_Program = 0;
             return;
@@ -146,7 +146,7 @@ namespace Physara::RHI
                 GLenum type = GL_FLOAT;
                 GLboolean normalized = GL_FALSE;
 
-                Internal::GetVertexFormat(attr.format, components, type, normalized);
+                OpenGLPipelineDetail::GetVertexFormat(attr.format, components, type, normalized);
 
                 glEnableVertexArrayAttrib(m_VAO, attr.location);
                 glVertexArrayAttribFormat(

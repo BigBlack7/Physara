@@ -22,7 +22,7 @@ namespace Physara::RHI
         Shutdown();
     }
 
-    namespace Internal
+    namespace OpenGLDeviceDetail
     {
         static bool CheckRequiredCapabilities()
         {
@@ -99,7 +99,7 @@ namespace Physara::RHI
         PHYSARA_CORE_INFO("OpenGL {}", reinterpret_cast<const char *>(glGetString(GL_VERSION)));
         PHYSARA_CORE_INFO("GPU: {}", reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
 
-        if (!Internal::CheckRequiredCapabilities())
+        if (!OpenGLDeviceDetail::CheckRequiredCapabilities())
         {
             return false;
         }
@@ -124,7 +124,7 @@ namespace Physara::RHI
         {
             glEnable(GL_DEBUG_OUTPUT);
             glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-            glDebugMessageCallback(Internal::GLDebugCallback, nullptr);
+            glDebugMessageCallback(OpenGLDeviceDetail::GLDebugCallback, nullptr);
         }
 #endif
 

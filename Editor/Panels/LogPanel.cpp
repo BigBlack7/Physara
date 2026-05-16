@@ -45,11 +45,11 @@ namespace Physara::Editor
             case LogPanelLevel::Trace:
                 return ImVec4(0.34f, 0.39f, 0.36f, 1.f);
             case LogPanelLevel::Info:
-                return ImVec4(0.05f, 0.32f, 0.20f, 1.f);
+                return ImVec4(0.05f, 0.32f, 0.2f, 1.f);
             case LogPanelLevel::Warning:
                 return ImVec4(0.58f, 0.36f, 0.03f, 1.f);
             case LogPanelLevel::Error:
-                return ImVec4(0.70f, 0.12f, 0.10f, 1.f);
+                return ImVec4(0.7f, 0.12f, 0.1f, 1.f);
             case LogPanelLevel::Critical:
                 return ImVec4(0.58f, 0.04f, 0.05f, 1.f);
             case LogPanelLevel::Unknown:

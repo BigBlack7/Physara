@@ -17,7 +17,7 @@
 
 namespace Physara::RHI
 {
-    namespace Internal
+    namespace OpenGLCommandListDetail
     {
         static bool BlendStateEqual(const RHIBlendState &a, const RHIBlendState &b)
         {
@@ -259,7 +259,7 @@ namespace Physara::RHI
                 target = desc.blendStates[i];
             }
 
-            if (!Internal::BlendStateEqual(m_State.blendStates[i], target))
+            if (!OpenGLCommandListDetail::BlendStateEqual(m_State.blendStates[i], target))
             {
                 if (target.blendEnable)
                 {
@@ -504,7 +504,7 @@ namespace Physara::RHI
 
         if (desc.hasDepth && desc.depthAttachment.loadOp == LoadOp::Clear)
         {
-            if (Internal::IsDepthStencilFormat(desc.depthAttachment.format))
+            if (OpenGLCommandListDetail::IsDepthStencilFormat(desc.depthAttachment.format))
             {
                 if (fboID != 0)
                 {
@@ -554,7 +554,7 @@ namespace Physara::RHI
             if (m_CurrentPassDesc->hasDepth && m_CurrentPassDesc->depthAttachment.storeOp == StoreOp::DontCare)
             {
                 attachments.push_back(
-                    Internal::IsDepthStencilFormat(m_CurrentPassDesc->depthAttachment.format)
+                    OpenGLCommandListDetail::IsDepthStencilFormat(m_CurrentPassDesc->depthAttachment.format)
                         ? GL_DEPTH_STENCIL_ATTACHMENT
                         : GL_DEPTH_ATTACHMENT);
             }
@@ -581,7 +581,7 @@ namespace Physara::RHI
     {
         // 现代indexed draw: 一次调用同时支持instancing、baseVertex、baseInstance
         // firstIndex和SetIndexBuffer(offset) 都以byte offset合并传入indices参数
-        const std::uint32_t indexStride = Internal::GetIndexStride(m_State.indexType);
+        const std::uint32_t indexStride = OpenGLCommandListDetail::GetIndexStride(m_State.indexType);
         const std::uintptr_t offset =
             static_cast<std::uintptr_t>(m_State.indexOffset) +
             static_cast<std::uintptr_t>(firstIndex) * indexStride;
@@ -673,13 +673,13 @@ namespace Physara::RHI
     {
         // 新接口按RHIResourceBarrier映射barrier bits, 后续RenderGraph可直接走这里
         (void)texture;
-        glMemoryBarrier(Internal::ToGLMemoryBarrierBits(barrier));
+        glMemoryBarrier(OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier));
     }
 
     void OpenGLCommandList::BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier)
     {
         (void)buffer;
-        glMemoryBarrier(Internal::ToGLMemoryBarrierBits(barrier));
+        glMemoryBarrier(OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier));
     }
 
     void OpenGLCommandList::CopyTextureToTexture(RHITexture *src, RHITexture *dst)

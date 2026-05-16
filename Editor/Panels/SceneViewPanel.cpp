@@ -405,9 +405,9 @@ namespace Physara::Editor
             const float x0 = boxMin.x + boxSize * 0.25f;
             const float y0 = boxMin.y + boxSize * 0.53f;
             const float x1 = boxMin.x + boxSize * 0.43f;
-            const float y1 = boxMin.y + boxSize * 0.70f;
+            const float y1 = boxMin.y + boxSize * 0.7f;
             const float x2 = boxMin.x + boxSize * 0.76f;
-            const float y2 = boxMin.y + boxSize * 0.30f;
+            const float y2 = boxMin.y + boxSize * 0.3f;
             drawList->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(238, 250, 242, 255), 2.f);
             drawList->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(238, 250, 242, 255), 2.f);
         }

@@ -7,7 +7,7 @@
 
 namespace Physara::RHI
 {
-    namespace Internal
+    namespace OpenGLSamplerDetail
     {
         static GLenum ToGLMagFilter(FilterMode mode)
         {
@@ -44,8 +44,8 @@ namespace Physara::RHI
         glCreateSamplers(1, &m_ID);
 
         // 过滤模式设置(Min/Mag Filter)
-        glSamplerParameteri(m_ID, GL_TEXTURE_MIN_FILTER, Internal::ToGLMinFilter(m_Desc.minFilter, m_Desc.mipFilter));
-        glSamplerParameteri(m_ID, GL_TEXTURE_MAG_FILTER, Internal::ToGLMagFilter(m_Desc.magFilter));
+        glSamplerParameteri(m_ID, GL_TEXTURE_MIN_FILTER, OpenGLSamplerDetail::ToGLMinFilter(m_Desc.minFilter, m_Desc.mipFilter));
+        glSamplerParameteri(m_ID, GL_TEXTURE_MAG_FILTER, OpenGLSamplerDetail::ToGLMagFilter(m_Desc.magFilter));
 
         // 纹理环绕模式设置UVW
         glSamplerParameteri(m_ID, GL_TEXTURE_WRAP_S, ToGLWrap(m_Desc.wrapU));

@@ -171,9 +171,9 @@ namespace Physara::Editor
             colors[ImGuiCol_TableRowBgAlt] = Color(205, 221, 200, 0.52f);
             colors[ImGuiCol_TextSelectedBg] = Color(137, 178, 134, 0.45f);
             colors[ImGuiCol_DragDropTarget] = Color(91, 139, 98, 0.85f);
-            colors[ImGuiCol_NavHighlight] = Color(76, 122, 93, 0.60f);
-            colors[ImGuiCol_NavWindowingHighlight] = Color(255, 255, 255, 0.70f);
-            colors[ImGuiCol_NavWindowingDimBg] = Color(55, 70, 62, 0.20f);
+            colors[ImGuiCol_NavHighlight] = Color(76, 122, 93, 0.6f);
+            colors[ImGuiCol_NavWindowingHighlight] = Color(255, 255, 255, 0.7f);
+            colors[ImGuiCol_NavWindowingDimBg] = Color(55, 70, 62, 0.2f);
             colors[ImGuiCol_ModalWindowDimBg] = Color(55, 70, 62, 0.28f);
         }
     }

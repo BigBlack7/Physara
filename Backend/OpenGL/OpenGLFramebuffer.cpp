@@ -10,7 +10,7 @@
 
 namespace Physara::RHI
 {
-    namespace Internal
+    namespace OpenGLFramebufferDetail
     {
         static const char *FramebufferStatusToString(GLenum status)
         {
@@ -93,7 +93,7 @@ namespace Physara::RHI
         const GLenum status = glCheckNamedFramebufferStatus(m_ID, GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE)
         {
-            PHYSARA_CORE_ERROR("FBO incomplete: {}", Internal::FramebufferStatusToString(status));
+            PHYSARA_CORE_ERROR("FBO incomplete: {}", OpenGLFramebufferDetail::FramebufferStatusToString(status));
         }
     }
 

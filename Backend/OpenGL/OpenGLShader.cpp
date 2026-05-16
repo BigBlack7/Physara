@@ -7,7 +7,7 @@
 
 namespace Physara::RHI
 {
-    namespace Internal
+    namespace OpenGLShaderDetail
     {
         static const char *ToStageName(ShaderStage stage)
         {
@@ -33,7 +33,7 @@ namespace Physara::RHI
 
         if (m_ID == 0)
         {
-            PHYSARA_CORE_ERROR("Shader create failed [{}]: glCreateShader returned 0", Internal::ToStageName(stage));
+            PHYSARA_CORE_ERROR("Shader create failed [{}]: glCreateShader returned 0", OpenGLShaderDetail::ToStageName(stage));
             return;
         }
 
@@ -60,7 +60,7 @@ namespace Physara::RHI
                 log = "No info log from driver.";
             }
 
-            PHYSARA_CORE_ERROR("Shader compile failed [{}]: {}", Internal::ToStageName(stage), log);
+            PHYSARA_CORE_ERROR("Shader compile failed [{}]: {}", OpenGLShaderDetail::ToStageName(stage), log);
 
             glDeleteShader(m_ID);
             m_ID = 0;
