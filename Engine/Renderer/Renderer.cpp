@@ -7,6 +7,7 @@
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
+#include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Engine
 {
@@ -73,6 +74,14 @@ namespace Physara::Engine
     void Renderer::Render(const RenderView &view, float deltaTimeSeconds)
     {
         BeginFrame(view, deltaTimeSeconds);
+        RenderClear();
+        ProcessPendingCapture();
+    }
+
+    void Renderer::RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds)
+    {
+        BeginFrame(view, deltaTimeSeconds);
+        m_RenderProxy.Build(scene, view, m_FrameData);
         RenderClear();
         ProcessPendingCapture();
     }

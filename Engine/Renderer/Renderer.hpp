@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderGraph/RenderGraph.hpp>
 #include <Engine/Renderer/RendererCapture.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
@@ -20,6 +21,8 @@ namespace Physara::RHI
 
 namespace Physara::Engine
 {
+    class Scene;
+
     class Renderer final
     {
     public:
@@ -36,6 +39,7 @@ namespace Physara::Engine
         void ResizeViewport(std::uint32_t width, std::uint32_t height);
         void BeginFrame(const RenderView &view, float deltaTimeSeconds = 0.f);
         void Render(const RenderView &view, float deltaTimeSeconds = 0.f);
+        void RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds = 0.f);
         void RenderClear();
         CaptureResult CaptureCurrentView(const CaptureDesc &desc);
         void RequestCapture(const CaptureDesc &desc);
@@ -47,6 +51,7 @@ namespace Physara::Engine
         [[nodiscard]] std::uint32_t GetViewportWidth() const { return m_ViewportWidth; }
         [[nodiscard]] std::uint32_t GetViewportHeight() const { return m_ViewportHeight; }
         [[nodiscard]] const FrameData &GetFrameData() const { return m_FrameData; }
+        [[nodiscard]] const RenderProxy &GetRenderProxy() const { return m_RenderProxy; }
         [[nodiscard]] bool HasValidRenderTarget() const;
 
     private:
@@ -60,6 +65,7 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
         RenderGraph m_RenderGraph{};
+        RenderProxy m_RenderProxy{};
         FrameData m_FrameData{};
         std::optional<CaptureDesc> m_PendingCapture{};
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};

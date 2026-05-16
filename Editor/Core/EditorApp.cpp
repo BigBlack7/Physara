@@ -349,7 +349,14 @@ namespace Physara::Editor
         Engine::RenderView view = m_EditorCamera.BuildRenderView();
         view.viewport.width = width;
         view.viewport.height = height;
-        m_Renderer->Render(view, std::max(ImGui::GetIO().DeltaTime, 0.f));
+        if (m_Context.activeScene != nullptr)
+        {
+            m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f));
+        }
+        else
+        {
+            m_Renderer->Render(view, std::max(ImGui::GetIO().DeltaTime, 0.f));
+        }
         RefreshSceneViewTexture();
     }
 
