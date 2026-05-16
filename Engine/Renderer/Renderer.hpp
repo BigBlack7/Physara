@@ -25,6 +25,7 @@ namespace Physara::RHI
 
 namespace Physara::Engine
 {
+    class AssetManager;
     class Scene;
 
     class Renderer final
@@ -39,6 +40,7 @@ namespace Physara::Engine
 
         void Initialize(RHI::RHIDevice *device);
         void Shutdown();
+        void SetAssetManager(AssetManager *assetManager) { m_AssetManager = assetManager; }
 
         void ResizeViewport(std::uint32_t width, std::uint32_t height);
         void BeginFrame(const RenderView &view, float deltaTimeSeconds = 0.f);
@@ -65,6 +67,7 @@ namespace Physara::Engine
 
     private:
         RHI::RHIDevice *m_Device{nullptr};
+        AssetManager *m_AssetManager{nullptr};
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHITexture> m_SceneDepth{};

@@ -4,14 +4,19 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <glm/trigonometric.hpp>
 #include <nlohmann/json.hpp>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
+#include <Engine/Scene/Components/MaterialComponent.hpp>
+#include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/RelationshipComponent.hpp>
 #include <Engine/Scene/Components/TagComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
@@ -93,6 +98,49 @@ namespace Physara::Engine
                 CollectEntityRecursive(scene, child, out);
                 child = next;
             }
+        }
+
+        json TextureSlotToJson(const TextureSlot &slot)
+        {
+            return json{
+                {"path", slot.path},
+                {"texCoord", slot.texCoord}};
+        }
+
+        TextureSlot JsonToTextureSlot(const json &value)
+        {
+            if (!value.is_object())
+            {
+                return {};
+            }
+
+            return TextureSlot(value.value("path", std::string{}), value.value("texCoord", 0u));
+        }
+
+        json BoundsToJson(const MeshBounds &bounds)
+        {
+            return json{
+                {"min", Vec3ToJson(bounds.min)},
+                {"max", Vec3ToJson(bounds.max)},
+                {"center", Vec3ToJson(bounds.center)},
+                {"radius", bounds.radius},
+                {"valid", bounds.valid}};
+        }
+
+        MeshBounds JsonToBounds(const json &value)
+        {
+            MeshBounds bounds{};
+            if (!value.is_object())
+            {
+                return bounds;
+            }
+
+            bounds.min = JsonToVec3(value.value("min", json::array()));
+            bounds.max = JsonToVec3(value.value("max", json::array()));
+            bounds.center = JsonToVec3(value.value("center", json::array()));
+            bounds.radius = value.value("radius", 0.f);
+            bounds.valid = value.value("valid", false);
+            return bounds;
         }
     }
 
@@ -190,6 +238,49 @@ namespace Physara::Engine
                     e["light"] = std::move(lightJson);
                 }
 
+                if (const auto *mesh = registry.try_get<MeshComponent>(entity))
+                {
+                    SceneSerializerDetail::json meshJson;
+                    meshJson["assetPath"] = mesh->primitive.assetPath;
+                    meshJson["meshIndex"] = mesh->primitive.meshIndex;
+                    meshJson["primitiveIndex"] = mesh->primitive.primitiveIndex;
+                    meshJson["visible"] = mesh->visible;
+                    meshJson["receiveShadows"] = mesh->receiveShadows;
+                    meshJson["localBounds"] = SceneSerializerDetail::BoundsToJson(mesh->localBounds);
+                    meshJson["materialSlots"] = SceneSerializerDetail::json::array();
+                    for (const MaterialSlotRef &slot : mesh->materialSlots)
+                    {
+                        meshJson["materialSlots"].push_back({
+                            {"slotIndex", slot.slotIndex},
+                            {"materialPath", slot.materialPath}});
+                    }
+                    e["mesh"] = std::move(meshJson);
+                }
+
+                if (const auto *material = registry.try_get<MaterialComponent>(entity))
+                {
+                    SceneSerializerDetail::json materialJson;
+                    materialJson["materialPath"] = material->materialPath;
+                    materialJson["shadingModel"] = std::string(ToString(material->shadingModel));
+                    materialJson["alphaMode"] = std::string(ToString(material->alphaMode));
+                    materialJson["doubleSided"] = material->doubleSided;
+                    materialJson["castShadow"] = material->castShadow;
+                    materialJson["baseColor"] = SceneSerializerDetail::Vec4ToJson(material->baseColor);
+                    materialJson["metallic"] = material->metallic;
+                    materialJson["roughness"] = material->roughness;
+                    materialJson["ambientOcclusion"] = material->ambientOcclusion;
+                    materialJson["alphaCutoff"] = material->alphaCutoff;
+                    materialJson["emissiveColor"] = SceneSerializerDetail::Vec3ToJson(material->emissiveColor);
+                    materialJson["emissiveLuminance"] = material->emissiveLuminance;
+                    materialJson["normalScale"] = material->normalScale;
+                    materialJson["baseColorTexture"] = SceneSerializerDetail::TextureSlotToJson(material->baseColorTexture);
+                    materialJson["metallicRoughnessTexture"] = SceneSerializerDetail::TextureSlotToJson(material->metallicRoughnessTexture);
+                    materialJson["normalTexture"] = SceneSerializerDetail::TextureSlotToJson(material->normalTexture);
+                    materialJson["occlusionTexture"] = SceneSerializerDetail::TextureSlotToJson(material->occlusionTexture);
+                    materialJson["emissiveTexture"] = SceneSerializerDetail::TextureSlotToJson(material->emissiveTexture);
+                    e["material"] = std::move(materialJson);
+                }
+
                 root["entities"].push_back(std::move(e));
             }
 
@@ -205,7 +296,7 @@ namespace Physara::Engine
         }
     }
 
-    bool SceneSerializer::Deserialize(Scene &scene, const std::filesystem::path &path)
+    bool SceneSerializer::Deserialize(Scene &scene, const std::filesystem::path &path, AssetManager *assetManager)
     {
         try
         {
@@ -228,6 +319,7 @@ namespace Physara::Engine
 
             std::unordered_map<std::uint64_t, Entity> idToEntity;
             idToEntity.reserve(entities.size());
+            std::unordered_set<std::string> meshAssetPaths;
 
             for (const SceneSerializerDetail::json &serialized : entities)
             {
@@ -288,7 +380,73 @@ namespace Physara::Engine
                     entity.AddOrReplaceComponent<LightComponent>(light);
                 }
 
+                if (serialized.contains("mesh"))
+                {
+                    const SceneSerializerDetail::json &m = serialized.at("mesh");
+                    MeshComponent mesh(
+                        m.value("assetPath", std::string{}),
+                        m.value("meshIndex", 0u),
+                        m.value("primitiveIndex", 0u));
+                    if (!mesh.primitive.assetPath.empty())
+                    {
+                        meshAssetPaths.insert(mesh.primitive.assetPath);
+                    }
+                    mesh.visible = m.value("visible", true);
+                    mesh.receiveShadows = m.value("receiveShadows", true);
+                    mesh.localBounds = SceneSerializerDetail::JsonToBounds(m.value("localBounds", SceneSerializerDetail::json::object()));
+
+                    const SceneSerializerDetail::json slots = m.value("materialSlots", SceneSerializerDetail::json::array());
+                    if (slots.is_array())
+                    {
+                        for (const SceneSerializerDetail::json &slot : slots)
+                        {
+                            mesh.materialSlots.emplace_back(
+                                slot.value("slotIndex", 0u),
+                                slot.value("materialPath", std::string{}));
+                        }
+                    }
+                    entity.AddOrReplaceComponent<MeshComponent>(std::move(mesh));
+                }
+
+                if (serialized.contains("material"))
+                {
+                    const SceneSerializerDetail::json &m = serialized.at("material");
+                    MaterialComponent material{};
+                    material.materialPath = m.value("materialPath", std::string{});
+                    material.shadingModel = ShadingModelFromString(m.value("shadingModel", std::string{"Lit"}));
+                    material.alphaMode = AlphaModeFromString(m.value("alphaMode", std::string{"Opaque"}));
+                    material.doubleSided = m.value("doubleSided", material.doubleSided);
+                    material.castShadow = m.value("castShadow", material.castShadow);
+                    material.baseColor = SceneSerializerDetail::JsonToVec4(m.value("baseColor", SceneSerializerDetail::json::array()), material.baseColor);
+                    material.metallic = m.value("metallic", material.metallic);
+                    material.roughness = m.value("roughness", material.roughness);
+                    material.ambientOcclusion = m.value("ambientOcclusion", material.ambientOcclusion);
+                    material.alphaCutoff = m.value("alphaCutoff", material.alphaCutoff);
+                    material.emissiveColor = SceneSerializerDetail::JsonToVec3(m.value("emissiveColor", SceneSerializerDetail::json::array()), material.emissiveColor);
+                    material.emissiveLuminance = m.value("emissiveLuminance", material.emissiveLuminance);
+                    material.normalScale = m.value("normalScale", material.normalScale);
+                    material.baseColorTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("baseColorTexture", SceneSerializerDetail::json::object()));
+                    material.metallicRoughnessTexture =
+                        SceneSerializerDetail::JsonToTextureSlot(m.value("metallicRoughnessTexture", SceneSerializerDetail::json::object()));
+                    material.normalTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("normalTexture", SceneSerializerDetail::json::object()));
+                    material.occlusionTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("occlusionTexture", SceneSerializerDetail::json::object()));
+                    material.emissiveTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("emissiveTexture", SceneSerializerDetail::json::object()));
+                    material.Sanitize();
+                    entity.AddOrReplaceComponent<MaterialComponent>(std::move(material));
+                }
+
                 idToEntity.emplace(id, entity);
+            }
+
+            if (assetManager != nullptr)
+            {
+                for (const std::string &meshAssetPath : meshAssetPaths)
+                {
+                    if (!GLTFLoader::LoadResources(meshAssetPath, assetManager))
+                    {
+                        PHYSARA_CORE_WARN("Scene mesh resource preload failed: '{}'.", meshAssetPath);
+                    }
+                }
             }
 
             for (const SceneSerializerDetail::json &serialized : entities)
@@ -300,6 +458,25 @@ namespace Physara::Engine
                 if (parentId != 0 && idToEntity.contains(id) && idToEntity.contains(parentId))
                 {
                     scene.SetParent(idToEntity.at(id), idToEntity.at(parentId));
+                }
+            }
+
+            const SceneSerializerDetail::json imports = root.value("gltfImports", SceneSerializerDetail::json::array());
+            if (imports.is_array())
+            {
+                for (const SceneSerializerDetail::json &importJson : imports)
+                {
+                    const std::string importPath = importJson.value("path", std::string{});
+                    if (importPath.empty())
+                    {
+                        continue;
+                    }
+
+                    Entity rootEntity = GLTFLoader::LoadToScene(scene, importPath, assetManager);
+                    if (!rootEntity)
+                    {
+                        PHYSARA_CORE_ERROR("Scene import failed for GLTF '{}'.", importPath);
+                    }
                 }
             }
 

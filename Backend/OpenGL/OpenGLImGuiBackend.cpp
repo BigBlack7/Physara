@@ -107,6 +107,7 @@ namespace Physara::RHI
 
         if (ImDrawData *drawData = ImGui::GetDrawData())
         {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
             // 将ImGui draw lists翻译为OpenGL draw calls. 此处是唯一接触imgui_impl_opengl3的位置, 其他地方只依赖imgui_impl_glfw和imgui核心接口
             ImGui_ImplOpenGL3_RenderDrawData(drawData);
         }

@@ -27,6 +27,11 @@ namespace Physara::RHI
                 type = GL_FLOAT;
                 normalized = GL_FALSE;
                 break;
+            case VertexFormat::RG32F:
+                components = 2;
+                type = GL_FLOAT;
+                normalized = GL_FALSE;
+                break;
             case VertexFormat::RGBA16F:
                 components = 4;
                 type = GL_HALF_FLOAT;

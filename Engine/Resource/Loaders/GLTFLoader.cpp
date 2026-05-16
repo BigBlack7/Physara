@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <numbers>
+#include <cstring>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -13,14 +14,17 @@
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <tinygltf/tiny_gltf_v3.h>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/Types/Material.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
+#include <Engine/Resource/Types/Texture.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
 #include <Engine/Scene/Components/MeshComponent.hpp>
@@ -139,6 +143,153 @@ namespace Physara::Engine
             return &model.accessors[index];
         }
 
+        const tg3_buffer_view *BufferViewAt(const tg3_model &model, int32_t index)
+        {
+            if (index < 0 || static_cast<std::uint32_t>(index) >= model.buffer_views_count)
+            {
+                return nullptr;
+            }
+            return &model.buffer_views[index];
+        }
+
+        const std::uint8_t *AccessorData(const tg3_model &model, const tg3_accessor &accessor)
+        {
+            const tg3_buffer_view *bufferView = BufferViewAt(model, accessor.buffer_view);
+            if (bufferView == nullptr || bufferView->buffer < 0 || static_cast<std::uint32_t>(bufferView->buffer) >= model.buffers_count)
+            {
+                return nullptr;
+            }
+
+            const tg3_buffer &buffer = model.buffers[bufferView->buffer];
+            const std::uint64_t offset = bufferView->byte_offset + accessor.byte_offset;
+            if (offset >= buffer.data.count)
+            {
+                return nullptr;
+            }
+
+            return buffer.data.data + offset;
+        }
+
+        float ReadFloatComponent(const std::uint8_t *data, int32_t componentType)
+        {
+            if (componentType == TG3_COMPONENT_TYPE_FLOAT)
+            {
+                float value = 0.f;
+                std::memcpy(&value, data, sizeof(float));
+                return value;
+            }
+            if (componentType == TG3_COMPONENT_TYPE_UNSIGNED_SHORT)
+            {
+                std::uint16_t value = 0;
+                std::memcpy(&value, data, sizeof(std::uint16_t));
+                return static_cast<float>(value);
+            }
+            if (componentType == TG3_COMPONENT_TYPE_SHORT)
+            {
+                std::int16_t value = 0;
+                std::memcpy(&value, data, sizeof(std::int16_t));
+                return static_cast<float>(value);
+            }
+            if (componentType == TG3_COMPONENT_TYPE_UNSIGNED_BYTE)
+            {
+                return static_cast<float>(*data);
+            }
+            if (componentType == TG3_COMPONENT_TYPE_BYTE)
+            {
+                std::int8_t value = 0;
+                std::memcpy(&value, data, sizeof(std::int8_t));
+                return static_cast<float>(value);
+            }
+            return 0.f;
+        }
+
+        std::uint32_t ReadIndexComponent(const std::uint8_t *data, int32_t componentType)
+        {
+            if (componentType == TG3_COMPONENT_TYPE_UNSIGNED_INT)
+            {
+                std::uint32_t value = 0;
+                std::memcpy(&value, data, sizeof(std::uint32_t));
+                return value;
+            }
+            if (componentType == TG3_COMPONENT_TYPE_UNSIGNED_SHORT)
+            {
+                std::uint16_t value = 0;
+                std::memcpy(&value, data, sizeof(std::uint16_t));
+                return value;
+            }
+            if (componentType == TG3_COMPONENT_TYPE_UNSIGNED_BYTE)
+            {
+                return *data;
+            }
+            return 0u;
+        }
+
+        int32_t AccessorStride(const tg3_model &model, const tg3_accessor &accessor)
+        {
+            const tg3_buffer_view *bufferView = BufferViewAt(model, accessor.buffer_view);
+            return tg3_accessor_byte_stride(&accessor, bufferView);
+        }
+
+        glm::vec2 ReadVec2Attribute(const tg3_model &model, const tg3_accessor *accessor, std::uint64_t vertexIndex, glm::vec2 fallback)
+        {
+            if (accessor == nullptr)
+            {
+                return fallback;
+            }
+            const std::uint8_t *data = AccessorData(model, *accessor);
+            if (data == nullptr)
+            {
+                return fallback;
+            }
+
+            const int32_t componentSize = tg3_component_size(accessor->component_type);
+            const std::uint8_t *element = data + vertexIndex * static_cast<std::uint64_t>(AccessorStride(model, *accessor));
+            return {
+                ReadFloatComponent(element, accessor->component_type),
+                ReadFloatComponent(element + componentSize, accessor->component_type)};
+        }
+
+        glm::vec3 ReadVec3Attribute(const tg3_model &model, const tg3_accessor *accessor, std::uint64_t vertexIndex, glm::vec3 fallback)
+        {
+            if (accessor == nullptr)
+            {
+                return fallback;
+            }
+            const std::uint8_t *data = AccessorData(model, *accessor);
+            if (data == nullptr)
+            {
+                return fallback;
+            }
+
+            const int32_t componentSize = tg3_component_size(accessor->component_type);
+            const std::uint8_t *element = data + vertexIndex * static_cast<std::uint64_t>(AccessorStride(model, *accessor));
+            return {
+                ReadFloatComponent(element, accessor->component_type),
+                ReadFloatComponent(element + componentSize, accessor->component_type),
+                ReadFloatComponent(element + componentSize * 2, accessor->component_type)};
+        }
+
+        glm::vec4 ReadVec4Attribute(const tg3_model &model, const tg3_accessor *accessor, std::uint64_t vertexIndex, glm::vec4 fallback)
+        {
+            if (accessor == nullptr)
+            {
+                return fallback;
+            }
+            const std::uint8_t *data = AccessorData(model, *accessor);
+            if (data == nullptr)
+            {
+                return fallback;
+            }
+
+            const int32_t componentSize = tg3_component_size(accessor->component_type);
+            const std::uint8_t *element = data + vertexIndex * static_cast<std::uint64_t>(AccessorStride(model, *accessor));
+            return {
+                ReadFloatComponent(element, accessor->component_type),
+                ReadFloatComponent(element + componentSize, accessor->component_type),
+                ReadFloatComponent(element + componentSize * 2, accessor->component_type),
+                ReadFloatComponent(element + componentSize * 3, accessor->component_type)};
+        }
+
         // 在Primitive的属性列表中查找指定名称的属性, 并返回其索引
         int32_t FindAttribute(const tg3_primitive &primitive, const char *name)
         {
@@ -177,6 +328,65 @@ namespace Physara::Engine
             }
 
             return result;
+        }
+
+        void BuildPrimitiveGeometry(const tg3_model &model, const tg3_primitive &primitive, MeshPrimitive &result)
+        {
+            const tg3_accessor *positions = AccessorAt(model, FindAttribute(primitive, "POSITION"));
+            if (positions == nullptr || positions->component_type != TG3_COMPONENT_TYPE_FLOAT || positions->type != TG3_TYPE_VEC3)
+            {
+                PHYSARA_CORE_WARN("GLTF primitive {} has no supported POSITION accessor.", result.primitiveIndex);
+                return;
+            }
+
+            if (AccessorData(model, *positions) == nullptr)
+            {
+                PHYSARA_CORE_WARN("GLTF primitive {} POSITION accessor has no loaded buffer data.", result.primitiveIndex);
+                return;
+            }
+
+            const tg3_accessor *normals = AccessorAt(model, FindAttribute(primitive, "NORMAL"));
+            const tg3_accessor *tangents = AccessorAt(model, FindAttribute(primitive, "TANGENT"));
+            const tg3_accessor *texCoords = AccessorAt(model, FindAttribute(primitive, "TEXCOORD_0"));
+
+            result.vertices.resize(static_cast<std::size_t>(positions->count));
+            for (std::uint64_t i = 0; i < positions->count; ++i)
+            {
+                MeshVertex vertex{};
+                vertex.position = ReadVec3Attribute(model, positions, i, glm::vec3(0.f));
+                vertex.normal = glm::normalize(ReadVec3Attribute(model, normals, i, glm::vec3(0.f, 0.f, 1.f)));
+                vertex.tangent = ReadVec4Attribute(model, tangents, i, glm::vec4(1.f, 0.f, 0.f, 1.f));
+                vertex.texCoord0 = ReadVec2Attribute(model, texCoords, i, glm::vec2(0.f));
+                result.vertices[static_cast<std::size_t>(i)] = vertex;
+            }
+
+            const tg3_accessor *indices = AccessorAt(model, primitive.indices);
+            if (indices != nullptr)
+            {
+                const std::uint8_t *indexData = AccessorData(model, *indices);
+                const int32_t componentSize = tg3_component_size(indices->component_type);
+                const int32_t stride = AccessorStride(model, *indices);
+                if (indexData != nullptr && componentSize > 0 && stride > 0)
+                {
+                    result.indices.resize(static_cast<std::size_t>(indices->count));
+                    for (std::uint64_t i = 0; i < indices->count; ++i)
+                    {
+                        result.indices[static_cast<std::size_t>(i)] =
+                            ReadIndexComponent(indexData + i * static_cast<std::uint64_t>(stride), indices->component_type);
+                    }
+                }
+            }
+            else
+            {
+                result.indices.resize(result.vertices.size());
+                for (std::uint32_t i = 0; i < result.indices.size(); ++i)
+                {
+                    result.indices[i] = i;
+                }
+            }
+
+            result.vertexCount = result.vertices.size();
+            result.indexCount = result.indices.size();
         }
 
         std::string ImageUriFromTextureIndex(const tg3_model &model, int32_t textureIndex)
@@ -268,6 +478,40 @@ namespace Physara::Engine
             return material;
         }
 
+        void TryRegisterTexture(const std::string &texturePath, AssetManager *assetManager, std::unordered_set<std::string> &registered)
+        {
+            if (texturePath.empty() || assetManager == nullptr)
+            {
+                return;
+            }
+
+            const std::string normalizedPath = assetManager->NormalizePath(texturePath);
+            if (!registered.insert(normalizedPath).second || assetManager->GetByPath<Texture>(normalizedPath) != nullptr)
+            {
+                return;
+            }
+
+            std::shared_ptr<Texture> texture = TextureLoader::LoadRGBA8(normalizedPath);
+            if (texture == nullptr || !texture->IsLoaded())
+            {
+                PHYSARA_CORE_WARN("GLTF texture '{}' could not be loaded.", normalizedPath);
+                return;
+            }
+
+            texture->path = normalizedPath;
+            (void)assetManager->RegisterAsset<Texture>(normalizedPath, texture);
+            PHYSARA_CORE_INFO("Registered GLTF texture '{}': {}x{}.", normalizedPath, texture->width, texture->height);
+        }
+
+        void RegisterMaterialTextures(const Material &material, AssetManager *assetManager, std::unordered_set<std::string> &registered)
+        {
+            TryRegisterTexture(material.baseColorTexture.path, assetManager, registered);
+            TryRegisterTexture(material.metallicRoughnessTexture.path, assetManager, registered);
+            TryRegisterTexture(material.normalTexture.path, assetManager, registered);
+            TryRegisterTexture(material.occlusionTexture.path, assetManager, registered);
+            TryRegisterTexture(material.emissiveTexture.path, assetManager, registered);
+        }
+
         MaterialComponent ToComponent(const Material &material)
         {
             MaterialComponent component{};
@@ -332,12 +576,15 @@ namespace Physara::Engine
         {
             if (assetManager == nullptr)
             {
+                PHYSARA_CORE_WARN("GLTF resource registration skipped for '{}' because AssetManager is null.", gltfPath.string());
                 return;
             }
 
+            std::unordered_set<std::string> registeredTextures;
             for (std::uint32_t materialIndex = 0; materialIndex < model.materials_count; ++materialIndex)
             {
                 auto material = std::make_shared<Material>(ConvertMaterial(model, gltfPath, materialIndex, assetManager));
+                RegisterMaterialTextures(*material, assetManager, registeredTextures);
                 (void)assetManager->RegisterAsset<Material>(material->path, material);
             }
 
@@ -351,9 +598,18 @@ namespace Physara::Engine
                 mesh->name = ToString(source.name);
                 for (std::uint32_t primitiveIndex = 0; primitiveIndex < source.primitives_count; ++primitiveIndex)
                 {
-                    mesh->primitives.push_back(BuildPrimitiveInfo(model, source.primitives[primitiveIndex], primitiveIndex));
+                    MeshPrimitive primitive = BuildPrimitiveInfo(model, source.primitives[primitiveIndex], primitiveIndex);
+                    BuildPrimitiveGeometry(model, source.primitives[primitiveIndex], primitive);
+                    PHYSARA_CORE_INFO("Registered GLTF mesh {} primitive {}: vertices={}, indices={}, bounds={}.",
+                                      meshIndex,
+                                      primitiveIndex,
+                                      primitive.vertices.size(),
+                                      primitive.indices.size(),
+                                      primitive.hasBounds ? "yes" : "no");
+                    mesh->primitives.push_back(std::move(primitive));
                 }
                 (void)assetManager->RegisterAsset<Mesh>(mesh->path, mesh);
+                PHYSARA_CORE_INFO("Registered GLTF mesh resource '{}'.", assetManager->NormalizePath(mesh->path));
             }
         }
 
@@ -466,9 +722,55 @@ namespace Physara::Engine
         }
     }
 
+    bool GLTFLoader::LoadResources(const std::filesystem::path &path, AssetManager *assetManager)
+    {
+        if (assetManager == nullptr)
+        {
+            return false;
+        }
+
+        const std::filesystem::path gltfPath = Platform::FileSystem::ResolvePath(path.string());
+
+        tinygltf3::Model model;
+        tinygltf3::ErrorStack errors;
+        tg3_parse_options options{};
+        tg3_parse_options_init(&options);
+        options.images_as_is = 1;
+
+        std::vector<std::uint8_t> fileData;
+        try
+        {
+            fileData = Platform::FileSystem::ReadBinaryFile(gltfPath.string());
+        }
+        catch (const std::exception &error)
+        {
+            PHYSARA_CORE_ERROR("Failed to read GLTF resources '{}': {}", gltfPath.string(), error.what());
+            return false;
+        }
+
+        const std::string baseDir = Platform::FileSystem::NormalizePath(gltfPath.parent_path().string());
+        const tg3_error_code result = tinygltf3::parse(model,
+                                                       errors,
+                                                       fileData.data(),
+                                                       static_cast<std::uint64_t>(fileData.size()),
+                                                       baseDir.c_str(),
+                                                       &options);
+        if (result != TG3_OK)
+        {
+            PHYSARA_CORE_ERROR("Failed to parse GLTF resources '{}'. Error code: {}", gltfPath.string(), static_cast<int>(result));
+            return false;
+        }
+
+        GLTFLoaderDetail::RegisterResources(*model.get(), gltfPath, assetManager);
+        return true;
+    }
+
     Entity GLTFLoader::LoadToScene(Scene &scene, const std::filesystem::path &path, AssetManager *assetManager)
     {
-        const std::filesystem::path gltfPath = path.lexically_normal();
+        const std::filesystem::path gltfPath = Platform::FileSystem::ResolvePath(path.string());
+        PHYSARA_CORE_INFO("Loading GLTF scene '{}' with AssetManager={}.",
+                          gltfPath.string(),
+                          assetManager != nullptr ? "yes" : "no");
 
         tinygltf3::Model model;
         tinygltf3::ErrorStack errors;

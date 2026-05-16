@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <glm/vec3.hpp>
@@ -22,6 +23,50 @@ namespace Physara::Engine
         Mask,
         Blend
     };
+
+    [[nodiscard]] inline constexpr std::string_view ToString(ShadingModel model)
+    {
+        switch (model)
+        {
+        case ShadingModel::Unlit:
+            return "Unlit";
+        case ShadingModel::Lit:
+        default:
+            return "Lit";
+        }
+    }
+
+    [[nodiscard]] inline constexpr ShadingModel ShadingModelFromString(std::string_view model)
+    {
+        return model == "Unlit" ? ShadingModel::Unlit : ShadingModel::Lit;
+    }
+
+    [[nodiscard]] inline constexpr std::string_view ToString(AlphaMode mode)
+    {
+        switch (mode)
+        {
+        case AlphaMode::Mask:
+            return "Mask";
+        case AlphaMode::Blend:
+            return "Blend";
+        case AlphaMode::Opaque:
+        default:
+            return "Opaque";
+        }
+    }
+
+    [[nodiscard]] inline constexpr AlphaMode AlphaModeFromString(std::string_view mode)
+    {
+        if (mode == "Mask")
+        {
+            return AlphaMode::Mask;
+        }
+        if (mode == "Blend")
+        {
+            return AlphaMode::Blend;
+        }
+        return AlphaMode::Opaque;
+    }
 
     struct TextureSlot
     {

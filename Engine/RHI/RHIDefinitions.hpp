@@ -31,6 +31,7 @@ namespace Physara::RHI
     {
         RGBA32F = 0,
         RGB32F,
+        RG32F,
         RGBA16F,
         RG16F,
         RGBA8,

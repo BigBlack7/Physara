@@ -58,6 +58,7 @@ namespace Physara::Engine
         m_ViewportWidth = 0;
         m_ViewportHeight = 0;
         m_Device = nullptr;
+        m_AssetManager = nullptr;
     }
 
     void Renderer::ResizeViewport(std::uint32_t width, std::uint32_t height)
@@ -246,6 +247,7 @@ namespace Physara::Engine
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
                             passContext.renderProxy = &m_RenderProxy;
+                            passContext.assetManager = m_AssetManager;
                             passContext.clearColor = m_ClearColor;
                             m_ForwardOpaquePass.Execute(passContext);
                         });

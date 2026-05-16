@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
@@ -46,6 +47,7 @@ namespace Physara::Editor
         void DrawPanels();
         void DrawDockedPanels();
         void DrawPresentationPanels();
+        void DrawPanelDisabledIfCaptured(const std::function<void()> &drawFn);
         void RenderSceneView();
         void RefreshSceneViewTexture();
         void RequestCapture();

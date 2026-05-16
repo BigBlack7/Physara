@@ -57,5 +57,6 @@ namespace Physara::Editor
         SceneViewIconSet m_Icons{};
         ViewportResizeCallback m_ResizeCallback{};
         InputForwardCallback m_InputCallback{};
+        bool m_NavigationCaptureActive{false};
     };
 }

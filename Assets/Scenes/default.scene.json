@@ -1,0 +1,250 @@
+{
+    "entities": [
+        {
+            "id": 1,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "su7_ultra"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 2,
+            "relationship": {
+                "parent": 1
+            },
+            "tag": {
+                "name": "RootNode"
+            },
+            "transform": {
+                "position": [
+                    0.0010204501450061798,
+                    0.2658120393753052,
+                    0.0009570117108523846
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 3,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/su7_ultra/texture_0.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": false,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
+                "metallic": 0.4000000059604645,
+                "metallicRoughnessTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 0.5199999809265137,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/su7_ultra/su7_ultra.gltf",
+                "localBounds": {
+                    "center": [
+                        -1.0204501450061798e-05,
+                        -1.0255025699734688e-05,
+                        -9.570037946105003e-06
+                    ],
+                    "max": [
+                        0.009982690215110779,
+                        0.0026376100722700357,
+                        0.004259639885276556
+                    ],
+                    "min": [
+                        -0.010003099218010902,
+                        -0.002658120123669505,
+                        -0.004278779961168766
+                    ],
+                    "radius": 0.011184601113200188,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 2
+            },
+            "tag": {
+                "name": "Mesh1_Mesh1.008"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    100.0,
+                    100.0,
+                    100.0
+                ]
+            }
+        },
+        {
+            "camera": {
+                "apertureFStop": 2.799999952316284,
+                "farClipMeters": 1000.0,
+                "focalLengthMillimeters": 35.0,
+                "iso": 100.0,
+                "nearClipMeters": 0.10000000149011612,
+                "orthographicHeightMeters": 10.0,
+                "primary": true,
+                "projection": "Perspective",
+                "sensorHeightMillimeters": 24.0,
+                "sensorWidthMillimeters": 36.0,
+                "shutterTimeSeconds": 0.01666666753590107
+            },
+            "id": 4,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Scene Camera"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    1.600000023841858,
+                    5.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 5,
+            "light": {
+                "areaLuminanceCandelaPerSquareMeter": 1000.0,
+                "areaSizeMeters": [
+                    1.0,
+                    1.0
+                ],
+                "castsShadow": true,
+                "color": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "colorTemperatureKelvin": 6500.0,
+                "directionalIlluminanceLux": 100000.0,
+                "iesProfilePath": "",
+                "innerConeAngleDegrees": 20.0,
+                "outerConeAngleDegrees": 35.0,
+                "pointLuminousPowerLumens": 800.0,
+                "rangeMeters": 10.0,
+                "shadowBias": 0.0010000000474974513,
+                "sourceRadiusMeters": 0.05000000074505806,
+                "spotLuminousIntensityCandela": 1000.0,
+                "type": "Directional",
+                "useColorTemperature": false
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Directional Light"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    -45.0,
+                    34.999996185302734,
+                    1.0422652394481702e-06
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        }
+    ],
+    "format": "PhysaraScene",
+    "version": 1
+}

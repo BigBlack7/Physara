@@ -62,6 +62,17 @@ namespace Physara::Engine
             const float scale = 1.f / std::max(cosInner - cosOuter, 0.0001f);
             return {scale, -cosOuter * scale};
         }
+
+        LightData BuildDefaultViewerLight()
+        {
+            LightData light{};
+            light.positionRange = glm::vec4(0.f, 0.f, 0.f, 0.f);
+            light.directionType = glm::vec4(glm::normalize(glm::vec3(-0.35f, -0.8f, -0.45f)), static_cast<float>(RenderLightType::Directional));
+            light.colorIntensity = glm::vec4(1.f, 1.f, 1.f, 25000.f);
+            light.spotAngles = glm::vec4(0.f);
+            light.shadowParams = glm::vec4(0.f);
+            return light;
+        }
     }
 
     std::vector<LightData> LightSystem::Collect(Scene &scene)
@@ -100,6 +111,11 @@ namespace Physara::Engine
 
             lights.push_back(light);
         });
+
+        if (lights.empty())
+        {
+            lights.push_back(LightSystemDetail::BuildDefaultViewerLight());
+        }
 
         return lights;
     }

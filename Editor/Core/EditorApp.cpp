@@ -15,7 +15,10 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
+#include <glm/vec2.hpp>
+
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
@@ -124,6 +127,7 @@ namespace Physara::Editor
         m_Backend = backend;
         m_Input = input;
         m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
+        m_Renderer->SetAssetManager(&m_AssetManager);
         m_Renderer->SetClearColor({0.16f, 0.22f, 0.2f, 1.f});
         m_LayoutInitialized = false;
         m_DockspaceId = 0;
@@ -306,30 +310,51 @@ namespace Physara::Editor
     {
         if (m_Context.ui.panels.hierarchy)
         {
-            m_HierarchyPanel.Draw();
+            DrawPanelDisabledIfCaptured([this]()
+                                        { m_HierarchyPanel.Draw(); });
         }
         if (m_Context.ui.panels.rendererSettings)
         {
-            m_RendererSettingsPanel.Draw();
+            DrawPanelDisabledIfCaptured([this]()
+                                        { m_RendererSettingsPanel.Draw(); });
         }
         m_SceneViewPanel.Draw();
         if (m_Context.ui.panels.inspector)
         {
-            m_InspectorPanel.Draw();
+            DrawPanelDisabledIfCaptured([this]()
+                                        { m_InspectorPanel.Draw(); });
         }
         if (m_Context.ui.panels.contentBrowser)
         {
-            m_ContentBrowserPanel.Draw();
+            DrawPanelDisabledIfCaptured([this]()
+                                        { m_ContentBrowserPanel.Draw(); });
         }
         if (m_Context.ui.panels.log)
         {
-            m_LogPanel.Draw();
+            DrawPanelDisabledIfCaptured([this]()
+                                        { m_LogPanel.Draw(); });
         }
     }
 
     void EditorApp::DrawPresentationPanels()
     {
         m_SceneViewPanel.Draw();
+    }
+
+    void EditorApp::DrawPanelDisabledIfCaptured(const std::function<void()> &drawFn)
+    {
+        const bool disablePanelInput = m_Context.sceneView.inputCaptured;
+        if (disablePanelInput)
+        {
+            ImGui::BeginDisabled();
+        }
+
+        drawFn();
+
+        if (disablePanelInput)
+        {
+            ImGui::EndDisabled();
+        }
     }
 
     void EditorApp::RenderSceneView()
@@ -516,9 +541,40 @@ namespace Physara::Editor
     void EditorApp::CreateDefaultScene()
     {
         m_EditorScene = std::make_unique<Engine::Scene>();
+        m_Context.activeScene = m_EditorScene.get();
+
+        const std::filesystem::path defaultScenePath = m_Context.assetsRootPath / "Scenes" / "default.scene.json";
+        bool loadedDefaultScene = false;
+        if (std::filesystem::exists(defaultScenePath))
+        {
+            loadedDefaultScene = Engine::SceneSerializer::Deserialize(*m_EditorScene, defaultScenePath, &m_AssetManager);
+            if (loadedDefaultScene)
+            {
+                m_Context.currentScenePath = defaultScenePath;
+                PHYSARA_INFO("Loaded default scene: {}", defaultScenePath.string());
+            }
+            else
+            {
+                PHYSARA_ERROR("Failed to load default scene: {}", defaultScenePath.string());
+            }
+        }
+
+        if (!loadedDefaultScene)
+        {
+            Engine::Entity importRoot = Engine::GLTFLoader::LoadToScene(
+                *m_EditorScene,
+                m_Context.assetsRootPath / "Models" / "su7_ultra" / "su7_ultra.gltf",
+                &m_AssetManager);
+            if (importRoot)
+            {
+                PHYSARA_INFO("Fallback startup GLTF loaded.");
+            }
+        }
+
         Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
         entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
-        m_Context.activeScene = m_EditorScene.get();
+        m_EditorCamera.SetPosition({0.f, 2.f, 6.f});
+        m_EditorCamera.SetYawPitchDegrees(-90.f, -12.f);
         m_Context.selectedEntity = entity.GetHandle();
     }
 
@@ -550,13 +606,28 @@ namespace Physara::Editor
                                                            m_Renderer->ResizeViewport(width, height);
                                                            m_Renderer->RenderClear();
                                                            RefreshSceneViewTexture();
-                                                       }
-                                                   });
+                                                       } });
 
         m_SceneViewPanel.SetInputForwardCallback([this](const EditorCameraInputFrame &input)
                                                  {
                                                      const float deltaTime = std::max(ImGui::GetIO().DeltaTime, 0.f);
-                                                     m_EditorCamera.Update(input, deltaTime);
+                                                     EditorCameraInputFrame cameraInput = input;
+                                                     const bool enteringCapture = input.hovered &&
+                                                                                  (input.rightMouseDown || input.gravePressed) &&
+                                                                                  m_CurrentCursorMode == Platform::CursorMode::Normal;
+                                                     if (enteringCapture)
+                                                     {
+                                                         cameraInput.mouseDeltaX = 0.f;
+                                                         cameraInput.mouseDeltaY = 0.f;
+                                                     }
+                                                     else if (m_Input != nullptr && m_CurrentCursorMode == Platform::CursorMode::Locked)
+                                                     {
+                                                         const glm::vec2 mouseDelta = m_Input->GetMouseDelta();
+                                                         cameraInput.mouseDeltaX = mouseDelta.x;
+                                                         cameraInput.mouseDeltaY = mouseDelta.y;
+                                                     }
+
+                                                     m_EditorCamera.Update(cameraInput, deltaTime);
                                                      m_Context.sceneView.flyCameraMode = m_EditorCamera.GetMode() != EditorCameraMode::Orbit;
                                                      m_Context.sceneView.playFlyMode = m_EditorCamera.IsPlayFlyModeActive();
                                                      if (m_Input != nullptr)
@@ -570,7 +641,6 @@ namespace Physara::Editor
                                                              m_Input->SetCursorMode(desiredCursorMode);
                                                              m_CurrentCursorMode = desiredCursorMode;
                                                          }
-                                                     }
-                                                 });
+                                                     } });
     }
 }

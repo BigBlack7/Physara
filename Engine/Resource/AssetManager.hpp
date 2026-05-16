@@ -97,6 +97,20 @@ namespace Physara::Engine
         }
 
         template <typename T>
+        [[nodiscard]] std::shared_ptr<T> GetByPath(const std::filesystem::path &path) const
+        {
+            const AssetKey key{std::type_index(typeid(T)), NormalizePath(path)};
+            const auto it = m_PathToIndex.find(key);
+            if (it == m_PathToIndex.end())
+            {
+                return {};
+            }
+
+            const AssetRecord &record = m_Records[it->second];
+            return record.resource ? std::static_pointer_cast<T>(record.resource) : std::shared_ptr<T>{};
+        }
+
+        template <typename T>
         [[nodiscard]] bool IsAlive(ResourceHandle<T> handle) const
         {
             const AssetRecord *record = FindRecord(handle);

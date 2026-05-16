@@ -53,8 +53,8 @@ namespace Physara::Editor
         float sensorWidthMillimeters{36.f};
         float sensorHeightMillimeters{24.f};
         float focalLengthMillimeters{35.f};
-        float apertureFStop{2.8f};
-        float shutterTimeSeconds{1.f / 60.f};
+        float apertureFStop{16.f};
+        float shutterTimeSeconds{1.f / 125.f};
         float iso{100.f};
         float nearClipMeters{0.1f};
         float farClipMeters{1000.f};
@@ -98,7 +98,7 @@ namespace Physara::Editor
         [[nodiscard]] CaptureViewSource GetCaptureViewSource() const { return m_CaptureViewSource; }
         void SetCaptureViewSource(CaptureViewSource source) { m_CaptureViewSource = source; }
         [[nodiscard]] bool IsPlayFlyModeActive() const { return m_PlayFlyMode; }
-        [[nodiscard]] bool WantsLockedCursor() const { return m_PlayFlyMode; }
+        [[nodiscard]] bool WantsLockedCursor() const { return m_Mode == EditorCameraMode::ViewportNavigate || m_Mode == EditorCameraMode::PlayFly; }
 
         EditorCameraSettings &GetSettings() { return m_Settings; }
         [[nodiscard]] const EditorCameraSettings &GetSettings() const { return m_Settings; }

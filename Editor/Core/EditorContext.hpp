@@ -64,6 +64,7 @@ namespace Physara::Editor
         bool sizeChanged{false};
         bool flyCameraMode{false};
         bool playFlyMode{false};
+        bool inputCaptured{false};
     };
 
     struct PanelVisibilityState

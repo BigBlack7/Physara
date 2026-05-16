@@ -4,10 +4,20 @@
 #include <string>
 #include <vector>
 
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 namespace Physara::Engine
 {
+    struct MeshVertex
+    {
+        glm::vec3 position{0.f};
+        glm::vec3 normal{0.f, 0.f, 1.f};
+        glm::vec4 tangent{1.f, 0.f, 0.f, 1.f};
+        glm::vec2 texCoord0{0.f};
+    };
+
     struct MeshPrimitive
     {
         std::uint32_t primitiveIndex{0};
@@ -17,6 +27,10 @@ namespace Physara::Engine
         glm::vec3 boundsMin{0.f};
         glm::vec3 boundsMax{0.f};
         bool hasBounds{false};
+        std::vector<MeshVertex> vertices{};
+        std::vector<std::uint32_t> indices{};
+
+        [[nodiscard]] bool HasGeometry() const { return !vertices.empty() && !indices.empty(); }
     };
 
     struct Mesh

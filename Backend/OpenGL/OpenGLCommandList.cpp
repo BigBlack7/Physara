@@ -161,7 +161,7 @@ namespace Physara::RHI
     void OpenGLCommandList::SetPipelineState(RHIPipelineState *pso)
     {
         // PipelineState在OpenGL下拆成program + VAO + 固定函数状态
-        // 这里做轻量状态缓存, 避免每次draw前重复glUseProgram/glBindVertexArray/glEnable
+        // ImGui等外部OpenGL代码会改写全局状态, 因此这里显式重绑关键状态, 避免缓存与真实GL状态脱节。
         auto *gl = static_cast<OpenGLPipeline *>(pso);
         if (gl == nullptr || !gl->IsValid())
         {
@@ -169,13 +169,10 @@ namespace Physara::RHI
             return;
         }
 
-        if (m_State.program != gl->GetProgram())
-        {
-            glUseProgram(gl->GetProgram());
-            m_State.program = gl->GetProgram();
-        }
+        glUseProgram(gl->GetProgram());
+        m_State.program = gl->GetProgram();
 
-        if (!gl->IsCompute() && m_State.vao != gl->GetVAO())
+        if (!gl->IsCompute())
         {
             glBindVertexArray(gl->GetVAO());
             m_State.vao = gl->GetVAO();
@@ -190,66 +187,47 @@ namespace Physara::RHI
             return;
         }
 
-        if (m_State.cullMode != desc.rasterizerState.cullMode)
+        if (desc.rasterizerState.cullMode == CullMode::None)
         {
-            if (desc.rasterizerState.cullMode == CullMode::None)
-            {
-                glDisable(GL_CULL_FACE);
-            }
-            else
-            {
-                glEnable(GL_CULL_FACE);
-                glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
-            }
-            m_State.cullMode = desc.rasterizerState.cullMode;
+            glDisable(GL_CULL_FACE);
         }
+        else
+        {
+            glEnable(GL_CULL_FACE);
+            glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
+        }
+        m_State.cullMode = desc.rasterizerState.cullMode;
 
-        if (m_State.polygonMode != desc.rasterizerState.polygonMode)
-        {
-            glPolygonMode(GL_FRONT_AND_BACK, ToGLPolygonMode(desc.rasterizerState.polygonMode));
-            m_State.polygonMode = desc.rasterizerState.polygonMode;
-        }
+        glPolygonMode(GL_FRONT_AND_BACK, ToGLPolygonMode(desc.rasterizerState.polygonMode));
+        m_State.polygonMode = desc.rasterizerState.polygonMode;
 
-        if (m_State.depthBias != desc.rasterizerState.depthBias ||
-            m_State.depthBiasSlope != desc.rasterizerState.depthBiasSlope)
+        if (desc.rasterizerState.depthBias != 0.f || desc.rasterizerState.depthBiasSlope != 0.f)
         {
-            if (desc.rasterizerState.depthBias != 0.f || desc.rasterizerState.depthBiasSlope != 0.f)
-            {
-                glEnable(GL_POLYGON_OFFSET_FILL);
-                glPolygonOffset(desc.rasterizerState.depthBiasSlope, desc.rasterizerState.depthBias);
-            }
-            else
-            {
-                glDisable(GL_POLYGON_OFFSET_FILL);
-            }
-            m_State.depthBias = desc.rasterizerState.depthBias;
-            m_State.depthBiasSlope = desc.rasterizerState.depthBiasSlope;
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(desc.rasterizerState.depthBiasSlope, desc.rasterizerState.depthBias);
         }
+        else
+        {
+            glDisable(GL_POLYGON_OFFSET_FILL);
+        }
+        m_State.depthBias = desc.rasterizerState.depthBias;
+        m_State.depthBiasSlope = desc.rasterizerState.depthBiasSlope;
 
-        if (m_State.depthTest != desc.depthStencilState.depthTest)
+        if (desc.depthStencilState.depthTest)
         {
-            if (desc.depthStencilState.depthTest)
-            {
-                glEnable(GL_DEPTH_TEST);
-            }
-            else
-            {
-                glDisable(GL_DEPTH_TEST);
-            }
-            m_State.depthTest = desc.depthStencilState.depthTest;
+            glEnable(GL_DEPTH_TEST);
         }
+        else
+        {
+            glDisable(GL_DEPTH_TEST);
+        }
+        m_State.depthTest = desc.depthStencilState.depthTest;
 
-        if (m_State.depthWrite != desc.depthStencilState.depthWrite)
-        {
-            glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
-            m_State.depthWrite = desc.depthStencilState.depthWrite;
-        }
+        glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
+        m_State.depthWrite = desc.depthStencilState.depthWrite;
 
-        if (m_State.depthFunc != desc.depthStencilState.compareOp)
-        {
-            glDepthFunc(ToGLDepthFunc(desc.depthStencilState.compareOp));
-            m_State.depthFunc = desc.depthStencilState.compareOp;
-        }
+        glDepthFunc(ToGLDepthFunc(desc.depthStencilState.compareOp));
+        m_State.depthFunc = desc.depthStencilState.compareOp;
 
         for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
         {
@@ -259,31 +237,28 @@ namespace Physara::RHI
                 target = desc.blendStates[i];
             }
 
-            if (!OpenGLCommandListDetail::BlendStateEqual(m_State.blendStates[i], target))
+            if (target.blendEnable)
             {
-                if (target.blendEnable)
-                {
-                    // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0, 以此类推;
-                    // 如果某个attachment没有blend state, 就当作blend disabled
-                    glEnablei(GL_BLEND, i);
-                    glBlendFuncSeparatei(
-                        i,
-                        ToGLBlendFactor(target.srcColor),
-                        ToGLBlendFactor(target.dstColor),
-                        ToGLBlendFactor(target.srcAlpha),
-                        ToGLBlendFactor(target.dstAlpha));
-                    glBlendEquationSeparatei(
-                        i,
-                        ToGLBlendOp(target.colorOp),
-                        ToGLBlendOp(target.alphaOp));
-                }
-                else
-                {
-                    glDisablei(GL_BLEND, i);
-                }
-
-                m_State.blendStates[i] = target;
+                // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0, 以此类推;
+                // 如果某个attachment没有blend state, 就当作blend disabled
+                glEnablei(GL_BLEND, i);
+                glBlendFuncSeparatei(
+                    i,
+                    ToGLBlendFactor(target.srcColor),
+                    ToGLBlendFactor(target.dstColor),
+                    ToGLBlendFactor(target.srcAlpha),
+                    ToGLBlendFactor(target.dstAlpha));
+                glBlendEquationSeparatei(
+                    i,
+                    ToGLBlendOp(target.colorOp),
+                    ToGLBlendOp(target.alphaOp));
             }
+            else
+            {
+                glDisablei(GL_BLEND, i);
+            }
+
+            m_State.blendStates[i] = target;
         }
 
         m_State.topology = ToGLTopology(desc.topology);
@@ -468,11 +443,8 @@ namespace Physara::RHI
             fboID = glFbo->GetID();
         }
 
-        if (m_State.framebuffer != fboID)
-        {
-            glBindFramebuffer(GL_FRAMEBUFFER, fboID);
-            m_State.framebuffer = fboID;
-        }
+        glBindFramebuffer(GL_FRAMEBUFFER, fboID);
+        m_State.framebuffer = fboID;
 
         m_CurrentPassDesc = &desc;
 

@@ -9,6 +9,7 @@ struct MaterialData
     vec4 emissiveColorLuminance;
     vec4 metallicRoughnessReflectanceAO;
     vec4 alphaNormalFlags;
+    vec4 textureFlags;
 };
 
 struct MaterialInputs
@@ -22,6 +23,10 @@ struct MaterialInputs
     float emissiveLuminance;
     float normalScale;
     float alphaCutoff;
+    bool hasBaseColorTexture;
+    bool hasMetallicRoughnessTexture;
+    bool hasNormalTexture;
+    bool hasOcclusionTexture;
     uint shadingModel;
     uint alphaMode;
 };
@@ -56,6 +61,10 @@ MaterialInputs DefaultMaterialInputs()
     material.emissiveLuminance = 0.0;
     material.normalScale = 1.0;
     material.alphaCutoff = 0.5;
+    material.hasBaseColorTexture = false;
+    material.hasMetallicRoughnessTexture = false;
+    material.hasNormalTexture = false;
+    material.hasOcclusionTexture = false;
     material.shadingModel = PHYSARA_SHADING_MODEL_LIT;
     material.alphaMode = PHYSARA_ALPHA_OPAQUE;
     return material;
@@ -73,6 +82,10 @@ MaterialInputs UnpackMaterialData(MaterialData data)
     material.ambientOcclusion = data.metallicRoughnessReflectanceAO.w;
     material.alphaCutoff = data.alphaNormalFlags.x;
     material.normalScale = data.alphaNormalFlags.y;
+    material.hasBaseColorTexture = data.textureFlags.x > 0.5;
+    material.hasMetallicRoughnessTexture = data.textureFlags.y > 0.5;
+    material.hasNormalTexture = data.textureFlags.z > 0.5;
+    material.hasOcclusionTexture = data.textureFlags.w > 0.5;
     material.shadingModel = uint(data.alphaNormalFlags.z);
     material.alphaMode = uint(data.alphaNormalFlags.w);
     return material;

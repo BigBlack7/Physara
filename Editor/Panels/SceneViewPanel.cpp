@@ -107,7 +107,7 @@ namespace Physara::Editor
         {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             const ImTextureID textureId = static_cast<ImTextureID>(m_PreviewTexture);
-            ImGui::Image(textureId, ImVec2(width, height));
+            ImGui::Image(textureId, ImVec2(width, height), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
             DrawViewportToolbar(origin, width);
             DrawOverlay(origin, width, height);
         }
@@ -477,13 +477,30 @@ namespace Physara::Editor
         }
 
         const ImGuiIO &io = ImGui::GetIO();
+        const bool rightMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && m_Context.sceneView.hovered)
+        {
+            m_NavigationCaptureActive = true;
+        }
+        if (!rightMouseDown)
+        {
+            m_NavigationCaptureActive = false;
+        }
+
+        const bool captured = m_NavigationCaptureActive || m_Context.sceneView.playFlyMode;
+        m_Context.sceneView.inputCaptured = captured;
+        if (captured)
+        {
+            ImGui::SetNextFrameWantCaptureMouse(true);
+            ImGui::SetNextFrameWantCaptureKeyboard(true);
+        }
 
         EditorCameraInputFrame snapshot{};
         snapshot.mouseDeltaX = io.MouseDelta.x;
         snapshot.mouseDeltaY = io.MouseDelta.y;
-        snapshot.hovered = m_Context.sceneView.hovered;
-        snapshot.focused = m_Context.sceneView.focused;
-        snapshot.rightMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        snapshot.hovered = m_Context.sceneView.hovered || captured;
+        snapshot.focused = m_Context.sceneView.focused || captured;
+        snapshot.rightMouseDown = rightMouseDown && m_NavigationCaptureActive;
         snapshot.gravePressed = ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false);
         snapshot.escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
         snapshot.moveForward = ImGui::IsKeyDown(ImGuiKey_W);
