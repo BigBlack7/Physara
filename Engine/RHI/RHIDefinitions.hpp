@@ -30,6 +30,7 @@ namespace Physara::RHI
     enum class VertexFormat : std::uint8_t
     {
         RGBA32F = 0,
+        RGB32F,
         RGBA16F,
         RG16F,
         RGBA8,

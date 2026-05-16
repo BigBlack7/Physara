@@ -26,13 +26,20 @@ namespace Physara::Engine
         Shutdown();
 
         m_Device = device;
+        m_ShaderLibrary.SetDevice(device);
+        m_PipelineStateCache.SetDevice(device);
         m_RenderPassDesc = {};
         m_RenderPassDesc.colorAttachments.push_back({
             RHI::TextureFormat::RGBA8,
             RHI::LoadOp::Clear,
             RHI::StoreOp::Store,
             1u});
-        m_RenderPassDesc.hasDepth = false;
+        m_RenderPassDesc.depthAttachment = {
+            RHI::TextureFormat::Depth24Stencil8,
+            RHI::LoadOp::Clear,
+            RHI::StoreOp::Store,
+            1u};
+        m_RenderPassDesc.hasDepth = true;
 
         if (m_Device == nullptr)
         {
@@ -44,7 +51,10 @@ namespace Physara::Engine
     {
         m_RenderGraph.Reset();
         m_Framebuffer.reset();
+        m_SceneDepth.reset();
         m_SceneColor.reset();
+        m_ShaderLibrary.SetDevice(nullptr);
+        m_PipelineStateCache.SetDevice(nullptr);
         m_ViewportWidth = 0;
         m_ViewportHeight = 0;
         m_Device = nullptr;
@@ -156,6 +166,7 @@ namespace Physara::Engine
     {
         m_RenderGraph.Reset();
         m_Framebuffer.reset();
+        m_SceneDepth.reset();
         m_SceneColor.reset();
 
         if (m_Device == nullptr || m_ViewportWidth == 0 || m_ViewportHeight == 0)
@@ -180,8 +191,27 @@ namespace Physara::Engine
             return;
         }
 
+        RHI::RHITextureDesc sceneDepthDesc{};
+        sceneDepthDesc.width = m_ViewportWidth;
+        sceneDepthDesc.height = m_ViewportHeight;
+        sceneDepthDesc.format = RHI::TextureFormat::Depth24Stencil8;
+        sceneDepthDesc.dimension = RHI::TextureDimension::Tex2D;
+        sceneDepthDesc.usage = RHI::TextureUsage::DepthStencil | RHI::TextureUsage::Sampled;
+        sceneDepthDesc.mipLevels = 1;
+        sceneDepthDesc.arrayLayers = 1;
+        sceneDepthDesc.samples = 1;
+
+        m_SceneDepth = m_Device->CreateTexture(sceneDepthDesc);
+        if (m_SceneDepth == nullptr)
+        {
+            PHYSARA_CORE_ERROR("Renderer failed to create SceneDepth render target.");
+            m_SceneColor.reset();
+            return;
+        }
+
         RHI::RHIFramebufferDesc framebufferDesc{};
         framebufferDesc.colorAttachments.push_back(m_SceneColor.get());
+        framebufferDesc.depthAttachment = m_SceneDepth.get();
         framebufferDesc.width = m_ViewportWidth;
         framebufferDesc.height = m_ViewportHeight;
         framebufferDesc.renderPassDesc = &m_RenderPassDesc;
@@ -203,21 +233,21 @@ namespace Physara::Engine
         }
 
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
-        m_RenderGraph.AddPass("ClearSceneColor")
+        m_RenderGraph.AddPass("ForwardOpaque")
             .Write(sceneColor)
             .SetExecute([this](RenderGraphContext &context)
                         {
-                            context.commandList.SetViewport(
-                                0.f,
-                                0.f,
-                                static_cast<float>(m_ViewportWidth),
-                                static_cast<float>(m_ViewportHeight));
-                            context.commandList.SetScissor(0, 0, m_ViewportWidth, m_ViewportHeight);
-                            context.commandList.BeginRenderPass(
-                                m_Framebuffer.get(),
-                                m_RenderPassDesc,
-                                std::vector<glm::vec4>{m_ClearColor});
-                            context.commandList.EndRenderPass();
+                            ForwardPassContext passContext{};
+                            passContext.device = m_Device;
+                            passContext.commandList = &context.commandList;
+                            passContext.framebuffer = m_Framebuffer.get();
+                            passContext.renderPassDesc = &m_RenderPassDesc;
+                            passContext.shaderLibrary = &m_ShaderLibrary;
+                            passContext.pipelineCache = &m_PipelineStateCache;
+                            passContext.frameData = &m_FrameData;
+                            passContext.renderProxy = &m_RenderProxy;
+                            passContext.clearColor = m_ClearColor;
+                            m_ForwardOpaquePass.Execute(passContext);
                         });
     }
 }

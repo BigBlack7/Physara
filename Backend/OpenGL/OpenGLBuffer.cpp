@@ -29,12 +29,14 @@ namespace Physara::RHI
 
         if (m_Dynamic)
         {
+            constexpr GLbitfield mapAccessFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+
             // 映射缓冲区对象的一个范围到客户端内存, 返回指向缓冲区内存的指针, 允许直接读写操作
             m_PersistentPtr = glMapNamedBufferRange(
                 m_ID,
                 0,
                 static_cast<GLsizeiptr>(m_Size),
-                storageFlags);
+                mapAccessFlags);
 
             assert(m_PersistentPtr != nullptr);
         }
