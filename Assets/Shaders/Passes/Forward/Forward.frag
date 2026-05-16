@@ -7,15 +7,16 @@ layout(location = 0)in vec3 inWorldPosition;
 layout(location = 1)in vec3 inWorldNormal;
 layout(location = 2)in vec4 inWorldTangent;
 layout(location = 3)in vec2 inTexCoord0;
+layout(location = 4)flat in uint inMaterialIndex;
 
 layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
 {
     CameraData uCamera;
 };
 
-layout(std140, binding = PHYSARA_BINDING_MATERIALS)uniform MaterialBuffer
+layout(std430, binding = PHYSARA_BINDING_MATERIALS)readonly buffer MaterialBuffer
 {
-    MaterialData uMaterial;
+    MaterialData uMaterials[];
 };
 
 layout(std430, binding = PHYSARA_BINDING_LIGHTS)readonly buffer LightBuffer
@@ -79,7 +80,7 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
 
 void main()
 {
-    MaterialInputs inputs = UnpackMaterialData(uMaterial);
+    MaterialInputs inputs = UnpackMaterialData(uMaterials[inMaterialIndex]);
     vec4 baseColorSample = texture(uBaseColorTexture, inTexCoord0);
     vec4 mrSample = texture(uMetallicRoughnessTexture, inTexCoord0);
     float occlusionSample = texture(uOcclusionTexture, inTexCoord0).r;

@@ -192,7 +192,7 @@ namespace Physara::Engine
             context.commandList->SetPipelineState(pipeline);
             context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::CameraBinding, m_CameraBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::ObjectBinding, m_ObjectBuffer.get());
-            context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::MaterialBinding, m_MaterialBuffer.get());
+            context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::MaterialBinding, m_MaterialBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::LightBinding, m_LightBuffer.get());
             DrawBucket(context, context.renderProxy->GetBuckets().opaque);
             DrawBucket(context, context.renderProxy->GetBuckets().unlit);
@@ -227,10 +227,12 @@ namespace Physara::Engine
                 ForwardOpaquePassDetail::DynamicBufferDesc(lightBufferSize, RHI::BufferUsage::Storage));
         }
 
-        if (m_MaterialBuffer == nullptr)
+        const std::uint32_t materialBufferSize =
+            static_cast<std::uint32_t>(std::max<std::size_t>(frameData.objects.size(), 1u) * sizeof(ForwardOpaquePassDetail::MaterialGPUData));
+        if (m_MaterialBuffer == nullptr || m_MaterialBuffer->GetSize() < materialBufferSize)
         {
             m_MaterialBuffer = context.device->CreateBuffer(
-                ForwardOpaquePassDetail::DynamicBufferDesc(sizeof(ForwardOpaquePassDetail::MaterialGPUData), RHI::BufferUsage::Uniform));
+                ForwardOpaquePassDetail::DynamicBufferDesc(materialBufferSize, RHI::BufferUsage::Storage));
         }
 
         m_CameraBuffer->UploadData(&frameData.camera, sizeof(CameraData));
@@ -250,8 +252,28 @@ namespace Physara::Engine
                 sizeof(lightHeader));
         }
 
-        const ForwardOpaquePassDetail::MaterialGPUData material = ForwardOpaquePassDetail::BuildDefaultMaterial();
-        m_MaterialBuffer->UploadData(&material, sizeof(material));
+        std::vector<ForwardOpaquePassDetail::MaterialGPUData> materials(
+            std::max<std::size_t>(frameData.objects.size(), 1u),
+            ForwardOpaquePassDetail::BuildDefaultMaterial());
+        const auto fillMaterials = [&materials](const std::vector<RenderDrawItem> &bucket)
+        {
+            for (const RenderDrawItem &item : bucket)
+            {
+                if (item.objectIndex < materials.size())
+                {
+                    materials[item.objectIndex] = ForwardOpaquePassDetail::BuildMaterial(item.submission.material);
+                }
+            }
+        };
+
+        if (context.renderProxy != nullptr)
+        {
+            const RenderDrawBuckets &buckets = context.renderProxy->GetBuckets();
+            fillMaterials(buckets.opaque);
+            fillMaterials(buckets.unlit);
+            fillMaterials(buckets.transparent);
+        }
+        m_MaterialBuffer->UploadData(materials.data(), static_cast<std::uint32_t>(materials.size() * sizeof(ForwardOpaquePassDetail::MaterialGPUData)));
     }
 
     void ForwardOpaquePass::EnsureDefaultTextures(const ForwardPassContext &context)
@@ -383,9 +405,6 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderDrawItem &item)
     {
-        const ForwardOpaquePassDetail::MaterialGPUData material = ForwardOpaquePassDetail::BuildMaterial(item.submission.material);
-        m_MaterialBuffer->UploadData(&material, sizeof(material));
-
         RHI::RHITexture *baseColor = GetOrCreateTexture(context, item.submission.material.baseColorTexture.path);
         RHI::RHITexture *metallicRoughness = GetOrCreateTexture(context, item.submission.material.metallicRoughnessTexture.path);
         RHI::RHITexture *normal = GetOrCreateTexture(context, item.submission.material.normalTexture.path);

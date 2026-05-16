@@ -118,7 +118,9 @@ namespace Physara::Engine
             const RenderBucket bucket = transparent ? RenderBucket::Transparent : (unlit ? RenderBucket::Unlit : RenderBucket::Opaque);
 
             const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
-            frameData.objects.push_back(BuildObjectData(submission, bucket));
+            ObjectData object = BuildObjectData(submission, bucket);
+            object.materialIndex = objectIndex;
+            frameData.objects.push_back(object);
             m_VisibleSubmissions.push_back(submission);
 
             RenderDrawItem item{};

@@ -19,7 +19,7 @@ namespace Physara::Editor
     namespace ContentBrowserPanelDetail
     {
         constexpr const char *PanelName = "Content Browser";
-        constexpr float DirectoryTreeWidth = 100.f;
+        constexpr float DirectoryTreeWidth = 180.f;
         constexpr float TileSize = 92.f;
         constexpr float TileIconSize = 42.f;
         constexpr float TilePadding = 8.f;

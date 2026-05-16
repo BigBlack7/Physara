@@ -234,9 +234,27 @@ namespace Physara::Editor
         auto addLight = [&entity](Engine::LightType type)
         {
             entity.AddComponent<Engine::LightComponent>(type);
+            auto &transform = entity.GetComponent<Engine::TransformComponent>();
             if (type == Engine::LightType::Directional)
             {
-                entity.GetComponent<Engine::TransformComponent>().SetLocalEulerRotation({glm::radians(-45.f), glm::radians(35.f), 0.f});
+                transform.SetLocalEulerRotation({glm::radians(-45.f), glm::radians(35.f), 0.f});
+            }
+            else if (type == Engine::LightType::Point)
+            {
+                auto &light = entity.GetComponent<Engine::LightComponent>();
+                light.pointLuminousPowerLumens = 200000.f;
+                light.rangeMeters = 20.f;
+                transform.SetLocalPosition({0.f, 2.f, 3.f});
+            }
+            else if (type == Engine::LightType::Spot)
+            {
+                auto &light = entity.GetComponent<Engine::LightComponent>();
+                light.spotLuminousIntensityCandela = 50000.f;
+                light.rangeMeters = 25.f;
+                light.innerConeAngleRadians = glm::radians(18.f);
+                light.outerConeAngleRadians = glm::radians(32.f);
+                transform.SetLocalPosition({0.f, 3.f, 4.f});
+                transform.SetLocalEulerRotation({glm::radians(-37.f), 0.f, 0.f});
             }
         };
 

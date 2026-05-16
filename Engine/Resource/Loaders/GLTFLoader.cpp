@@ -1,6 +1,7 @@
 #include "GLTFLoader.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -330,6 +331,104 @@ namespace Physara::Engine
             return result;
         }
 
+        glm::vec3 BuildFallbackTangent(const glm::vec3 &normal)
+        {
+            const glm::vec3 axis = std::abs(normal.y) < 0.9f ? glm::vec3(0.f, 1.f, 0.f) : glm::vec3(1.f, 0.f, 0.f);
+            return glm::normalize(glm::cross(axis, normal));
+        }
+
+        void GenerateNormals(MeshPrimitive &primitive)
+        {
+            std::vector<glm::vec3> accum(primitive.vertices.size(), glm::vec3(0.f));
+            for (std::size_t i = 0; i + 2u < primitive.indices.size(); i += 3u)
+            {
+                const std::uint32_t ia = primitive.indices[i];
+                const std::uint32_t ib = primitive.indices[i + 1u];
+                const std::uint32_t ic = primitive.indices[i + 2u];
+                if (ia >= primitive.vertices.size() || ib >= primitive.vertices.size() || ic >= primitive.vertices.size())
+                {
+                    continue;
+                }
+
+                const glm::vec3 &a = primitive.vertices[ia].position;
+                const glm::vec3 &b = primitive.vertices[ib].position;
+                const glm::vec3 &c = primitive.vertices[ic].position;
+                const glm::vec3 normal = glm::cross(b - a, c - a);
+                if (glm::dot(normal, normal) <= 0.f)
+                {
+                    continue;
+                }
+
+                accum[ia] += normal;
+                accum[ib] += normal;
+                accum[ic] += normal;
+            }
+
+            for (std::size_t i = 0; i < primitive.vertices.size(); ++i)
+            {
+                primitive.vertices[i].normal = glm::dot(accum[i], accum[i]) > 0.f
+                                                   ? glm::normalize(accum[i])
+                                                   : glm::vec3(0.f, 0.f, 1.f);
+            }
+        }
+
+        void GenerateTangents(MeshPrimitive &primitive)
+        {
+            std::vector<glm::vec3> tangentAccum(primitive.vertices.size(), glm::vec3(0.f));
+            std::vector<glm::vec3> bitangentAccum(primitive.vertices.size(), glm::vec3(0.f));
+
+            for (std::size_t i = 0; i + 2u < primitive.indices.size(); i += 3u)
+            {
+                const std::uint32_t ia = primitive.indices[i];
+                const std::uint32_t ib = primitive.indices[i + 1u];
+                const std::uint32_t ic = primitive.indices[i + 2u];
+                if (ia >= primitive.vertices.size() || ib >= primitive.vertices.size() || ic >= primitive.vertices.size())
+                {
+                    continue;
+                }
+
+                const MeshVertex &a = primitive.vertices[ia];
+                const MeshVertex &b = primitive.vertices[ib];
+                const MeshVertex &c = primitive.vertices[ic];
+                const glm::vec3 edge1 = b.position - a.position;
+                const glm::vec3 edge2 = c.position - a.position;
+                const glm::vec2 uv1 = b.texCoord0 - a.texCoord0;
+                const glm::vec2 uv2 = c.texCoord0 - a.texCoord0;
+                const float determinant = uv1.x * uv2.y - uv1.y * uv2.x;
+                if (std::abs(determinant) <= 1e-8f)
+                {
+                    continue;
+                }
+
+                const float invDet = 1.f / determinant;
+                const glm::vec3 tangent = (edge1 * uv2.y - edge2 * uv1.y) * invDet;
+                const glm::vec3 bitangent = (edge2 * uv1.x - edge1 * uv2.x) * invDet;
+                tangentAccum[ia] += tangent;
+                tangentAccum[ib] += tangent;
+                tangentAccum[ic] += tangent;
+                bitangentAccum[ia] += bitangent;
+                bitangentAccum[ib] += bitangent;
+                bitangentAccum[ic] += bitangent;
+            }
+
+            for (std::size_t i = 0; i < primitive.vertices.size(); ++i)
+            {
+                const glm::vec3 normal = glm::normalize(primitive.vertices[i].normal);
+                glm::vec3 tangent = tangentAccum[i] - normal * glm::dot(normal, tangentAccum[i]);
+                if (glm::dot(tangent, tangent) <= 0.f)
+                {
+                    tangent = BuildFallbackTangent(normal);
+                }
+                else
+                {
+                    tangent = glm::normalize(tangent);
+                }
+
+                const float handedness = glm::dot(glm::cross(normal, tangent), bitangentAccum[i]) < 0.f ? -1.f : 1.f;
+                primitive.vertices[i].tangent = glm::vec4(tangent, handedness);
+            }
+        }
+
         void BuildPrimitiveGeometry(const tg3_model &model, const tg3_primitive &primitive, MeshPrimitive &result)
         {
             const tg3_accessor *positions = AccessorAt(model, FindAttribute(primitive, "POSITION"));
@@ -348,14 +447,16 @@ namespace Physara::Engine
             const tg3_accessor *normals = AccessorAt(model, FindAttribute(primitive, "NORMAL"));
             const tg3_accessor *tangents = AccessorAt(model, FindAttribute(primitive, "TANGENT"));
             const tg3_accessor *texCoords = AccessorAt(model, FindAttribute(primitive, "TEXCOORD_0"));
+            const bool hasNormals = normals != nullptr && normals->component_type == TG3_COMPONENT_TYPE_FLOAT && normals->type == TG3_TYPE_VEC3;
+            const bool hasTangents = tangents != nullptr && tangents->component_type == TG3_COMPONENT_TYPE_FLOAT && tangents->type == TG3_TYPE_VEC4;
 
             result.vertices.resize(static_cast<std::size_t>(positions->count));
             for (std::uint64_t i = 0; i < positions->count; ++i)
             {
                 MeshVertex vertex{};
                 vertex.position = ReadVec3Attribute(model, positions, i, glm::vec3(0.f));
-                vertex.normal = glm::normalize(ReadVec3Attribute(model, normals, i, glm::vec3(0.f, 0.f, 1.f)));
-                vertex.tangent = ReadVec4Attribute(model, tangents, i, glm::vec4(1.f, 0.f, 0.f, 1.f));
+                vertex.normal = hasNormals ? glm::normalize(ReadVec3Attribute(model, normals, i, glm::vec3(0.f, 0.f, 1.f))) : glm::vec3(0.f, 0.f, 1.f);
+                vertex.tangent = hasTangents ? ReadVec4Attribute(model, tangents, i, glm::vec4(1.f, 0.f, 0.f, 1.f)) : glm::vec4(1.f, 0.f, 0.f, 1.f);
                 vertex.texCoord0 = ReadVec2Attribute(model, texCoords, i, glm::vec2(0.f));
                 result.vertices[static_cast<std::size_t>(i)] = vertex;
             }
@@ -387,6 +488,15 @@ namespace Physara::Engine
 
             result.vertexCount = result.vertices.size();
             result.indexCount = result.indices.size();
+
+            if (!hasNormals)
+            {
+                GenerateNormals(result);
+            }
+            if (!hasTangents)
+            {
+                GenerateTangents(result);
+            }
         }
 
         std::string ImageUriFromTextureIndex(const tg3_model &model, int32_t textureIndex)

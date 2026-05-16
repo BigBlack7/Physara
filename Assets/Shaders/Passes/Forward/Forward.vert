@@ -22,6 +22,7 @@ layout(location = 0)out vec3 outWorldPosition;
 layout(location = 1)out vec3 outWorldNormal;
 layout(location = 2)out vec4 outWorldTangent;
 layout(location = 3)out vec2 outTexCoord0;
+layout(location = 4)flat out uint outMaterialIndex;
 
 void main()
 {
@@ -32,6 +33,7 @@ void main()
     outWorldNormal = normalize((objectData.inverseTransposeModel * vec4(inNormal, 0.0)).xyz);
     outWorldTangent = vec4(normalize((objectData.model * vec4(inTangent.xyz, 0.0)).xyz), inTangent.w);
     outTexCoord0 = inTexCoord0;
+    outMaterialIndex = objectData.indicesAndFlags.z;
     
     gl_Position = uCamera.viewProjection * worldPosition;
 }

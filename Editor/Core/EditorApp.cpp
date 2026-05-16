@@ -18,6 +18,7 @@
 #include <glm/vec2.hpp>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/BuiltinPrimitives.hpp>
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
@@ -137,6 +138,7 @@ namespace Physara::Editor
         m_Context.currentScenePath.clear();
         m_Context.settings.capture.outputDirectory = m_Context.assetsRootPath / "Gallery";
         std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", "Untitled");
+        Engine::RegisterBuiltinPrimitives(m_AssetManager);
 
         EditorTheme::Apply();
         CreateDefaultScene();
