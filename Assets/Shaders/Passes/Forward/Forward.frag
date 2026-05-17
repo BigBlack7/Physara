@@ -81,25 +81,28 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
 void main()
 {
     MaterialInputs inputs = UnpackMaterialData(uMaterials[inMaterialIndex]);
-    vec4 baseColorSample = texture(uBaseColorTexture, inTexCoord0);
-    vec4 mrSample = texture(uMetallicRoughnessTexture, inTexCoord0);
-    float occlusionSample = texture(uOcclusionTexture, inTexCoord0).r;
-    vec3 emissiveSample = texture(uEmissiveTexture, inTexCoord0).rgb;
 
     if (inputs.hasBaseColorTexture)
     {
+        vec4 baseColorSample = texture(uBaseColorTexture, inTexCoord0);
         inputs.baseColor *= vec4(SrgbToLinear(baseColorSample.rgb), baseColorSample.a);
     }
     if (inputs.hasMetallicRoughnessTexture)
     {
+        vec4 mrSample = texture(uMetallicRoughnessTexture, inTexCoord0);
         inputs.perceptualRoughness *= mrSample.g;
         inputs.metallic *= mrSample.b;
     }
     if (inputs.hasOcclusionTexture)
     {
+        float occlusionSample = texture(uOcclusionTexture, inTexCoord0).r;
         inputs.ambientOcclusion *= occlusionSample;
     }
-    inputs.emissiveColor *= SrgbToLinear(emissiveSample);
+    if (inputs.hasEmissiveTexture)
+    {
+        vec3 emissiveSample = texture(uEmissiveTexture, inTexCoord0).rgb;
+        inputs.emissiveColor *= SrgbToLinear(emissiveSample);
+    }
 
     PixelMaterial material = PrepareMaterial(inputs);
     if (ShouldDiscardMaterial(material))
@@ -115,7 +118,12 @@ void main()
     
     ShadingContext context;
     context.worldPosition = inWorldPosition;
-    context.normal = ResolveWorldNormal(inputs, inWorldNormal, inWorldTangent, inTexCoord0);
+    vec3 geometricNormal = normalize(inWorldNormal);
+    if (inputs.doubleSided && !gl_FrontFacing)
+    {
+        geometricNormal = -geometricNormal;
+    }
+    context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, inTexCoord0);
     context.view = normalize(GetCameraPosition(uCamera) - inWorldPosition);
     
     vec3 color = vec3(0.0);

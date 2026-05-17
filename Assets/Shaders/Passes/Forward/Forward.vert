@@ -26,7 +26,7 @@ layout(location = 4)flat out uint outMaterialIndex;
 
 void main()
 {
-    ObjectData objectData = uObjects[gl_BaseInstance];
+    ObjectData objectData = uObjects[gl_BaseInstance + gl_InstanceID];
     vec4 worldPosition = objectData.model * vec4(inPosition, 1.0);
     
     outWorldPosition = worldPosition.xyz;

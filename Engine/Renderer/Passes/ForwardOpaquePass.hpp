@@ -10,6 +10,7 @@
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
+#include <Engine/RHI/RHIDefinitions.hpp>
 
 #include <glm/vec4.hpp>
 
@@ -65,15 +66,17 @@ namespace Physara::Engine
 
         void EnsureFrameBuffers(const ForwardPassContext &context);
         void EnsureDefaultTextures(const ForwardPassContext &context);
-        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context);
+        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode);
         [[nodiscard]] MeshGPUPrimitive *GetOrCreateMeshPrimitive(const ForwardPassContext &context, const RenderDrawItem &item);
         [[nodiscard]] RHI::RHITexture *GetOrCreateTexture(const ForwardPassContext &context, const std::string &texturePath);
         [[nodiscard]] RHI::RHITexture *GetFallbackWhiteTexture() const;
         [[nodiscard]] RHI::RHITexture *GetFallbackNormalTexture() const;
         void BindMaterial(const ForwardPassContext &context, const RenderDrawItem &item);
-        void DrawBucket(const ForwardPassContext &context, const std::vector<RenderDrawItem> &bucket);
+        void DrawBucket(const ForwardPassContext &context, const std::vector<RenderDrawItem> &bucket, bool drawDoubleSided);
+        [[nodiscard]] bool CanInstanceTogether(const ForwardPassContext &context, const RenderDrawItem &first, const RenderDrawItem &candidate, std::uint32_t instanceOffset);
+        void ResetTextureBindings();
         [[nodiscard]] static std::string BuildMeshResourcePath(const RenderDrawItem &item);
-        [[nodiscard]] static std::string BuildMeshPrimitiveKey(const RenderDrawItem &item);
+        [[nodiscard]] static std::string BuildMeshPrimitiveDebugName(const RenderDrawItem &item);
 
     private:
         std::unique_ptr<RHI::RHIBuffer> m_CameraBuffer{};
@@ -83,10 +86,12 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHISampler> m_LinearRepeatSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackWhiteTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackNormalTexture{};
-        std::unordered_map<std::string, MeshGPUPrimitive> m_MeshCache{};
+        std::unordered_map<std::uint64_t, MeshGPUPrimitive> m_MeshCache{};
         std::unordered_map<std::string, TextureGPUResource> m_TextureCache{};
-        std::unordered_set<std::string> m_MissingMeshWarnings{};
+        std::unordered_set<std::uint64_t> m_MissingMeshWarnings{};
         std::unordered_set<std::string> m_MissingTextureWarnings{};
+        RHI::RHITexture *m_BoundTextures[5]{};
+        RHI::RHISampler *m_BoundSampler{nullptr};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

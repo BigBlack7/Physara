@@ -20,6 +20,8 @@ namespace Physara::Engine
         std::uint32_t width{0};
         std::uint32_t height{0};
         std::uint32_t channels{0};
+        bool hasTransparentPixels{false};
+        bool hasPartialAlphaPixels{false};
         TextureSourceFormat sourceFormat{TextureSourceFormat::Unknown};
         std::vector<std::uint8_t> rgba8Pixels{};
 

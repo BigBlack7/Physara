@@ -32,6 +32,9 @@ namespace Physara::Engine
         std::uint32_t objectIndex{0};
         std::uint64_t sortKey{0};
         float cameraDistanceSq{0.f};
+        std::uint64_t meshKey{0};
+        std::uint64_t primitiveKey{0};
+        bool doubleSided{false};
     };
 
     struct RenderDrawBuckets
@@ -56,6 +59,7 @@ namespace Physara::Engine
     private:
         void CullAndBucket(const std::vector<RenderMeshSubmission> &submissions, const RenderView &view, FrameData &frameData);
         void SortBuckets();
+        void RepackObjectsForSortedBuckets(FrameData &frameData);
         [[nodiscard]] static std::uint64_t BuildSortKey(const RenderMeshSubmission &submission);
         [[nodiscard]] static ObjectData BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket);
 

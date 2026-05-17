@@ -67,6 +67,18 @@ namespace Physara::Engine
         texture->channels = 4;
         texture->sourceFormat = TextureLoaderDetail::DetectFormat(path);
         texture->rgba8Pixels.assign(pixels, pixels + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
+        for (std::size_t i = 3u; i < texture->rgba8Pixels.size(); i += 4u)
+        {
+            const std::uint8_t alpha = texture->rgba8Pixels[i];
+            if (alpha < 250u)
+            {
+                texture->hasTransparentPixels = true;
+            }
+            if (alpha > 5u && alpha < 250u)
+            {
+                texture->hasPartialAlphaPixels = true;
+            }
+        }
 
         stbi_image_free(pixels);
         return texture;

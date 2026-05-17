@@ -622,6 +622,37 @@ namespace Physara::Engine
             TryRegisterTexture(material.emissiveTexture.path, assetManager, registered);
         }
 
+        void ApplyBaseColorAlphaPolicy(Material &material, AssetManager *assetManager)
+        {
+            if (assetManager == nullptr || material.baseColorTexture.path.empty())
+            {
+                return;
+            }
+
+            const std::shared_ptr<Texture> texture = assetManager->GetByPath<Texture>(material.baseColorTexture.path);
+            if (texture == nullptr || !texture->hasTransparentPixels)
+            {
+                return;
+            }
+
+            if (material.alphaMode == AlphaMode::Opaque)
+            {
+                material.alphaMode = AlphaMode::Mask;
+                material.alphaCutoff = 0.5f;
+                PHYSARA_CORE_INFO("GLTF material '{}' promoted OPAQUE -> MASK because baseColor texture '{}' contains alpha.",
+                                  material.name,
+                                  material.baseColorTexture.path);
+            }
+            else if (material.alphaMode == AlphaMode::Blend && !texture->hasPartialAlphaPixels)
+            {
+                material.alphaMode = AlphaMode::Mask;
+                material.alphaCutoff = 0.5f;
+                PHYSARA_CORE_INFO("GLTF material '{}' promoted BLEND -> MASK because baseColor texture '{}' has binary cutout alpha.",
+                                  material.name,
+                                  material.baseColorTexture.path);
+            }
+        }
+
         MaterialComponent ToComponent(const Material &material)
         {
             MaterialComponent component{};
@@ -695,6 +726,7 @@ namespace Physara::Engine
             {
                 auto material = std::make_shared<Material>(ConvertMaterial(model, gltfPath, materialIndex, assetManager));
                 RegisterMaterialTextures(*material, assetManager, registeredTextures);
+                ApplyBaseColorAlphaPolicy(*material, assetManager);
                 (void)assetManager->RegisterAsset<Material>(material->path, material);
             }
 
@@ -744,7 +776,8 @@ namespace Physara::Engine
             if (primitive.material >= 0)
             {
                 const std::uint32_t materialIndex = static_cast<std::uint32_t>(primitive.material);
-                const Material material = ConvertMaterial(model, gltfPath, materialIndex, assetManager);
+                Material material = ConvertMaterial(model, gltfPath, materialIndex, assetManager);
+                ApplyBaseColorAlphaPolicy(material, assetManager);
                 meshComponent.materialSlots.emplace_back(0u, material.path);
                 owner.AddOrReplaceComponent<MaterialComponent>(ToComponent(material));
             }

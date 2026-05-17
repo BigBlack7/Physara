@@ -1,7 +1,5 @@
 #include "ForwardOpaquePass.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cstddef>
 #include <vector>
 
@@ -37,6 +35,12 @@ namespace Physara::Engine
         constexpr std::uint32_t OcclusionTextureBinding = 3u;
         constexpr std::uint32_t EmissiveTextureBinding = 4u;
 
+        template <typename T>
+        constexpr T MaxValue(T lhs, T rhs)
+        {
+            return lhs < rhs ? rhs : lhs;
+        }
+
         struct MaterialGPUData
         {
             glm::vec4 baseColor{1.f};
@@ -44,6 +48,7 @@ namespace Physara::Engine
             glm::vec4 metallicRoughnessReflectanceAO{0.f, 0.5f, 0.5f, 1.f};
             glm::vec4 alphaNormalFlags{0.5f, 1.f, 0.f, 0.f};
             glm::vec4 textureFlags{0.f, 0.f, 0.f, 0.f};
+            glm::vec4 materialFlags{0.f, 0.f, 0.f, 0.f};
         };
 
         struct LightBufferHeader
@@ -59,7 +64,7 @@ namespace Physara::Engine
         RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
         {
             RHI::RHIBufferDesc desc{};
-            desc.size = std::max(size, 16u);
+            desc.size = MaxValue(size, 16u);
             desc.usage = usage;
             desc.dynamic = true;
             return desc;
@@ -92,9 +97,25 @@ namespace Physara::Engine
             }
         }
 
-        MaterialGPUData BuildMaterial(const MaterialComponent &component)
+        void ApplyRuntimeAlphaPolicy(MaterialComponent &materialComponent, const AssetManager *assetManager)
+        {
+            if (assetManager == nullptr || materialComponent.alphaMode != AlphaMode::Opaque || !materialComponent.baseColorTexture.IsBound())
+            {
+                return;
+            }
+
+            const std::shared_ptr<Texture> texture = assetManager->GetByPath<Texture>(materialComponent.baseColorTexture.path);
+            if (texture != nullptr && texture->hasTransparentPixels)
+            {
+                materialComponent.alphaMode = AlphaMode::Mask;
+                materialComponent.alphaCutoff = 0.5f;
+            }
+        }
+
+        MaterialGPUData BuildMaterial(const MaterialComponent &component, const AssetManager *assetManager)
         {
             MaterialComponent materialComponent = component;
+            ApplyRuntimeAlphaPolicy(materialComponent, assetManager);
             materialComponent.Sanitize();
 
             MaterialGPUData material{};
@@ -115,15 +136,20 @@ namespace Physara::Engine
                 materialComponent.metallicRoughnessTexture.IsBound() ? 1.f : 0.f,
                 materialComponent.normalTexture.IsBound() ? 1.f : 0.f,
                 materialComponent.occlusionTexture.IsBound() ? 1.f : 0.f);
+            material.materialFlags = glm::vec4(
+                materialComponent.doubleSided ? 1.f : 0.f,
+                materialComponent.emissiveTexture.IsBound() ? 1.f : 0.f,
+                0.f,
+                0.f);
             return material;
         }
 
         RHI::RHITextureDesc TextureDesc(std::uint32_t width, std::uint32_t height, const void *pixels, std::uint32_t mipLevels = 1u)
         {
             RHI::RHITextureDesc desc{};
-            desc.width = std::max(width, 1u);
-            desc.height = std::max(height, 1u);
-            desc.mipLevels = std::max(mipLevels, 1u);
+            desc.width = MaxValue(width, 1u);
+            desc.height = MaxValue(height, 1u);
+            desc.mipLevels = MaxValue(mipLevels, 1u);
             desc.format = RHI::TextureFormat::RGBA8;
             desc.dimension = RHI::TextureDimension::Tex2D;
             desc.usage = RHI::TextureUsage::Sampled;
@@ -134,7 +160,7 @@ namespace Physara::Engine
         std::uint32_t CalculateMipLevels(std::uint32_t width, std::uint32_t height)
         {
             std::uint32_t levels = 1u;
-            std::uint32_t size = std::max(width, height);
+            std::uint32_t size = MaxValue(width, height);
             while (size > 1u)
             {
                 size >>= 1u;
@@ -165,7 +191,8 @@ namespace Physara::Engine
 
         EnsureFrameBuffers(context);
         EnsureDefaultTextures(context);
-        RHI::RHIPipelineState *pipeline = GetPipeline(context);
+        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back);
+        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None);
 
         context.commandList->SetViewport(
             0.f,
@@ -175,7 +202,7 @@ namespace Physara::Engine
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::vector<glm::vec4>{context.clearColor});
 
-        if (pipeline != nullptr)
+        if (singleSidedPipeline != nullptr && doubleSidedPipeline != nullptr)
         {
             if (!m_LoggedFirstScene && !context.frameData->objects.empty())
             {
@@ -189,13 +216,20 @@ namespace Physara::Engine
                 m_LoggedFirstScene = true;
             }
 
-            context.commandList->SetPipelineState(pipeline);
             context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::CameraBinding, m_CameraBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::ObjectBinding, m_ObjectBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::MaterialBinding, m_MaterialBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::LightBinding, m_LightBuffer.get());
-            DrawBucket(context, context.renderProxy->GetBuckets().opaque);
-            DrawBucket(context, context.renderProxy->GetBuckets().unlit);
+
+            ResetTextureBindings();
+            context.commandList->SetPipelineState(singleSidedPipeline);
+            DrawBucket(context, context.renderProxy->GetBuckets().opaque, false);
+            DrawBucket(context, context.renderProxy->GetBuckets().unlit, false);
+
+            ResetTextureBindings();
+            context.commandList->SetPipelineState(doubleSidedPipeline);
+            DrawBucket(context, context.renderProxy->GetBuckets().opaque, true);
+            DrawBucket(context, context.renderProxy->GetBuckets().unlit, true);
         }
 
         context.commandList->EndRenderPass();
@@ -211,7 +245,7 @@ namespace Physara::Engine
                 ForwardOpaquePassDetail::DynamicBufferDesc(sizeof(CameraData), RHI::BufferUsage::Uniform));
         }
 
-        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(std::max<std::size_t>(frameData.objects.size(), 1u) * sizeof(ObjectData));
+        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.objects.size(), 1u) * sizeof(ObjectData));
         if (m_ObjectBuffer == nullptr || m_ObjectBuffer->GetSize() < objectBufferSize)
         {
             m_ObjectBuffer = context.device->CreateBuffer(
@@ -220,7 +254,7 @@ namespace Physara::Engine
 
         const std::uint32_t lightBufferSize =
             static_cast<std::uint32_t>(sizeof(ForwardOpaquePassDetail::LightBufferHeader) +
-                                       std::max<std::size_t>(frameData.lights.size(), 1u) * sizeof(LightData));
+                                       ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.lights.size(), 1u) * sizeof(LightData));
         if (m_LightBuffer == nullptr || m_LightBuffer->GetSize() < lightBufferSize)
         {
             m_LightBuffer = context.device->CreateBuffer(
@@ -228,7 +262,7 @@ namespace Physara::Engine
         }
 
         const std::uint32_t materialBufferSize =
-            static_cast<std::uint32_t>(std::max<std::size_t>(frameData.objects.size(), 1u) * sizeof(ForwardOpaquePassDetail::MaterialGPUData));
+            static_cast<std::uint32_t>(ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.objects.size(), 1u) * sizeof(ForwardOpaquePassDetail::MaterialGPUData));
         if (m_MaterialBuffer == nullptr || m_MaterialBuffer->GetSize() < materialBufferSize)
         {
             m_MaterialBuffer = context.device->CreateBuffer(
@@ -253,15 +287,15 @@ namespace Physara::Engine
         }
 
         std::vector<ForwardOpaquePassDetail::MaterialGPUData> materials(
-            std::max<std::size_t>(frameData.objects.size(), 1u),
+            ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.objects.size(), 1u),
             ForwardOpaquePassDetail::BuildDefaultMaterial());
-        const auto fillMaterials = [&materials](const std::vector<RenderDrawItem> &bucket)
+        const auto fillMaterials = [&materials, &context](const std::vector<RenderDrawItem> &bucket)
         {
             for (const RenderDrawItem &item : bucket)
             {
                 if (item.objectIndex < materials.size())
                 {
-                    materials[item.objectIndex] = ForwardOpaquePassDetail::BuildMaterial(item.submission.material);
+                    materials[item.objectIndex] = ForwardOpaquePassDetail::BuildMaterial(item.submission.material, context.assetManager);
                 }
             }
         };
@@ -292,24 +326,24 @@ namespace Physara::Engine
             desc.wrapU = RHI::WrapMode::Repeat;
             desc.wrapV = RHI::WrapMode::Repeat;
             desc.wrapW = RHI::WrapMode::Repeat;
-            desc.anisotropy = static_cast<float>(std::max(context.device->GetMaxAnisotropy(), 1));
+            desc.anisotropy = static_cast<float>(ForwardOpaquePassDetail::MaxValue(context.device->GetMaxAnisotropy(), 1));
             m_LinearRepeatSampler = context.device->CreateSampler(desc);
         }
 
         if (m_FallbackWhiteTexture == nullptr)
         {
-            const std::array<std::uint8_t, 4> white{255u, 255u, 255u, 255u};
-            m_FallbackWhiteTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, white.data()));
+            const std::uint8_t white[4]{255u, 255u, 255u, 255u};
+            m_FallbackWhiteTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, white));
         }
 
         if (m_FallbackNormalTexture == nullptr)
         {
-            const std::array<std::uint8_t, 4> normal{128u, 128u, 255u, 255u};
-            m_FallbackNormalTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, normal.data()));
+            const std::uint8_t normal[4]{128u, 128u, 255u, 255u};
+            m_FallbackNormalTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, normal));
         }
     }
 
-    RHI::RHIPipelineState *ForwardOpaquePass::GetPipeline(const ForwardPassContext &context)
+    RHI::RHIPipelineState *ForwardOpaquePass::GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode)
     {
         if (context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
         {
@@ -336,7 +370,7 @@ namespace Physara::Engine
         pipelineDesc.vertexAttributes.push_back({1u, 0u, RHI::VertexFormat::RGB32F, static_cast<std::uint32_t>(offsetof(MeshVertex, normal))});
         pipelineDesc.vertexAttributes.push_back({2u, 0u, RHI::VertexFormat::RGBA32F, static_cast<std::uint32_t>(offsetof(MeshVertex, tangent))});
         pipelineDesc.vertexAttributes.push_back({3u, 0u, RHI::VertexFormat::RG32F, static_cast<std::uint32_t>(offsetof(MeshVertex, texCoord0))});
-        pipelineDesc.rasterizerState.cullMode = RHI::CullMode::None;
+        pipelineDesc.rasterizerState.cullMode = cullMode;
         pipelineDesc.depthStencilState.depthTest = true;
         pipelineDesc.depthStencilState.depthWrite = true;
         pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::Less;
@@ -410,22 +444,31 @@ namespace Physara::Engine
         RHI::RHITexture *normal = GetOrCreateTexture(context, item.submission.material.normalTexture.path);
         RHI::RHITexture *occlusion = GetOrCreateTexture(context, item.submission.material.occlusionTexture.path);
         RHI::RHITexture *emissive = GetOrCreateTexture(context, item.submission.material.emissiveTexture.path);
+        RHI::RHITexture *textures[5]{
+            baseColor != nullptr ? baseColor : GetFallbackWhiteTexture(),
+            metallicRoughness != nullptr ? metallicRoughness : GetFallbackWhiteTexture(),
+            normal != nullptr ? normal : GetFallbackNormalTexture(),
+            occlusion != nullptr ? occlusion : GetFallbackWhiteTexture(),
+            emissive != nullptr ? emissive : GetFallbackWhiteTexture()};
+        const std::uint32_t bindings[5]{
+            ForwardOpaquePassDetail::BaseColorTextureBinding,
+            ForwardOpaquePassDetail::MetallicRoughnessTextureBinding,
+            ForwardOpaquePassDetail::NormalTextureBinding,
+            ForwardOpaquePassDetail::OcclusionTextureBinding,
+            ForwardOpaquePassDetail::EmissiveTextureBinding};
 
-        context.commandList->SetTexture(ForwardOpaquePassDetail::BaseColorTextureBinding,
-                                        baseColor != nullptr ? baseColor : GetFallbackWhiteTexture(),
-                                        m_LinearRepeatSampler.get());
-        context.commandList->SetTexture(ForwardOpaquePassDetail::MetallicRoughnessTextureBinding,
-                                        metallicRoughness != nullptr ? metallicRoughness : GetFallbackWhiteTexture(),
-                                        m_LinearRepeatSampler.get());
-        context.commandList->SetTexture(ForwardOpaquePassDetail::NormalTextureBinding,
-                                        normal != nullptr ? normal : GetFallbackNormalTexture(),
-                                        m_LinearRepeatSampler.get());
-        context.commandList->SetTexture(ForwardOpaquePassDetail::OcclusionTextureBinding,
-                                        occlusion != nullptr ? occlusion : GetFallbackWhiteTexture(),
-                                        m_LinearRepeatSampler.get());
-        context.commandList->SetTexture(ForwardOpaquePassDetail::EmissiveTextureBinding,
-                                        emissive != nullptr ? emissive : GetFallbackWhiteTexture(),
-                                        m_LinearRepeatSampler.get());
+        RHI::RHISampler *sampler = m_LinearRepeatSampler.get();
+        for (std::size_t i = 0; i < 5u; ++i)
+        {
+            if (m_BoundTextures[i] == textures[i] && m_BoundSampler == sampler)
+            {
+                continue;
+            }
+
+            context.commandList->SetTexture(bindings[i], textures[i], sampler);
+            m_BoundTextures[i] = textures[i];
+        }
+        m_BoundSampler = sampler;
     }
 
     ForwardOpaquePass::MeshGPUPrimitive *ForwardOpaquePass::GetOrCreateMeshPrimitive(const ForwardPassContext &context, const RenderDrawItem &item)
@@ -435,8 +478,7 @@ namespace Physara::Engine
             return nullptr;
         }
 
-        const std::string primitiveKey = BuildMeshPrimitiveKey(item);
-        const auto cached = m_MeshCache.find(primitiveKey);
+        const auto cached = m_MeshCache.find(item.primitiveKey);
         if (cached != m_MeshCache.end())
         {
             return &cached->second;
@@ -446,10 +488,10 @@ namespace Physara::Engine
         const std::shared_ptr<Mesh> mesh = context.assetManager->GetByPath<Mesh>(meshResourcePath);
         if (mesh == nullptr || item.submission.primitiveIndex >= mesh->primitives.size())
         {
-            if (m_MissingMeshWarnings.insert(primitiveKey).second)
+            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
             {
                 PHYSARA_CORE_WARN("Forward pass skipped mesh '{}': resource not found or primitive index out of range. normalized='{}'.",
-                                  primitiveKey,
+                                  BuildMeshPrimitiveDebugName(item),
                                   context.assetManager->NormalizePath(meshResourcePath));
             }
             return nullptr;
@@ -458,10 +500,10 @@ namespace Physara::Engine
         const MeshPrimitive &primitive = mesh->primitives[item.submission.primitiveIndex];
         if (!primitive.HasGeometry())
         {
-            if (m_MissingMeshWarnings.insert(primitiveKey).second)
+            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
             {
                 PHYSARA_CORE_WARN("Forward pass skipped mesh '{}': primitive has no decoded geometry.",
-                                  primitiveKey);
+                                  BuildMeshPrimitiveDebugName(item));
             }
             return nullptr;
         }
@@ -475,41 +517,89 @@ namespace Physara::Engine
 
         if (gpuPrimitive.vertexBuffer == nullptr || gpuPrimitive.indexBuffer == nullptr)
         {
-            PHYSARA_CORE_ERROR("Forward pass failed to upload mesh '{}'.", primitiveKey);
+            PHYSARA_CORE_ERROR("Forward pass failed to upload mesh '{}'.", BuildMeshPrimitiveDebugName(item));
             return nullptr;
         }
 
         PHYSARA_CORE_INFO("Forward mesh uploaded '{}': vertices={}, indices={}.",
-                          primitiveKey,
+                          BuildMeshPrimitiveDebugName(item),
                           primitive.vertices.size(),
                           primitive.indices.size());
-        auto [inserted, _] = m_MeshCache.emplace(primitiveKey, std::move(gpuPrimitive));
+        auto [inserted, _] = m_MeshCache.emplace(item.primitiveKey, std::move(gpuPrimitive));
         return &inserted->second;
     }
 
-    void ForwardOpaquePass::DrawBucket(const ForwardPassContext &context, const std::vector<RenderDrawItem> &bucket)
+    void ForwardOpaquePass::DrawBucket(const ForwardPassContext &context, const std::vector<RenderDrawItem> &bucket, bool drawDoubleSided)
     {
-        for (const RenderDrawItem &item : bucket)
+        for (std::size_t i = 0; i < bucket.size();)
         {
+            const RenderDrawItem &item = bucket[i];
+            if (item.doubleSided != drawDoubleSided)
+            {
+                ++i;
+                continue;
+            }
+
             MeshGPUPrimitive *primitive = GetOrCreateMeshPrimitive(context, item);
             if (primitive == nullptr || primitive->indexCount == 0)
             {
+                ++i;
                 continue;
+            }
+
+            std::uint32_t instanceCount = 1u;
+            while (i + instanceCount < bucket.size() &&
+                   CanInstanceTogether(context, item, bucket[i + instanceCount], instanceCount))
+            {
+                ++instanceCount;
             }
 
             BindMaterial(context, item);
             context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer.get());
             context.commandList->SetIndexBuffer(primitive->indexBuffer.get());
-            context.commandList->DrawIndexed(primitive->indexCount, 1u, 0u, 0, item.objectIndex);
+            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, 0u, 0, item.objectIndex);
             if (!m_LoggedFirstDraw)
             {
-                PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}.",
-                                  BuildMeshPrimitiveKey(item),
+                PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}, instances={}.",
+                                  BuildMeshPrimitiveDebugName(item),
                                   primitive->indexCount,
-                                  item.objectIndex);
+                                  item.objectIndex,
+                                  instanceCount);
                 m_LoggedFirstDraw = true;
             }
+
+            i += instanceCount;
         }
+    }
+
+    bool ForwardOpaquePass::CanInstanceTogether(const ForwardPassContext &context, const RenderDrawItem &first, const RenderDrawItem &candidate, std::uint32_t instanceOffset)
+    {
+        (void)context;
+        if (candidate.objectIndex != first.objectIndex + instanceOffset)
+        {
+            return false;
+        }
+
+        if (candidate.sortKey != first.sortKey)
+        {
+            return false;
+        }
+
+        if (candidate.doubleSided != first.doubleSided)
+        {
+            return false;
+        }
+
+        return candidate.primitiveKey == first.primitiveKey;
+    }
+
+    void ForwardOpaquePass::ResetTextureBindings()
+    {
+        for (RHI::RHITexture *&texture : m_BoundTextures)
+        {
+            texture = nullptr;
+        }
+        m_BoundSampler = nullptr;
     }
 
     std::string ForwardOpaquePass::BuildMeshResourcePath(const RenderDrawItem &item)
@@ -517,8 +607,9 @@ namespace Physara::Engine
         return item.submission.meshPath + "#mesh/" + std::to_string(item.submission.meshIndex);
     }
 
-    std::string ForwardOpaquePass::BuildMeshPrimitiveKey(const RenderDrawItem &item)
+    std::string ForwardOpaquePass::BuildMeshPrimitiveDebugName(const RenderDrawItem &item)
     {
         return BuildMeshResourcePath(item) + "#primitive/" + std::to_string(item.submission.primitiveIndex);
     }
+
 }

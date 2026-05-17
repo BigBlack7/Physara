@@ -73,6 +73,44 @@ namespace Physara::Engine
         {
             return static_cast<std::uint64_t>(std::hash<std::string_view>{}(value));
         }
+
+        void HashCombine(std::uint64_t &seed, std::string_view value)
+        {
+            const std::uint64_t hash = HashString(value);
+            seed ^= hash + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+        }
+
+        void HashCombine(std::uint64_t &seed, std::uint64_t value)
+        {
+            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+        }
+
+        std::uint64_t HashMaterialSignature(const MaterialComponent &material)
+        {
+            std::uint64_t seed = HashString(material.materialPath);
+            HashCombine(seed, material.baseColorTexture.path);
+            HashCombine(seed, material.metallicRoughnessTexture.path);
+            HashCombine(seed, material.normalTexture.path);
+            HashCombine(seed, material.occlusionTexture.path);
+            HashCombine(seed, material.emissiveTexture.path);
+            seed ^= static_cast<std::uint64_t>(material.alphaMode) << 8u;
+            seed ^= material.doubleSided ? 0x8000000000000000ull : 0ull;
+            return seed;
+        }
+
+        std::uint64_t BuildMeshKey(const RenderMeshSubmission &submission)
+        {
+            std::uint64_t seed = HashString(submission.meshPath);
+            HashCombine(seed, submission.meshIndex);
+            return seed;
+        }
+
+        std::uint64_t BuildPrimitiveKey(const RenderMeshSubmission &submission)
+        {
+            std::uint64_t seed = BuildMeshKey(submission);
+            HashCombine(seed, submission.primitiveIndex);
+            return seed;
+        }
     }
 
     void RenderDrawBuckets::Clear()
@@ -90,6 +128,7 @@ namespace Physara::Engine
         frameData.lights = LightSystem::Collect(scene);
         CullAndBucket(RenderSystem::Collect(scene), view, frameData);
         SortBuckets();
+        RepackObjectsForSortedBuckets(frameData);
     }
 
     void RenderProxy::Reset()
@@ -129,6 +168,9 @@ namespace Physara::Engine
             item.sortKey = BuildSortKey(submission);
             const glm::vec3 cameraToObject = submission.boundsCenter - view.position;
             item.cameraDistanceSq = glm::dot(cameraToObject, cameraToObject);
+            item.meshKey = RenderProxyDetail::BuildMeshKey(submission);
+            item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(submission);
+            item.doubleSided = submission.material.doubleSided;
 
             if (transparent)
             {
@@ -170,9 +212,35 @@ namespace Physara::Engine
                   });
     }
 
+    void RenderProxy::RepackObjectsForSortedBuckets(FrameData &frameData)
+    {
+        std::vector<ObjectData> objects;
+        objects.reserve(frameData.objects.size());
+
+        auto repackBucket = [&objects](std::vector<RenderDrawItem> &bucket)
+        {
+            for (RenderDrawItem &item : bucket)
+            {
+                ObjectData object = RenderProxy::BuildObjectData(
+                    item.submission,
+                    item.submission.material.IsTransparent()
+                        ? RenderBucket::Transparent
+                        : (item.submission.material.shadingModel == ShadingModel::Unlit ? RenderBucket::Unlit : RenderBucket::Opaque));
+                item.objectIndex = static_cast<std::uint32_t>(objects.size());
+                object.materialIndex = item.objectIndex;
+                objects.push_back(object);
+            }
+        };
+
+        repackBucket(m_Buckets.opaque);
+        repackBucket(m_Buckets.unlit);
+        repackBucket(m_Buckets.transparent);
+        frameData.objects = std::move(objects);
+    }
+
     std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission)
     {
-        const std::uint64_t materialHash = RenderProxyDetail::HashString(submission.materialPath) & 0xffffffffull;
+        const std::uint64_t materialHash = RenderProxyDetail::HashMaterialSignature(submission.material) & 0xffffffffull;
         const std::uint64_t meshHash = RenderProxyDetail::HashString(submission.meshPath) & 0xffffull;
         const std::uint64_t primitive = static_cast<std::uint64_t>(submission.primitiveIndex & 0xffffu);
         return (materialHash << 32u) | (meshHash << 16u) | primitive;

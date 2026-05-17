@@ -10,6 +10,7 @@ struct MaterialData
     vec4 metallicRoughnessReflectanceAO;
     vec4 alphaNormalFlags;
     vec4 textureFlags;
+    vec4 materialFlags;
 };
 
 struct MaterialInputs
@@ -27,6 +28,8 @@ struct MaterialInputs
     bool hasMetallicRoughnessTexture;
     bool hasNormalTexture;
     bool hasOcclusionTexture;
+    bool hasEmissiveTexture;
+    bool doubleSided;
     uint shadingModel;
     uint alphaMode;
 };
@@ -45,6 +48,7 @@ struct PixelMaterial
     float ambientOcclusion;
     float alphaCutoff;
     float normalScale;
+    bool doubleSided;
     uint shadingModel;
     uint alphaMode;
 };
@@ -65,6 +69,8 @@ MaterialInputs DefaultMaterialInputs()
     material.hasMetallicRoughnessTexture = false;
     material.hasNormalTexture = false;
     material.hasOcclusionTexture = false;
+    material.hasEmissiveTexture = false;
+    material.doubleSided = false;
     material.shadingModel = PHYSARA_SHADING_MODEL_LIT;
     material.alphaMode = PHYSARA_ALPHA_OPAQUE;
     return material;
@@ -86,6 +92,8 @@ MaterialInputs UnpackMaterialData(MaterialData data)
     material.hasMetallicRoughnessTexture = data.textureFlags.y > 0.5;
     material.hasNormalTexture = data.textureFlags.z > 0.5;
     material.hasOcclusionTexture = data.textureFlags.w > 0.5;
+    material.hasEmissiveTexture = data.materialFlags.y > 0.5;
+    material.doubleSided = data.materialFlags.x > 0.5;
     material.shadingModel = uint(data.alphaNormalFlags.z);
     material.alphaMode = uint(data.alphaNormalFlags.w);
     return material;
@@ -102,6 +110,7 @@ PixelMaterial PrepareMaterial(MaterialInputs inputs)
     material.ambientOcclusion = Saturate(inputs.ambientOcclusion);
     material.alphaCutoff = Saturate(inputs.alphaCutoff);
     material.normalScale = max(inputs.normalScale, 0.0);
+    material.doubleSided = inputs.doubleSided;
     material.shadingModel = inputs.shadingModel;
     material.alphaMode = inputs.alphaMode;
 
