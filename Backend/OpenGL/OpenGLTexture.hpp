@@ -26,7 +26,7 @@ namespace Physara::RHI
         GLuint GetGLID() const { return m_ID; }
         GLenum GetGLTarget() const { return m_Target; }
 
-        void Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize);
+        void Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize = 0) override;
         void GenerateMipmaps();
 
     private:

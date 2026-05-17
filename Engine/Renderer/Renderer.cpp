@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include <Engine/Core/Log.hpp>
@@ -40,6 +41,12 @@ namespace Physara::Engine
             RHI::StoreOp::Store,
             1u};
         m_RenderPassDesc.hasDepth = true;
+        m_SkyboxRenderPassDesc = m_RenderPassDesc;
+        if (!m_SkyboxRenderPassDesc.colorAttachments.empty())
+        {
+            m_SkyboxRenderPassDesc.colorAttachments[0].loadOp = RHI::LoadOp::Load;
+        }
+        m_SkyboxRenderPassDesc.depthAttachment.loadOp = RHI::LoadOp::Load;
 
         if (m_Device == nullptr)
         {
@@ -135,6 +142,18 @@ namespace Physara::Engine
     void Renderer::RequestCapture(const CaptureDesc &desc)
     {
         m_PendingCapture = desc;
+    }
+
+    void Renderer::SetEnvironmentMapPath(std::filesystem::path path)
+    {
+        path = path.lexically_normal();
+        if (m_EnvironmentMapPath == path)
+        {
+            return;
+        }
+
+        m_EnvironmentMapPath = std::move(path);
+        m_SkyboxPass.InvalidateEnvironment();
     }
 
     bool Renderer::HasValidRenderTarget() const
@@ -234,6 +253,8 @@ namespace Physara::Engine
         }
 
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
+        const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
+
         m_RenderGraph.AddPass("ForwardOpaque")
             .Write(sceneColor)
             .SetExecute([this](RenderGraphContext &context)
@@ -251,5 +272,26 @@ namespace Physara::Engine
                             passContext.clearColor = m_ClearColor;
                             m_ForwardOpaquePass.Execute(passContext);
                         });
+
+        if (drawSkybox)
+        {
+            m_RenderGraph.AddPass("Skybox")
+                .Read(sceneColor)
+                .Write(sceneColor)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                SkyboxPassContext passContext{};
+                                passContext.device = m_Device;
+                                passContext.commandList = &context.commandList;
+                                passContext.framebuffer = m_Framebuffer.get();
+                                passContext.renderPassDesc = &m_SkyboxRenderPassDesc;
+                                passContext.shaderLibrary = &m_ShaderLibrary;
+                                passContext.pipelineCache = &m_PipelineStateCache;
+                                passContext.frameData = &m_FrameData;
+                                passContext.environmentPath = m_EnvironmentMapPath;
+                                passContext.enabled = true;
+                                m_SkyboxPass.Execute(passContext);
+                            });
+        }
     }
 }

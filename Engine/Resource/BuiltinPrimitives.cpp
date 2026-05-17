@@ -97,8 +97,8 @@ namespace Physara::Engine
                 Vertex({0.5f, 0.f, -0.5f}, normal, tangent, {1.f, 0.f}),
                 Vertex({0.5f, 0.f, 0.5f}, normal, tangent, {1.f, 1.f}),
                 Vertex({-0.5f, 0.f, 0.5f}, normal, tangent, {0.f, 1.f})};
-            primitive.indices = {0u, 1u, 2u, 0u, 2u, 3u};
-            SetBounds(primitive, {-0.5f, 0.f, -0.5f}, {0.5f, 0.f, 0.5f});
+            primitive.indices = {0u, 2u, 1u, 0u, 3u, 2u};
+            SetBounds(primitive, {-0.5f, -0.001f, -0.5f}, {0.5f, 0.001f, 0.5f});
             return primitive;
         }
 

@@ -11,5 +11,6 @@ namespace Physara::Engine
     {
     public:
         static std::shared_ptr<Texture> LoadRGBA8(const std::filesystem::path &path);
+        static std::shared_ptr<Texture> LoadRGBA32F(const std::filesystem::path &path);
     };
 }

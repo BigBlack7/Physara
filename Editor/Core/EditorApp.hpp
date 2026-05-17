@@ -59,6 +59,7 @@ namespace Physara::Editor
         std::filesystem::path BuildSceneSavePath(std::string name) const;
         void InitializeIcons();
         void CreateDefaultScene();
+        void FrameEditorCameraToScene();
         void DeleteSelectedEntity();
         void ConnectSceneViewCameraInput();
 

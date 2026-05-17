@@ -1,6 +1,13 @@
 #include "RendererSettingsPanel.hpp"
 
+#include <algorithm>
+#include <filesystem>
+#include <string>
+#include <vector>
+
 #include <imgui/imgui.h>
+
+#include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Editor
 {
@@ -26,6 +33,41 @@ namespace Physara::Editor
             "GBufferAO",
             "GBufferEmissive",
             "ShadowMap"};
+
+        std::vector<std::filesystem::path> CollectEnvironmentMaps(const std::filesystem::path &assetsRoot)
+        {
+            std::vector<std::filesystem::path> maps;
+            const std::filesystem::path envRoot = assetsRoot / "Textures" / "Env";
+            std::error_code error{};
+            if (!std::filesystem::exists(envRoot, error))
+            {
+                return maps;
+            }
+
+            for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(envRoot, error))
+            {
+                if (error || !entry.is_regular_file(error))
+                {
+                    continue;
+                }
+
+                const std::string extension = Platform::FileSystem::GetExtensionLower(entry.path().string());
+                if (extension == ".exr" || extension == ".hdr")
+                {
+                    maps.push_back(entry.path());
+                }
+            }
+
+            std::sort(maps.begin(), maps.end());
+            return maps;
+        }
+
+        std::filesystem::path ToAssetsRelative(const std::filesystem::path &assetsRoot, const std::filesystem::path &path)
+        {
+            std::error_code error{};
+            std::filesystem::path relative = std::filesystem::relative(path, assetsRoot, error);
+            return error ? path.lexically_normal() : relative.lexically_normal();
+        }
 
     }
 
@@ -97,10 +139,51 @@ namespace Physara::Editor
 
     void RendererSettingsPanel::DrawEnvironmentSection()
     {
-        if (ImGui::CollapsingHeader("IBL / Atmosphere", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::TextUnformatted("Environment lighting and atmosphere controls are reserved.");
-            ImGui::TextUnformatted("Reserved: HDR environment, IBL precompute and atmosphere preset.");
+            ImGui::Checkbox("Skybox", &m_Context.settings.environment.skyboxEnabled);
+
+            const std::vector<std::filesystem::path> maps =
+                RendererSettingsPanelDetail::CollectEnvironmentMaps(m_Context.assetsRootPath);
+            std::string currentLabel = "None";
+            if (!m_Context.settings.environment.skyboxPath.empty())
+            {
+                currentLabel = m_Context.settings.environment.skyboxPath.generic_string();
+            }
+
+            if (ImGui::BeginCombo("Panorama", currentLabel.c_str()))
+            {
+                const bool noneSelected = m_Context.settings.environment.skyboxPath.empty();
+                if (ImGui::Selectable("None", noneSelected))
+                {
+                    m_Context.settings.environment.skyboxPath.clear();
+                }
+                if (noneSelected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+
+                for (const std::filesystem::path &path : maps)
+                {
+                    const std::filesystem::path relative =
+                        RendererSettingsPanelDetail::ToAssetsRelative(m_Context.assetsRootPath, path);
+                    const std::string label = relative.generic_string();
+                    const bool selected = relative == m_Context.settings.environment.skyboxPath;
+                    if (ImGui::Selectable(label.c_str(), selected))
+                    {
+                        m_Context.settings.environment.skyboxPath = relative;
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+
+                ImGui::EndCombo();
+            }
+
+            ImGui::TextUnformatted("Input: one equirectangular HDR panorama from Assets/Textures/Env.");
+            ImGui::TextUnformatted("IBL precompute will reuse this environment in a later phase.");
         }
     }
 }

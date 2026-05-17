@@ -24,6 +24,7 @@ namespace Physara::Engine
         bool hasPartialAlphaPixels{false};
         TextureSourceFormat sourceFormat{TextureSourceFormat::Unknown};
         std::vector<std::uint8_t> rgba8Pixels{};
+        std::vector<float> rgba32fPixels{};
 
         [[nodiscard]] bool IsLoaded() const
         {

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <ctime>
 #include <cstdio>
@@ -15,13 +16,17 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/BuiltinPrimitives.hpp>
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
+#include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Editor/Camera/EditorCamera.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
@@ -107,6 +112,16 @@ namespace Physara::Editor
             default:
                 return Engine::CaptureFormat::PNG;
             }
+        }
+
+        void ExpandBounds(glm::vec3 &minBounds, glm::vec3 &maxBounds, const glm::vec3 &point)
+        {
+            minBounds.x = std::min(minBounds.x, point.x);
+            minBounds.y = std::min(minBounds.y, point.y);
+            minBounds.z = std::min(minBounds.z, point.z);
+            maxBounds.x = std::max(maxBounds.x, point.x);
+            maxBounds.y = std::max(maxBounds.y, point.y);
+            maxBounds.z = std::max(maxBounds.z, point.z);
         }
 
     }
@@ -376,6 +391,12 @@ namespace Physara::Editor
         Engine::RenderView view = m_EditorCamera.BuildRenderView();
         view.viewport.width = width;
         view.viewport.height = height;
+        const std::filesystem::path environmentPath =
+            m_Context.settings.environment.skyboxEnabled && !m_Context.settings.environment.skyboxPath.empty()
+                ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
+                : std::filesystem::path{};
+        m_Renderer->SetSkyboxEnabled(m_Context.settings.environment.skyboxEnabled);
+        m_Renderer->SetEnvironmentMapPath(environmentPath);
         if (m_Context.activeScene != nullptr)
         {
             m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f));
@@ -575,9 +596,82 @@ namespace Physara::Editor
 
         Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
         entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
-        m_EditorCamera.SetPosition({0.f, 2.f, 6.f});
-        m_EditorCamera.SetYawPitchDegrees(-90.f, -12.f);
+        FrameEditorCameraToScene();
         m_Context.selectedEntity = entity.GetHandle();
+    }
+
+    void EditorApp::FrameEditorCameraToScene()
+    {
+        if (m_Context.activeScene == nullptr)
+        {
+            m_EditorCamera.SetPosition({0.f, 2.f, 6.f});
+            m_EditorCamera.SetYawPitchDegrees(-90.f, -12.f);
+            return;
+        }
+
+        m_Context.activeScene->UpdateTransforms();
+        auto &registry = m_Context.activeScene->GetRegistry();
+        auto view = registry.view<Engine::MeshComponent, Engine::TransformComponent>();
+
+        bool hasBounds = false;
+        glm::vec3 minBounds(0.f);
+        glm::vec3 maxBounds(0.f);
+
+        view.each([&hasBounds, &minBounds, &maxBounds](Engine::EntityId, const Engine::MeshComponent &mesh, const Engine::TransformComponent &transform)
+        {
+            if (!mesh.visible || !mesh.localBounds.valid)
+            {
+                return;
+            }
+
+            const glm::vec3 localMin = mesh.localBounds.min;
+            const glm::vec3 localMax = mesh.localBounds.max;
+            const glm::mat4 world = transform.GetWorldMatrix();
+            const glm::vec3 corners[8]{
+                {localMin.x, localMin.y, localMin.z},
+                {localMax.x, localMin.y, localMin.z},
+                {localMin.x, localMax.y, localMin.z},
+                {localMax.x, localMax.y, localMin.z},
+                {localMin.x, localMin.y, localMax.z},
+                {localMax.x, localMin.y, localMax.z},
+                {localMin.x, localMax.y, localMax.z},
+                {localMax.x, localMax.y, localMax.z}};
+
+            for (const glm::vec3 &corner : corners)
+            {
+                const glm::vec3 worldCorner = glm::vec3(world * glm::vec4(corner, 1.f));
+                if (!hasBounds)
+                {
+                    minBounds = worldCorner;
+                    maxBounds = worldCorner;
+                    hasBounds = true;
+                }
+                else
+                {
+                    EditorAppDetail::ExpandBounds(minBounds, maxBounds, worldCorner);
+                }
+            }
+        });
+
+        if (!hasBounds)
+        {
+            m_EditorCamera.SetPosition({0.f, 2.f, 6.f});
+            m_EditorCamera.SetYawPitchDegrees(-90.f, -12.f);
+            return;
+        }
+
+        const glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+        const glm::vec3 extent = maxBounds - minBounds;
+        const float radius = std::max(std::max(extent.x, extent.y), extent.z) * 0.5f;
+        const float distance = std::max(radius * 3.2f, 4.f);
+        const glm::vec3 direction = glm::normalize(glm::vec3(0.55f, 0.28f, 1.f));
+        const glm::vec3 position = center + direction * distance;
+        const glm::vec3 toCenter = glm::normalize(center - position);
+        const float yaw = glm::degrees(std::atan2(toCenter.z, toCenter.x));
+        const float pitch = glm::degrees(std::asin(toCenter.y));
+
+        m_EditorCamera.SetPosition(position);
+        m_EditorCamera.SetYawPitchDegrees(yaw, pitch);
     }
 
     void EditorApp::DeleteSelectedEntity()

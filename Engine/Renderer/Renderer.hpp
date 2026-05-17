@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 
@@ -9,6 +10,7 @@
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
 #include <Engine/Renderer/Passes/ForwardTransparentPass.hpp>
+#include <Engine/Renderer/Passes/SkyboxPass.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderGraph/RenderGraph.hpp>
@@ -52,6 +54,9 @@ namespace Physara::Engine
 
         void SetClearColor(const glm::vec4 &color) { m_ClearColor = color; }
         [[nodiscard]] const glm::vec4 &GetClearColor() const { return m_ClearColor; }
+        void SetEnvironmentMapPath(std::filesystem::path path);
+        void SetSkyboxEnabled(bool enabled) { m_SkyboxEnabled = enabled; }
+        [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
 
         [[nodiscard]] RHI::RHITexture *GetSceneColorTexture() const { return m_SceneColor.get(); }
         [[nodiscard]] std::uint32_t GetViewportWidth() const { return m_ViewportWidth; }
@@ -69,6 +74,7 @@ namespace Physara::Engine
         RHI::RHIDevice *m_Device{nullptr};
         AssetManager *m_AssetManager{nullptr};
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
+        RHI::RHIRenderPassDesc m_SkyboxRenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHITexture> m_SceneDepth{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
@@ -78,9 +84,12 @@ namespace Physara::Engine
         PipelineStateCache m_PipelineStateCache{};
         ForwardOpaquePass m_ForwardOpaquePass{};
         ForwardTransparentPass m_ForwardTransparentPass{};
+        SkyboxPass m_SkyboxPass{};
         FrameData m_FrameData{};
         std::optional<CaptureDesc> m_PendingCapture{};
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};
+        std::filesystem::path m_EnvironmentMapPath{};
+        bool m_SkyboxEnabled{true};
         std::uint64_t m_FrameIndex{0};
         std::uint32_t m_ViewportWidth{0};
         std::uint32_t m_ViewportHeight{0};

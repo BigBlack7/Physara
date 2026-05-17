@@ -187,6 +187,11 @@ namespace Physara::RHI
             return;
         }
 
+        glDisable(GL_RASTERIZER_DISCARD);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+        glDisable(GL_SAMPLE_COVERAGE);
+
         if (desc.rasterizerState.cullMode == CullMode::None)
         {
             glDisable(GL_CULL_FACE);
@@ -259,6 +264,7 @@ namespace Physara::RHI
             }
 
             m_State.blendStates[i] = target;
+            glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         }
 
         m_State.topology = ToGLTopology(desc.topology);
@@ -449,6 +455,36 @@ namespace Physara::RHI
         m_CurrentPassDesc = &desc;
 
         const std::uint32_t colorCount = static_cast<std::uint32_t>(desc.colorAttachments.size());
+        for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
+        {
+            glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
+        glDepthMask(GL_TRUE);
+        glStencilMask(0xffffffffu);
+
+        if (colorCount > 0u)
+        {
+            std::vector<GLenum> drawBuffers;
+            drawBuffers.reserve(colorCount);
+            for (std::uint32_t i = 0; i < colorCount; ++i)
+            {
+                drawBuffers.push_back(fboID != 0 ? ToGLAttachmentPoint(i) : GL_BACK);
+            }
+
+            if (fboID != 0)
+            {
+                glNamedFramebufferDrawBuffers(fboID, static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+            }
+            else
+            {
+                glDrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+            }
+        }
+        else if (fboID != 0)
+        {
+            glNamedFramebufferDrawBuffers(fboID, 0, nullptr);
+        }
+
         for (std::uint32_t i = 0; i < colorCount; ++i)
         {
             if (desc.colorAttachments[i].loadOp != LoadOp::Clear)

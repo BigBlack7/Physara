@@ -86,6 +86,12 @@ namespace Physara::Editor
         bool captureRequested{false};
     };
 
+    struct EnvironmentSettings
+    {
+        std::filesystem::path skyboxPath{};
+        bool skyboxEnabled{true};
+    };
+
     struct EditorUIState
     {
         EditorDisplayMode displayMode{EditorDisplayMode::Docked};
@@ -103,6 +109,7 @@ namespace Physara::Editor
         RenderPipelineMode pipelineMode{RenderPipelineMode::Forward};
         DebugViewMode debugViewMode{DebugViewMode::None};
         CaptureSettings capture{};
+        EnvironmentSettings environment{};
     };
 
     struct EditorContext

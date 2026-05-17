@@ -16,5 +16,6 @@ namespace Physara::RHI
         virtual TextureFormat GetFormat() const = 0;
         virtual TextureDimension GetDimension() const = 0;
         virtual TextureUsageFlags GetUsage() const = 0;
+        virtual void Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize = 0) = 0;
     };
 }

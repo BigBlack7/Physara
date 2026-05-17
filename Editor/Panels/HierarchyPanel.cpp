@@ -287,7 +287,7 @@ namespace Physara::Editor
             addPrimitive("Builtin/Primitives/Sphere", {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}, {0.f, 0.f, 0.f}, 0.5f, true});
             break;
         case CreateEntityKind::Plane:
-            addPrimitive("Builtin/Primitives/Plane", {{-0.5f, 0.f, -0.5f}, {0.5f, 0.f, 0.5f}, {0.f, 0.f, 0.f}, 0.707f, true});
+            addPrimitive("Builtin/Primitives/Plane", {{-0.5f, -0.001f, -0.5f}, {0.5f, 0.001f, 0.5f}, {0.f, 0.f, 0.f}, 0.707f, true});
             break;
         case CreateEntityKind::Empty:
             break;
