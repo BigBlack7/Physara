@@ -131,6 +131,34 @@ namespace Physara::Engine
             return pixels;
         }
 
+        Texture BuildPlaceholderPanorama(std::uint32_t width, std::uint32_t height)
+        {
+            Texture texture{};
+            texture.width = width;
+            texture.height = height;
+            texture.channels = 4u;
+            texture.sourceFormat = TextureSourceFormat::EXR;
+            texture.rgba32fPixels.resize(static_cast<std::size_t>(width) * height * 4u);
+
+            for (std::uint32_t y = 0u; y < height; ++y)
+            {
+                const float fy = static_cast<float>(y) / static_cast<float>(height - 1u);
+                const glm::vec3 top(0.38f, 0.52f, 0.72f);
+                const glm::vec3 horizon(0.74f, 0.82f, 0.78f);
+                const glm::vec3 color = glm::mix(top, horizon, fy);
+                for (std::uint32_t x = 0u; x < width; ++x)
+                {
+                    const std::size_t base = (static_cast<std::size_t>(y) * width + x) * 4u;
+                    texture.rgba32fPixels[base + 0u] = color.r;
+                    texture.rgba32fPixels[base + 1u] = color.g;
+                    texture.rgba32fPixels[base + 2u] = color.b;
+                    texture.rgba32fPixels[base + 3u] = 1.f;
+                }
+            }
+
+            return texture;
+        }
+
         std::vector<float> BuildCubemapFromEquirectangular(const Texture &texture, std::uint32_t faceSize)
         {
             std::vector<float> pixels(static_cast<std::size_t>(faceSize) * faceSize * 6u * 4u);
@@ -160,7 +188,7 @@ namespace Physara::Engine
             {
                 return 16u;
             }
-            return MinValue<std::uint32_t>(1024u, MaxValue<std::uint32_t>(64u, texture.height / 2u));
+            return MinValue<std::uint32_t>(2048u, MaxValue<std::uint32_t>(64u, texture.height));
         }
 
         glm::vec3 AverageColor(const std::vector<float> &pixels)
@@ -241,7 +269,7 @@ namespace Physara::Engine
             desc.minFilter = RHI::FilterMode::Linear;
             desc.magFilter = RHI::FilterMode::Linear;
             desc.mipFilter = RHI::FilterMode::Linear;
-            desc.wrapU = RHI::WrapMode::ClampToEdge;
+            desc.wrapU = RHI::WrapMode::Repeat;
             desc.wrapV = RHI::WrapMode::ClampToEdge;
             desc.wrapW = RHI::WrapMode::ClampToEdge;
             desc.anisotropy = 1.f;
@@ -264,17 +292,13 @@ namespace Physara::Engine
             std::shared_ptr<Texture> texture = TextureLoader::LoadRGBA32F(requestedPath);
             if (texture != nullptr && texture->IsLoaded() && !texture->rgba32fPixels.empty())
             {
-                const std::uint32_t faceSize = SkyboxPassDetail::ChooseFaceSize(*texture);
-                const std::vector<float> cubemapPixels = SkyboxPassDetail::BuildCubemapFromEquirectangular(*texture, faceSize);
-                const glm::vec3 averageColor = SkyboxPassDetail::AverageColor(cubemapPixels);
-                UploadCubemap(context, faceSize, cubemapPixels);
+                const glm::vec3 averageColor = SkyboxPassDetail::AverageColor(texture->rgba32fPixels);
+                UploadPanorama(context, *texture);
                 m_LoadedEnvironmentPath = requestedPath;
-                PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, cubemap={}x{}, avg=({}, {}, {}).",
+                PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, avg=({}, {}, {}).",
                                   requestedPath.string(),
                                   texture->width,
                                   texture->height,
-                                  faceSize,
-                                  faceSize,
                                   averageColor.r,
                                   averageColor.g,
                                   averageColor.b);
@@ -284,13 +308,31 @@ namespace Physara::Engine
             PHYSARA_CORE_WARN("Skybox environment '{}' could not be loaded; using placeholder.", requestedPath.string());
         }
 
-        constexpr std::uint32_t placeholderSize = 16u;
-        UploadCubemap(context, placeholderSize, SkyboxPassDetail::BuildPlaceholderCubemap(placeholderSize));
+        UploadPanorama(context, SkyboxPassDetail::BuildPlaceholderPanorama(32u, 16u));
         m_LoadedEnvironmentPath = requestedPath;
         if (!m_LoggedPlaceholder)
         {
             PHYSARA_CORE_INFO("Skybox using placeholder cubemap.");
             m_LoggedPlaceholder = true;
+        }
+    }
+
+    void SkyboxPass::UploadPanorama(const SkyboxPassContext &context, const Texture &texture)
+    {
+        RHI::RHITextureDesc desc{};
+        desc.width = texture.width;
+        desc.height = texture.height;
+        desc.mipLevels = 1u;
+        desc.arrayLayers = 1u;
+        desc.format = RHI::TextureFormat::RGBA16F;
+        desc.dimension = RHI::TextureDimension::Tex2D;
+        desc.usage = RHI::TextureUsage::Sampled;
+        desc.initialData = texture.rgba32fPixels.data();
+
+        m_SkyboxTexture = context.device->CreateTexture(desc);
+        if (m_SkyboxTexture == nullptr)
+        {
+            PHYSARA_CORE_ERROR("Failed to create skybox panorama texture.");
         }
     }
 

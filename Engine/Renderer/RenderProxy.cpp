@@ -121,12 +121,12 @@ namespace Physara::Engine
         shadowCasters.clear();
     }
 
-    void RenderProxy::Build(Scene &scene, const RenderView &view, FrameData &frameData)
+    void RenderProxy::Build(Scene &scene, const RenderView &view, FrameData &frameData, AssetManager *assetManager)
     {
         Reset();
         frameData.objects.clear();
         frameData.lights = LightSystem::Collect(scene);
-        CullAndBucket(RenderSystem::Collect(scene), view, frameData);
+        CullAndBucket(RenderSystem::Collect(scene, assetManager), view, frameData);
         SortBuckets();
         RepackObjectsForSortedBuckets(frameData);
     }

@@ -49,6 +49,7 @@ namespace Physara::Engine
     {
     public:
         void Execute(const ForwardPassContext &context);
+        void ExecuteTransparent(const ForwardPassContext &context);
 
     private:
         struct MeshGPUPrimitive
@@ -66,7 +67,8 @@ namespace Physara::Engine
 
         void EnsureFrameBuffers(const ForwardPassContext &context);
         void EnsureDefaultTextures(const ForwardPassContext &context);
-        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode);
+        void ExecuteBuckets(const ForwardPassContext &context, bool transparent);
+        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         [[nodiscard]] MeshGPUPrimitive *GetOrCreateMeshPrimitive(const ForwardPassContext &context, const RenderDrawItem &item);
         [[nodiscard]] RHI::RHITexture *GetOrCreateTexture(const ForwardPassContext &context, const std::string &texturePath);
         [[nodiscard]] RHI::RHITexture *GetFallbackWhiteTexture() const;

@@ -49,6 +49,52 @@ namespace Physara::Engine
             return tg3_str_equals_cstr(value, text) != 0;
         }
 
+        const tg3_value *FindObjectValue(const tg3_value &object, const char *key)
+        {
+            if (object.type != TG3_VALUE_OBJECT || key == nullptr)
+            {
+                return nullptr;
+            }
+
+            for (std::uint32_t i = 0; i < object.object_count; ++i)
+            {
+                if (Equals(object.object_data[i].key, key))
+                {
+                    return &object.object_data[i].value;
+                }
+            }
+            return nullptr;
+        }
+
+        const tg3_value *FindExtensionValue(const tg3_extras_ext &ext, const char *name)
+        {
+            for (std::uint32_t i = 0; i < ext.extensions_count; ++i)
+            {
+                if (Equals(ext.extensions[i].name, name))
+                {
+                    return &ext.extensions[i].value;
+                }
+            }
+            return nullptr;
+        }
+
+        float ReadNumberValue(const tg3_value *value, float fallback)
+        {
+            if (value == nullptr)
+            {
+                return fallback;
+            }
+            if (value->type == TG3_VALUE_REAL)
+            {
+                return static_cast<float>(value->real_val);
+            }
+            if (value->type == TG3_VALUE_INT)
+            {
+                return static_cast<float>(value->int_val);
+            }
+            return fallback;
+        }
+
         std::string NormalizeAssetPath(const std::filesystem::path &path, AssetManager *assetManager)
         {
             if (assetManager != nullptr)
@@ -567,6 +613,17 @@ namespace Physara::Engine
             {
                 material.alphaMode = AlphaMode::Blend;
                 material.castShadow = false;
+            }
+
+            if (const tg3_value *transmission = FindExtensionValue(source.ext, "KHR_materials_transmission"))
+            {
+                const float transmissionFactor = ReadNumberValue(FindObjectValue(*transmission, "transmissionFactor"), 0.f);
+                if (transmissionFactor > 0.f)
+                {
+                    material.alphaMode = AlphaMode::Blend;
+                    material.baseColor.a = std::min(material.baseColor.a, 1.f - transmissionFactor * 0.75f);
+                    material.castShadow = false;
+                }
             }
 
             material.baseColorTexture = TextureSlot(

@@ -123,7 +123,7 @@ namespace Physara::Engine
     void Renderer::RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds)
     {
         BeginFrame(view, deltaTimeSeconds);
-        m_RenderProxy.Build(scene, view, m_FrameData);
+        m_RenderProxy.Build(scene, view, m_FrameData, m_AssetManager);
         RenderClear();
         ProcessPendingCapture();
     }
@@ -353,6 +353,17 @@ namespace Physara::Engine
                             });
         }
 
+        if (!m_RenderProxy.GetBuckets().transparent.empty())
+        {
+            m_RenderGraph.AddPass("ForwardTransparent")
+                .Read(sceneHDR)
+                .Write(sceneHDR)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                ExecuteForwardTransparentPass(context);
+                            });
+        }
+
         m_RenderGraph.AddPass("PostProcess")
             .Read(sceneHDR)
             .Write(sceneColor)
@@ -379,5 +390,20 @@ namespace Physara::Engine
                             passContext.settings = m_PostProcessSettings;
                             m_PostProcessPass.Execute(passContext);
                         });
+    }
+
+    void Renderer::ExecuteForwardTransparentPass(RenderGraphContext &context)
+    {
+        ForwardPassContext passContext{};
+        passContext.device = m_Device;
+        passContext.commandList = &context.commandList;
+        passContext.framebuffer = m_Framebuffer.get();
+        passContext.renderPassDesc = &m_SkyboxRenderPassDesc;
+        passContext.shaderLibrary = &m_ShaderLibrary;
+        passContext.pipelineCache = &m_PipelineStateCache;
+        passContext.frameData = &m_FrameData;
+        passContext.renderProxy = &m_RenderProxy;
+        passContext.assetManager = m_AssetManager;
+        m_ForwardTransparentPass.Execute(passContext);
     }
 }

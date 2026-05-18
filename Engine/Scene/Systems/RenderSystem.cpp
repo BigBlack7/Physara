@@ -7,6 +7,8 @@
 
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
+#include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/Types/Material.hpp>
 #include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Engine
@@ -21,7 +23,42 @@ namespace Physara::Engine
             return std::max(x, std::max(y, z));
         }
 
-        MaterialComponent GetMaterial(const entt::registry &registry, EntityId entity, const MeshComponent &mesh)
+        MaterialComponent ToComponent(const Material &material)
+        {
+            MaterialComponent component{};
+            component.materialPath = material.path;
+            component.shadingModel = material.shadingModel;
+            component.alphaMode = material.alphaMode;
+            component.doubleSided = material.doubleSided;
+            component.castShadow = material.castShadow;
+            component.baseColor = material.baseColor;
+            component.metallic = material.metallic;
+            component.roughness = material.roughness;
+            component.ambientOcclusion = material.ambientOcclusion;
+            component.alphaCutoff = material.alphaCutoff;
+            component.emissiveColor = material.emissiveColor;
+            component.normalScale = material.normalScale;
+            component.baseColorTexture = material.baseColorTexture;
+            component.metallicRoughnessTexture = material.metallicRoughnessTexture;
+            component.normalTexture = material.normalTexture;
+            component.occlusionTexture = material.occlusionTexture;
+            component.emissiveTexture = material.emissiveTexture;
+            return component;
+        }
+
+        void ApplyResourceTransparency(MaterialComponent &material, const Material &resource)
+        {
+            if (resource.alphaMode != AlphaMode::Blend)
+            {
+                return;
+            }
+
+            material.alphaMode = AlphaMode::Blend;
+            material.baseColor.a = std::min(material.baseColor.a, resource.baseColor.a);
+            material.castShadow = false;
+        }
+
+        MaterialComponent GetMaterial(const entt::registry &registry, EntityId entity, const MeshComponent &mesh, AssetManager *assetManager)
         {
             MaterialComponent material{};
             if (const auto *component = registry.try_get<MaterialComponent>(entity))
@@ -34,12 +71,27 @@ namespace Physara::Engine
                 material.materialPath = mesh.materialSlots.front().materialPath;
             }
 
+            if (assetManager != nullptr && !material.materialPath.empty())
+            {
+                if (const std::shared_ptr<Material> resource = assetManager->GetByPath<Material>(material.materialPath))
+                {
+                    if (!registry.try_get<MaterialComponent>(entity))
+                    {
+                        material = ToComponent(*resource);
+                    }
+                    else
+                    {
+                        ApplyResourceTransparency(material, *resource);
+                    }
+                }
+            }
+
             material.Sanitize();
             return material;
         }
     }
 
-    std::vector<RenderMeshSubmission> RenderSystem::Collect(Scene &scene)
+    std::vector<RenderMeshSubmission> RenderSystem::Collect(Scene &scene, AssetManager *assetManager)
     {
         scene.UpdateTransforms();
 
@@ -49,7 +101,7 @@ namespace Physara::Engine
         std::vector<RenderMeshSubmission> submissions;
         submissions.reserve(view.size_hint());
 
-        view.each([&submissions, &registry](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
+        view.each([&submissions, &registry, assetManager](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
         {
             if (!mesh.visible || !mesh.HasMesh())
             {
@@ -61,7 +113,7 @@ namespace Physara::Engine
             submission.meshPath = mesh.primitive.assetPath;
             submission.meshIndex = mesh.primitive.meshIndex;
             submission.primitiveIndex = mesh.primitive.primitiveIndex;
-            submission.material = RenderSystemDetail::GetMaterial(registry, entity, mesh);
+            submission.material = RenderSystemDetail::GetMaterial(registry, entity, mesh, assetManager);
             submission.materialPath = submission.material.materialPath;
             submission.model = transform.GetWorldMatrix();
             submission.inverseTransposeModel = glm::inverseTranspose(submission.model);

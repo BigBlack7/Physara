@@ -2,8 +2,8 @@
 
 namespace Physara::Engine
 {
-    void ForwardTransparentPass::Execute(const ForwardPassContext &)
+    void ForwardTransparentPass::Execute(const ForwardPassContext &context)
     {
-        // Transparent drawing will share the Forward shader once Mesh GPU buffers and per-material binding exist.
+        m_ForwardPass.ExecuteTransparent(context);
     }
 }

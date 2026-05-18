@@ -25,6 +25,7 @@ namespace Physara::Engine
 {
     class PipelineStateCache;
     class ShaderLibrary;
+    struct Texture;
 
     struct SkyboxPassContext
     {
@@ -49,6 +50,7 @@ namespace Physara::Engine
     private:
         void EnsureResources(const SkyboxPassContext &context);
         void EnsureSkyboxTexture(const SkyboxPassContext &context);
+        void UploadPanorama(const SkyboxPassContext &context, const Texture &texture);
         void UploadCubemap(const SkyboxPassContext &context, std::uint32_t faceSize, const std::vector<float> &pixels);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const SkyboxPassContext &context);
 

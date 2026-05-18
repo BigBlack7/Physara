@@ -52,6 +52,7 @@ vec3 BloomContribution(vec2 uv)
     float knee = max(uBloomParams.y, 0.0001);
     float intensity = uBloomParams.z;
     float radius = max(uBloomParams.w, 1.0);
+    float exposure = ExposureFromEV100(GetEV100(uCamera));
 
     vec3 sum = vec3(0.0);
     float weightSum = 0.0;
@@ -61,7 +62,8 @@ vec3 BloomContribution(vec2 uv)
         {
             vec2 offset = vec2(float(x), float(y)) * texel * radius;
             vec3 sampleColor = SampleHDR(uv + offset);
-            float brightness = max(max(sampleColor.r, sampleColor.g), sampleColor.b);
+            vec3 exposedSample = sampleColor * exposure;
+            float brightness = max(max(exposedSample.r, exposedSample.g), exposedSample.b);
             float soft = clamp((brightness - threshold + knee) / (2.0 * knee), 0.0, 1.0);
             float contribution = max(brightness - threshold, 0.0) + soft * soft * knee;
             float weight = contribution / max(brightness, PHYSARA_EPSILON);

@@ -12,6 +12,7 @@
 
 namespace Physara::Engine
 {
+    class AssetManager;
     class Scene;
 
     struct RenderMeshSubmission
@@ -33,6 +34,6 @@ namespace Physara::Engine
     class RenderSystem final
     {
     public:
-        [[nodiscard]] static std::vector<RenderMeshSubmission> Collect(Scene &scene);
+        [[nodiscard]] static std::vector<RenderMeshSubmission> Collect(Scene &scene, AssetManager *assetManager = nullptr);
     };
 }

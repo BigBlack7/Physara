@@ -8,5 +8,8 @@ namespace Physara::Engine
     {
     public:
         void Execute(const ForwardPassContext &context);
+
+    private:
+        ForwardOpaquePass m_ForwardPass{};
     };
 }

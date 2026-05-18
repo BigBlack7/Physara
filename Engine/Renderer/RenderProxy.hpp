@@ -8,6 +8,7 @@
 
 namespace Physara::Engine
 {
+    class AssetManager;
     class Scene;
 
     enum class RenderBucket : std::uint32_t
@@ -50,7 +51,7 @@ namespace Physara::Engine
     class RenderProxy final
     {
     public:
-        void Build(Scene &scene, const RenderView &view, FrameData &frameData);
+        void Build(Scene &scene, const RenderView &view, FrameData &frameData, AssetManager *assetManager = nullptr);
         void Reset();
 
         [[nodiscard]] const RenderDrawBuckets &GetBuckets() const { return m_Buckets; }

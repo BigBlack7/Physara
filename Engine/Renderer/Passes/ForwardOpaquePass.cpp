@@ -183,16 +183,26 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::Execute(const ForwardPassContext &context)
     {
+        ExecuteBuckets(context, false);
+    }
+
+    void ForwardOpaquePass::ExecuteTransparent(const ForwardPassContext &context)
+    {
+        ExecuteBuckets(context, true);
+    }
+
+    void ForwardOpaquePass::ExecuteBuckets(const ForwardPassContext &context, bool transparent)
+    {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
             context.frameData == nullptr || context.renderProxy == nullptr)
         {
             return;
         }
 
-        EnsureFrameBuffers(context);
         EnsureDefaultTextures(context);
-        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back);
-        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None);
+        EnsureFrameBuffers(context);
+        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back, transparent);
+        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None, transparent);
 
         context.commandList->SetViewport(
             0.f,
@@ -200,7 +210,12 @@ namespace Physara::Engine
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
-        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::vector<glm::vec4>{context.clearColor});
+        std::vector<glm::vec4> clearColors;
+        if (!transparent)
+        {
+            clearColors.push_back(context.clearColor);
+        }
+        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
 
         if (singleSidedPipeline != nullptr && doubleSidedPipeline != nullptr)
         {
@@ -223,13 +238,27 @@ namespace Physara::Engine
 
             ResetTextureBindings();
             context.commandList->SetPipelineState(singleSidedPipeline);
-            DrawBucket(context, context.renderProxy->GetBuckets().opaque, false);
-            DrawBucket(context, context.renderProxy->GetBuckets().unlit, false);
+            if (transparent)
+            {
+                DrawBucket(context, context.renderProxy->GetBuckets().transparent, false);
+            }
+            else
+            {
+                DrawBucket(context, context.renderProxy->GetBuckets().opaque, false);
+                DrawBucket(context, context.renderProxy->GetBuckets().unlit, false);
+            }
 
             ResetTextureBindings();
             context.commandList->SetPipelineState(doubleSidedPipeline);
-            DrawBucket(context, context.renderProxy->GetBuckets().opaque, true);
-            DrawBucket(context, context.renderProxy->GetBuckets().unlit, true);
+            if (transparent)
+            {
+                DrawBucket(context, context.renderProxy->GetBuckets().transparent, true);
+            }
+            else
+            {
+                DrawBucket(context, context.renderProxy->GetBuckets().opaque, true);
+                DrawBucket(context, context.renderProxy->GetBuckets().unlit, true);
+            }
         }
 
         context.commandList->EndRenderPass();
@@ -343,7 +372,7 @@ namespace Physara::Engine
         }
     }
 
-    RHI::RHIPipelineState *ForwardOpaquePass::GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode)
+    RHI::RHIPipelineState *ForwardOpaquePass::GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent)
     {
         if (context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
         {
@@ -372,9 +401,18 @@ namespace Physara::Engine
         pipelineDesc.vertexAttributes.push_back({3u, 0u, RHI::VertexFormat::RG32F, static_cast<std::uint32_t>(offsetof(MeshVertex, texCoord0))});
         pipelineDesc.rasterizerState.cullMode = cullMode;
         pipelineDesc.depthStencilState.depthTest = true;
-        pipelineDesc.depthStencilState.depthWrite = true;
+        pipelineDesc.depthStencilState.depthWrite = !transparent;
         pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::Less;
-        pipelineDesc.blendStates.push_back({});
+        RHI::RHIBlendState blendState{};
+        if (transparent)
+        {
+            blendState.blendEnable = true;
+            blendState.srcColor = RHI::BlendFactor::SrcAlpha;
+            blendState.dstColor = RHI::BlendFactor::OneMinusSrcAlpha;
+            blendState.srcAlpha = RHI::BlendFactor::One;
+            blendState.dstAlpha = RHI::BlendFactor::OneMinusSrcAlpha;
+        }
+        pipelineDesc.blendStates.push_back(blendState);
         return context.pipelineCache->GetOrCreate(pipelineDesc);
     }
 

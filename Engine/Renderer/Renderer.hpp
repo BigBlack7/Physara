@@ -71,6 +71,7 @@ namespace Physara::Engine
     private:
         void RecreateRenderTarget();
         void BuildRenderGraph();
+        void ExecuteForwardTransparentPass(RenderGraphContext &context);
         void ProcessPendingCapture();
 
     private:

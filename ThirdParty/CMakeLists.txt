@@ -73,8 +73,10 @@ target_include_directories(spdlog INTERFACE
 # tinyexr
 add_library(tinyexr STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/tinyexr_c_impl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/tinyexr_legacy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/deps/miniz/miniz.c
 )
 target_include_directories(tinyexr PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr/src/tinyexr/deps/miniz
 )
