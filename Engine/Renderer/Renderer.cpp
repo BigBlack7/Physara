@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,20 @@
 
 namespace Physara::Engine
 {
+    namespace RendererDetail
+    {
+        float ExposureFromEV100(float ev100)
+        {
+            return 1.f / (std::pow(2.f, ev100) * 1.2f);
+        }
+
+        glm::vec4 BuildSceneReferredClearColor(const glm::vec4 &displayColor, float ev100)
+        {
+            const float inverseExposure = 1.f / std::max(ExposureFromEV100(ev100), 0.000001f);
+            return glm::vec4(glm::vec3(displayColor) * inverseExposure, displayColor.a);
+        }
+    }
+
     Renderer::Renderer(RHI::RHIDevice *device)
     {
         Initialize(device);
@@ -31,7 +46,7 @@ namespace Physara::Engine
         m_PipelineStateCache.SetDevice(device);
         m_RenderPassDesc = {};
         m_RenderPassDesc.colorAttachments.push_back({
-            RHI::TextureFormat::RGBA8,
+            RHI::TextureFormat::RGBA16F,
             RHI::LoadOp::Clear,
             RHI::StoreOp::Store,
             1u});
@@ -47,6 +62,13 @@ namespace Physara::Engine
             m_SkyboxRenderPassDesc.colorAttachments[0].loadOp = RHI::LoadOp::Load;
         }
         m_SkyboxRenderPassDesc.depthAttachment.loadOp = RHI::LoadOp::Load;
+        m_FinalRenderPassDesc = {};
+        m_FinalRenderPassDesc.colorAttachments.push_back({
+            RHI::TextureFormat::RGBA8,
+            RHI::LoadOp::Clear,
+            RHI::StoreOp::Store,
+            1u});
+        m_FinalRenderPassDesc.hasDepth = false;
 
         if (m_Device == nullptr)
         {
@@ -58,8 +80,10 @@ namespace Physara::Engine
     {
         m_RenderGraph.Reset();
         m_Framebuffer.reset();
+        m_FinalFramebuffer.reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
+        m_SceneHDRColor.reset();
         m_ShaderLibrary.SetDevice(nullptr);
         m_PipelineStateCache.SetDevice(nullptr);
         m_ViewportWidth = 0;
@@ -158,7 +182,8 @@ namespace Physara::Engine
 
     bool Renderer::HasValidRenderTarget() const
     {
-        return m_SceneColor != nullptr && m_Framebuffer != nullptr && m_ViewportWidth > 0 && m_ViewportHeight > 0;
+        return m_SceneHDRColor != nullptr && m_SceneColor != nullptr && m_Framebuffer != nullptr &&
+               m_FinalFramebuffer != nullptr && m_ViewportWidth > 0 && m_ViewportHeight > 0;
     }
 
     void Renderer::ProcessPendingCapture()
@@ -186,28 +211,40 @@ namespace Physara::Engine
     {
         m_RenderGraph.Reset();
         m_Framebuffer.reset();
+        m_FinalFramebuffer.reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
+        m_SceneHDRColor.reset();
 
         if (m_Device == nullptr || m_ViewportWidth == 0 || m_ViewportHeight == 0)
         {
             return;
         }
 
-        RHI::RHITextureDesc sceneColorDesc{};
-        sceneColorDesc.width = m_ViewportWidth;
-        sceneColorDesc.height = m_ViewportHeight;
-        sceneColorDesc.format = RHI::TextureFormat::RGBA8;
-        sceneColorDesc.dimension = RHI::TextureDimension::Tex2D;
-        sceneColorDesc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::RenderTarget;
-        sceneColorDesc.mipLevels = 1;
-        sceneColorDesc.arrayLayers = 1;
-        sceneColorDesc.samples = 1;
+        RHI::RHITextureDesc sceneHDRDesc{};
+        sceneHDRDesc.width = m_ViewportWidth;
+        sceneHDRDesc.height = m_ViewportHeight;
+        sceneHDRDesc.format = RHI::TextureFormat::RGBA16F;
+        sceneHDRDesc.dimension = RHI::TextureDimension::Tex2D;
+        sceneHDRDesc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::RenderTarget;
+        sceneHDRDesc.mipLevels = 1;
+        sceneHDRDesc.arrayLayers = 1;
+        sceneHDRDesc.samples = 1;
 
+        m_SceneHDRColor = m_Device->CreateTexture(sceneHDRDesc);
+        if (m_SceneHDRColor == nullptr)
+        {
+            PHYSARA_CORE_ERROR("Renderer failed to create SceneHDR render target.");
+            return;
+        }
+
+        RHI::RHITextureDesc sceneColorDesc = sceneHDRDesc;
+        sceneColorDesc.format = RHI::TextureFormat::RGBA8;
         m_SceneColor = m_Device->CreateTexture(sceneColorDesc);
         if (m_SceneColor == nullptr)
         {
             PHYSARA_CORE_ERROR("Renderer failed to create SceneColor render target.");
+            m_SceneHDRColor.reset();
             return;
         }
 
@@ -225,12 +262,13 @@ namespace Physara::Engine
         if (m_SceneDepth == nullptr)
         {
             PHYSARA_CORE_ERROR("Renderer failed to create SceneDepth render target.");
+            m_SceneHDRColor.reset();
             m_SceneColor.reset();
             return;
         }
 
         RHI::RHIFramebufferDesc framebufferDesc{};
-        framebufferDesc.colorAttachments.push_back(m_SceneColor.get());
+        framebufferDesc.colorAttachments.push_back(m_SceneHDRColor.get());
         framebufferDesc.depthAttachment = m_SceneDepth.get();
         framebufferDesc.width = m_ViewportWidth;
         framebufferDesc.height = m_ViewportHeight;
@@ -239,8 +277,27 @@ namespace Physara::Engine
         m_Framebuffer = m_Device->CreateFramebuffer(framebufferDesc);
         if (m_Framebuffer == nullptr)
         {
-            PHYSARA_CORE_ERROR("Renderer failed to create SceneColor framebuffer.");
+            PHYSARA_CORE_ERROR("Renderer failed to create SceneHDR framebuffer.");
+            m_SceneHDRColor.reset();
             m_SceneColor.reset();
+            m_SceneDepth.reset();
+            return;
+        }
+
+        RHI::RHIFramebufferDesc finalFramebufferDesc{};
+        finalFramebufferDesc.colorAttachments.push_back(m_SceneColor.get());
+        finalFramebufferDesc.width = m_ViewportWidth;
+        finalFramebufferDesc.height = m_ViewportHeight;
+        finalFramebufferDesc.renderPassDesc = &m_FinalRenderPassDesc;
+
+        m_FinalFramebuffer = m_Device->CreateFramebuffer(finalFramebufferDesc);
+        if (m_FinalFramebuffer == nullptr)
+        {
+            PHYSARA_CORE_ERROR("Renderer failed to create SceneColor framebuffer.");
+            m_Framebuffer.reset();
+            m_SceneHDRColor.reset();
+            m_SceneColor.reset();
+            m_SceneDepth.reset();
         }
     }
 
@@ -252,11 +309,12 @@ namespace Physara::Engine
             return;
         }
 
+        RenderGraphResourceHandle sceneHDR = m_RenderGraph.ImportTexture("SceneHDR", *m_SceneHDRColor);
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
 
         m_RenderGraph.AddPass("ForwardOpaque")
-            .Write(sceneColor)
+            .Write(sceneHDR)
             .SetExecute([this](RenderGraphContext &context)
                         {
                             ForwardPassContext passContext{};
@@ -269,15 +327,15 @@ namespace Physara::Engine
                             passContext.frameData = &m_FrameData;
                             passContext.renderProxy = &m_RenderProxy;
                             passContext.assetManager = m_AssetManager;
-                            passContext.clearColor = m_ClearColor;
+                            passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
                             m_ForwardOpaquePass.Execute(passContext);
                         });
 
         if (drawSkybox)
         {
             m_RenderGraph.AddPass("Skybox")
-                .Read(sceneColor)
-                .Write(sceneColor)
+                .Read(sceneHDR)
+                .Write(sceneHDR)
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 SkyboxPassContext passContext{};
@@ -289,9 +347,37 @@ namespace Physara::Engine
                                 passContext.pipelineCache = &m_PipelineStateCache;
                                 passContext.frameData = &m_FrameData;
                                 passContext.environmentPath = m_EnvironmentMapPath;
+                                passContext.exposureCompensation = m_SkyboxExposureCompensation;
                                 passContext.enabled = true;
                                 m_SkyboxPass.Execute(passContext);
                             });
         }
+
+        m_RenderGraph.AddPass("PostProcess")
+            .Read(sceneHDR)
+            .Write(sceneColor)
+            .SetExecute([this](RenderGraphContext &context)
+                        {
+                            RHI::RHIResourceBarrier barrier{};
+                            barrier.before = RHI::ResourceState::RenderTarget;
+                            barrier.after = RHI::ResourceState::ShaderResource;
+                            barrier.srcStages = RHI::ShaderStageBit::Fragment;
+                            barrier.dstStages = RHI::ShaderStageBit::Fragment;
+                            barrier.srcAccess = RHI::ResourceAccess::ColorAttachmentWrite;
+                            barrier.dstAccess = RHI::ResourceAccess::ShaderRead;
+                            context.commandList.TextureBarrier(m_SceneHDRColor.get(), barrier);
+
+                            PostProcessPassContext passContext{};
+                            passContext.device = m_Device;
+                            passContext.commandList = &context.commandList;
+                            passContext.framebuffer = m_FinalFramebuffer.get();
+                            passContext.renderPassDesc = &m_FinalRenderPassDesc;
+                            passContext.shaderLibrary = &m_ShaderLibrary;
+                            passContext.pipelineCache = &m_PipelineStateCache;
+                            passContext.frameData = &m_FrameData;
+                            passContext.sceneHDR = m_SceneHDRColor.get();
+                            passContext.settings = m_PostProcessSettings;
+                            m_PostProcessPass.Execute(passContext);
+                        });
     }
 }

@@ -89,7 +89,19 @@ namespace Physara::Editor
     struct EnvironmentSettings
     {
         std::filesystem::path skyboxPath{};
+        float skyboxExposureCompensation{0.f};
         bool skyboxEnabled{true};
+    };
+
+    struct PostProcessSettings
+    {
+        bool toneMappingEnabled{true};
+        bool bloomEnabled{true};
+        bool fxaaEnabled{true};
+        float bloomThreshold{1.f};
+        float bloomKnee{0.5f};
+        float bloomIntensity{0.08f};
+        float bloomRadius{2.f};
     };
 
     struct EditorUIState
@@ -110,6 +122,7 @@ namespace Physara::Editor
         DebugViewMode debugViewMode{DebugViewMode::None};
         CaptureSettings capture{};
         EnvironmentSettings environment{};
+        PostProcessSettings postProcess{};
     };
 
     struct EditorContext

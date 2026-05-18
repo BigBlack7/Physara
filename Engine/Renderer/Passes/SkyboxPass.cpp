@@ -23,8 +23,14 @@ namespace Physara::Engine
     namespace SkyboxPassDetail
     {
         constexpr std::uint32_t CameraBinding = 0u;
+        constexpr std::uint32_t SettingsBinding = 4u;
         constexpr std::uint32_t SkyboxTextureBinding = 5u;
         constexpr float Pi = 3.14159265358979323846f;
+
+        struct SettingsGPUData
+        {
+            glm::vec4 params{0.f};
+        };
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -191,6 +197,8 @@ namespace Physara::Engine
         }
 
         m_CameraBuffer->UploadData(&context.frameData->camera, sizeof(CameraData));
+        const SkyboxPassDetail::SettingsGPUData settingsData{glm::vec4(context.exposureCompensation, 0.f, 0.f, 0.f)};
+        m_SettingsBuffer->UploadData(&settingsData, sizeof(settingsData));
 
         context.commandList->SetViewport(
             0.f,
@@ -201,8 +209,9 @@ namespace Physara::Engine
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::vector<glm::vec4>{});
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, m_CameraBuffer.get());
+        context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, m_SettingsBuffer.get());
         context.commandList->SetTexture(SkyboxPassDetail::SkyboxTextureBinding, m_SkyboxTexture.get(), m_Sampler.get());
-        context.commandList->Draw(3u, 1u, 0u, 0u);
+        context.commandList->Draw(36u, 1u, 0u, 0u);
         context.commandList->EndRenderPass();
     }
 
@@ -218,6 +227,12 @@ namespace Physara::Engine
         {
             m_CameraBuffer = context.device->CreateBuffer(
                 SkyboxPassDetail::DynamicBufferDesc(sizeof(CameraData), RHI::BufferUsage::Uniform));
+        }
+
+        if (m_SettingsBuffer == nullptr)
+        {
+            m_SettingsBuffer = context.device->CreateBuffer(
+                SkyboxPassDetail::DynamicBufferDesc(sizeof(SkyboxPassDetail::SettingsGPUData), RHI::BufferUsage::Uniform));
         }
 
         if (m_Sampler == nullptr)

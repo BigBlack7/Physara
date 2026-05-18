@@ -10,16 +10,30 @@ layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
 
 layout(location = 0)out vec3 outDirection;
 
-const vec2 kPositions[3] = vec2[3](
-    vec2(-1.0, -1.0),
-    vec2(3.0, -1.0),
-    vec2(-1.0, 3.0));
+const vec3 kPositions[36] = vec3[36](
+    vec3(-1.0, -1.0, 1.0), vec3(1.0, -1.0, 1.0), vec3(1.0, 1.0, 1.0),
+    vec3(1.0, 1.0, 1.0), vec3(-1.0, 1.0, 1.0), vec3(-1.0, -1.0, 1.0),
+
+    vec3(1.0, -1.0, -1.0), vec3(-1.0, -1.0, -1.0), vec3(-1.0, 1.0, -1.0),
+    vec3(-1.0, 1.0, -1.0), vec3(1.0, 1.0, -1.0), vec3(1.0, -1.0, -1.0),
+
+    vec3(-1.0, -1.0, -1.0), vec3(-1.0, -1.0, 1.0), vec3(-1.0, 1.0, 1.0),
+    vec3(-1.0, 1.0, 1.0), vec3(-1.0, 1.0, -1.0), vec3(-1.0, -1.0, -1.0),
+
+    vec3(1.0, -1.0, 1.0), vec3(1.0, -1.0, -1.0), vec3(1.0, 1.0, -1.0),
+    vec3(1.0, 1.0, -1.0), vec3(1.0, 1.0, 1.0), vec3(1.0, -1.0, 1.0),
+
+    vec3(-1.0, 1.0, 1.0), vec3(1.0, 1.0, 1.0), vec3(1.0, 1.0, -1.0),
+    vec3(1.0, 1.0, -1.0), vec3(-1.0, 1.0, -1.0), vec3(-1.0, 1.0, 1.0),
+
+    vec3(-1.0, -1.0, -1.0), vec3(1.0, -1.0, -1.0), vec3(1.0, -1.0, 1.0),
+    vec3(1.0, -1.0, 1.0), vec3(-1.0, -1.0, 1.0), vec3(-1.0, -1.0, -1.0));
 
 void main()
 {
-    vec2 position = kPositions[gl_VertexID];
-    vec4 viewPosition = uCamera.inverseProjection * vec4(position, 1.0, 1.0);
-    vec3 viewDirection = normalize(viewPosition.xyz / viewPosition.w);
-    outDirection = normalize((uCamera.inverseView * vec4(viewDirection, 0.0)).xyz);
-    gl_Position = vec4(position.xy, 1.0, 1.0);
+    vec3 position = kPositions[gl_VertexID];
+    mat4 viewWithoutTranslation = mat4(mat3(uCamera.view));
+    vec4 clipPosition = uCamera.projection * viewWithoutTranslation * vec4(position, 1.0);
+    outDirection = position;
+    gl_Position = clipPosition.xyww;
 }

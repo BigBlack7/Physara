@@ -13,6 +13,7 @@
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
+#include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
@@ -141,6 +142,11 @@ namespace Physara::Engine
             bounds.radius = value.value("radius", 0.f);
             bounds.valid = value.value("valid", false);
             return bounds;
+        }
+
+        std::string MeshResourcePath(const std::string &assetPath, std::uint32_t meshIndex)
+        {
+            return assetPath + "#mesh/" + std::to_string(meshIndex);
         }
     }
 
@@ -319,7 +325,7 @@ namespace Physara::Engine
 
             std::unordered_map<std::uint64_t, Entity> idToEntity;
             idToEntity.reserve(entities.size());
-            std::unordered_set<std::string> meshAssetPaths;
+            std::unordered_map<std::string, std::uint32_t> meshAssetPaths;
 
             for (const SceneSerializerDetail::json &serialized : entities)
             {
@@ -389,7 +395,7 @@ namespace Physara::Engine
                         m.value("primitiveIndex", 0u));
                     if (!mesh.primitive.assetPath.empty())
                     {
-                        meshAssetPaths.insert(mesh.primitive.assetPath);
+                        meshAssetPaths.emplace(mesh.primitive.assetPath, mesh.primitive.meshIndex);
                     }
                     mesh.visible = m.value("visible", true);
                     mesh.receiveShadows = m.value("receiveShadows", true);
@@ -440,8 +446,14 @@ namespace Physara::Engine
 
             if (assetManager != nullptr)
             {
-                for (const std::string &meshAssetPath : meshAssetPaths)
+                for (const auto &[meshAssetPath, meshIndex] : meshAssetPaths)
                 {
+                    const std::string meshResourcePath = SceneSerializerDetail::MeshResourcePath(meshAssetPath, meshIndex);
+                    if (assetManager->GetByPath<Mesh>(meshResourcePath) != nullptr)
+                    {
+                        continue;
+                    }
+
                     if (!GLTFLoader::LoadResources(meshAssetPath, assetManager))
                     {
                         PHYSARA_CORE_WARN("Scene mesh resource preload failed: '{}'.", meshAssetPath);

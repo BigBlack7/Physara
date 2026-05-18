@@ -100,8 +100,15 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::TextUnformatted("Post process controls are reserved for the final composite pass.");
-            ImGui::TextUnformatted("Reserved: tone mapping, exposure, bloom and FXAA.");
+            ImGui::Checkbox("ACES Tone Mapping", &m_Context.settings.postProcess.toneMappingEnabled);
+            ImGui::Checkbox("FXAA", &m_Context.settings.postProcess.fxaaEnabled);
+            ImGui::Checkbox("Bloom", &m_Context.settings.postProcess.bloomEnabled);
+            ImGui::BeginDisabled(!m_Context.settings.postProcess.bloomEnabled);
+            ImGui::SliderFloat("Threshold", &m_Context.settings.postProcess.bloomThreshold, 0.f, 10.f, "%.2f");
+            ImGui::SliderFloat("Knee", &m_Context.settings.postProcess.bloomKnee, 0.f, 2.f, "%.2f");
+            ImGui::SliderFloat("Intensity", &m_Context.settings.postProcess.bloomIntensity, 0.f, 1.f, "%.3f");
+            ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 1.f, 8.f, "%.1f");
+            ImGui::EndDisabled();
         }
     }
 
@@ -142,6 +149,7 @@ namespace Physara::Editor
         if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::Checkbox("Skybox", &m_Context.settings.environment.skyboxEnabled);
+            ImGui::SliderFloat("Skybox EV", &m_Context.settings.environment.skyboxExposureCompensation, -8.f, 8.f, "%.2f");
 
             const std::vector<std::filesystem::path> maps =
                 RendererSettingsPanelDetail::CollectEnvironmentMaps(m_Context.assetsRootPath);
@@ -183,6 +191,7 @@ namespace Physara::Editor
             }
 
             ImGui::TextUnformatted("Input: one equirectangular HDR panorama from Assets/Textures/Env.");
+            ImGui::TextUnformatted("Skybox EV adjusts background display brightness; IBL intensity is separate.");
             ImGui::TextUnformatted("IBL precompute will reuse this environment in a later phase.");
         }
     }

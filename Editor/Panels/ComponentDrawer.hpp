@@ -108,6 +108,7 @@ namespace Physara::Editor
         }
 
         ImGui::Text("EV100: %.2f", camera.GetEV100());
+        ImGui::TextDisabled("Scene View uses the Editor Camera; this component drives capture views.");
         return changed;
     }
 

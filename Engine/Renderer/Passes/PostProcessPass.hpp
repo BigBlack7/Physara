@@ -1,17 +1,11 @@
 #pragma once
 
-#include <filesystem>
 #include <memory>
-#include <string>
-#include <vector>
 
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
-#include <Engine/RHI/Resource/RHITexture.hpp>
-
-#include <glm/vec4.hpp>
 
 namespace Physara::RHI
 {
@@ -19,6 +13,7 @@ namespace Physara::RHI
     class RHIDevice;
     class RHIFramebuffer;
     class RHIPipelineState;
+    class RHITexture;
 }
 
 namespace Physara::Engine
@@ -26,7 +21,18 @@ namespace Physara::Engine
     class PipelineStateCache;
     class ShaderLibrary;
 
-    struct SkyboxPassContext
+    struct PostProcessSettings
+    {
+        bool toneMappingEnabled{true};
+        bool bloomEnabled{true};
+        bool fxaaEnabled{true};
+        float bloomThreshold{1.0f};
+        float bloomKnee{0.5f};
+        float bloomIntensity{0.08f};
+        float bloomRadius{2.0f};
+    };
+
+    struct PostProcessPassContext
     {
         RHI::RHIDevice *device{nullptr};
         RHI::RHICommandList *commandList{nullptr};
@@ -35,29 +41,22 @@ namespace Physara::Engine
         ShaderLibrary *shaderLibrary{nullptr};
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
-        std::filesystem::path environmentPath{};
-        float exposureCompensation{0.f};
-        bool enabled{true};
+        RHI::RHITexture *sceneHDR{nullptr};
+        PostProcessSettings settings{};
     };
 
-    class SkyboxPass final
+    class PostProcessPass final
     {
     public:
-        void Execute(const SkyboxPassContext &context);
-        void InvalidateEnvironment();
+        void Execute(const PostProcessPassContext &context);
 
     private:
-        void EnsureResources(const SkyboxPassContext &context);
-        void EnsureSkyboxTexture(const SkyboxPassContext &context);
-        void UploadCubemap(const SkyboxPassContext &context, std::uint32_t faceSize, const std::vector<float> &pixels);
-        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const SkyboxPassContext &context);
+        void EnsureResources(const PostProcessPassContext &context);
+        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const PostProcessPassContext &context);
 
     private:
         std::unique_ptr<RHI::RHIBuffer> m_CameraBuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_SettingsBuffer{};
-        std::unique_ptr<RHI::RHISampler> m_Sampler{};
-        std::unique_ptr<RHI::RHITexture> m_SkyboxTexture{};
-        std::filesystem::path m_LoadedEnvironmentPath{};
-        bool m_LoggedPlaceholder{false};
+        std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
     };
 }

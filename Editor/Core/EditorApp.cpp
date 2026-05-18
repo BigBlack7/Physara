@@ -396,7 +396,17 @@ namespace Physara::Editor
                 ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
                 : std::filesystem::path{};
         m_Renderer->SetSkyboxEnabled(m_Context.settings.environment.skyboxEnabled);
+        m_Renderer->SetSkyboxExposureCompensation(m_Context.settings.environment.skyboxExposureCompensation);
         m_Renderer->SetEnvironmentMapPath(environmentPath);
+        Engine::PostProcessSettings postProcessSettings{};
+        postProcessSettings.toneMappingEnabled = m_Context.settings.postProcess.toneMappingEnabled;
+        postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
+        postProcessSettings.fxaaEnabled = m_Context.settings.postProcess.fxaaEnabled;
+        postProcessSettings.bloomThreshold = m_Context.settings.postProcess.bloomThreshold;
+        postProcessSettings.bloomKnee = m_Context.settings.postProcess.bloomKnee;
+        postProcessSettings.bloomIntensity = m_Context.settings.postProcess.bloomIntensity;
+        postProcessSettings.bloomRadius = m_Context.settings.postProcess.bloomRadius;
+        m_Renderer->SetPostProcessSettings(postProcessSettings);
         if (m_Context.activeScene != nullptr)
         {
             m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f));

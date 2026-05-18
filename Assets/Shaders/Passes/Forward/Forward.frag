@@ -41,27 +41,6 @@ vec3 SrgbToLinear(vec3 value)
     return pow(max(value, vec3(0.0)), vec3(2.2));
 }
 
-vec3 LinearToSrgb(vec3 value)
-{
-    return pow(max(value, vec3(0.0)), vec3(1.0 / 2.2));
-}
-
-vec3 TonemapACES(vec3 color)
-{
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
-}
-
-vec3 ToViewportOutput(vec3 linearColor)
-{
-    vec3 exposed = linearColor * ExposureFromEV100(GetEV100(uCamera));
-    return LinearToSrgb(TonemapACES(exposed));
-}
-
 vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldTangent, vec2 texCoord)
 {
     if (!inputs.hasNormalTexture)
@@ -112,7 +91,7 @@ void main()
     
     if (material.shadingModel == PHYSARA_SHADING_MODEL_UNLIT)
     {
-        outColor = vec4(ToViewportOutput(material.emissive), material.baseColor.a);
+        outColor = vec4(material.emissive, material.baseColor.a);
         return;
     }
     
@@ -135,5 +114,5 @@ void main()
     vec3 ambient = material.diffuseColor * material.ambientOcclusion * 0.04;
     color += ambient;
     color += material.emissive;
-    outColor = vec4(ToViewportOutput(color), material.baseColor.a);
+    outColor = vec4(color, material.baseColor.a);
 }

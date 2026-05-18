@@ -10,27 +10,19 @@ layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
     CameraData uCamera;
 };
 
+layout(std140, binding = PHYSARA_BINDING_SKYBOX_SETTINGS)uniform SkyboxSettingsBuffer
+{
+    vec4 uSkyboxParams;
+};
+
 layout(binding = PHYSARA_BINDING_SKYBOX_TEXTURE)uniform samplerCube uSkyboxTexture;
 
 layout(location = 0)out vec4 outColor;
 
-vec3 LinearToSrgb(vec3 value)
-{
-    return pow(max(value, vec3(0.0)), vec3(1.0 / 2.2));
-}
-
-vec3 TonemapACES(vec3 color)
-{
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
-}
-
 void main()
 {
     vec3 hdrColor = texture(uSkyboxTexture, normalize(inDirection)).rgb;
-    outColor = vec4(LinearToSrgb(TonemapACES(hdrColor)), 1.0);
+    float exposure = max(ExposureFromEV100(GetEV100(uCamera)), PHYSARA_EPSILON);
+    float exposureCompensation = exp2(uSkyboxParams.x);
+    outColor = vec4(hdrColor * exposureCompensation / exposure, 1.0);
 }

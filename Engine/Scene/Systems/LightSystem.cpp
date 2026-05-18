@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 #include <Engine/Scene/Components/LightComponent.hpp>
@@ -55,6 +57,65 @@ namespace Physara::Engine
             return 0.f;
         }
 
+        float SrgbChannelToLinear(float value)
+        {
+            value = std::clamp(value, 0.f, 1.f);
+            if (value <= 0.04045f)
+            {
+                return value / 12.92f;
+            }
+            return std::pow((value + 0.055f) / 1.055f, 2.4f);
+        }
+
+        glm::vec3 ColorTemperatureToLinearRgb(float kelvin)
+        {
+            kelvin = std::clamp(kelvin, 1000.f, 40000.f) / 100.f;
+
+            float red = 1.f;
+            if (kelvin > 66.f)
+            {
+                red = 1.292936186062745f * std::pow(kelvin - 60.f, -0.1332047592f);
+            }
+
+            float green = 1.f;
+            if (kelvin <= 66.f)
+            {
+                green = 0.3900815787690196f * std::log(kelvin) - 0.6318414437886275f;
+            }
+            else
+            {
+                green = 1.129890860895294f * std::pow(kelvin - 60.f, -0.0755148492f);
+            }
+
+            float blue = 1.f;
+            if (kelvin < 19.f)
+            {
+                blue = 0.f;
+            }
+            else if (kelvin < 66.f)
+            {
+                blue = 0.5432067891101961f * std::log(kelvin - 10.f) - 1.19625408914f;
+            }
+
+            glm::vec3 linear(
+                SrgbChannelToLinear(red),
+                SrgbChannelToLinear(green),
+                SrgbChannelToLinear(blue));
+
+            const float luminance = glm::dot(linear, glm::vec3(0.2126f, 0.7152f, 0.0722f));
+            return luminance > 0.0001f ? linear / luminance : glm::vec3(1.f);
+        }
+
+        glm::vec3 GetLightColor(const LightComponent &light)
+        {
+            glm::vec3 color = glm::max(light.color, glm::vec3(0.f));
+            if (light.useColorTemperature)
+            {
+                color *= ColorTemperatureToLinearRgb(light.colorTemperatureKelvin);
+            }
+            return color;
+        }
+
         glm::vec2 GetSpotScaleOffset(const LightComponent &light)
         {
             const float cosInner = std::cos(light.innerConeAngleRadians);
@@ -99,7 +160,7 @@ namespace Physara::Engine
             light.directionType = glm::vec4(
                 LightSystemDetail::GetForwardDirection(transform.GetWorldMatrix()),
                 static_cast<float>(LightSystemDetail::ToRenderLightType(component.type)));
-            light.colorIntensity = glm::vec4(component.color, LightSystemDetail::GetIntensity(component));
+            light.colorIntensity = glm::vec4(LightSystemDetail::GetLightColor(component), LightSystemDetail::GetIntensity(component));
 
             const glm::vec2 spotScaleOffset = LightSystemDetail::GetSpotScaleOffset(component);
             light.spotAngles = glm::vec4(spotScaleOffset, component.innerConeAngleRadians, component.outerConeAngleRadians);
