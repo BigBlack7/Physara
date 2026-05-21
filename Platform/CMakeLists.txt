@@ -1,9 +1,17 @@
-file(GLOB_RECURSE PLATFORM_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
-)
+add_library(Platform STATIC)
 
-add_library(Platform STATIC ${PLATFORM_SOURCES})
+target_sources(Platform PRIVATE
+    FileSystem/FileSystem.cpp
+    FileSystem/FileSystem.hpp
+    Input/GLFWInput.cpp
+    Input/GLFWInput.hpp
+    Input/IInput.hpp
+    Input/KeyCodes.hpp
+    Window/GLFWWindowContext.hpp
+    Window/GLFWWindowOpenGL.cpp
+    Window/GLFWWindowOpenGL.hpp
+    Window/IWindow.hpp
+)
 
 target_include_directories(Platform PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..

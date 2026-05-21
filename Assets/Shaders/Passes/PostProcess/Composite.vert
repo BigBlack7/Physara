@@ -1,5 +1,4 @@
 #version 460 core
-#extension GL_ARB_shading_language_include : require
 
 layout(location = 0)out vec2 outUV;
 

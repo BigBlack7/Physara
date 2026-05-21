@@ -130,6 +130,7 @@ namespace Physara::Editor
 
         ImGui::BeginChild(LogPanelDetail::ScrollRegionName, ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar);
 
+        bool hasVisibleLine = false;
         for (const LogPanelLine &line : m_CachedLogs)
         {
             if (!PassesSearch(line))
@@ -140,6 +141,14 @@ namespace Physara::Editor
             ImGui::PushStyleColor(ImGuiCol_Text, LogPanelDetail::LevelColor(line.level));
             ImGui::TextUnformatted(line.text.c_str());
             ImGui::PopStyleColor();
+            hasVisibleLine = true;
+        }
+
+        if (!hasVisibleLine)
+        {
+            ImGui::TextDisabled(m_LastClearedLogLine.empty()
+                                    ? "No logs captured yet."
+                                    : "Log view is clear. New logs will appear here.");
         }
 
         if (m_AutoScroll)

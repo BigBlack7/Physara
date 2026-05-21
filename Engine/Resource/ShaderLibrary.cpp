@@ -6,6 +6,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
+#include <Engine/Resource/AssetPath.hpp>
 #include <Engine/Resource/Loaders/ShaderLoader.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
@@ -13,11 +14,6 @@ namespace Physara::Engine
 {
     namespace ShaderLibraryDetail
     {
-        std::string NormalizeAssetPath(const std::filesystem::path &path)
-        {
-            return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
-        }
-
         bool ContainsDependency(const std::vector<std::string> &dependencies, const std::string &path)
         {
             return std::find(dependencies.begin(), dependencies.end(), path) != dependencies.end();
@@ -86,7 +82,7 @@ namespace Physara::Engine
 
     void ShaderLibrary::InvalidatePath(const std::filesystem::path &path)
     {
-        const std::string normalizedPath = ShaderLibraryDetail::NormalizeAssetPath(path);
+        const std::string normalizedPath = AssetPath::NormalizeAssetPath(path);
         for (auto it = m_Cache.begin(); it != m_Cache.end();)
         {
             if (ShaderLibraryDetail::ContainsDependency(it->second->dependencies, normalizedPath))
@@ -122,9 +118,9 @@ namespace Physara::Engine
     {
         ShaderVariantKey key{};
         key.debugName = desc.debugName;
-        key.vertexPath = ShaderLibraryDetail::NormalizeAssetPath(desc.vertexPath);
-        key.fragmentPath = ShaderLibraryDetail::NormalizeAssetPath(desc.fragmentPath);
-        key.computePath = ShaderLibraryDetail::NormalizeAssetPath(desc.computePath);
+        key.vertexPath = AssetPath::NormalizeAssetPath(desc.vertexPath);
+        key.fragmentPath = AssetPath::NormalizeAssetPath(desc.fragmentPath);
+        key.computePath = AssetPath::NormalizeAssetPath(desc.computePath);
         key.featureMask = desc.featureMask;
         key.defines = desc.defines;
         std::sort(key.defines.begin(), key.defines.end(), [](const ShaderDefine &lhs, const ShaderDefine &rhs)
@@ -217,7 +213,7 @@ namespace Physara::Engine
 
     std::filesystem::file_time_type ShaderLibrary::GetLastWriteTime(const std::filesystem::path &path)
     {
-        const std::string resolvedPath = Platform::FileSystem::ResolvePath(ShaderLibraryDetail::NormalizeAssetPath(path));
+        const std::string resolvedPath = Platform::FileSystem::ResolvePath(AssetPath::NormalizeAssetPath(path));
         std::error_code error{};
         const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(resolvedPath, error);
         return error ? std::filesystem::file_time_type{} : writeTime;

@@ -9,7 +9,6 @@
 
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
-#include <Engine/Renderer/Passes/ForwardTransparentPass.hpp>
 #include <Engine/Renderer/Passes/PostProcessPass.hpp>
 #include <Engine/Renderer/Passes/SkyboxPass.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
@@ -48,7 +47,7 @@ namespace Physara::Engine
         void ResizeViewport(std::uint32_t width, std::uint32_t height);
         void BeginFrame(const RenderView &view, float deltaTimeSeconds = 0.f);
         void Render(const RenderView &view, float deltaTimeSeconds = 0.f);
-        void RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds = 0.f);
+        void RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds = 0.f, bool transformsAlreadyUpdated = false);
         void RenderClear();
         CaptureResult CaptureCurrentView(const CaptureDesc &desc);
         void RequestCapture(const CaptureDesc &desc);
@@ -71,7 +70,7 @@ namespace Physara::Engine
     private:
         void RecreateRenderTarget();
         void BuildRenderGraph();
-        void ExecuteForwardTransparentPass(RenderGraphContext &context);
+        void ExecuteTransparentForwardPass(RenderGraphContext &context);
         void ProcessPendingCapture();
 
     private:
@@ -90,7 +89,6 @@ namespace Physara::Engine
         ShaderLibrary m_ShaderLibrary{};
         PipelineStateCache m_PipelineStateCache{};
         ForwardOpaquePass m_ForwardOpaquePass{};
-        ForwardTransparentPass m_ForwardTransparentPass{};
         SkyboxPass m_SkyboxPass{};
         PostProcessPass m_PostProcessPass{};
         FrameData m_FrameData{};

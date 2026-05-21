@@ -52,12 +52,39 @@ namespace Physara::Engine
         glm::vec4 shadowParams{0.f, 0.f, 0.f, 0.f};
     };
 
+    struct FrameStatistics
+    {
+        std::uint32_t visibleSubmissions{0};
+        std::uint32_t opaqueItems{0};
+        std::uint32_t unlitItems{0};
+        std::uint32_t transparentItems{0};
+        std::uint32_t lightCount{0};
+        std::uint32_t meshUploads{0};
+        std::uint32_t textureUploads{0};
+        std::uint64_t drawCalls{0};
+        std::uint64_t instances{0};
+        std::uint64_t triangles{0};
+        std::uint64_t bufferUploadBytes{0};
+        std::uint64_t meshUploadBytes{0};
+        std::uint64_t textureUploadBytes{0};
+        float sceneBuildCpuMs{0.f};
+        float renderGraphCpuMs{0.f};
+        float forwardOpaqueCpuMs{0.f};
+        float skyboxCpuMs{0.f};
+        float forwardTransparentCpuMs{0.f};
+        float postProcessCpuMs{0.f};
+
+        void Reset();
+        [[nodiscard]] std::uint64_t TotalUploadBytes() const;
+    };
+
     struct FrameData
     {
         RenderView view{};
         CameraData camera{};
         std::vector<ObjectData> objects{};
         std::vector<LightData> lights{};
+        FrameStatistics stats{};
         std::uint64_t frameIndex{0};
         float deltaTimeSeconds{0.f};
 

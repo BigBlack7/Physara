@@ -1,14 +1,99 @@
-file(GLOB_RECURSE ENGINE_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
-)
+add_library(Engine STATIC)
 
-add_library(Engine STATIC ${ENGINE_SOURCES})
+target_sources(Engine PRIVATE
+    Core/Log.cpp
+    Core/Log.hpp
+    Core/Time.cpp
+    Core/Time.hpp
+    Renderer/FrameData.cpp
+    Renderer/FrameData.hpp
+    Renderer/Passes/ForwardOpaquePass.cpp
+    Renderer/Passes/ForwardOpaquePass.hpp
+    Renderer/Passes/PostProcessPass.cpp
+    Renderer/Passes/PostProcessPass.hpp
+    Renderer/Passes/SkyboxPass.cpp
+    Renderer/Passes/SkyboxPass.hpp
+    Renderer/PipelineStateCache.cpp
+    Renderer/PipelineStateCache.hpp
+    Renderer/Renderer.cpp
+    Renderer/Renderer.hpp
+    Renderer/RendererCapture.cpp
+    Renderer/RendererCapture.hpp
+    Renderer/RenderGraph/PassNode.hpp
+    Renderer/RenderGraph/RenderGraph.cpp
+    Renderer/RenderGraph/RenderGraph.hpp
+    Renderer/RenderGraph/ResourceNode.hpp
+    Renderer/RenderGraph/RGBuilder.cpp
+    Renderer/RenderGraph/RGBuilder.hpp
+    Renderer/RenderProxy.cpp
+    Renderer/RenderProxy.hpp
+    Renderer/RenderView.cpp
+    Renderer/RenderView.hpp
+    Renderer/UploadHasher.hpp
+    Resource/AssetManager.cpp
+    Resource/AssetManager.hpp
+    Resource/AssetPath.cpp
+    Resource/AssetPath.hpp
+    Resource/BuiltinPrimitives.cpp
+    Resource/BuiltinPrimitives.hpp
+    Resource/Handle.hpp
+    Resource/Loaders/GLTFLoader.cpp
+    Resource/Loaders/GLTFLoader.hpp
+    Resource/Loaders/ShaderLoader.cpp
+    Resource/Loaders/ShaderLoader.hpp
+    Resource/Loaders/TextureLoader.cpp
+    Resource/Loaders/TextureLoader.hpp
+    Resource/ShaderLibrary.cpp
+    Resource/ShaderLibrary.hpp
+    Resource/Types/Material.hpp
+    Resource/Types/Mesh.hpp
+    Resource/Types/Shader.cpp
+    Resource/Types/Shader.hpp
+    Resource/Types/Texture.hpp
+    RHI/Command/RHICommandList.hpp
+    RHI/Core/IImGuiBackend.hpp
+    RHI/Core/RHIDevice.hpp
+    RHI/Descriptors/RHIBufferDesc.hpp
+    RHI/Descriptors/RHISamplerDesc.hpp
+    RHI/Descriptors/RHITextureDesc.hpp
+    RHI/Pipeline/RHIFramebuffer.hpp
+    RHI/Pipeline/RHIPipelineState.hpp
+    RHI/Pipeline/RHIRenderPassDesc.hpp
+    RHI/Resource/RHIBuffer.hpp
+    RHI/Resource/RHISampler.hpp
+    RHI/Resource/RHIShader.hpp
+    RHI/Resource/RHITexture.hpp
+    RHI/RHIDefinitions.hpp
+    Scene/Components/CameraComponent.hpp
+    Scene/Components/LightComponent.hpp
+    Scene/Components/MaterialComponent.hpp
+    Scene/Components/MeshComponent.hpp
+    Scene/Components/RelationshipComponent.hpp
+    Scene/Components/TagComponent.hpp
+    Scene/Components/TransformComponent.cpp
+    Scene/Components/TransformComponent.hpp
+    Scene/Entity.cpp
+    Scene/Entity.hpp
+    Scene/EntityId.hpp
+    Scene/Scene.cpp
+    Scene/Scene.hpp
+    Scene/SceneSerializer.cpp
+    Scene/SceneSerializer.hpp
+    Scene/Systems/LightSystem.cpp
+    Scene/Systems/LightSystem.hpp
+    Scene/Systems/RenderSystem.cpp
+    Scene/Systems/RenderSystem.hpp
+    Scene/Systems/TransformSystem.cpp
+    Scene/Systems/TransformSystem.hpp
+)
 
 target_include_directories(Engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
-target_compile_definitions(Engine PUBLIC PHYSARA_DEBUG)
+
+target_compile_definitions(Engine PUBLIC
+    $<$<CONFIG:Debug>:PHYSARA_DEBUG>
+)
 
 target_link_libraries(Engine PUBLIC
     glm

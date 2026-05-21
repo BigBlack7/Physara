@@ -91,14 +91,12 @@ namespace Physara::Engine
         }
     }
 
-    std::vector<RenderMeshSubmission> RenderSystem::Collect(Scene &scene, AssetManager *assetManager)
+    void RenderSystem::Collect(Scene &scene, std::vector<RenderMeshSubmission> &submissions, AssetManager *assetManager)
     {
-        scene.UpdateTransforms();
-
         auto &registry = scene.GetRegistry();
         auto view = registry.view<MeshComponent, TransformComponent>();
 
-        std::vector<RenderMeshSubmission> submissions;
+        submissions.clear();
         submissions.reserve(view.size_hint());
 
         view.each([&submissions, &registry, assetManager](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
@@ -128,7 +126,5 @@ namespace Physara::Engine
 
             submissions.push_back(std::move(submission));
         });
-
-        return submissions;
     }
 }

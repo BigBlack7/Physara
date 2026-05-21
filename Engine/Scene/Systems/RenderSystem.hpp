@@ -34,6 +34,7 @@ namespace Physara::Engine
     class RenderSystem final
     {
     public:
-        [[nodiscard]] static std::vector<RenderMeshSubmission> Collect(Scene &scene, AssetManager *assetManager = nullptr);
+        // Caller owns Scene::UpdateTransforms() so render and light collection can share one authoritative update.
+        static void Collect(Scene &scene, std::vector<RenderMeshSubmission> &submissions, AssetManager *assetManager = nullptr);
     };
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 
 #include <Engine/Renderer/FrameData.hpp>
@@ -41,6 +43,7 @@ namespace Physara::Engine
         ShaderLibrary *shaderLibrary{nullptr};
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
+        FrameStatistics *stats{nullptr};
         RHI::RHITexture *sceneHDR{nullptr};
         PostProcessSettings settings{};
     };
@@ -55,8 +58,10 @@ namespace Physara::Engine
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const PostProcessPassContext &context);
 
     private:
-        std::unique_ptr<RHI::RHIBuffer> m_CameraBuffer{};
+        std::unique_ptr<RHI::RHIBuffer> m_FrameBuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_SettingsBuffer{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
+        std::uint64_t m_LastFrameUploadSignature{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastSettingsUploadSignature{std::numeric_limits<std::uint64_t>::max()};
     };
 }

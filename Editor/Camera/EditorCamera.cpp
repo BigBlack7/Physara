@@ -17,11 +17,6 @@ namespace Physara::Editor
     namespace EditorCameraDetail
     {
         constexpr glm::vec3 WorldUp{0.f, 1.f, 0.f};
-
-        float SafePositive(float value, float fallback)
-        {
-            return value > 0.f ? value : fallback;
-        }
     }
 
     EditorCamera::EditorCamera() = default;
@@ -56,15 +51,68 @@ namespace Physara::Editor
         m_ViewportHeight = std::max(height, 1u);
     }
 
+    void EditorCamera::SyncFromSceneCamera(Engine::Scene *scene)
+    {
+        if (scene == nullptr)
+        {
+            return;
+        }
+
+        Engine::Entity entity = scene->GetSceneCameraEntity();
+        if (!entity.HasComponent<Engine::TransformComponent>())
+        {
+            return;
+        }
+
+        const Engine::TransformComponent &transform = entity.GetComponent<Engine::TransformComponent>();
+        m_Position = transform.localPosition;
+
+        glm::vec3 forward = transform.localRotationQuat * glm::vec3(0.f, 0.f, -1.f);
+        if (glm::dot(forward, forward) <= 0.f)
+        {
+            return;
+        }
+
+        forward = glm::normalize(forward);
+        m_YawDegrees = glm::degrees(std::atan2(forward.z, forward.x));
+        m_PitchDegrees = glm::degrees(std::asin(std::clamp(forward.y, -1.f, 1.f)));
+    }
+
+    void EditorCamera::SyncToSceneCamera(Engine::Scene *scene) const
+    {
+        if (scene == nullptr)
+        {
+            return;
+        }
+
+        Engine::Entity entity = scene->GetSceneCameraEntity();
+        if (!entity.HasComponent<Engine::TransformComponent>())
+        {
+            return;
+        }
+
+        auto &transform = entity.GetComponent<Engine::TransformComponent>();
+        const glm::quat rotation = glm::quatLookAtRH(GetForward(), EditorCameraDetail::WorldUp);
+        transform.SetLocalTRS(m_Position, rotation, transform.localScale);
+
+        if (entity.HasComponent<Engine::CameraComponent>())
+        {
+            auto &camera = entity.GetComponent<Engine::CameraComponent>();
+            camera.primary = true;
+            camera.Sanitize();
+        }
+    }
+
     glm::mat4 EditorCamera::GetViewMatrix() const
     {
         return glm::lookAt(m_Position, m_Position + GetForward(), GetUp());
     }
 
-    glm::mat4 EditorCamera::GetProjectionMatrix() const
+    glm::mat4 EditorCamera::GetProjectionMatrix(const Engine::CameraComponent &camera) const
     {
-        Engine::CameraComponent camera = ToCameraComponent();
-        return camera.GetProjectionMatrix(GetAspectRatio());
+        Engine::CameraComponent sanitized = camera;
+        sanitized.Sanitize();
+        return sanitized.GetProjectionMatrix(GetAspectRatio());
     }
 
     Engine::RenderView EditorCamera::BuildRenderView() const
@@ -80,13 +128,9 @@ namespace Physara::Editor
             camera.farClipMeters);
     }
 
-    Engine::RenderView EditorCamera::BuildCaptureView(Engine::Scene *scene,
-                                                      Engine::EntityId selectedEntity,
-                                                      CaptureViewSource source) const
+    Engine::RenderView EditorCamera::BuildRenderView(Engine::Scene *scene) const
     {
-        (void)selectedEntity;
-
-        if (source == CaptureViewSource::SceneCamera && scene != nullptr)
+        if (scene != nullptr)
         {
             Engine::Entity entity = scene->GetSceneCameraEntity();
             if (entity.HasComponent<Engine::CameraComponent>() && entity.HasComponent<Engine::TransformComponent>())
@@ -156,14 +200,6 @@ namespace Physara::Editor
     Engine::CameraComponent EditorCamera::ToCameraComponent() const
     {
         Engine::CameraComponent camera{};
-        camera.sensorWidthMillimeters = EditorCameraDetail::SafePositive(m_Settings.sensorWidthMillimeters, 36.f);
-        camera.sensorHeightMillimeters = EditorCameraDetail::SafePositive(m_Settings.sensorHeightMillimeters, 24.f);
-        camera.focalLengthMillimeters = EditorCameraDetail::SafePositive(m_Settings.focalLengthMillimeters, 35.f);
-        camera.apertureFStop = EditorCameraDetail::SafePositive(m_Settings.apertureFStop, 2.8f);
-        camera.shutterTimeSeconds = EditorCameraDetail::SafePositive(m_Settings.shutterTimeSeconds, 1.f / 60.f);
-        camera.iso = EditorCameraDetail::SafePositive(m_Settings.iso, 100.f);
-        camera.nearClipMeters = EditorCameraDetail::SafePositive(m_Settings.nearClipMeters, 0.1f);
-        camera.farClipMeters = std::max(m_Settings.farClipMeters, camera.nearClipMeters + 0.001f);
         camera.Sanitize();
         return camera;
     }

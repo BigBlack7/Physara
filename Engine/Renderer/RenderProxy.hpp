@@ -29,7 +29,7 @@ namespace Physara::Engine
 
     struct RenderDrawItem
     {
-        RenderMeshSubmission submission{};
+        const RenderMeshSubmission *submission{nullptr};
         std::uint32_t objectIndex{0};
         std::uint64_t sortKey{0};
         float cameraDistanceSq{0.f};
@@ -55,7 +55,6 @@ namespace Physara::Engine
         void Reset();
 
         [[nodiscard]] const RenderDrawBuckets &GetBuckets() const { return m_Buckets; }
-        [[nodiscard]] const std::vector<RenderMeshSubmission> &GetVisibleSubmissions() const { return m_VisibleSubmissions; }
 
     private:
         void CullAndBucket(const std::vector<RenderMeshSubmission> &submissions, const RenderView &view, FrameData &frameData);
@@ -67,5 +66,6 @@ namespace Physara::Engine
     private:
         RenderDrawBuckets m_Buckets{};
         std::vector<RenderMeshSubmission> m_VisibleSubmissions{};
+        std::vector<RenderMeshSubmission> m_SubmissionScratch{};
     };
 }

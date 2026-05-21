@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include <Engine/Resource/AssetPath.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
@@ -18,7 +19,7 @@ namespace Physara::Engine
 
     std::string AssetManager::NormalizePath(const std::filesystem::path &path) const
     {
-        return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
+        return AssetPath::NormalizeAssetPath(path);
     }
 
     std::vector<AssetRecordInfo> AssetManager::GetCachedAssets() const

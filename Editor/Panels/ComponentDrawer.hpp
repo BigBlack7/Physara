@@ -87,7 +87,7 @@ namespace Physara::Editor
             changed = true;
         }
 
-        changed |= ImGui::Checkbox("Primary", &camera.primary);
+        camera.primary = true;
         changed |= ImGui::DragFloat("Sensor Width", &camera.sensorWidthMillimeters, 0.1f, 1.f, 100.f, "%.1f mm");
         changed |= ImGui::DragFloat("Sensor Height", &camera.sensorHeightMillimeters, 0.1f, 1.f, 100.f, "%.1f mm");
         changed |= ImGui::DragFloat("Focal Length", &camera.focalLengthMillimeters, 0.25f, 1.f, 300.f, "%.1f mm");
@@ -108,7 +108,7 @@ namespace Physara::Editor
         }
 
         ImGui::Text("EV100: %.2f", camera.GetEV100());
-        ImGui::TextDisabled("Scene View uses the Editor Camera; this component drives capture views.");
+        ImGui::TextDisabled("Viewport navigation and capture use this camera.");
         return changed;
     }
 

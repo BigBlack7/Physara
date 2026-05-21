@@ -192,7 +192,7 @@ namespace Physara::Editor
         ImGui::NewFrame();
 
         HandleGlobalShortcuts();
-        RefreshSceneViewTexture();
+        RenderSceneView();
 
         if (m_Context.ui.displayMode == EditorDisplayMode::Docked)
         {
@@ -208,13 +208,6 @@ namespace Physara::Editor
         DrawPanels();
         ProcessCaptureRequests();
         DrawSaveScenePopup();
-
-        if (m_Context.activeScene != nullptr)
-        {
-            m_Context.activeScene->UpdateTransforms();
-        }
-
-        RenderSceneView();
 
         m_Backend->EndFrame();
         m_Backend->RenderDrawData();
@@ -388,7 +381,13 @@ namespace Physara::Editor
 
         const auto width = static_cast<std::uint32_t>(std::max(m_Context.sceneView.width, 1.f));
         const auto height = static_cast<std::uint32_t>(std::max(m_Context.sceneView.height, 1.f));
-        Engine::RenderView view = m_EditorCamera.BuildRenderView();
+        const bool sceneTransformsUpdated = m_Context.activeScene != nullptr;
+        if (sceneTransformsUpdated)
+        {
+            m_Context.activeScene->EnsureSceneCamera();
+            m_Context.activeScene->UpdateTransforms();
+        }
+        Engine::RenderView view = m_EditorCamera.BuildRenderView(m_Context.activeScene);
         view.viewport.width = width;
         view.viewport.height = height;
         const std::filesystem::path environmentPath =
@@ -409,12 +408,13 @@ namespace Physara::Editor
         m_Renderer->SetPostProcessSettings(postProcessSettings);
         if (m_Context.activeScene != nullptr)
         {
-            m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f));
+            m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f), sceneTransformsUpdated);
         }
         else
         {
             m_Renderer->Render(view, std::max(ImGui::GetIO().DeltaTime, 0.f));
         }
+        m_Context.sceneView.rendererStats = m_Renderer->GetFrameData().stats;
         RefreshSceneViewTexture();
     }
 
@@ -468,8 +468,6 @@ namespace Physara::Editor
         desc.format = format;
         desc.outputPath = directory / (prefix + "_" + EditorAppDetail::TimestampForFileName() + std::string(Engine::GetCaptureFormatExtension(format)));
         desc.resolutionScale = m_Context.settings.capture.resolutionScale;
-        desc.includeDebugView = m_Context.settings.capture.includeDebugView;
-        desc.usePostExposureOutput = true;
         desc.jpgQuality = 95;
         return desc;
     }
@@ -607,6 +605,7 @@ namespace Physara::Editor
         Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
         entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
         FrameEditorCameraToScene();
+        m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
         m_Context.selectedEntity = entity.GetHandle();
     }
 
@@ -694,7 +693,7 @@ namespace Physara::Editor
 
         if (m_Context.activeScene->IsSceneCamera(m_Context.selectedEntity))
         {
-            PHYSARA_INFO("Scene Camera is global and cannot be deleted.");
+            PHYSARA_INFO("The global camera cannot be deleted.");
             return;
         }
 
@@ -733,7 +732,9 @@ namespace Physara::Editor
                                                          cameraInput.mouseDeltaY = mouseDelta.y;
                                                      }
 
+                                                     m_EditorCamera.SyncFromSceneCamera(m_Context.activeScene);
                                                      m_EditorCamera.Update(cameraInput, deltaTime);
+                                                     m_EditorCamera.SyncToSceneCamera(m_Context.activeScene);
                                                      m_Context.sceneView.flyCameraMode = m_EditorCamera.GetMode() != EditorCameraMode::Orbit;
                                                      m_Context.sceneView.playFlyMode = m_EditorCamera.IsPlayFlyModeActive();
                                                      if (m_Input != nullptr)

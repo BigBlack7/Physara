@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace Physara::Engine::AssetPath
 {
@@ -18,5 +19,6 @@ namespace Physara::Engine::AssetPath
     [[nodiscard]] bool IsModelFile(const std::filesystem::path &path);
     [[nodiscard]] bool IsTextureFile(const std::filesystem::path &path);
     [[nodiscard]] bool IsShaderFile(const std::filesystem::path &path);
+    [[nodiscard]] std::string NormalizeAssetPath(const std::filesystem::path &path);
     [[nodiscard]] AssetKind Classify(const std::filesystem::path &path, bool isDirectory);
 }

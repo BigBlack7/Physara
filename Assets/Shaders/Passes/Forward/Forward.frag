@@ -1,13 +1,13 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
-
 #include "../../Includes/Lighting.glsl"
 
 layout(location = 0)in vec3 inWorldPosition;
 layout(location = 1)in vec3 inWorldNormal;
 layout(location = 2)in vec4 inWorldTangent;
 layout(location = 3)in vec2 inTexCoord0;
-layout(location = 4)flat in uint inMaterialIndex;
+layout(location = 4)in vec2 inTexCoord1;
+layout(location = 5)flat in uint inMaterialIndex;
 
 layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
 {
@@ -47,7 +47,7 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
     {
         return normalize(geometricNormal);
     }
-
+    
     vec3 n = normalize(geometricNormal);
     vec3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
     vec3 b = normalize(cross(n, t) * worldTangent.w);
@@ -57,32 +57,37 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
     return normalize(tbn * tangentNormal);
 }
 
+vec2 SelectTexCoord(uint texCoordSet)
+{
+    return texCoordSet == 1u ? inTexCoord1 : inTexCoord0;
+}
+
 void main()
 {
     MaterialInputs inputs = UnpackMaterialData(uMaterials[inMaterialIndex]);
-
+    
     if (inputs.hasBaseColorTexture)
     {
-        vec4 baseColorSample = texture(uBaseColorTexture, inTexCoord0);
+        vec4 baseColorSample = texture(uBaseColorTexture, SelectTexCoord(inputs.baseColorTexCoord));
         inputs.baseColor *= vec4(SrgbToLinear(baseColorSample.rgb), baseColorSample.a);
     }
     if (inputs.hasMetallicRoughnessTexture)
     {
-        vec4 mrSample = texture(uMetallicRoughnessTexture, inTexCoord0);
+        vec4 mrSample = texture(uMetallicRoughnessTexture, SelectTexCoord(inputs.metallicRoughnessTexCoord));
         inputs.perceptualRoughness *= mrSample.g;
         inputs.metallic *= mrSample.b;
     }
     if (inputs.hasOcclusionTexture)
     {
-        float occlusionSample = texture(uOcclusionTexture, inTexCoord0).r;
+        float occlusionSample = texture(uOcclusionTexture, SelectTexCoord(inputs.occlusionTexCoord)).r;
         inputs.ambientOcclusion *= occlusionSample;
     }
     if (inputs.hasEmissiveTexture)
     {
-        vec3 emissiveSample = texture(uEmissiveTexture, inTexCoord0).rgb;
+        vec3 emissiveSample = texture(uEmissiveTexture, SelectTexCoord(inputs.emissiveTexCoord)).rgb;
         inputs.emissiveColor *= SrgbToLinear(emissiveSample);
     }
-
+    
     PixelMaterial material = PrepareMaterial(inputs);
     if (ShouldDiscardMaterial(material))
     {
@@ -98,11 +103,11 @@ void main()
     ShadingContext context;
     context.worldPosition = inWorldPosition;
     vec3 geometricNormal = normalize(inWorldNormal);
-    if (inputs.doubleSided && !gl_FrontFacing)
+    if (inputs.doubleSided && ! gl_FrontFacing)
     {
         geometricNormal = -geometricNormal;
     }
-    context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, inTexCoord0);
+    context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, SelectTexCoord(inputs.normalTexCoord));
     context.view = normalize(GetCameraPosition(uCamera) - inWorldPosition);
     
     vec3 color = vec3(0.0);

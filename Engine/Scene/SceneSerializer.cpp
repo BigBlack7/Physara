@@ -314,7 +314,7 @@ namespace Physara::Engine
                 return false;
             }
 
-            const SceneSerializerDetail::json &entities = root.at("entities");
+            const SceneSerializerDetail::json entities = root.value("entities", SceneSerializerDetail::json::array());
             if (!entities.is_array())
             {
                 PHYSARA_CORE_ERROR("Scene file has invalid entities array: {}", path.string());
@@ -474,7 +474,7 @@ namespace Physara::Engine
             }
 
             const SceneSerializerDetail::json imports = root.value("gltfImports", SceneSerializerDetail::json::array());
-            if (imports.is_array())
+            if (entities.empty() && imports.is_array())
             {
                 for (const SceneSerializerDetail::json &importJson : imports)
                 {
@@ -490,6 +490,10 @@ namespace Physara::Engine
                         PHYSARA_CORE_ERROR("Scene import failed for GLTF '{}'.", importPath);
                     }
                 }
+            }
+            else if (!entities.empty() && root.contains("gltfImports"))
+            {
+                PHYSARA_CORE_WARN("Scene '{}' contains deprecated gltfImports; explicit serialized entities are used.", path.string());
             }
 
             scene.EnsureSceneCamera();

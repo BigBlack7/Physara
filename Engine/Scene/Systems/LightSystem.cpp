@@ -136,14 +136,12 @@ namespace Physara::Engine
         }
     }
 
-    std::vector<LightData> LightSystem::Collect(Scene &scene)
+    void LightSystem::Collect(Scene &scene, std::vector<LightData> &lights)
     {
-        scene.UpdateTransforms();
-
         auto &registry = scene.GetRegistry();
         auto view = registry.view<LightComponent, TransformComponent>();
 
-        std::vector<LightData> lights;
+        lights.clear();
         lights.reserve(std::min<std::size_t>(view.size_hint(), LightSystemDetail::MaxForwardLights));
 
         view.each([&lights](EntityId, LightComponent component, const TransformComponent &transform)
@@ -177,7 +175,5 @@ namespace Physara::Engine
         {
             lights.push_back(LightSystemDetail::BuildDefaultViewerLight());
         }
-
-        return lights;
     }
 }

@@ -2,18 +2,1182 @@
     "entities": [
         {
             "id": 1,
+            "light": {
+                "areaLuminanceCandelaPerSquareMeter": 1000.0,
+                "areaSizeMeters": [
+                    1.0,
+                    1.0
+                ],
+                "castsShadow": true,
+                "color": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "colorTemperatureKelvin": 6500.0,
+                "directionalIlluminanceLux": 100000.0,
+                "iesProfilePath": "",
+                "innerConeAngleDegrees": 20.0,
+                "outerConeAngleDegrees": 35.0,
+                "pointLuminousPowerLumens": 800.0,
+                "rangeMeters": 10.0,
+                "shadowBias": 0.0010000000474974513,
+                "sourceRadiusMeters": 0.05000000074505806,
+                "spotLuminousIntensityCandela": 1000.0,
+                "type": "Directional",
+                "useColorTemperature": false
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Directional Light"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    -45.0,
+                    34.9999885559082,
+                    5.211325060372474e-06
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "camera": {
+                "apertureFStop": 16.0,
+                "farClipMeters": 1000.0,
+                "focalLengthMillimeters": 35.0,
+                "iso": 100.0,
+                "nearClipMeters": 0.10000000149011612,
+                "orthographicHeightMeters": 10.0,
+                "primary": true,
+                "projection": "Perspective",
+                "sensorHeightMillimeters": 24.0,
+                "sensorWidthMillimeters": 36.0,
+                "shutterTimeSeconds": 0.00800000037997961
+            },
+            "id": 2,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "MainCamera"
+            },
+            "transform": {
+                "position": [
+                    0.6511420011520386,
+                    0.4063447117805481,
+                    1.521917700767517
+                ],
+                "rotationDegrees": [
+                    -9.106183052062988,
+                    20.65241241455078,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 3,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Camera"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.15000000596046448,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 4,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
                 "ambientOcclusion": 1.0,
                 "baseColor": [
-                    0.41645556688308716,
-                    0.6293701529502869,
-                    0.8520900011062622,
+                    1.0,
+                    1.0,
+                    1.0,
                     1.0
                 ],
                 "baseColorTexture": {
+                    "path": "models/camera/textures/camera_01_strap_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
                     "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/camera/camera.gltf#material/0",
+                "metallic": 1.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/camera/textures/camera_01_strap_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/camera/textures/camera_01_strap_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/camera/camera.gltf",
+                "localBounds": {
+                    "center": [
+                        -0.02859286218881607,
+                        0.029159408062696457,
+                        0.07085415720939636
+                    ],
+                    "max": [
+                        0.07835790514945984,
+                        0.0580633245408535,
+                        0.20226606726646423
+                    ],
+                    "min": [
+                        -0.13554362952709198,
+                        0.00025549158453941345,
+                        -0.06055775657296181
+                    ],
+                    "radius": 0.17188075184822083,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/camera/camera.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 3
+            },
+            "tag": {
+                "name": "Camera_01_strap"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 5,
+            "relationship": {
+                "parent": 3
+            },
+            "tag": {
+                "name": "Camera_01"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 6,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/camera/textures/camera_01_lens_body_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/camera/camera.gltf#material/1",
+                "metallic": 1.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/camera/textures/camera_01_lens_body_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/camera/textures/camera_01_lens_body_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/camera/camera.gltf",
+                "localBounds": {
+                    "center": [
+                        0.007969284430146217,
+                        0.033808961510658264,
+                        0.040475644171237946
+                    ],
+                    "max": [
+                        0.0361202247440815,
+                        0.06000663340091705,
+                        0.0701393187046051
+                    ],
+                    "min": [
+                        -0.020181655883789063,
+                        0.007611287757754326,
+                        0.010811969637870789
+                    ],
+                    "radius": 0.048566728830337524,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/camera/camera.gltf#material/1",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 1,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 5
+            },
+            "tag": {
+                "name": "Mesh.016 0"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 7,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Blend",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    0.800000011920929,
+                    0.800000011920929,
+                    0.800000011920929,
+                    0.25
+                ],
+                "baseColorTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "castShadow": false,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/camera/camera.gltf#material/2",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 0.04500000178813934,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/camera/camera.gltf",
+                "localBounds": {
+                    "center": [
+                        -0.0038392096757888794,
+                        0.04466075822710991,
+                        0.024904370307922363
+                    ],
+                    "max": [
+                        0.05469425767660141,
+                        0.07397206872701645,
+                        0.06653554737567902
+                    ],
+                    "min": [
+                        -0.06237267702817917,
+                        0.01534944772720337,
+                        -0.01672680675983429
+                    ],
+                    "radius": 0.0775788277387619,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/camera/camera.gltf#material/2",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 1,
+                "primitiveIndex": 1,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 5
+            },
+            "tag": {
+                "name": "Mesh.016 1"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 8,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/camera/textures/camera_01_body_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/camera/camera.gltf#material/3",
+                "metallic": 1.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/camera/textures/camera_01_body_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/camera/textures/camera_01_body_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/camera/camera.gltf",
+                "localBounds": {
+                    "center": [
+                        5.474686622619629e-05,
+                        0.03931843489408493,
+                        0.0004404578357934952
+                    ],
+                    "max": [
+                        0.07372476160526276,
+                        0.07810214161872864,
+                        0.019579116255044937
+                    ],
+                    "min": [
+                        -0.07361526787281036,
+                        0.0005347318947315216,
+                        -0.018698200583457947
+                    ],
+                    "radius": 0.08542678505182266,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/camera/camera.gltf#material/3",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 1,
+                "primitiveIndex": 2,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 5
+            },
+            "tag": {
+                "name": "Mesh.016 2"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 9,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/camera/textures/camera_01_strap_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/camera/camera.gltf#material/0",
+                "metallic": 1.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/camera/textures/camera_01_strap_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/camera/textures/camera_01_strap_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/camera/camera.gltf",
+                "localBounds": {
+                    "center": [
+                        0.009933981113135815,
+                        0.033808961510658264,
+                        0.01754411682486534
+                    ],
+                    "max": [
+                        0.035122036933898926,
+                        0.0589970201253891,
+                        0.02088724821805954
+                    ],
+                    "min": [
+                        -0.015254074707627296,
+                        0.008620904758572578,
+                        0.014200985431671143
+                    ],
+                    "radius": 0.035777829587459564,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/camera/camera.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 1,
+                "primitiveIndex": 3,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 5
+            },
+            "tag": {
+                "name": "Mesh.016 3"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 10,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "gallinera_table"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    -0.3499999940395355,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 11,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/gallinera_table/gallinera_table.gltf",
+                "localBounds": {
+                    "center": [
+                        2.9802322387695313e-08,
+                        0.2438928484916687,
+                        0.0
+                    ],
+                    "max": [
+                        0.4150412976741791,
+                        0.4877856969833374,
+                        0.2591458559036255
+                    ],
+                    "min": [
+                        -0.4150412380695343,
+                        -7.450580596923828e-09,
+                        -0.2591458559036255
+                    ],
+                    "radius": 0.5467170476913452,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 10
+            },
+            "tag": {
+                "name": "gallinera_table"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 12,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/gallinera_table/gallinera_table.gltf",
+                "localBounds": {
+                    "center": [
+                        -0.006485454738140106,
+                        0.250550240278244,
+                        0.22813157737255096
+                    ],
+                    "max": [
+                        0.11524398624897003,
+                        0.39795130491256714,
+                        0.2458086460828781
+                    ],
+                    "min": [
+                        -0.12821489572525024,
+                        0.1031491830945015,
+                        0.21045450866222382
+                    ],
+                    "radius": 0.19198335707187653,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 1,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 10
+            },
+            "tag": {
+                "name": "gallinera_table_door_a"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 13,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/gallinera_table/gallinera_table.gltf",
+                "localBounds": {
+                    "center": [
+                        -0.006485454738140106,
+                        0.250550240278244,
+                        -0.22813157737255096
+                    ],
+                    "max": [
+                        0.11524398624897003,
+                        0.39795130491256714,
+                        -0.21045450866222382
+                    ],
+                    "min": [
+                        -0.12821489572525024,
+                        0.1031491830945015,
+                        -0.2458086460828781
+                    ],
+                    "radius": 0.19198335707187653,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 2,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 10
+            },
+            "tag": {
+                "name": "gallinera_table_door_b"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 14,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "small_lpg_tank"
+            },
+            "transform": {
+                "position": [
+                    -0.75,
+                    -0.3499999940395355,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 15,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/small_lpg_tank/textures/small_lpg_tank_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": true,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "materialPath": "models/small_lpg_tank/small_lpg_tank.gltf#material/0",
+                "metallic": 1.0,
+                "metallicRoughnessTexture": {
+                    "path": "models/small_lpg_tank/textures/small_lpg_tank_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "models/small_lpg_tank/textures/small_lpg_tank_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 1.0,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "models/small_lpg_tank/small_lpg_tank.gltf",
+                "localBounds": {
+                    "center": [
+                        0.00031666457653045654,
+                        0.3209889829158783,
+                        -0.00030441582202911377
+                    ],
+                    "max": [
+                        0.20532627403736115,
+                        0.6419764757156372,
+                        0.2042912244796753
+                    ],
+                    "min": [
+                        -0.20469294488430023,
+                        1.5020370938145788e-06,
+                        -0.20490005612373352
+                    ],
+                    "radius": 0.4323439300060272,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "models/small_lpg_tank/small_lpg_tank.gltf#material/0",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 14
+            },
+            "tag": {
+                "name": "small_lpg_tank"
+            },
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 16,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "su7_ultra"
+            },
+            "transform": {
+                "position": [
+                    0.15000000596046448,
+                    -0.3499999940395355,
+                    -2.0999999046325684
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    39.75,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 17,
+            "relationship": {
+                "parent": 16
+            },
+            "tag": {
+                "name": "RootNode"
+            },
+            "transform": {
+                "position": [
+                    0.0010204501450061798,
+                    0.2658120393753052,
+                    0.0009570117108523846
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 18,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "models/su7_ultra/texture_0.jpg",
                     "texCoord": 0
                 },
                 "castShadow": true,
@@ -28,8 +1192,8 @@
                     "path": "",
                     "texCoord": 0
                 },
-                "materialPath": "",
-                "metallic": 0.3869999945163727,
+                "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
+                "metallic": 0.4000000059604645,
                 "metallicRoughnessTexture": {
                     "path": "",
                     "texCoord": 0
@@ -43,33 +1207,33 @@
                     "path": "",
                     "texCoord": 0
                 },
-                "roughness": 0.7160000205039978,
+                "roughness": 0.5199999809265137,
                 "shadingModel": "Lit"
             },
             "mesh": {
-                "assetPath": "Builtin/Primitives/Plane",
+                "assetPath": "models/su7_ultra/su7_ultra.gltf",
                 "localBounds": {
                     "center": [
-                        0.0,
-                        0.0,
-                        0.0
+                        -1.0204501450061798e-05,
+                        -1.0255025699734688e-05,
+                        -9.570037946105003e-06
                     ],
                     "max": [
-                        0.5,
-                        0.0010000000474974513,
-                        0.5
+                        0.009982690215110779,
+                        0.0026376100722700357,
+                        0.004259639885276556
                     ],
                     "min": [
-                        -0.5,
-                        -0.0010000000474974513,
-                        -0.5
+                        -0.010003099218010902,
+                        -0.002658120123669505,
+                        -0.004278779961168766
                     ],
-                    "radius": 0.7070000171661377,
+                    "radius": 0.011184601113200188,
                     "valid": true
                 },
                 "materialSlots": [
                     {
-                        "materialPath": "",
+                        "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
                         "slotIndex": 0
                     }
                 ],
@@ -79,31 +1243,31 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 0
+                "parent": 17
             },
             "tag": {
-                "name": "Plane"
+                "name": "Mesh1_Mesh1.008"
             },
             "transform": {
                 "position": [
-                    -0.6000000238418579,
-                    -0.44999998807907104,
+                    0.0,
+                    0.0,
                     0.0
                 ],
                 "rotationDegrees": [
                     0.0,
-                    -0.5,
+                    -0.0,
                     0.0
                 ],
                 "scale": [
-                    10.0,
-                    10.0,
-                    10.0
+                    100.0,
+                    100.0,
+                    100.0
                 ]
             }
         },
         {
-            "id": 2,
+            "id": 19,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -205,71 +1369,19 @@
             }
         },
         {
-            "id": 3,
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "su7_ultra"
-            },
-            "transform": {
-                "position": [
-                    0.15000000596046448,
-                    -0.3499999940395355,
-                    -2.0999999046325684
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    39.75,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 4,
-            "relationship": {
-                "parent": 3
-            },
-            "tag": {
-                "name": "RootNode"
-            },
-            "transform": {
-                "position": [
-                    0.0010204501450061798,
-                    0.2658120393753052,
-                    0.0009570117108523846
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 5,
+            "id": 20,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
                 "ambientOcclusion": 1.0,
                 "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
+                    0.41645556688308716,
+                    0.6293701529502869,
+                    0.8520900011062622,
                     1.0
                 ],
                 "baseColorTexture": {
-                    "path": "models/su7_ultra/texture_0.jpg",
+                    "path": "",
                     "texCoord": 0
                 },
                 "castShadow": true,
@@ -284,8 +1396,8 @@
                     "path": "",
                     "texCoord": 0
                 },
-                "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
-                "metallic": 0.4000000059604645,
+                "materialPath": "",
+                "metallic": 0.3869999945163727,
                 "metallicRoughnessTexture": {
                     "path": "",
                     "texCoord": 0
@@ -299,289 +1411,33 @@
                     "path": "",
                     "texCoord": 0
                 },
-                "roughness": 0.5199999809265137,
+                "roughness": 0.7160000205039978,
                 "shadingModel": "Lit"
             },
             "mesh": {
-                "assetPath": "models/su7_ultra/su7_ultra.gltf",
+                "assetPath": "Builtin/Primitives/Plane",
                 "localBounds": {
                     "center": [
-                        -1.0204501450061798e-05,
-                        -1.0255025699734688e-05,
-                        -9.570037946105003e-06
-                    ],
-                    "max": [
-                        0.009982690215110779,
-                        0.0026376100722700357,
-                        0.004259639885276556
-                    ],
-                    "min": [
-                        -0.010003099218010902,
-                        -0.002658120123669505,
-                        -0.004278779961168766
-                    ],
-                    "radius": 0.011184601113200188,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 0,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 4
-            },
-            "tag": {
-                "name": "Mesh1_Mesh1.008"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    100.0,
-                    100.0,
-                    100.0
-                ]
-            }
-        },
-        {
-            "id": 6,
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "small_lpg_tank"
-            },
-            "transform": {
-                "position": [
-                    -0.75,
-                    -0.3499999940395355,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 7,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/small_lpg_tank/textures/small_lpg_tank_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/small_lpg_tank/small_lpg_tank.gltf#material/0",
-                "metallic": 1.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/small_lpg_tank/textures/small_lpg_tank_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/small_lpg_tank/textures/small_lpg_tank_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/small_lpg_tank/small_lpg_tank.gltf",
-                "localBounds": {
-                    "center": [
-                        0.00031666457653045654,
-                        0.3209889829158783,
-                        -0.00030441582202911377
-                    ],
-                    "max": [
-                        0.20532627403736115,
-                        0.6419764757156372,
-                        0.2042912244796753
-                    ],
-                    "min": [
-                        -0.20469294488430023,
-                        1.5020370938145788e-06,
-                        -0.20490005612373352
-                    ],
-                    "radius": 0.4323439300060272,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/small_lpg_tank/small_lpg_tank.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 0,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 6
-            },
-            "tag": {
-                "name": "small_lpg_tank"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 8,
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "gallinera_table"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    -0.3499999940395355,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 9,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
-                "metallic": 0.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/gallinera_table/gallinera_table.gltf",
-                "localBounds": {
-                    "center": [
-                        2.9802322387695313e-08,
-                        0.2438928484916687,
+                        0.0,
+                        0.0,
                         0.0
                     ],
                     "max": [
-                        0.4150412976741791,
-                        0.4877856969833374,
-                        0.2591458559036255
+                        0.5,
+                        0.0010000000474974513,
+                        0.5
                     ],
                     "min": [
-                        -0.4150412380695343,
-                        -7.450580596923828e-09,
-                        -0.2591458559036255
+                        -0.5,
+                        -0.0010000000474974513,
+                        -0.5
                     ],
-                    "radius": 0.5467170476913452,
+                    "radius": 0.7070000171661377,
                     "valid": true
                 },
                 "materialSlots": [
                     {
-                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
+                        "materialPath": "",
                         "slotIndex": 0
                     }
                 ],
@@ -591,882 +1447,26 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 8
-            },
-            "tag": {
-                "name": "gallinera_table"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 10,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
-                "metallic": 0.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/gallinera_table/gallinera_table.gltf",
-                "localBounds": {
-                    "center": [
-                        -0.006485454738140106,
-                        0.250550240278244,
-                        0.22813157737255096
-                    ],
-                    "max": [
-                        0.11524398624897003,
-                        0.39795130491256714,
-                        0.2458086460828781
-                    ],
-                    "min": [
-                        -0.12821489572525024,
-                        0.1031491830945015,
-                        0.21045450866222382
-                    ],
-                    "radius": 0.19198335707187653,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 1,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 8
-            },
-            "tag": {
-                "name": "gallinera_table_door_a"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 11,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
-                "metallic": 0.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/gallinera_table/textures/gallinera_table_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/gallinera_table/gallinera_table.gltf",
-                "localBounds": {
-                    "center": [
-                        -0.006485454738140106,
-                        0.250550240278244,
-                        -0.22813157737255096
-                    ],
-                    "max": [
-                        0.11524398624897003,
-                        0.39795130491256714,
-                        -0.21045450866222382
-                    ],
-                    "min": [
-                        -0.12821489572525024,
-                        0.1031491830945015,
-                        -0.2458086460828781
-                    ],
-                    "radius": 0.19198335707187653,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 2,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 8
-            },
-            "tag": {
-                "name": "gallinera_table_door_b"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 12,
-            "relationship": {
                 "parent": 0
             },
             "tag": {
-                "name": "Camera"
+                "name": "Plane"
             },
             "transform": {
                 "position": [
-                    0.0,
-                    0.15000000596046448,
+                    -0.6000000238418579,
+                    -0.44999998807907104,
                     0.0
                 ],
                 "rotationDegrees": [
                     0.0,
-                    -0.0,
+                    -0.5,
                     0.0
                 ],
                 "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 13,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/camera/textures/camera_01_strap_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/camera/camera.gltf#material/0",
-                "metallic": 1.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/camera/textures/camera_01_strap_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/camera/textures/camera_01_strap_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/camera/camera.gltf",
-                "localBounds": {
-                    "center": [
-                        -0.02859286218881607,
-                        0.029159408062696457,
-                        0.07085415720939636
-                    ],
-                    "max": [
-                        0.07835790514945984,
-                        0.0580633245408535,
-                        0.20226606726646423
-                    ],
-                    "min": [
-                        -0.13554362952709198,
-                        0.00025549158453941345,
-                        -0.06055775657296181
-                    ],
-                    "radius": 0.17188075184822083,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/camera/camera.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 0,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 12
-            },
-            "tag": {
-                "name": "Camera_01_strap"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 14,
-            "relationship": {
-                "parent": 12
-            },
-            "tag": {
-                "name": "Camera_01"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 15,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/camera/textures/camera_01_lens_body_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/camera/camera.gltf#material/1",
-                "metallic": 1.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/camera/textures/camera_01_lens_body_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/camera/textures/camera_01_lens_body_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/camera/camera.gltf",
-                "localBounds": {
-                    "center": [
-                        0.007969284430146217,
-                        0.033808961510658264,
-                        0.040475644171237946
-                    ],
-                    "max": [
-                        0.0361202247440815,
-                        0.06000663340091705,
-                        0.0701393187046051
-                    ],
-                    "min": [
-                        -0.020181655883789063,
-                        0.007611287757754326,
-                        0.010811969637870789
-                    ],
-                    "radius": 0.048566728830337524,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/camera/camera.gltf#material/1",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 1,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 14
-            },
-            "tag": {
-                "name": "Mesh.016 0"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 16,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Blend",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    0.800000011920929,
-                    0.800000011920929,
-                    0.800000011920929,
-                    0.25
-                ],
-                "baseColorTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "castShadow": false,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/camera/camera.gltf#material/2",
-                "metallic": 0.0,
-                "metallicRoughnessTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 0.04500000178813934,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/camera/camera.gltf",
-                "localBounds": {
-                    "center": [
-                        -0.0038392096757888794,
-                        0.04466075822710991,
-                        0.024904370307922363
-                    ],
-                    "max": [
-                        0.05469425767660141,
-                        0.07397206872701645,
-                        0.06653554737567902
-                    ],
-                    "min": [
-                        -0.06237267702817917,
-                        0.01534944772720337,
-                        -0.01672680675983429
-                    ],
-                    "radius": 0.0775788277387619,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/camera/camera.gltf#material/2",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 1,
-                "primitiveIndex": 1,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 14
-            },
-            "tag": {
-                "name": "Mesh.016 1"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 17,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/camera/textures/camera_01_body_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/camera/camera.gltf#material/3",
-                "metallic": 1.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/camera/textures/camera_01_body_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/camera/textures/camera_01_body_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/camera/camera.gltf",
-                "localBounds": {
-                    "center": [
-                        5.474686622619629e-05,
-                        0.03931843489408493,
-                        0.0004404578357934952
-                    ],
-                    "max": [
-                        0.07372476160526276,
-                        0.07810214161872864,
-                        0.019579116255044937
-                    ],
-                    "min": [
-                        -0.07361526787281036,
-                        0.0005347318947315216,
-                        -0.018698200583457947
-                    ],
-                    "radius": 0.08542678505182266,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/camera/camera.gltf#material/3",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 1,
-                "primitiveIndex": 2,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 14
-            },
-            "tag": {
-                "name": "Mesh.016 2"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 18,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "models/camera/textures/camera_01_strap_diff_2k.jpg",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": true,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "models/camera/camera.gltf#material/0",
-                "metallic": 1.0,
-                "metallicRoughnessTexture": {
-                    "path": "models/camera/textures/camera_01_strap_arm_2k.jpg",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "models/camera/textures/camera_01_strap_nor_gl_2k.jpg",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 1.0,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "models/camera/camera.gltf",
-                "localBounds": {
-                    "center": [
-                        0.009933981113135815,
-                        0.033808961510658264,
-                        0.01754411682486534
-                    ],
-                    "max": [
-                        0.035122036933898926,
-                        0.0589970201253891,
-                        0.02088724821805954
-                    ],
-                    "min": [
-                        -0.015254074707627296,
-                        0.008620904758572578,
-                        0.014200985431671143
-                    ],
-                    "radius": 0.035777829587459564,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "models/camera/camera.gltf#material/0",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 1,
-                "primitiveIndex": 3,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 14
-            },
-            "tag": {
-                "name": "Mesh.016 3"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "camera": {
-                "apertureFStop": 2.799999952316284,
-                "farClipMeters": 1000.0,
-                "focalLengthMillimeters": 35.0,
-                "iso": 100.0,
-                "nearClipMeters": 0.10000000149011612,
-                "orthographicHeightMeters": 10.0,
-                "primary": true,
-                "projection": "Perspective",
-                "sensorHeightMillimeters": 24.0,
-                "sensorWidthMillimeters": 36.0,
-                "shutterTimeSeconds": 0.01666666753590107
-            },
-            "id": 19,
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "Scene Camera"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    1.600000023841858,
-                    5.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.0,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 20,
-            "light": {
-                "areaLuminanceCandelaPerSquareMeter": 1000.0,
-                "areaSizeMeters": [
-                    1.0,
-                    1.0
-                ],
-                "castsShadow": true,
-                "color": [
-                    1.0,
-                    1.0,
-                    1.0
-                ],
-                "colorTemperatureKelvin": 6500.0,
-                "directionalIlluminanceLux": 100000.0,
-                "iesProfilePath": "",
-                "innerConeAngleDegrees": 20.0,
-                "outerConeAngleDegrees": 35.0,
-                "pointLuminousPowerLumens": 800.0,
-                "rangeMeters": 10.0,
-                "shadowBias": 0.0010000000474974513,
-                "sourceRadiusMeters": 0.05000000074505806,
-                "spotLuminousIntensityCandela": 1000.0,
-                "type": "Directional",
-                "useColorTemperature": false
-            },
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "Directional Light"
-            },
-            "transform": {
-                "position": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    -45.000003814697266,
-                    34.9999885559082,
-                    5.211324605625123e-06
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
+                    10.0,
+                    10.0,
+                    10.0
                 ]
             }
         }

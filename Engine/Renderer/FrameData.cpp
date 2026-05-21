@@ -2,6 +2,34 @@
 
 namespace Physara::Engine
 {
+    void FrameStatistics::Reset()
+    {
+        visibleSubmissions = 0;
+        opaqueItems = 0;
+        unlitItems = 0;
+        transparentItems = 0;
+        lightCount = 0;
+        meshUploads = 0;
+        textureUploads = 0;
+        drawCalls = 0;
+        instances = 0;
+        triangles = 0;
+        bufferUploadBytes = 0;
+        meshUploadBytes = 0;
+        textureUploadBytes = 0;
+        sceneBuildCpuMs = 0.f;
+        renderGraphCpuMs = 0.f;
+        forwardOpaqueCpuMs = 0.f;
+        skyboxCpuMs = 0.f;
+        forwardTransparentCpuMs = 0.f;
+        postProcessCpuMs = 0.f;
+    }
+
+    std::uint64_t FrameStatistics::TotalUploadBytes() const
+    {
+        return bufferUploadBytes + meshUploadBytes + textureUploadBytes;
+    }
+
     CameraData BuildCameraData(const RenderView &view)
     {
         CameraData camera{};
@@ -27,6 +55,7 @@ namespace Physara::Engine
         camera = BuildCameraData(renderView);
         objects.clear();
         lights.clear();
+        stats.Reset();
         frameIndex = newFrameIndex;
         deltaTimeSeconds = deltaTime;
     }

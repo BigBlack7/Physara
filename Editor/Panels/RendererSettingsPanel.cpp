@@ -15,25 +15,6 @@ namespace Physara::Editor
     {
         constexpr const char *PanelName = "Renderer Settings";
 
-        static constexpr const char *PipelineLabels[] = {
-            "Forward",
-            "ForwardPlus",
-            "Deferred"};
-
-        static constexpr const char *DebugViewLabels[] = {
-            "None",
-            "Normals",
-            "Depth",
-            "Wireframe",
-            "LightComplexity",
-            "GBufferAlbedo",
-            "GBufferNormal",
-            "GBufferRoughness",
-            "GBufferMetallic",
-            "GBufferAO",
-            "GBufferEmissive",
-            "ShadowMap"};
-
         std::vector<std::filesystem::path> CollectEnvironmentMaps(const std::filesystem::path &assetsRoot)
         {
             std::vector<std::filesystem::path> maps;
@@ -78,22 +59,10 @@ namespace Physara::Editor
     {
         ImGui::Begin(RendererSettingsPanelDetail::PanelName);
 
-        DrawShadowSection();
         DrawPostProcessSection();
-        DrawPipelineSection();
-        DrawDebugVisualizationSection();
         DrawEnvironmentSection();
 
         ImGui::End();
-    }
-
-    void RendererSettingsPanel::DrawShadowSection()
-    {
-        if (ImGui::CollapsingHeader("Shadow", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::TextUnformatted("Shadow controls are reserved for the renderer path.");
-            ImGui::TextUnformatted("Reserved: map size, cascade count, bias and PCF kernel.");
-        }
     }
 
     void RendererSettingsPanel::DrawPostProcessSection()
@@ -110,38 +79,6 @@ namespace Physara::Editor
             ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 1.f, 8.f, "%.1f");
             ImGui::EndDisabled();
         }
-    }
-
-    void RendererSettingsPanel::DrawPipelineSection()
-    {
-        if (!ImGui::CollapsingHeader("Pipeline", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            return;
-        }
-
-        int pipelineIndex = static_cast<int>(m_Context.settings.pipelineMode);
-        if (ImGui::Combo("Mode", &pipelineIndex, RendererSettingsPanelDetail::PipelineLabels, IM_ARRAYSIZE(RendererSettingsPanelDetail::PipelineLabels)))
-        {
-            m_Context.settings.pipelineMode = static_cast<RenderPipelineMode>(pipelineIndex);
-        }
-
-        ImGui::TextUnformatted("Current selection is an editor setting placeholder until Renderer is connected.");
-    }
-
-    void RendererSettingsPanel::DrawDebugVisualizationSection()
-    {
-        if (!ImGui::CollapsingHeader("Debug Visualization", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            return;
-        }
-
-        int debugIndex = static_cast<int>(m_Context.settings.debugViewMode);
-        if (ImGui::Combo("View", &debugIndex, RendererSettingsPanelDetail::DebugViewLabels, IM_ARRAYSIZE(RendererSettingsPanelDetail::DebugViewLabels)))
-        {
-            m_Context.settings.debugViewMode = static_cast<DebugViewMode>(debugIndex);
-        }
-
-        ImGui::TextUnformatted("Debug output will replace Scene View final color when Renderer supports it.");
     }
 
     void RendererSettingsPanel::DrawEnvironmentSection()
@@ -189,10 +126,6 @@ namespace Physara::Editor
 
                 ImGui::EndCombo();
             }
-
-            ImGui::TextUnformatted("Input: one equirectangular HDR panorama from Assets/Textures/Env.");
-            ImGui::TextUnformatted("Skybox EV adjusts background display brightness; IBL intensity is separate.");
-            ImGui::TextUnformatted("IBL precompute will reuse this environment in a later phase.");
         }
     }
 }

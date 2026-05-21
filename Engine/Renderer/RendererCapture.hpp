@@ -39,8 +39,6 @@ namespace Physara::Engine
         std::filesystem::path outputPath{};
         CaptureFormat format{CaptureFormat::PNG};
         float resolutionScale{1.f};
-        bool includeDebugView{false};
-        bool usePostExposureOutput{true};
         int jpgQuality{95};
     };
 

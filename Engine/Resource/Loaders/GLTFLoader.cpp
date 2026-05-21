@@ -22,10 +22,12 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/AssetPath.hpp>
 #include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/Types/Material.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/Resource/Types/Texture.hpp>
+#include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
 #include <Engine/Scene/Components/MeshComponent.hpp>
@@ -101,7 +103,7 @@ namespace Physara::Engine
             {
                 return assetManager->NormalizePath(path);
             }
-            return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
+            return AssetPath::NormalizeAssetPath(path);
         }
 
         // 生成glTF内嵌材质的合成路径
@@ -492,7 +494,8 @@ namespace Physara::Engine
 
             const tg3_accessor *normals = AccessorAt(model, FindAttribute(primitive, "NORMAL"));
             const tg3_accessor *tangents = AccessorAt(model, FindAttribute(primitive, "TANGENT"));
-            const tg3_accessor *texCoords = AccessorAt(model, FindAttribute(primitive, "TEXCOORD_0"));
+            const tg3_accessor *texCoords0 = AccessorAt(model, FindAttribute(primitive, "TEXCOORD_0"));
+            const tg3_accessor *texCoords1 = AccessorAt(model, FindAttribute(primitive, "TEXCOORD_1"));
             const bool hasNormals = normals != nullptr && normals->component_type == TG3_COMPONENT_TYPE_FLOAT && normals->type == TG3_TYPE_VEC3;
             const bool hasTangents = tangents != nullptr && tangents->component_type == TG3_COMPONENT_TYPE_FLOAT && tangents->type == TG3_TYPE_VEC4;
 
@@ -503,7 +506,8 @@ namespace Physara::Engine
                 vertex.position = ReadVec3Attribute(model, positions, i, glm::vec3(0.f));
                 vertex.normal = hasNormals ? glm::normalize(ReadVec3Attribute(model, normals, i, glm::vec3(0.f, 0.f, 1.f))) : glm::vec3(0.f, 0.f, 1.f);
                 vertex.tangent = hasTangents ? ReadVec4Attribute(model, tangents, i, glm::vec4(1.f, 0.f, 0.f, 1.f)) : glm::vec4(1.f, 0.f, 0.f, 1.f);
-                vertex.texCoord0 = ReadVec2Attribute(model, texCoords, i, glm::vec2(0.f));
+                vertex.texCoord0 = ReadVec2Attribute(model, texCoords0, i, glm::vec2(0.f));
+                vertex.texCoord1 = ReadVec2Attribute(model, texCoords1, i, vertex.texCoord0);
                 result.vertices[static_cast<std::size_t>(i)] = vertex;
             }
 
@@ -604,6 +608,7 @@ namespace Physara::Engine
             material.alphaCutoff = static_cast<float>(source.alpha_cutoff);
             material.emissiveColor = ReadVec3(source.emissive_factor, glm::vec3(0.f));
             material.normalScale = static_cast<float>(source.normal_texture.scale);
+            material.ambientOcclusion = static_cast<float>(source.occlusion_texture.strength);
 
             if (Equals(source.alpha_mode, "MASK"))
             {
@@ -624,6 +629,12 @@ namespace Physara::Engine
                     material.baseColor.a = std::min(material.baseColor.a, 1.f - transmissionFactor * 0.75f);
                     material.castShadow = false;
                 }
+            }
+
+            if (const tg3_value *emissiveStrength = FindExtensionValue(source.ext, "KHR_materials_emissive_strength"))
+            {
+                const float strength = std::max(ReadNumberValue(FindObjectValue(*emissiveStrength, "emissiveStrength"), 1.f), 0.f);
+                material.emissiveColor *= strength;
             }
 
             material.baseColorTexture = TextureSlot(
@@ -770,6 +781,44 @@ namespace Physara::Engine
             entity.AddOrReplaceComponent<LightComponent>(light);
         }
 
+        void ApplyCamera(const tg3_model &model, const tg3_node &node, Entity entity)
+        {
+            if (node.camera < 0 || static_cast<std::uint32_t>(node.camera) >= model.cameras_count)
+            {
+                return;
+            }
+
+            const tg3_camera &source = model.cameras[node.camera];
+            CameraComponent camera{};
+            camera.primary = false;
+
+            if (Equals(source.type, "orthographic"))
+            {
+                camera.projectionType = CameraProjectionType::Orthographic;
+                camera.orthographicHeightMeters = static_cast<float>(source.orthographic.ymag);
+                camera.nearClipMeters = static_cast<float>(source.orthographic.znear);
+                camera.farClipMeters = static_cast<float>(source.orthographic.zfar);
+            }
+            else
+            {
+                camera.projectionType = CameraProjectionType::Perspective;
+                camera.sensorHeightMillimeters = 24.f;
+                if (source.perspective.yfov > 0.0)
+                {
+                    camera.focalLengthMillimeters =
+                        camera.sensorHeightMillimeters / (2.f * std::tan(static_cast<float>(source.perspective.yfov) * 0.5f));
+                }
+                camera.nearClipMeters = static_cast<float>(source.perspective.znear);
+                if (source.perspective.zfar > source.perspective.znear)
+                {
+                    camera.farClipMeters = static_cast<float>(source.perspective.zfar);
+                }
+            }
+
+            camera.Sanitize();
+            entity.AddOrReplaceComponent<CameraComponent>(camera);
+        }
+
         void RegisterResources(const tg3_model &model, const std::filesystem::path &gltfPath, AssetManager *assetManager)
         {
             if (assetManager == nullptr)
@@ -867,6 +916,7 @@ namespace Physara::Engine
             }
 
             ApplyLight(model, node, entity);
+            ApplyCamera(model, node, entity);
 
             if (node.mesh >= 0 && static_cast<std::uint32_t>(node.mesh) < model.meshes_count)
             {

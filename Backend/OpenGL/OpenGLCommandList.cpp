@@ -437,7 +437,7 @@ namespace Physara::RHI
     void OpenGLCommandList::BeginRenderPass(
         RHIFramebuffer *framebuffer,
         const RHIRenderPassDesc &desc,
-        const std::vector<glm::vec4> &clearColors,
+        std::span<const glm::vec4> clearColors,
         float clearDepth)
     {
         // OpenGL没有render pass对象. 这里把RHI RenderPassDesc翻译为:
@@ -464,20 +464,19 @@ namespace Physara::RHI
 
         if (colorCount > 0u)
         {
-            std::vector<GLenum> drawBuffers;
-            drawBuffers.reserve(colorCount);
+            std::array<GLenum, kMaxColorAttachments> drawBuffers{};
             for (std::uint32_t i = 0; i < colorCount; ++i)
             {
-                drawBuffers.push_back(fboID != 0 ? ToGLAttachmentPoint(i) : GL_BACK);
+                drawBuffers[i] = fboID != 0 ? ToGLAttachmentPoint(i) : GL_BACK;
             }
 
             if (fboID != 0)
             {
-                glNamedFramebufferDrawBuffers(fboID, static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+                glNamedFramebufferDrawBuffers(fboID, static_cast<GLsizei>(colorCount), drawBuffers.data());
             }
             else
             {
-                glDrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+                glDrawBuffers(static_cast<GLsizei>(colorCount), drawBuffers.data());
             }
         }
         else if (fboID != 0)

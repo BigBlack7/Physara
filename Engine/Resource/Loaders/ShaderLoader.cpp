@@ -7,17 +7,13 @@
 #include <string>
 #include <utility>
 
+#include <Engine/Resource/AssetPath.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
 
 namespace Physara::Engine
 {
     namespace ShaderLoaderDetail
     {
-        std::string NormalizeAssetPath(const std::filesystem::path &path)
-        {
-            return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
-        }
-
         std::string Trim(std::string_view text)
         {
             const std::size_t first = text.find_first_not_of(" \t\r\n");
@@ -85,7 +81,7 @@ namespace Physara::Engine
 
         ShaderSource result{};
         result.stage = desc.stage;
-        result.path = ShaderLoaderDetail::NormalizeAssetPath(desc.path);
+        result.path = AssetPath::NormalizeAssetPath(desc.path);
         result.source = InjectDefines(std::move(source), defines);
         result.dependencies = std::move(dependencies);
         return result;
@@ -160,7 +156,7 @@ namespace Physara::Engine
                                                  std::vector<std::string> &dependencies,
                                                  std::vector<std::string> &includeStack)
     {
-        const std::string normalizedPath = ShaderLoaderDetail::NormalizeAssetPath(path);
+        const std::string normalizedPath = AssetPath::NormalizeAssetPath(path);
         if (std::find(includeStack.begin(), includeStack.end(), normalizedPath) != includeStack.end())
         {
             throw std::runtime_error("Recursive shader include detected: " + normalizedPath);
@@ -231,23 +227,23 @@ namespace Physara::Engine
     {
         const std::filesystem::path include(includePath);
         const std::filesystem::path relativeCandidate = (includingPath.parent_path() / include).lexically_normal();
-        if (Platform::FileSystem::Exists(ShaderLoaderDetail::NormalizeAssetPath(relativeCandidate)))
+        if (Platform::FileSystem::Exists(AssetPath::NormalizeAssetPath(relativeCandidate)))
         {
             return relativeCandidate;
         }
 
         const std::filesystem::path includesCandidate = (std::filesystem::path("Shaders/Includes") / include).lexically_normal();
-        if (Platform::FileSystem::Exists(ShaderLoaderDetail::NormalizeAssetPath(includesCandidate)))
+        if (Platform::FileSystem::Exists(AssetPath::NormalizeAssetPath(includesCandidate)))
         {
             return includesCandidate;
         }
 
-        if (Platform::FileSystem::Exists(ShaderLoaderDetail::NormalizeAssetPath(include)))
+        if (Platform::FileSystem::Exists(AssetPath::NormalizeAssetPath(include)))
         {
             return include;
         }
 
         throw std::runtime_error("Shader include not found: " + std::string(includePath) +
-                                 " included from " + ShaderLoaderDetail::NormalizeAssetPath(includingPath));
+                                 " included from " + AssetPath::NormalizeAssetPath(includingPath));
     }
 }

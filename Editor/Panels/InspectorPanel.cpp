@@ -19,8 +19,7 @@ namespace Physara::Editor
 
         static constexpr const char *CaptureFormatLabels[] = {
             "PNG",
-            "JPG",
-            "EXR (planned)"};
+            "JPG"};
     }
 
     InspectorPanel::InspectorPanel(EditorContext &context)
@@ -90,22 +89,22 @@ namespace Physara::Editor
         ImGui::InputText("File Prefix",
                          m_Context.settings.capture.fileNamePrefix.data(),
                          m_Context.settings.capture.fileNamePrefix.size());
+        m_Context.settings.capture.fileFormatIndex = std::clamp(m_Context.settings.capture.fileFormatIndex, 0, 1);
         ImGui::Combo("Format", &m_Context.settings.capture.fileFormatIndex,
                      InspectorPanelDetail::CaptureFormatLabels, IM_ARRAYSIZE(InspectorPanelDetail::CaptureFormatLabels));
 
         m_Context.settings.capture.resolutionScale =
             std::clamp(m_Context.settings.capture.resolutionScale, 0.25f, 4.f);
         ImGui::SliderFloat("Resolution Scale", &m_Context.settings.capture.resolutionScale, 0.25f, 4.f, "%.2fx");
-        ImGui::Checkbox("Include Debug View", &m_Context.settings.capture.includeDebugView);
 
-        if (ImGui::Button("Capture Current View"))
+        if (ImGui::Button("Capture Camera"))
         {
             m_Context.settings.capture.captureRequested = true;
             const auto &camera = entity.GetComponent<Engine::CameraComponent>();
-            PHYSARA_INFO("Capture requested from Scene Camera Inspector. EV100={:.2f}.", camera.GetEV100());
+            PHYSARA_INFO("Camera capture requested. EV100={:.2f}.", camera.GetEV100());
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("Shortcut: F12");
+        ImGui::TextDisabled("F12 captures this viewport camera.");
 
         ImGui::PopID();
     }

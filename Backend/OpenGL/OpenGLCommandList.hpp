@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 
 #include <glad/glad.h>
 
@@ -31,7 +32,7 @@ namespace Physara::RHI
         void BeginRenderPass(
             RHIFramebuffer *framebuffer,
             const RHIRenderPassDesc &desc,
-            const std::vector<glm::vec4> &clearColors,
+            std::span<const glm::vec4> clearColors,
             float clearDepth = 1.f) override;
 
         void EndRenderPass() override;

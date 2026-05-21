@@ -1,14 +1,18 @@
 #include "SkyboxPass.hpp"
 
-#include <cmath>
+#include <algorithm>
 #include <cstddef>
+#include <cmath>
+#include <span>
 #include <vector>
 
-#include <glm/geometric.hpp>
+#include <glm/common.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
+#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
@@ -25,7 +29,6 @@ namespace Physara::Engine
         constexpr std::uint32_t CameraBinding = 0u;
         constexpr std::uint32_t SettingsBinding = 4u;
         constexpr std::uint32_t SkyboxTextureBinding = 5u;
-        constexpr float Pi = 3.14159265358979323846f;
 
         struct SettingsGPUData
         {
@@ -38,12 +41,6 @@ namespace Physara::Engine
             return lhs < rhs ? rhs : lhs;
         }
 
-        template <typename T>
-        constexpr T MinValue(T lhs, T rhs)
-        {
-            return lhs < rhs ? lhs : rhs;
-        }
-
         RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
         {
             RHI::RHIBufferDesc desc{};
@@ -51,84 +48,6 @@ namespace Physara::Engine
             desc.usage = usage;
             desc.dynamic = true;
             return desc;
-        }
-
-        glm::vec3 FaceDirection(std::uint32_t face, float u, float v)
-        {
-            switch (face)
-            {
-            case 0u:
-                return glm::normalize(glm::vec3(1.f, -v, -u));
-            case 1u:
-                return glm::normalize(glm::vec3(-1.f, -v, u));
-            case 2u:
-                return glm::normalize(glm::vec3(u, 1.f, v));
-            case 3u:
-                return glm::normalize(glm::vec3(u, -1.f, -v));
-            case 4u:
-                return glm::normalize(glm::vec3(u, -v, 1.f));
-            case 5u:
-            default:
-                return glm::normalize(glm::vec3(-u, -v, -1.f));
-            }
-        }
-
-        glm::vec4 SampleEquirectangular(const Texture &texture, const glm::vec3 &direction)
-        {
-            const float longitude = std::atan2(direction.z, direction.x);
-            const float latitude = std::acos(MinValue(MaxValue(direction.y, -1.f), 1.f));
-            float u = longitude / (2.f * Pi) + 0.5f;
-            const float v = latitude / Pi;
-
-            u = u - std::floor(u);
-            const float x = u * static_cast<float>(texture.width - 1u);
-            const float y = v * static_cast<float>(texture.height - 1u);
-            const std::uint32_t x0 = static_cast<std::uint32_t>(std::floor(x)) % texture.width;
-            const std::uint32_t y0 = MinValue(static_cast<std::uint32_t>(std::floor(y)), texture.height - 1u);
-            const std::uint32_t x1 = (x0 + 1u) % texture.width;
-            const std::uint32_t y1 = MinValue(y0 + 1u, texture.height - 1u);
-            const float tx = x - std::floor(x);
-            const float ty = y - std::floor(y);
-
-            const auto read = [&texture](std::uint32_t px, std::uint32_t py)
-            {
-                const std::size_t base = (static_cast<std::size_t>(py) * texture.width + px) * 4u;
-                return glm::vec4(
-                    texture.rgba32fPixels[base + 0u],
-                    texture.rgba32fPixels[base + 1u],
-                    texture.rgba32fPixels[base + 2u],
-                    texture.rgba32fPixels[base + 3u]);
-            };
-
-            const glm::vec4 a = read(x0, y0);
-            const glm::vec4 b = read(x1, y0);
-            const glm::vec4 c = read(x0, y1);
-            const glm::vec4 d = read(x1, y1);
-            return glm::mix(glm::mix(a, b, tx), glm::mix(c, d, tx), ty);
-        }
-
-        std::vector<float> BuildPlaceholderCubemap(std::uint32_t faceSize)
-        {
-            std::vector<float> pixels(static_cast<std::size_t>(faceSize) * faceSize * 6u * 4u);
-            for (std::uint32_t face = 0u; face < 6u; ++face)
-            {
-                for (std::uint32_t y = 0u; y < faceSize; ++y)
-                {
-                    for (std::uint32_t x = 0u; x < faceSize; ++x)
-                    {
-                        const float fy = static_cast<float>(y) / static_cast<float>(faceSize - 1u);
-                        const glm::vec3 top(0.38f, 0.52f, 0.72f);
-                        const glm::vec3 horizon(0.74f, 0.82f, 0.78f);
-                        const glm::vec3 color = glm::mix(top, horizon, fy);
-                        const std::size_t base = ((static_cast<std::size_t>(face) * faceSize + y) * faceSize + x) * 4u;
-                        pixels[base + 0u] = color.r;
-                        pixels[base + 1u] = color.g;
-                        pixels[base + 2u] = color.b;
-                        pixels[base + 3u] = 1.f;
-                    }
-                }
-            }
-            return pixels;
         }
 
         Texture BuildPlaceholderPanorama(std::uint32_t width, std::uint32_t height)
@@ -157,38 +76,6 @@ namespace Physara::Engine
             }
 
             return texture;
-        }
-
-        std::vector<float> BuildCubemapFromEquirectangular(const Texture &texture, std::uint32_t faceSize)
-        {
-            std::vector<float> pixels(static_cast<std::size_t>(faceSize) * faceSize * 6u * 4u);
-            for (std::uint32_t face = 0u; face < 6u; ++face)
-            {
-                for (std::uint32_t y = 0u; y < faceSize; ++y)
-                {
-                    for (std::uint32_t x = 0u; x < faceSize; ++x)
-                    {
-                        const float u = (2.f * (static_cast<float>(x) + 0.5f) / static_cast<float>(faceSize)) - 1.f;
-                        const float v = (2.f * (static_cast<float>(y) + 0.5f) / static_cast<float>(faceSize)) - 1.f;
-                        const glm::vec4 sample = SampleEquirectangular(texture, FaceDirection(face, u, v));
-                        const std::size_t base = ((static_cast<std::size_t>(face) * faceSize + y) * faceSize + x) * 4u;
-                        pixels[base + 0u] = sample.r;
-                        pixels[base + 1u] = sample.g;
-                        pixels[base + 2u] = sample.b;
-                        pixels[base + 3u] = sample.a;
-                    }
-                }
-            }
-            return pixels;
-        }
-
-        std::uint32_t ChooseFaceSize(const Texture &texture)
-        {
-            if (texture.width == 0u || texture.height == 0u)
-            {
-                return 16u;
-            }
-            return MinValue<std::uint32_t>(2048u, MaxValue<std::uint32_t>(64u, texture.height));
         }
 
         glm::vec3 AverageColor(const std::vector<float> &pixels)
@@ -224,9 +111,28 @@ namespace Physara::Engine
             return;
         }
 
-        m_CameraBuffer->UploadData(&context.frameData->camera, sizeof(CameraData));
+        const std::uint64_t cameraSignature = UploadHash::Value(UploadHash::Offset, context.frameData->camera);
+        if (cameraSignature != m_LastCameraUploadSignature)
+        {
+            m_CameraBuffer->UploadData(&context.frameData->camera, sizeof(CameraData));
+            if (context.stats != nullptr)
+            {
+                context.stats->bufferUploadBytes += sizeof(CameraData);
+            }
+            m_LastCameraUploadSignature = cameraSignature;
+        }
+
         const SkyboxPassDetail::SettingsGPUData settingsData{glm::vec4(context.exposureCompensation, 0.f, 0.f, 0.f)};
-        m_SettingsBuffer->UploadData(&settingsData, sizeof(settingsData));
+        const std::uint64_t settingsSignature = UploadHash::Value(UploadHash::Offset, settingsData);
+        if (settingsSignature != m_LastSettingsUploadSignature)
+        {
+            m_SettingsBuffer->UploadData(&settingsData, sizeof(settingsData));
+            if (context.stats != nullptr)
+            {
+                context.stats->bufferUploadBytes += sizeof(settingsData);
+            }
+            m_LastSettingsUploadSignature = settingsSignature;
+        }
 
         context.commandList->SetViewport(
             0.f,
@@ -234,12 +140,18 @@ namespace Physara::Engine
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
-        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::vector<glm::vec4>{});
+        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::span<const glm::vec4>{});
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, m_CameraBuffer.get());
         context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, m_SettingsBuffer.get());
         context.commandList->SetTexture(SkyboxPassDetail::SkyboxTextureBinding, m_SkyboxTexture.get(), m_Sampler.get());
         context.commandList->Draw(36u, 1u, 0u, 0u);
+        if (context.stats != nullptr)
+        {
+            ++context.stats->drawCalls;
+            ++context.stats->instances;
+            context.stats->triangles += 12u;
+        }
         context.commandList->EndRenderPass();
     }
 
@@ -255,12 +167,14 @@ namespace Physara::Engine
         {
             m_CameraBuffer = context.device->CreateBuffer(
                 SkyboxPassDetail::DynamicBufferDesc(sizeof(CameraData), RHI::BufferUsage::Uniform));
+            m_LastCameraUploadSignature = std::numeric_limits<std::uint64_t>::max();
         }
 
         if (m_SettingsBuffer == nullptr)
         {
             m_SettingsBuffer = context.device->CreateBuffer(
                 SkyboxPassDetail::DynamicBufferDesc(sizeof(SkyboxPassDetail::SettingsGPUData), RHI::BufferUsage::Uniform));
+            m_LastSettingsUploadSignature = std::numeric_limits<std::uint64_t>::max();
         }
 
         if (m_Sampler == nullptr)
@@ -268,7 +182,7 @@ namespace Physara::Engine
             RHI::RHISamplerDesc desc{};
             desc.minFilter = RHI::FilterMode::Linear;
             desc.magFilter = RHI::FilterMode::Linear;
-            desc.mipFilter = RHI::FilterMode::Linear;
+            desc.mipFilter = RHI::FilterMode::Nearest;
             desc.wrapU = RHI::WrapMode::Repeat;
             desc.wrapV = RHI::WrapMode::ClampToEdge;
             desc.wrapW = RHI::WrapMode::ClampToEdge;
@@ -295,7 +209,7 @@ namespace Physara::Engine
                 const glm::vec3 averageColor = SkyboxPassDetail::AverageColor(texture->rgba32fPixels);
                 UploadPanorama(context, *texture);
                 m_LoadedEnvironmentPath = requestedPath;
-                PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, avg=({}, {}, {}).",
+                PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, format=RGBA32F, avg=({}, {}, {}).",
                                   requestedPath.string(),
                                   texture->width,
                                   texture->height,
@@ -317,47 +231,29 @@ namespace Physara::Engine
         }
     }
 
-    void SkyboxPass::UploadPanorama(const SkyboxPassContext &context, const Texture &texture)
+    void SkyboxPass::UploadPanorama(const SkyboxPassContext &context, const Texture &panorama)
     {
         RHI::RHITextureDesc desc{};
-        desc.width = texture.width;
-        desc.height = texture.height;
+        desc.width = panorama.width;
+        desc.height = panorama.height;
         desc.mipLevels = 1u;
         desc.arrayLayers = 1u;
-        desc.format = RHI::TextureFormat::RGBA16F;
+        desc.format = RHI::TextureFormat::RGBA32F;
         desc.dimension = RHI::TextureDimension::Tex2D;
         desc.usage = RHI::TextureUsage::Sampled;
-        desc.initialData = texture.rgba32fPixels.data();
+        desc.initialData = panorama.rgba32fPixels.data();
 
         m_SkyboxTexture = context.device->CreateTexture(desc);
         if (m_SkyboxTexture == nullptr)
         {
             PHYSARA_CORE_ERROR("Failed to create skybox panorama texture.");
-        }
-    }
-
-    void SkyboxPass::UploadCubemap(const SkyboxPassContext &context, std::uint32_t faceSize, const std::vector<float> &pixels)
-    {
-        RHI::RHITextureDesc desc{};
-        desc.width = faceSize;
-        desc.height = faceSize;
-        desc.mipLevels = 1u;
-        desc.arrayLayers = 6u;
-        desc.format = RHI::TextureFormat::RGBA16F;
-        desc.dimension = RHI::TextureDimension::TexCube;
-        desc.usage = RHI::TextureUsage::Sampled;
-
-        m_SkyboxTexture = context.device->CreateTexture(desc);
-        if (m_SkyboxTexture == nullptr)
-        {
-            PHYSARA_CORE_ERROR("Failed to create skybox cubemap.");
             return;
         }
 
-        const std::size_t faceFloatCount = static_cast<std::size_t>(faceSize) * faceSize * 4u;
-        for (std::uint32_t face = 0u; face < 6u; ++face)
+        if (context.stats != nullptr)
         {
-            m_SkyboxTexture->Upload(0u, face, pixels.data() + static_cast<std::size_t>(face) * faceFloatCount);
+            ++context.stats->textureUploads;
+            context.stats->textureUploadBytes += static_cast<std::uint64_t>(panorama.rgba32fPixels.size() * sizeof(float));
         }
     }
 

@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -24,6 +25,13 @@ namespace Physara::Engine
         {
             const float inverseExposure = 1.f / std::max(ExposureFromEV100(ev100), 0.000001f);
             return glm::vec4(glm::vec3(displayColor) * inverseExposure, displayColor.a);
+        }
+
+        float ElapsedMilliseconds(std::chrono::steady_clock::time_point start)
+        {
+            const auto end = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration<float, std::milli>(end - start);
+            return elapsed.count();
         }
     }
 
@@ -120,10 +128,16 @@ namespace Physara::Engine
         ProcessPendingCapture();
     }
 
-    void Renderer::RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds)
+    void Renderer::RenderScene(Scene &scene, const RenderView &view, float deltaTimeSeconds, bool transformsAlreadyUpdated)
     {
         BeginFrame(view, deltaTimeSeconds);
+        const auto buildStart = std::chrono::steady_clock::now();
+        if (!transformsAlreadyUpdated)
+        {
+            scene.UpdateTransforms();
+        }
         m_RenderProxy.Build(scene, view, m_FrameData, m_AssetManager);
+        m_FrameData.stats.sceneBuildCpuMs = RendererDetail::ElapsedMilliseconds(buildStart);
         RenderClear();
         ProcessPendingCapture();
     }
@@ -142,9 +156,11 @@ namespace Physara::Engine
             return;
         }
 
+        const auto renderStart = std::chrono::steady_clock::now();
         BuildRenderGraph();
         m_RenderGraph.Execute(*commandList);
         m_Device->SubmitCommandList();
+        m_FrameData.stats.renderGraphCpuMs = RendererDetail::ElapsedMilliseconds(renderStart);
     }
 
     CaptureResult Renderer::CaptureCurrentView(const CaptureDesc &desc)
@@ -325,10 +341,13 @@ namespace Physara::Engine
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
+                            passContext.stats = &m_FrameData.stats;
                             passContext.renderProxy = &m_RenderProxy;
                             passContext.assetManager = m_AssetManager;
                             passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
+                            const auto passStart = std::chrono::steady_clock::now();
                             m_ForwardOpaquePass.Execute(passContext);
+                            m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
                         });
 
         if (drawSkybox)
@@ -346,10 +365,13 @@ namespace Physara::Engine
                                 passContext.shaderLibrary = &m_ShaderLibrary;
                                 passContext.pipelineCache = &m_PipelineStateCache;
                                 passContext.frameData = &m_FrameData;
+                                passContext.stats = &m_FrameData.stats;
                                 passContext.environmentPath = m_EnvironmentMapPath;
                                 passContext.exposureCompensation = m_SkyboxExposureCompensation;
                                 passContext.enabled = true;
+                                const auto passStart = std::chrono::steady_clock::now();
                                 m_SkyboxPass.Execute(passContext);
+                                m_FrameData.stats.skyboxCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
                             });
         }
 
@@ -360,7 +382,7 @@ namespace Physara::Engine
                 .Write(sceneHDR)
                 .SetExecute([this](RenderGraphContext &context)
                             {
-                                ExecuteForwardTransparentPass(context);
+                                ExecuteTransparentForwardPass(context);
                             });
         }
 
@@ -386,13 +408,16 @@ namespace Physara::Engine
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
+                            passContext.stats = &m_FrameData.stats;
                             passContext.sceneHDR = m_SceneHDRColor.get();
                             passContext.settings = m_PostProcessSettings;
+                            const auto passStart = std::chrono::steady_clock::now();
                             m_PostProcessPass.Execute(passContext);
+                            m_FrameData.stats.postProcessCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
                         });
     }
 
-    void Renderer::ExecuteForwardTransparentPass(RenderGraphContext &context)
+    void Renderer::ExecuteTransparentForwardPass(RenderGraphContext &context)
     {
         ForwardPassContext passContext{};
         passContext.device = m_Device;
@@ -402,8 +427,11 @@ namespace Physara::Engine
         passContext.shaderLibrary = &m_ShaderLibrary;
         passContext.pipelineCache = &m_PipelineStateCache;
         passContext.frameData = &m_FrameData;
+        passContext.stats = &m_FrameData.stats;
         passContext.renderProxy = &m_RenderProxy;
         passContext.assetManager = m_AssetManager;
-        m_ForwardTransparentPass.Execute(passContext);
+        const auto passStart = std::chrono::steady_clock::now();
+        m_ForwardOpaquePass.ExecuteTransparent(passContext);
+        m_FrameData.stats.forwardTransparentCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
     }
 }

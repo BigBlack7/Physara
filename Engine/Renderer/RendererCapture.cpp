@@ -7,7 +7,6 @@
 
 #include <stb/stb_image_write.h>
 
-#include <Engine/Core/Log.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 
@@ -157,15 +156,6 @@ namespace Physara::Engine
         {
             result.message = "stb_image_write failed to write capture file.";
             return result;
-        }
-
-        if (desc.includeDebugView)
-        {
-            PHYSARA_CORE_INFO("Capture includeDebugView requested; current renderer output is used until debug passes are connected.");
-        }
-        if (!desc.usePostExposureOutput)
-        {
-            PHYSARA_CORE_INFO("Capture requested pre-exposure output; current SceneColor is already the final LDR output.");
         }
 
         result.success = true;

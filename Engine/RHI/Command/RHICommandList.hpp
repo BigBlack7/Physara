@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <glm/vec4.hpp>
@@ -74,7 +75,7 @@ namespace Physara::RHI
         virtual void BeginRenderPass(
             RHIFramebuffer *framebuffer,
             const RHIRenderPassDesc &desc,
-            const std::vector<glm::vec4> &clearColors,
+            std::span<const glm::vec4> clearColors,
             float clearDepth = 1.f) = 0;
 
         void BeginRenderPass(
@@ -96,7 +97,7 @@ namespace Physara::RHI
                 clearDepth = clearValue.depth;
             }
 
-            BeginRenderPass(framebuffer, desc, clearColors, clearDepth);
+            BeginRenderPass(framebuffer, desc, std::span<const glm::vec4>(clearColors.data(), clearColors.size()), clearDepth);
         }
 
         virtual void EndRenderPass() = 0;

@@ -153,12 +153,41 @@ namespace Physara::Editor
         char sizeLine[128]{};
         char fpsLine[128]{};
         char cameraLine[128]{};
+        char drawLine[160]{};
+        char visibleLine[160]{};
+        char cpuLine[160]{};
+        char passLine[192]{};
+        char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
         char keysLine[160]{};
 
+        const Engine::FrameStatistics &stats = m_Context.sceneView.rendererStats;
+        const double uploadMegabytes = static_cast<double>(stats.TotalUploadBytes()) / (1024.0 * 1024.0);
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
+        std::snprintf(drawLine, sizeof(drawLine), "Draws: %llu, Instances: %llu, Tris: %llu",
+                      static_cast<unsigned long long>(stats.drawCalls),
+                      static_cast<unsigned long long>(stats.instances),
+                      static_cast<unsigned long long>(stats.triangles));
+        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u",
+                      stats.visibleSubmissions,
+                      stats.opaqueItems,
+                      stats.unlitItems,
+                      stats.transparentItems,
+                      stats.lightCount);
+        std::snprintf(cpuLine, sizeof(cpuLine), "CPU: build %.2f ms, render %.2f ms",
+                      stats.sceneBuildCpuMs,
+                      stats.renderGraphCpuMs);
+        std::snprintf(passLine, sizeof(passLine), "Pass: Fwd %.2f, Sky %.2f, Trans %.2f, Post %.2f ms",
+                      stats.forwardOpaqueCpuMs,
+                      stats.skyboxCpuMs,
+                      stats.forwardTransparentCpuMs,
+                      stats.postProcessCpuMs);
+        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB  Mesh/Tex: %u/%u",
+                      uploadMegabytes,
+                      stats.meshUploads,
+                      stats.textureUploads);
         const char *cameraMode = "Orbit";
         if (m_Context.sceneView.playFlyMode)
         {
@@ -174,6 +203,11 @@ namespace Physara::Editor
 
         float maxTextWidth = std::max({ImGui::CalcTextSize(sizeLine).x,
                                        ImGui::CalcTextSize(fpsLine).x,
+                                       ImGui::CalcTextSize(drawLine).x,
+                                       ImGui::CalcTextSize(visibleLine).x,
+                                       ImGui::CalcTextSize(cpuLine).x,
+                                       ImGui::CalcTextSize(passLine).x,
+                                       ImGui::CalcTextSize(uploadLine).x,
                                        ImGui::CalcTextSize(cameraLine).x,
                                        ImGui::CalcTextSize(hoveredLine).x,
                                        ImGui::CalcTextSize(focusedLine).x});
@@ -194,7 +228,7 @@ namespace Physara::Editor
         }
 
         const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 6.f : 5.f);
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 11.f : 10.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
             const ImVec2 overlayMin(origin.x + width - SceneViewPanelDetail::OverlayPadding - overlayWidth,
@@ -210,6 +244,21 @@ namespace Physara::Editor
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), drawLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), visibleLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), cpuLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), passLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), uploadLine);
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), cameraLine);

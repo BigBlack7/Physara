@@ -54,7 +54,7 @@ namespace Physara::Engine
 
         if (sceneCamera == NullEntity || !IsValid(sceneCamera))
         {
-            Entity cameraEntity = CreateEntity("Scene Camera");
+            Entity cameraEntity = CreateEntity("Camera");
             sceneCamera = cameraEntity.GetHandle();
             cameraEntity.AddComponent<CameraComponent>(true);
         }
@@ -63,9 +63,10 @@ namespace Physara::Engine
         camera.primary = true;
         camera.Sanitize();
 
-        if (auto *tag = m_Registry.try_get<TagComponent>(sceneCamera); tag != nullptr && tag->name.empty())
+        if (auto *tag = m_Registry.try_get<TagComponent>(sceneCamera);
+            tag != nullptr && (tag->name.empty() || tag->name == "Scene Camera"))
         {
-            tag->name = "Scene Camera";
+            tag->name = "Camera";
         }
 
         DetachFromParent(sceneCamera);

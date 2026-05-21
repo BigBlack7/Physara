@@ -16,6 +16,7 @@ namespace Physara::Engine
         glm::vec3 normal{0.f, 0.f, 1.f};
         glm::vec4 tangent{1.f, 0.f, 0.f, 1.f};
         glm::vec2 texCoord0{0.f};
+        glm::vec2 texCoord1{0.f};
     };
 
     struct MeshPrimitive

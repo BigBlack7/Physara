@@ -23,12 +23,6 @@ namespace Physara::Editor
         PlayFly
     };
 
-    enum class CaptureViewSource
-    {
-        EditorCamera,
-        SceneCamera
-    };
-
     struct EditorCameraInputFrame
     {
         float mouseDeltaX{0.f};
@@ -50,14 +44,6 @@ namespace Physara::Editor
 
     struct EditorCameraSettings
     {
-        float sensorWidthMillimeters{36.f};
-        float sensorHeightMillimeters{24.f};
-        float focalLengthMillimeters{35.f};
-        float apertureFStop{16.f};
-        float shutterTimeSeconds{1.f / 125.f};
-        float iso{100.f};
-        float nearClipMeters{0.1f};
-        float farClipMeters{1000.f};
         float rotationSensitivity{0.12f};
         float flySpeedMetersPerSecond{5.f};
         float boostMultiplier{4.f};
@@ -71,13 +57,13 @@ namespace Physara::Editor
 
         void Update(const EditorCameraInputFrame &input, float deltaTimeSeconds);
         void SetViewportSize(std::uint32_t width, std::uint32_t height);
+        void SyncFromSceneCamera(Engine::Scene *scene);
+        void SyncToSceneCamera(Engine::Scene *scene) const;
 
         [[nodiscard]] glm::mat4 GetViewMatrix() const;
-        [[nodiscard]] glm::mat4 GetProjectionMatrix() const;
+        [[nodiscard]] glm::mat4 GetProjectionMatrix(const Engine::CameraComponent &camera) const;
         [[nodiscard]] Engine::RenderView BuildRenderView() const;
-        [[nodiscard]] Engine::RenderView BuildCaptureView(Engine::Scene *scene,
-                                                          Engine::EntityId selectedEntity,
-                                                          CaptureViewSource source) const;
+        [[nodiscard]] Engine::RenderView BuildRenderView(Engine::Scene *scene) const;
 
         [[nodiscard]] const glm::vec3 &GetPosition() const { return m_Position; }
         void SetPosition(const glm::vec3 &position) { m_Position = position; }
@@ -95,8 +81,6 @@ namespace Physara::Editor
         [[nodiscard]] Engine::CameraComponent ToCameraComponent() const;
 
         [[nodiscard]] EditorCameraMode GetMode() const { return m_Mode; }
-        [[nodiscard]] CaptureViewSource GetCaptureViewSource() const { return m_CaptureViewSource; }
-        void SetCaptureViewSource(CaptureViewSource source) { m_CaptureViewSource = source; }
         [[nodiscard]] bool IsPlayFlyModeActive() const { return m_PlayFlyMode; }
         [[nodiscard]] bool WantsLockedCursor() const { return m_Mode == EditorCameraMode::ViewportNavigate || m_Mode == EditorCameraMode::PlayFly; }
 
@@ -117,7 +101,6 @@ namespace Physara::Editor
         std::uint32_t m_ViewportHeight{1};
         bool m_PlayFlyMode{false};
         EditorCameraMode m_Mode{EditorCameraMode::Orbit};
-        CaptureViewSource m_CaptureViewSource{CaptureViewSource::SceneCamera};
         EditorCameraSettings m_Settings{};
     };
 }

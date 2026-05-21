@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,9 +41,21 @@ namespace Physara::Engine
         ShaderLibrary *shaderLibrary{nullptr};
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
+        FrameStatistics *stats{nullptr};
         const RenderProxy *renderProxy{nullptr};
         AssetManager *assetManager{nullptr};
         glm::vec4 clearColor{0.f, 0.f, 0.f, 1.f};
+    };
+
+    struct ForwardMaterialGPUData
+    {
+        glm::vec4 baseColor{1.f};
+        glm::vec4 emissiveColorLuminance{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 metallicRoughnessReflectanceAO{0.f, 0.5f, 0.5f, 1.f};
+        glm::vec4 alphaNormalFlags{0.5f, 1.f, 0.f, 0.f};
+        glm::vec4 textureFlags{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 textureCoordSets{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 materialFlags{0.f, 0.f, 0.f, 0.f};
     };
 
     class ForwardOpaquePass final
@@ -92,8 +105,14 @@ namespace Physara::Engine
         std::unordered_map<std::string, TextureGPUResource> m_TextureCache{};
         std::unordered_set<std::uint64_t> m_MissingMeshWarnings{};
         std::unordered_set<std::string> m_MissingTextureWarnings{};
+        std::vector<ForwardMaterialGPUData> m_MaterialUploadScratch{};
         RHI::RHITexture *m_BoundTextures[5]{};
         RHI::RHISampler *m_BoundSampler{nullptr};
+        std::uint64_t m_LastUploadedFrameIndex{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastCameraUploadSignature{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastObjectUploadSignature{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastLightUploadSignature{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastMaterialUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

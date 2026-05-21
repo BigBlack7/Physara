@@ -104,6 +104,8 @@ namespace Physara::RHI
             return false;
         }
 
+        glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
         GLint maxAniso = 1;
 #if defined(GL_MAX_TEXTURE_MAX_ANISOTROPY)
         glGetIntegerv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);

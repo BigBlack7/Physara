@@ -3,6 +3,7 @@
 #include <array>
 #include <filesystem>
 
+#include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Scene/EntityId.hpp>
 
 namespace Physara::Engine
@@ -26,29 +27,6 @@ namespace Physara::Editor
         World
     };
 
-    enum class RenderPipelineMode
-    {
-        Forward,
-        ForwardPlus,
-        Deferred
-    };
-
-    enum class DebugViewMode
-    {
-        None,
-        Normals,
-        Depth,
-        Wireframe,
-        LightComplexity,
-        GBufferAlbedo,
-        GBufferNormal,
-        GBufferRoughness,
-        GBufferMetallic,
-        GBufferAO,
-        GBufferEmissive,
-        ShadowMap
-    };
-
     enum class EditorDisplayMode
     {
         Docked,
@@ -65,6 +43,7 @@ namespace Physara::Editor
         bool flyCameraMode{false};
         bool playFlyMode{false};
         bool inputCaptured{false};
+        Engine::FrameStatistics rendererStats{};
     };
 
     struct PanelVisibilityState
@@ -82,7 +61,6 @@ namespace Physara::Editor
         std::array<char, 64> fileNamePrefix{"Physara_Capture"};
         int fileFormatIndex{0};
         float resolutionScale{1.f};
-        bool includeDebugView{false};
         bool captureRequested{false};
     };
 
@@ -118,8 +96,6 @@ namespace Physara::Editor
     {
         GizmoOperation gizmoOperation{GizmoOperation::Translate};
         GizmoSpace gizmoSpace{GizmoSpace::World};
-        RenderPipelineMode pipelineMode{RenderPipelineMode::Forward};
-        DebugViewMode debugViewMode{DebugViewMode::None};
         CaptureSettings capture{};
         EnvironmentSettings environment{};
         PostProcessSettings postProcess{};

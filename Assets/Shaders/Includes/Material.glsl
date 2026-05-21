@@ -10,6 +10,7 @@ struct MaterialData
     vec4 metallicRoughnessReflectanceAO;
     vec4 alphaNormalFlags;
     vec4 textureFlags;
+    vec4 textureCoordSets;
     vec4 materialFlags;
 };
 
@@ -30,6 +31,11 @@ struct MaterialInputs
     bool hasOcclusionTexture;
     bool hasEmissiveTexture;
     bool doubleSided;
+    uint baseColorTexCoord;
+    uint metallicRoughnessTexCoord;
+    uint normalTexCoord;
+    uint occlusionTexCoord;
+    uint emissiveTexCoord;
     uint shadingModel;
     uint alphaMode;
 };
@@ -71,6 +77,11 @@ MaterialInputs DefaultMaterialInputs()
     material.hasOcclusionTexture = false;
     material.hasEmissiveTexture = false;
     material.doubleSided = false;
+    material.baseColorTexCoord = 0u;
+    material.metallicRoughnessTexCoord = 0u;
+    material.normalTexCoord = 0u;
+    material.occlusionTexCoord = 0u;
+    material.emissiveTexCoord = 0u;
     material.shadingModel = PHYSARA_SHADING_MODEL_LIT;
     material.alphaMode = PHYSARA_ALPHA_OPAQUE;
     return material;
@@ -94,6 +105,11 @@ MaterialInputs UnpackMaterialData(MaterialData data)
     material.hasOcclusionTexture = data.textureFlags.w > 0.5;
     material.hasEmissiveTexture = data.materialFlags.y > 0.5;
     material.doubleSided = data.materialFlags.x > 0.5;
+    material.baseColorTexCoord = uint(data.textureCoordSets.x);
+    material.metallicRoughnessTexCoord = uint(data.textureCoordSets.y);
+    material.normalTexCoord = uint(data.textureCoordSets.z);
+    material.occlusionTexCoord = uint(data.textureCoordSets.w);
+    material.emissiveTexCoord = uint(data.materialFlags.z);
     material.shadingModel = uint(data.alphaNormalFlags.z);
     material.alphaMode = uint(data.alphaNormalFlags.w);
     return material;

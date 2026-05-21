@@ -27,6 +27,11 @@ namespace Physara::Engine::AssetPath
         return extension == ".glsl" || extension == ".vert" || extension == ".frag" || extension == ".comp";
     }
 
+    std::string NormalizeAssetPath(const std::filesystem::path &path)
+    {
+        return Platform::FileSystem::NormalizeForCompare(Platform::FileSystem::ToAssetsRelativePath(path.string()));
+    }
+
     AssetKind Classify(const std::filesystem::path &path, bool isDirectory)
     {
         if (isDirectory)

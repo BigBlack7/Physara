@@ -69,12 +69,11 @@ namespace Physara::Engine
 // Engine侧(Console Logger)
 #if defined(PHYSARA_DEBUG)
 #define PHYSARA_CORE_TRACE(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetCoreLogger(), spdlog::level::trace, __VA_ARGS__)
-#define PHYSARA_CORE_INFO(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetCoreLogger(), spdlog::level::info, __VA_ARGS__)
 #else
 #define PHYSARA_CORE_TRACE(...) ((void)0)
-#define PHYSARA_CORE_INFO(...) ((void)0)
 #endif
 
+#define PHYSARA_CORE_INFO(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetCoreLogger(), spdlog::level::info, __VA_ARGS__)
 #define PHYSARA_CORE_WARN(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetCoreLogger(), spdlog::level::warn, __VA_ARGS__)
 #define PHYSARA_CORE_ERROR(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetCoreLogger(), spdlog::level::err, __VA_ARGS__)
 #define PHYSARA_CORE_FATAL(...)                                                                          \
@@ -92,12 +91,11 @@ namespace Physara::Engine
 // Editor侧(Windows Logger)
 #if defined(PHYSARA_DEBUG)
 #define PHYSARA_TRACE(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetEditorLogger(), spdlog::level::trace, __VA_ARGS__)
-#define PHYSARA_INFO(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetEditorLogger(), spdlog::level::info, __VA_ARGS__)
 #else
 #define PHYSARA_TRACE(...) ((void)0)
-#define PHYSARA_INFO(...) ((void)0)
 #endif
 
+#define PHYSARA_INFO(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetEditorLogger(), spdlog::level::info, __VA_ARGS__)
 #define PHYSARA_WARN(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetEditorLogger(), spdlog::level::warn, __VA_ARGS__)
 #define PHYSARA_ERROR(...) PHYSARA_LOG_IMPL(::Physara::Engine::Log::GetEditorLogger(), spdlog::level::err, __VA_ARGS__)
 #define PHYSARA_FATAL(...)                                                                                 \

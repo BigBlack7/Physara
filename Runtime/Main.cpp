@@ -1,14 +1,31 @@
 #include <memory>
+#include <cstdlib>
 #include <stdexcept>
+#include <string_view>
 
-#include <Backend/OpenGL/OpenGLDevice.hpp>
-#include <Backend/OpenGL/OpenGLImGuiBackend.hpp>
-#include <Editor/Core/EditorApp.hpp>
+#include <Backend/RuntimeBackendFactory.hpp>
+#include <Editor/Core/EditorAppHost.hpp>
 #include <Engine/Core/Log.hpp>
 #include <Engine/Core/Time.hpp>
+#include <Engine/RHI/Core/IImGuiBackend.hpp>
+#include <Engine/RHI/Core/RHIDevice.hpp>
 #include <Platform/FileSystem/FileSystem.hpp>
-#include <Platform/Input/GLFWInput.hpp>
-#include <Platform/Window/GLFWWindowOpenGL.hpp>
+#include <Platform/Input/IInput.hpp>
+#include <Platform/Window/IWindow.hpp>
+
+namespace
+{
+    bool IsTruthy(std::string_view value)
+    {
+        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+    }
+
+    bool ReadVSyncSetting()
+    {
+        const char *value = std::getenv("PHYSARA_VSYNC");
+        return value != nullptr && IsTruthy(value);
+    }
+}
 
 int main()
 {
@@ -20,13 +37,15 @@ int main()
     std::unique_ptr<Physara::Platform::IInput> input;
     std::unique_ptr<Physara::RHI::RHIDevice> device;
     std::unique_ptr<Physara::RHI::IImGuiBackend> imguiBackend;
-    std::unique_ptr<Physara::Editor::EditorApp> editorApp;
+    std::unique_ptr<Physara::Editor::EditorAppHost> editorApp;
 
     try
     {
         Physara::Platform::FileSystem::Init(ASSETS_PATH);
 
-        window = std::make_unique<Physara::Platform::GLFWWindowOpenGL>();
+        constexpr auto graphicsBackend = Physara::RHI::GraphicsBackend::OpenGL;
+
+        window = Physara::RHI::CreateRuntimeWindow(graphicsBackend);
         if (!window->Create("Physara", 1960, 1080))
         {
             throw std::runtime_error("Failed to create window.");
@@ -43,23 +62,25 @@ int main()
 
         PHYSARA_CORE_INFO("Window created: {} x {}", window->GetWidth(), window->GetHeight());
 
-        input = std::make_unique<Physara::Platform::GLFWInput>(nativeWindow);
+        input = Physara::RHI::CreateRuntimeInput(graphicsBackend, nativeWindow);
 
-        device = std::make_unique<Physara::RHI::OpenGLDevice>();
+        device = Physara::RHI::CreateRuntimeDevice(graphicsBackend);
         if (!device->Init(nativeWindow))
         {
-            throw std::runtime_error("Failed to initialize OpenGL device.");
+            throw std::runtime_error("Failed to initialize graphics device.");
         }
 
-        window->SetVSync(true);
+        const bool vsyncEnabled = ReadVSyncSetting();
+        window->SetVSync(vsyncEnabled);
+        PHYSARA_CORE_INFO("VSync {}", vsyncEnabled ? "enabled" : "disabled");
 
-        imguiBackend = std::make_unique<Physara::RHI::OpenGLImGuiBackend>();
+        imguiBackend = Physara::RHI::CreateRuntimeImGuiBackend(graphicsBackend);
         if (!imguiBackend->Initialize(device.get(), nativeWindow))
         {
-            throw std::runtime_error("Failed to initialize OpenGL ImGui backend.");
+            throw std::runtime_error("Failed to initialize graphics ImGui backend.");
         }
 
-        editorApp = std::make_unique<Physara::Editor::EditorApp>();
+        editorApp = std::make_unique<Physara::Editor::EditorAppHost>();
         editorApp->Init(device.get(), imguiBackend.get(), input.get());
 
         while (!window->IsCloseRequested())

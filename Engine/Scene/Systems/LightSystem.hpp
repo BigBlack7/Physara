@@ -11,6 +11,7 @@ namespace Physara::Engine
     class LightSystem final
     {
     public:
-        [[nodiscard]] static std::vector<LightData> Collect(Scene &scene);
+        // Caller owns Scene::UpdateTransforms() so render and light collection can share one authoritative update.
+        static void Collect(Scene &scene, std::vector<LightData> &lights);
     };
 }

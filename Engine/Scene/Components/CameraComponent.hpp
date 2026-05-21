@@ -60,7 +60,7 @@ namespace Physara::Engine
             f/8(小光圈, 大景深)
             f/16(极小光圈)
         */
-        float apertureFStop{2.8f}; // 镜头光圈, 单位-f
+        float apertureFStop{16.f}; // 镜头光圈, 单位-f
 
         /*
             1/1000s(高速)
@@ -68,7 +68,7 @@ namespace Physara::Engine
             1/30s(慢速)
             1s(长曝光)
         */
-        float shutterTimeSeconds{1.f / 60.f}; // 快门速度, 单位-秒
+        float shutterTimeSeconds{1.f / 125.f}; // 快门速度, 单位-秒
 
         /*
             100(低感光度, 画质好)
