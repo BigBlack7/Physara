@@ -7,10 +7,14 @@ target_sources(Engine PRIVATE
     Core/Time.hpp
     Renderer/FrameData.cpp
     Renderer/FrameData.hpp
+    Renderer/MeshGPUCache.cpp
+    Renderer/MeshGPUCache.hpp
     Renderer/Passes/ForwardOpaquePass.cpp
     Renderer/Passes/ForwardOpaquePass.hpp
     Renderer/Passes/PostProcessPass.cpp
     Renderer/Passes/PostProcessPass.hpp
+    Renderer/Passes/ShadowPass.cpp
+    Renderer/Passes/ShadowPass.hpp
     Renderer/Passes/SkyboxPass.cpp
     Renderer/Passes/SkyboxPass.hpp
     Renderer/PipelineStateCache.cpp

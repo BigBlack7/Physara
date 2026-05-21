@@ -9,6 +9,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/UploadHasher.hpp>
@@ -32,11 +33,14 @@ namespace Physara::Engine
         constexpr std::uint32_t ObjectBinding = 1u;
         constexpr std::uint32_t MaterialBinding = 2u;
         constexpr std::uint32_t LightBinding = 3u;
+        constexpr std::uint32_t RenderSettingsBinding = 5u;
+        constexpr std::uint32_t ShadowBinding = 6u;
         constexpr std::uint32_t BaseColorTextureBinding = 0u;
         constexpr std::uint32_t MetallicRoughnessTextureBinding = 1u;
         constexpr std::uint32_t NormalTextureBinding = 2u;
         constexpr std::uint32_t OcclusionTextureBinding = 3u;
         constexpr std::uint32_t EmissiveTextureBinding = 4u;
+        constexpr std::uint32_t ShadowTextureBinding = 8u;
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -50,6 +54,11 @@ namespace Physara::Engine
             std::uint32_t padding0{0};
             std::uint32_t padding1{0};
             std::uint32_t padding2{0};
+        };
+
+        struct RenderSettingsGPUData
+        {
+            glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
         };
 
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
@@ -232,15 +241,11 @@ namespace Physara::Engine
             return levels;
         }
 
-        template <typename T>
-        RHI::RHIBufferDesc StaticBufferDesc(const std::vector<T> &data, RHI::BufferUsageFlags usage)
+        RenderSettingsGPUData BuildRenderSettings(const ForwardPassContext &context)
         {
-            RHI::RHIBufferDesc desc{};
-            desc.size = static_cast<std::uint32_t>(data.size() * sizeof(T));
-            desc.usage = usage;
-            desc.dynamic = false;
-            desc.initialData = data.data();
-            return desc;
+            RenderSettingsGPUData data{};
+            data.debugParams.x = static_cast<float>(context.debugView);
+            return data;
         }
 
         void RecordBufferUpload(FrameStatistics *stats, std::uint64_t bytes)
@@ -305,6 +310,7 @@ namespace Physara::Engine
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::ObjectBinding, m_ObjectBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::MaterialBinding, m_MaterialBuffer.get());
             context.commandList->SetStorageBuffer(ForwardOpaquePassDetail::LightBinding, m_LightBuffer.get());
+            BindFrameState(context);
 
             ResetTextureBindings();
             context.commandList->SetPipelineState(singleSidedPipeline);
@@ -372,6 +378,20 @@ namespace Physara::Engine
             m_LastMaterialUploadSignature = std::numeric_limits<std::uint64_t>::max();
         }
 
+        if (m_RenderSettingsBuffer == nullptr)
+        {
+            m_RenderSettingsBuffer = context.device->CreateBuffer(
+                ForwardOpaquePassDetail::DynamicBufferDesc(sizeof(ForwardOpaquePassDetail::RenderSettingsGPUData), RHI::BufferUsage::Uniform));
+            m_LastRenderSettingsUploadSignature = std::numeric_limits<std::uint64_t>::max();
+        }
+
+        if (m_ShadowBuffer == nullptr)
+        {
+            m_ShadowBuffer = context.device->CreateBuffer(
+                ForwardOpaquePassDetail::DynamicBufferDesc(sizeof(ShadowData), RHI::BufferUsage::Uniform));
+            m_LastShadowUploadSignature = std::numeric_limits<std::uint64_t>::max();
+        }
+
         if (m_LastUploadedFrameIndex == frameData.frameIndex)
         {
             return;
@@ -383,6 +403,23 @@ namespace Physara::Engine
             m_CameraBuffer->UploadData(&frameData.camera, sizeof(CameraData));
             ForwardOpaquePassDetail::RecordBufferUpload(context.stats, sizeof(CameraData));
             m_LastCameraUploadSignature = cameraSignature;
+        }
+
+        const ForwardOpaquePassDetail::RenderSettingsGPUData renderSettings = ForwardOpaquePassDetail::BuildRenderSettings(context);
+        const std::uint64_t renderSettingsSignature = UploadHash::Value(UploadHash::Offset, renderSettings);
+        if (renderSettingsSignature != m_LastRenderSettingsUploadSignature)
+        {
+            m_RenderSettingsBuffer->UploadData(&renderSettings, sizeof(renderSettings));
+            ForwardOpaquePassDetail::RecordBufferUpload(context.stats, sizeof(renderSettings));
+            m_LastRenderSettingsUploadSignature = renderSettingsSignature;
+        }
+
+        const std::uint64_t shadowSignature = UploadHash::Value(UploadHash::Offset, frameData.shadow);
+        if (shadowSignature != m_LastShadowUploadSignature)
+        {
+            m_ShadowBuffer->UploadData(&frameData.shadow, sizeof(ShadowData));
+            ForwardOpaquePassDetail::RecordBufferUpload(context.stats, sizeof(ShadowData));
+            m_LastShadowUploadSignature = shadowSignature;
         }
 
         const std::uint64_t objectSignature = UploadHash::Vector(UploadHash::Offset, frameData.objects);
@@ -482,6 +519,20 @@ namespace Physara::Engine
         {
             const std::uint8_t normal[4]{128u, 128u, 255u, 255u};
             m_FallbackNormalTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, normal));
+        }
+
+        if (m_ShadowSampler == nullptr)
+        {
+            RHI::RHISamplerDesc desc{};
+            desc.minFilter = RHI::FilterMode::Linear;
+            desc.magFilter = RHI::FilterMode::Linear;
+            desc.mipFilter = RHI::FilterMode::Nearest;
+            desc.wrapU = RHI::WrapMode::ClampToEdge;
+            desc.wrapV = RHI::WrapMode::ClampToEdge;
+            desc.wrapW = RHI::WrapMode::ClampToEdge;
+            desc.compareOp = RHI::CompareOp::LessEqual;
+            desc.anisotropy = 1.f;
+            m_ShadowSampler = context.device->CreateSampler(desc);
         }
     }
 
@@ -595,6 +646,16 @@ namespace Physara::Engine
         return m_FallbackNormalTexture.get();
     }
 
+    void ForwardOpaquePass::BindFrameState(const ForwardPassContext &context)
+    {
+        context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::RenderSettingsBinding, m_RenderSettingsBuffer.get());
+        context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::ShadowBinding, m_ShadowBuffer.get());
+        if (context.shadowMap != nullptr)
+        {
+            context.commandList->SetTexture(ForwardOpaquePassDetail::ShadowTextureBinding, context.shadowMap, m_ShadowSampler.get());
+        }
+    }
+
     void ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderDrawItem &item)
     {
         if (item.submission == nullptr)
@@ -635,76 +696,6 @@ namespace Physara::Engine
         m_BoundSampler = sampler;
     }
 
-    ForwardOpaquePass::MeshGPUPrimitive *ForwardOpaquePass::GetOrCreateMeshPrimitive(const ForwardPassContext &context, const RenderDrawItem &item)
-    {
-        if (context.assetManager == nullptr || context.device == nullptr)
-        {
-            return nullptr;
-        }
-        if (item.submission == nullptr)
-        {
-            return nullptr;
-        }
-
-        const auto cached = m_MeshCache.find(item.primitiveKey);
-        if (cached != m_MeshCache.end())
-        {
-            return &cached->second;
-        }
-
-        const std::string meshResourcePath = BuildMeshResourcePath(item);
-        const std::shared_ptr<Mesh> mesh = context.assetManager->GetByPath<Mesh>(meshResourcePath);
-        if (mesh == nullptr || item.submission->primitiveIndex >= mesh->primitives.size())
-        {
-            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
-            {
-                PHYSARA_CORE_WARN("Forward pass skipped mesh '{}': resource not found or primitive index out of range. normalized='{}'.",
-                                  BuildMeshPrimitiveDebugName(item),
-                                  context.assetManager->NormalizePath(meshResourcePath));
-            }
-            return nullptr;
-        }
-
-        const MeshPrimitive &primitive = mesh->primitives[item.submission->primitiveIndex];
-        if (!primitive.HasGeometry())
-        {
-            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
-            {
-                PHYSARA_CORE_WARN("Forward pass skipped mesh '{}': primitive has no decoded geometry.",
-                                  BuildMeshPrimitiveDebugName(item));
-            }
-            return nullptr;
-        }
-
-        MeshGPUPrimitive gpuPrimitive{};
-        gpuPrimitive.vertexBuffer = context.device->CreateBuffer(
-            ForwardOpaquePassDetail::StaticBufferDesc(primitive.vertices, RHI::BufferUsage::Vertex));
-        gpuPrimitive.indexBuffer = context.device->CreateBuffer(
-            ForwardOpaquePassDetail::StaticBufferDesc(primitive.indices, RHI::BufferUsage::Index));
-        gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-
-        if (gpuPrimitive.vertexBuffer == nullptr || gpuPrimitive.indexBuffer == nullptr)
-        {
-            PHYSARA_CORE_ERROR("Forward pass failed to upload mesh '{}'.", BuildMeshPrimitiveDebugName(item));
-            return nullptr;
-        }
-
-        if (context.stats != nullptr)
-        {
-            const std::uint64_t vertexBytes = static_cast<std::uint64_t>(primitive.vertices.size() * sizeof(MeshVertex));
-            const std::uint64_t indexBytes = static_cast<std::uint64_t>(primitive.indices.size() * sizeof(std::uint32_t));
-            ++context.stats->meshUploads;
-            context.stats->meshUploadBytes += vertexBytes + indexBytes;
-        }
-
-        PHYSARA_CORE_INFO("Forward mesh uploaded '{}': vertices={}, indices={}.",
-                          BuildMeshPrimitiveDebugName(item),
-                          primitive.vertices.size(),
-                          primitive.indices.size());
-        auto [inserted, _] = m_MeshCache.emplace(item.primitiveKey, std::move(gpuPrimitive));
-        return &inserted->second;
-    }
-
     void ForwardOpaquePass::DrawBucket(const ForwardPassContext &context, const std::vector<RenderDrawItem> &bucket, bool drawDoubleSided)
     {
         for (std::size_t i = 0; i < bucket.size();)
@@ -716,7 +707,9 @@ namespace Physara::Engine
                 continue;
             }
 
-            MeshGPUPrimitive *primitive = GetOrCreateMeshPrimitive(context, item);
+            MeshGPUPrimitive *primitive = context.meshCache != nullptr
+                                              ? context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats)
+                                              : nullptr;
             if (primitive == nullptr || primitive->indexCount == 0)
             {
                 ++i;
@@ -743,7 +736,7 @@ namespace Physara::Engine
             if (!m_LoggedFirstDraw)
             {
                 PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}, instances={}.",
-                                  BuildMeshPrimitiveDebugName(item),
+                                  MeshGPUCache::BuildMeshPrimitiveDebugName(item),
                                   primitive->indexCount,
                                   item.objectIndex,
                                   instanceCount);
@@ -782,26 +775,6 @@ namespace Physara::Engine
             texture = nullptr;
         }
         m_BoundSampler = nullptr;
-    }
-
-    std::string ForwardOpaquePass::BuildMeshResourcePath(const RenderDrawItem &item)
-    {
-        if (item.submission == nullptr)
-        {
-            return {};
-        }
-
-        return item.submission->meshPath + "#mesh/" + std::to_string(item.submission->meshIndex);
-    }
-
-    std::string ForwardOpaquePass::BuildMeshPrimitiveDebugName(const RenderDrawItem &item)
-    {
-        if (item.submission == nullptr)
-        {
-            return {};
-        }
-
-        return BuildMeshResourcePath(item) + "#primitive/" + std::to_string(item.submission->primitiveIndex);
     }
 
 }

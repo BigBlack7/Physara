@@ -16,6 +16,7 @@ layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProce
 };
 
 layout(binding = PHYSARA_BINDING_SCENE_COLOR_TEXTURE)uniform sampler2D uSceneColor;
+layout(binding = PHYSARA_BINDING_SCENE_DEPTH_TEXTURE)uniform sampler2D uSceneDepth;
 
 layout(location = 0)out vec4 outColor;
 
@@ -119,9 +120,32 @@ vec3 SanitizeHDR(vec3 value)
         
         return (north + south + east + west + center * 2.0) / 6.0;
     }
+
+    float LinearizeDepth(float depth)
+    {
+        float nearClip = max(uViewportSizeEV100.w, 0.0001);
+        float farClip = 1000.0;
+        float z = depth * 2.0 - 1.0;
+        return (2.0 * nearClip * farClip) / max(farClip + nearClip - z * (farClip - nearClip), PHYSARA_EPSILON);
+    }
     
     void main()
     {
+        uint debugView = uint(uFlags.w + 0.5);
+        if (debugView == 1u)
+        {
+            outColor = vec4(SampleHDR(inUV), 1.0);
+            return;
+        }
+        if (debugView == 2u)
+        {
+            float rawDepth = texture(uSceneDepth, inUV).r;
+            float linearDepth = LinearizeDepth(rawDepth);
+            float normalizedDepth = clamp(linearDepth / 100.0, 0.0, 1.0);
+            outColor = vec4(vec3(pow(normalizedDepth, 0.45)), 1.0);
+            return;
+        }
+
         vec3 mapped = ApplyFXAA(inUV);
         outColor = vec4(LinearToSrgb(mapped), 1.0);
     }

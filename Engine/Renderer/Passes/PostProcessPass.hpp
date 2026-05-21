@@ -23,11 +23,19 @@ namespace Physara::Engine
     class PipelineStateCache;
     class ShaderLibrary;
 
+    enum class DebugViewMode : std::uint32_t
+    {
+        None = 0,
+        Normals = 1,
+        Depth = 2
+    };
+
     struct PostProcessSettings
     {
         bool toneMappingEnabled{true};
         bool bloomEnabled{true};
         bool fxaaEnabled{true};
+        DebugViewMode debugView{DebugViewMode::None};
         float bloomThreshold{1.0f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.08f};
@@ -45,6 +53,7 @@ namespace Physara::Engine
         const FrameData *frameData{nullptr};
         FrameStatistics *stats{nullptr};
         RHI::RHITexture *sceneHDR{nullptr};
+        RHI::RHITexture *sceneDepth{nullptr};
         PostProcessSettings settings{};
     };
 

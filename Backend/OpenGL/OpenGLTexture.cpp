@@ -67,6 +67,10 @@ namespace Physara::RHI
         glTextureParameteri(m_ID, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTextureParameteri(m_ID, GL_TEXTURE_BASE_LEVEL, 0);
         glTextureParameteri(m_ID, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(m_Desc.mipLevels - 1));
+        if (m_Desc.format == TextureFormat::Depth24Stencil8)
+        {
+            glTextureParameteri(m_ID, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+        }
 
         if (m_Desc.initialData != nullptr)
         {

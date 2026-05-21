@@ -14,6 +14,8 @@
 #define PHYSARA_BINDING_LIGHTS 3
 #define PHYSARA_BINDING_POST_PROCESS_SETTINGS 4
 #define PHYSARA_BINDING_SKYBOX_SETTINGS 4
+#define PHYSARA_BINDING_RENDER_SETTINGS 5
+#define PHYSARA_BINDING_SHADOW 6
 
 #define PHYSARA_BINDING_BASE_COLOR_TEXTURE 0
 #define PHYSARA_BINDING_METALLIC_ROUGHNESS_TEXTURE 1
@@ -22,6 +24,8 @@
 #define PHYSARA_BINDING_EMISSIVE_TEXTURE 4
 #define PHYSARA_BINDING_SKYBOX_TEXTURE 5
 #define PHYSARA_BINDING_SCENE_COLOR_TEXTURE 6
+#define PHYSARA_BINDING_SCENE_DEPTH_TEXTURE 7
+#define PHYSARA_BINDING_SHADOW_MAP 8
 
 #define PHYSARA_LIGHT_DIRECTIONAL 0u
 #define PHYSARA_LIGHT_POINT 1u
@@ -63,6 +67,13 @@ struct LightData
     vec4 colorIntensity;
     vec4 spotAngles;
     vec4 shadowParams;
+};
+
+struct ShadowData
+{
+    mat4 lightViewProjection;
+    vec4 params;
+    vec4 controls;
 };
 
 float GetEV100(CameraData camera)

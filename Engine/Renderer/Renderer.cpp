@@ -89,6 +89,8 @@ namespace Physara::Engine
         m_RenderGraph.Reset();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
+        m_ShadowPass.Reset();
+        m_MeshGPUCache.Reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
         m_SceneHDRColor.reset();
@@ -194,6 +196,12 @@ namespace Physara::Engine
 
         m_EnvironmentMapPath = std::move(path);
         m_SkyboxPass.InvalidateEnvironment();
+    }
+
+    void Renderer::SetShadowSettings(const ShadowSettings &settings)
+    {
+        m_ShadowSettings = settings;
+        m_ShadowPass.SetSettings(settings);
     }
 
     bool Renderer::HasValidRenderTarget() const
@@ -329,10 +337,43 @@ namespace Physara::Engine
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
 
+        if (m_ShadowSettings.algorithm != ShadowAlgorithm::None)
+        {
+            m_RenderGraph.AddPass("Shadow")
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                ShadowPassContext passContext{};
+                                passContext.device = m_Device;
+                                passContext.commandList = &context.commandList;
+                                passContext.shaderLibrary = &m_ShaderLibrary;
+                                passContext.pipelineCache = &m_PipelineStateCache;
+                                passContext.frameData = &m_FrameData;
+                                passContext.stats = &m_FrameData.stats;
+                                passContext.renderProxy = &m_RenderProxy;
+                                passContext.meshCache = &m_MeshGPUCache;
+                                passContext.assetManager = m_AssetManager;
+                                const auto passStart = std::chrono::steady_clock::now();
+                                m_ShadowPass.Execute(passContext);
+                                m_FrameData.stats.shadowCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                            });
+        }
+
         m_RenderGraph.AddPass("ForwardOpaque")
             .Write(sceneHDR)
             .SetExecute([this](RenderGraphContext &context)
                         {
+                            if (m_ShadowPass.GetShadowMap() != nullptr && m_FrameData.shadow.params.x > 0.5f)
+                            {
+                                RHI::RHIResourceBarrier shadowBarrier{};
+                                shadowBarrier.before = RHI::ResourceState::DepthWrite;
+                                shadowBarrier.after = RHI::ResourceState::ShaderResource;
+                                shadowBarrier.srcStages = RHI::ShaderStageBit::Fragment;
+                                shadowBarrier.dstStages = RHI::ShaderStageBit::Fragment;
+                                shadowBarrier.srcAccess = RHI::ResourceAccess::DepthStencilWrite;
+                                shadowBarrier.dstAccess = RHI::ResourceAccess::ShaderRead;
+                                context.commandList.TextureBarrier(m_ShadowPass.GetShadowMap(), shadowBarrier);
+                            }
+
                             ForwardPassContext passContext{};
                             passContext.device = m_Device;
                             passContext.commandList = &context.commandList;
@@ -343,8 +384,11 @@ namespace Physara::Engine
                             passContext.frameData = &m_FrameData;
                             passContext.stats = &m_FrameData.stats;
                             passContext.renderProxy = &m_RenderProxy;
+                            passContext.meshCache = &m_MeshGPUCache;
                             passContext.assetManager = m_AssetManager;
+                            passContext.shadowMap = m_ShadowPass.GetShadowMap();
                             passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
+                            passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
                             const auto passStart = std::chrono::steady_clock::now();
                             m_ForwardOpaquePass.Execute(passContext);
                             m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
@@ -400,6 +444,15 @@ namespace Physara::Engine
                             barrier.dstAccess = RHI::ResourceAccess::ShaderRead;
                             context.commandList.TextureBarrier(m_SceneHDRColor.get(), barrier);
 
+                            RHI::RHIResourceBarrier depthBarrier{};
+                            depthBarrier.before = RHI::ResourceState::DepthWrite;
+                            depthBarrier.after = RHI::ResourceState::ShaderResource;
+                            depthBarrier.srcStages = RHI::ShaderStageBit::Fragment;
+                            depthBarrier.dstStages = RHI::ShaderStageBit::Fragment;
+                            depthBarrier.srcAccess = RHI::ResourceAccess::DepthStencilWrite;
+                            depthBarrier.dstAccess = RHI::ResourceAccess::ShaderRead;
+                            context.commandList.TextureBarrier(m_SceneDepth.get(), depthBarrier);
+
                             PostProcessPassContext passContext{};
                             passContext.device = m_Device;
                             passContext.commandList = &context.commandList;
@@ -410,6 +463,7 @@ namespace Physara::Engine
                             passContext.frameData = &m_FrameData;
                             passContext.stats = &m_FrameData.stats;
                             passContext.sceneHDR = m_SceneHDRColor.get();
+                            passContext.sceneDepth = m_SceneDepth.get();
                             passContext.settings = m_PostProcessSettings;
                             const auto passStart = std::chrono::steady_clock::now();
                             m_PostProcessPass.Execute(passContext);
@@ -429,7 +483,10 @@ namespace Physara::Engine
         passContext.frameData = &m_FrameData;
         passContext.stats = &m_FrameData.stats;
         passContext.renderProxy = &m_RenderProxy;
+        passContext.meshCache = &m_MeshGPUCache;
         passContext.assetManager = m_AssetManager;
+        passContext.shadowMap = m_ShadowPass.GetShadowMap();
+        passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
         const auto passStart = std::chrono::steady_clock::now();
         m_ForwardOpaquePass.ExecuteTransparent(passContext);
         m_FrameData.stats.forwardTransparentCpuMs += RendererDetail::ElapsedMilliseconds(passStart);

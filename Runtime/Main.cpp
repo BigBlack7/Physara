@@ -13,7 +13,7 @@
 #include <Platform/Input/IInput.hpp>
 #include <Platform/Window/IWindow.hpp>
 
-namespace
+namespace MainDetail
 {
     bool IsTruthy(std::string_view value)
     {
@@ -70,7 +70,7 @@ int main()
             throw std::runtime_error("Failed to initialize graphics device.");
         }
 
-        const bool vsyncEnabled = ReadVSyncSetting();
+        const bool vsyncEnabled = MainDetail::ReadVSyncSetting();
         window->SetVSync(vsyncEnabled);
         PHYSARA_CORE_INFO("VSync {}", vsyncEnabled ? "enabled" : "disabled");
 

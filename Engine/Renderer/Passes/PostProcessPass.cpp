@@ -21,6 +21,7 @@ namespace Physara::Engine
         constexpr std::uint32_t CameraBinding = 0u;
         constexpr std::uint32_t SettingsBinding = 4u;
         constexpr std::uint32_t SceneColorBinding = 6u;
+        constexpr std::uint32_t SceneDepthBinding = 7u;
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -60,7 +61,7 @@ namespace Physara::Engine
                 settings.toneMappingEnabled ? 1.f : 0.f,
                 settings.bloomEnabled ? 1.f : 0.f,
                 settings.fxaaEnabled ? 1.f : 0.f,
-                0.f);
+                static_cast<float>(settings.debugView));
             return data;
         }
 
@@ -71,7 +72,7 @@ namespace Physara::Engine
                 static_cast<float>(frameData.view.viewport.width),
                 static_cast<float>(frameData.view.viewport.height),
                 frameData.view.ev100,
-                0.f);
+                frameData.view.nearClipMeters);
             return data;
         }
     }
@@ -79,7 +80,7 @@ namespace Physara::Engine
     void PostProcessPass::Execute(const PostProcessPassContext &context)
     {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
-            context.frameData == nullptr || context.sceneHDR == nullptr || context.device == nullptr)
+            context.frameData == nullptr || context.sceneHDR == nullptr || context.sceneDepth == nullptr || context.device == nullptr)
         {
             return;
         }
@@ -127,6 +128,7 @@ namespace Physara::Engine
         context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameBuffer.get());
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsBuffer.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
+        context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, context.sceneDepth, m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {

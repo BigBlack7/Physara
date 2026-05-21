@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <unordered_map>
 
 #include <glm/geometric.hpp>
 #include <glm/vec4.hpp>
@@ -219,8 +220,10 @@ namespace Physara::Engine
     {
         frameData.objects.clear();
         frameData.objects.reserve(m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
+        std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
+        objectIndexBySubmission.reserve(frameData.objects.capacity());
 
-        auto repackBucket = [&objects = frameData.objects](std::vector<RenderDrawItem> &bucket)
+        auto repackBucket = [&objects = frameData.objects, &objectIndexBySubmission](std::vector<RenderDrawItem> &bucket)
         {
             for (RenderDrawItem &item : bucket)
             {
@@ -237,6 +240,7 @@ namespace Physara::Engine
                         : (submission.material.shadingModel == ShadingModel::Unlit ? RenderBucket::Unlit : RenderBucket::Opaque));
                 item.objectIndex = static_cast<std::uint32_t>(objects.size());
                 object.materialIndex = item.objectIndex;
+                objectIndexBySubmission.emplace(item.submission, item.objectIndex);
                 objects.push_back(object);
             }
         };
@@ -244,6 +248,15 @@ namespace Physara::Engine
         repackBucket(m_Buckets.opaque);
         repackBucket(m_Buckets.unlit);
         repackBucket(m_Buckets.transparent);
+
+        for (RenderDrawItem &item : m_Buckets.shadowCasters)
+        {
+            const auto found = objectIndexBySubmission.find(item.submission);
+            if (found != objectIndexBySubmission.end())
+            {
+                item.objectIndex = found->second;
+            }
+        }
     }
 
     std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission)

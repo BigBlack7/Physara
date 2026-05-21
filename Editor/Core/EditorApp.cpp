@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <ctime>
 #include <cstdio>
 #include <filesystem>
@@ -401,11 +402,23 @@ namespace Physara::Editor
         postProcessSettings.toneMappingEnabled = m_Context.settings.postProcess.toneMappingEnabled;
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
         postProcessSettings.fxaaEnabled = m_Context.settings.postProcess.fxaaEnabled;
+        postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
         postProcessSettings.bloomThreshold = m_Context.settings.postProcess.bloomThreshold;
         postProcessSettings.bloomKnee = m_Context.settings.postProcess.bloomKnee;
         postProcessSettings.bloomIntensity = m_Context.settings.postProcess.bloomIntensity;
         postProcessSettings.bloomRadius = m_Context.settings.postProcess.bloomRadius;
         m_Renderer->SetPostProcessSettings(postProcessSettings);
+        Engine::ShadowSettings shadowSettings{};
+        shadowSettings.algorithm = m_Context.settings.shadow.algorithmIndex == 0
+                                       ? Engine::ShadowAlgorithm::None
+                                       : Engine::ShadowAlgorithm::SingleMapPCF3x3;
+        const std::uint32_t shadowResolutions[] = {1024u, 2048u, 4096u};
+        const int shadowResolutionIndex = std::clamp(m_Context.settings.shadow.resolutionIndex, 0, 2);
+        shadowSettings.resolution = shadowResolutions[shadowResolutionIndex];
+        shadowSettings.depthBias = m_Context.settings.shadow.depthBias;
+        shadowSettings.slopeBias = m_Context.settings.shadow.slopeBias;
+        shadowSettings.receiverBiasScale = m_Context.settings.shadow.receiverBiasScale;
+        m_Renderer->SetShadowSettings(shadowSettings);
         if (m_Context.activeScene != nullptr)
         {
             m_Renderer->RenderScene(*m_Context.activeScene, view, std::max(ImGui::GetIO().DeltaTime, 0.f), sceneTransformsUpdated);

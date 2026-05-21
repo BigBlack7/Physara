@@ -76,10 +76,20 @@ namespace Physara::Editor
         bool toneMappingEnabled{true};
         bool bloomEnabled{true};
         bool fxaaEnabled{true};
+        int debugViewIndex{0};
         float bloomThreshold{1.f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.08f};
         float bloomRadius{2.f};
+    };
+
+    struct ShadowSettings
+    {
+        int algorithmIndex{1};
+        int resolutionIndex{1};
+        float depthBias{2.f};
+        float slopeBias{2.f};
+        float receiverBiasScale{1.f};
     };
 
     struct EditorUIState
@@ -99,6 +109,7 @@ namespace Physara::Editor
         CaptureSettings capture{};
         EnvironmentSettings environment{};
         PostProcessSettings postProcess{};
+        ShadowSettings shadow{};
     };
 
     struct EditorContext

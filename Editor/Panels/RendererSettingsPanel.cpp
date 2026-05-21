@@ -60,6 +60,7 @@ namespace Physara::Editor
         ImGui::Begin(RendererSettingsPanelDetail::PanelName);
 
         DrawPostProcessSection();
+        DrawShadowSection();
         DrawEnvironmentSection();
 
         ImGui::End();
@@ -69,6 +70,8 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            const char *debugItems[] = {"None", "Normals", "Depth"};
+            ImGui::Combo("Debug View", &m_Context.settings.postProcess.debugViewIndex, debugItems, IM_ARRAYSIZE(debugItems));
             ImGui::Checkbox("ACES Tone Mapping", &m_Context.settings.postProcess.toneMappingEnabled);
             ImGui::Checkbox("FXAA", &m_Context.settings.postProcess.fxaaEnabled);
             ImGui::Checkbox("Bloom", &m_Context.settings.postProcess.bloomEnabled);
@@ -77,6 +80,24 @@ namespace Physara::Editor
             ImGui::SliderFloat("Knee", &m_Context.settings.postProcess.bloomKnee, 0.f, 2.f, "%.2f");
             ImGui::SliderFloat("Intensity", &m_Context.settings.postProcess.bloomIntensity, 0.f, 1.f, "%.3f");
             ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 1.f, 8.f, "%.1f");
+            ImGui::EndDisabled();
+        }
+    }
+
+    void RendererSettingsPanel::DrawShadowSection()
+    {
+        if (ImGui::CollapsingHeader("Shadow", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            const char *algorithmItems[] = {"None", "Single Map PCF 3x3"};
+            ImGui::Combo("Algorithm", &m_Context.settings.shadow.algorithmIndex, algorithmItems, IM_ARRAYSIZE(algorithmItems));
+
+            const bool shadowEnabled = m_Context.settings.shadow.algorithmIndex != 0;
+            ImGui::BeginDisabled(!shadowEnabled);
+            const char *resolutionItems[] = {"1024", "2048", "4096"};
+            ImGui::Combo("Resolution", &m_Context.settings.shadow.resolutionIndex, resolutionItems, IM_ARRAYSIZE(resolutionItems));
+            ImGui::SliderFloat("Depth Bias", &m_Context.settings.shadow.depthBias, 0.f, 8.f, "%.2f");
+            ImGui::SliderFloat("Slope Bias", &m_Context.settings.shadow.slopeBias, 0.f, 8.f, "%.2f");
+            ImGui::SliderFloat("Receiver Bias", &m_Context.settings.shadow.receiverBiasScale, 0.f, 4.f, "%.2f");
             ImGui::EndDisabled();
         }
     }

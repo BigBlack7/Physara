@@ -19,6 +19,7 @@ namespace Physara::Engine
         textureUploadBytes = 0;
         sceneBuildCpuMs = 0.f;
         renderGraphCpuMs = 0.f;
+        shadowCpuMs = 0.f;
         forwardOpaqueCpuMs = 0.f;
         skyboxCpuMs = 0.f;
         forwardTransparentCpuMs = 0.f;
@@ -53,6 +54,7 @@ namespace Physara::Engine
     {
         view = renderView;
         camera = BuildCameraData(renderView);
+        shadow = {};
         objects.clear();
         lights.clear();
         stats.Reset();

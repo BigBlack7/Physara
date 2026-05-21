@@ -8,8 +8,10 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
 #include <Engine/Renderer/Passes/PostProcessPass.hpp>
+#include <Engine/Renderer/Passes/ShadowPass.hpp>
 #include <Engine/Renderer/Passes/SkyboxPass.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
@@ -58,6 +60,7 @@ namespace Physara::Engine
         void SetSkyboxEnabled(bool enabled) { m_SkyboxEnabled = enabled; }
         void SetSkyboxExposureCompensation(float ev) { m_SkyboxExposureCompensation = ev; }
         void SetPostProcessSettings(const PostProcessSettings &settings) { m_PostProcessSettings = settings; }
+        void SetShadowSettings(const ShadowSettings &settings);
         [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
 
         [[nodiscard]] RHI::RHITexture *GetSceneColorTexture() const { return m_SceneColor.get(); }
@@ -88,6 +91,8 @@ namespace Physara::Engine
         RenderProxy m_RenderProxy{};
         ShaderLibrary m_ShaderLibrary{};
         PipelineStateCache m_PipelineStateCache{};
+        MeshGPUCache m_MeshGPUCache{};
+        ShadowPass m_ShadowPass{};
         ForwardOpaquePass m_ForwardOpaquePass{};
         SkyboxPass m_SkyboxPass{};
         PostProcessPass m_PostProcessPass{};
@@ -96,6 +101,7 @@ namespace Physara::Engine
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};
         std::filesystem::path m_EnvironmentMapPath{};
         PostProcessSettings m_PostProcessSettings{};
+        ShadowSettings m_ShadowSettings{};
         float m_SkyboxExposureCompensation{0.f};
         bool m_SkyboxEnabled{true};
         std::uint64_t m_FrameIndex{0};

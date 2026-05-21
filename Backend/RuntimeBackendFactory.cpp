@@ -9,7 +9,7 @@
 
 namespace Physara::RHI
 {
-    namespace
+    namespace RuntimeBackendFactoryDetail
     {
         [[noreturn]] void ThrowUnsupportedBackend()
         {
@@ -25,7 +25,7 @@ namespace Physara::RHI
             return std::make_unique<Platform::GLFWWindowOpenGL>();
         }
 
-        ThrowUnsupportedBackend();
+        RuntimeBackendFactoryDetail::ThrowUnsupportedBackend();
     }
 
     std::unique_ptr<Platform::IInput> CreateRuntimeInput(GraphicsBackend backend, void *nativeWindow)
@@ -36,7 +36,7 @@ namespace Physara::RHI
             return std::make_unique<Platform::GLFWInput>(nativeWindow);
         }
 
-        ThrowUnsupportedBackend();
+        RuntimeBackendFactoryDetail::ThrowUnsupportedBackend();
     }
 
     std::unique_ptr<RHIDevice> CreateRuntimeDevice(GraphicsBackend backend)
@@ -47,7 +47,7 @@ namespace Physara::RHI
             return std::make_unique<OpenGLDevice>();
         }
 
-        ThrowUnsupportedBackend();
+        RuntimeBackendFactoryDetail::ThrowUnsupportedBackend();
     }
 
     std::unique_ptr<IImGuiBackend> CreateRuntimeImGuiBackend(GraphicsBackend backend)
@@ -58,6 +58,6 @@ namespace Physara::RHI
             return std::make_unique<OpenGLImGuiBackend>();
         }
 
-        ThrowUnsupportedBackend();
+        RuntimeBackendFactoryDetail::ThrowUnsupportedBackend();
     }
 }

@@ -52,6 +52,13 @@ namespace Physara::Engine
         glm::vec4 shadowParams{0.f, 0.f, 0.f, 0.f};
     };
 
+    struct ShadowData
+    {
+        glm::mat4 lightViewProjection{1.f};
+        glm::vec4 params{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 controls{1.f, 0.f, 0.f, 0.f};
+    };
+
     struct FrameStatistics
     {
         std::uint32_t visibleSubmissions{0};
@@ -69,6 +76,7 @@ namespace Physara::Engine
         std::uint64_t textureUploadBytes{0};
         float sceneBuildCpuMs{0.f};
         float renderGraphCpuMs{0.f};
+        float shadowCpuMs{0.f};
         float forwardOpaqueCpuMs{0.f};
         float skyboxCpuMs{0.f};
         float forwardTransparentCpuMs{0.f};
@@ -82,6 +90,7 @@ namespace Physara::Engine
     {
         RenderView view{};
         CameraData camera{};
+        ShadowData shadow{};
         std::vector<ObjectData> objects{};
         std::vector<LightData> lights{};
         FrameStatistics stats{};

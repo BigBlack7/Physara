@@ -28,11 +28,22 @@ layout(std430, binding = PHYSARA_BINDING_LIGHTS)readonly buffer LightBuffer
     LightData uLights[];
 };
 
+layout(std140, binding = PHYSARA_BINDING_RENDER_SETTINGS)uniform RenderSettingsBuffer
+{
+    vec4 uDebugParams;
+};
+
+layout(std140, binding = PHYSARA_BINDING_SHADOW)uniform ShadowBuffer
+{
+    ShadowData uShadow;
+};
+
 layout(binding = PHYSARA_BINDING_BASE_COLOR_TEXTURE)uniform sampler2D uBaseColorTexture;
 layout(binding = PHYSARA_BINDING_METALLIC_ROUGHNESS_TEXTURE)uniform sampler2D uMetallicRoughnessTexture;
 layout(binding = PHYSARA_BINDING_NORMAL_TEXTURE)uniform sampler2D uNormalTexture;
 layout(binding = PHYSARA_BINDING_OCCLUSION_TEXTURE)uniform sampler2D uOcclusionTexture;
 layout(binding = PHYSARA_BINDING_EMISSIVE_TEXTURE)uniform sampler2D uEmissiveTexture;
+layout(binding = PHYSARA_BINDING_SHADOW_MAP)uniform sampler2DShadow uShadowMap;
 
 layout(location = 0)out vec4 outColor;
 
@@ -60,6 +71,38 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
 vec2 SelectTexCoord(uint texCoordSet)
 {
     return texCoordSet == 1u ? inTexCoord1 : inTexCoord0;
+}
+
+float SampleShadowPCF3x3(vec3 worldPosition, vec3 normal, LightData light, uint lightIndex)
+{
+    if (uShadow.params.x < 0.5 || uint(uShadow.params.z + 0.5) != lightIndex)
+    {
+        return 1.0;
+    }
+
+    vec4 lightClip = uShadow.lightViewProjection * vec4(worldPosition, 1.0);
+    vec3 projected = lightClip.xyz / max(lightClip.w, PHYSARA_EPSILON);
+    vec3 shadowCoord = projected * 0.5 + 0.5;
+    if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 || shadowCoord.y < 0.0 || shadowCoord.y > 1.0 || shadowCoord.z > 1.0)
+    {
+        return 1.0;
+    }
+
+    vec3 lightToSurface = SafeNormalize(light.directionType.xyz);
+    float NoL = Saturate(dot(normal, -lightToSurface));
+    float receiverBiasScale = max(uShadow.controls.x, 0.0);
+    float bias = max(light.shadowParams.y * receiverBiasScale * (1.0 - NoL), light.shadowParams.y * receiverBiasScale * 0.25);
+    float texel = max(uShadow.params.w, 1.0 / max(uShadow.params.y, 1.0));
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            vec2 offset = vec2(float(x), float(y)) * texel;
+            visibility += texture(uShadowMap, vec3(shadowCoord.xy + offset, shadowCoord.z - bias));
+        }
+    }
+    return visibility / 9.0;
 }
 
 void main()
@@ -109,12 +152,20 @@ void main()
     }
     context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, SelectTexCoord(inputs.normalTexCoord));
     context.view = normalize(GetCameraPosition(uCamera) - inWorldPosition);
+
+    uint debugView = uint(uDebugParams.x + 0.5);
+    if (debugView == 1u)
+    {
+        outColor = vec4(context.normal * 0.5 + 0.5, material.baseColor.a);
+        return;
+    }
     
     vec3 color = vec3(0.0);
     uint lightCount = min(uLightCount, uint(PHYSARA_MAX_LIGHTS));
     for(uint i = 0u; i < lightCount; ++ i)
     {
-        color += EvaluateLight(material, context, uLights[i]);
+        float shadowVisibility = SampleShadowPCF3x3(context.worldPosition, context.normal, uLights[i], i);
+        color += EvaluateLight(material, context, uLights[i]) * shadowVisibility;
     }
     vec3 ambient = material.diffuseColor * material.ambientOcclusion * 0.04;
     color += ambient;
