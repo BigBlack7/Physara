@@ -736,6 +736,7 @@ namespace Physara::Engine
             component.alphaCutoff = material.alphaCutoff;
             component.emissiveColor = material.emissiveColor;
             component.normalScale = material.normalScale;
+            component.flipNormalY = material.flipNormalY;
             component.baseColorTexture = TextureSlot(material.baseColorTexture.path, material.baseColorTexture.texCoord);
             component.metallicRoughnessTexture = TextureSlot(material.metallicRoughnessTexture.path, material.metallicRoughnessTexture.texCoord);
             component.normalTexture = TextureSlot(material.normalTexture.path, material.normalTexture.texCoord);

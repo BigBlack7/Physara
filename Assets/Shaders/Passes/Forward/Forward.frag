@@ -64,6 +64,10 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
     vec3 b = normalize(cross(n, t) * worldTangent.w);
     mat3 tbn = mat3(t, b, n);
     vec3 tangentNormal = texture(uNormalTexture, texCoord).xyz * 2.0 - 1.0;
+    if (inputs.flipNormalY)
+    {
+        tangentNormal.y = -tangentNormal.y;
+    }
     tangentNormal.xy *= inputs.normalScale;
     return normalize(tbn * tangentNormal);
 }

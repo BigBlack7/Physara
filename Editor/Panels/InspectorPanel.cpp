@@ -7,6 +7,7 @@
 #include <imgui/imgui.h>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Resource/AssetManager.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
@@ -22,8 +23,8 @@ namespace Physara::Editor
             "JPG"};
     }
 
-    InspectorPanel::InspectorPanel(EditorContext &context)
-        : m_Context(context)
+    InspectorPanel::InspectorPanel(EditorContext &context, Engine::AssetManager &assetManager)
+        : m_Context(context), m_AssetManager(assetManager)
     {
     }
 
@@ -42,6 +43,7 @@ namespace Physara::Editor
             !m_Context.activeScene->IsValid(m_Context.selectedEntity))
         {
             m_Context.selectedEntity = Engine::NullEntity;
+            m_Context.selectedEntities.clear();
             ImGui::TextUnformatted("No entity selected.");
             ImGui::End();
             return;
@@ -63,13 +65,13 @@ namespace Physara::Editor
         ImGui::Text("Entity ID: %u", static_cast<std::uint32_t>(entity.GetHandle()));
         ImGui::Separator();
 
-        TryDrawComponent<Engine::TagComponent>(entity, "Tag");
-        TryDrawComponent<Engine::TransformComponent>(entity, "Transform");
-        TryDrawComponent<Engine::CameraComponent>(entity, "Camera");
+        TryDrawComponent<Engine::TagComponent>(entity, "Tag", m_Context, &m_AssetManager);
+        TryDrawComponent<Engine::TransformComponent>(entity, "Transform", m_Context, &m_AssetManager);
+        TryDrawComponent<Engine::CameraComponent>(entity, "Camera", m_Context, &m_AssetManager);
         DrawCameraCaptureSection(entity);
-        TryDrawComponent<Engine::LightComponent>(entity, "Light");
-        TryDrawComponent<Engine::MeshComponent>(entity, "Mesh");
-        TryDrawComponent<Engine::MaterialComponent>(entity, "Material");
+        TryDrawComponent<Engine::LightComponent>(entity, "Light", m_Context, &m_AssetManager);
+        TryDrawComponent<Engine::MeshComponent>(entity, "Mesh", m_Context, &m_AssetManager);
+        TryDrawComponent<Engine::MaterialComponent>(entity, "Material", m_Context, &m_AssetManager);
     }
 
     void InspectorPanel::DrawCameraCaptureSection(Engine::Entity entity)
@@ -97,7 +99,7 @@ namespace Physara::Editor
             std::clamp(m_Context.settings.capture.resolutionScale, 0.25f, 4.f);
         ImGui::SliderFloat("Resolution Scale", &m_Context.settings.capture.resolutionScale, 0.25f, 4.f, "%.2fx");
 
-        if (ImGui::Button("Capture Camera"))
+        if (ImGui::Button("Capture From This Camera"))
         {
             m_Context.settings.capture.captureRequested = true;
             const auto &camera = entity.GetComponent<Engine::CameraComponent>();

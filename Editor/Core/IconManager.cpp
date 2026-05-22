@@ -38,6 +38,7 @@ namespace Physara::Editor
         LoadBuiltinIcon(EditorIcon::Panel, "icon_panel.png");
         LoadBuiltinIcon(EditorIcon::Shortcut, "icon_shortcut.png");
         LoadBuiltinIcon(EditorIcon::Info, "icon_info.png");
+        LoadBuiltinIcon(EditorIcon::Billboard, "icon_billboard.png");
         LoadBuiltinIcon(EditorIcon::Physara, "icon_physara.png");
     }
 

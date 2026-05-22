@@ -3,12 +3,17 @@
 #include <Editor/Core/EditorContext.hpp>
 #include <Engine/Scene/Entity.hpp>
 
+namespace Physara::Engine
+{
+    class AssetManager;
+}
+
 namespace Physara::Editor
 {
     class InspectorPanel final
     {
     public:
-        explicit InspectorPanel(EditorContext &context);
+        InspectorPanel(EditorContext &context, Engine::AssetManager &assetManager);
 
         void Draw();
 
@@ -18,5 +23,6 @@ namespace Physara::Editor
 
     private:
         EditorContext &m_Context;
+        Engine::AssetManager &m_AssetManager;
     };
 }

@@ -38,6 +38,7 @@ namespace Physara::Engine
             component.alphaCutoff = material.alphaCutoff;
             component.emissiveColor = material.emissiveColor;
             component.normalScale = material.normalScale;
+            component.flipNormalY = material.flipNormalY;
             component.baseColorTexture = material.baseColorTexture;
             component.metallicRoughnessTexture = material.metallicRoughnessTexture;
             component.normalTexture = material.normalTexture;

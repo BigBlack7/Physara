@@ -86,30 +86,67 @@ namespace Physara::Engine
             seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
         }
 
+        void HashCombine(std::uint64_t &seed, float value)
+        {
+            HashCombine(seed, static_cast<std::uint64_t>(std::hash<float>{}(value)));
+        }
+
+        void HashCombine(std::uint64_t &seed, const glm::vec3 &value)
+        {
+            HashCombine(seed, value.x);
+            HashCombine(seed, value.y);
+            HashCombine(seed, value.z);
+        }
+
+        void HashCombine(std::uint64_t &seed, const glm::vec4 &value)
+        {
+            HashCombine(seed, value.x);
+            HashCombine(seed, value.y);
+            HashCombine(seed, value.z);
+            HashCombine(seed, value.w);
+        }
+
+        void HashCombine(std::uint64_t &seed, const TextureSlot &slot)
+        {
+            HashCombine(seed, slot.path);
+            HashCombine(seed, static_cast<std::uint64_t>(slot.texCoord));
+        }
+
         std::uint64_t HashMaterialSignature(const MaterialComponent &material)
         {
             std::uint64_t seed = HashString(material.materialPath);
-            HashCombine(seed, material.baseColorTexture.path);
-            HashCombine(seed, material.metallicRoughnessTexture.path);
-            HashCombine(seed, material.normalTexture.path);
-            HashCombine(seed, material.occlusionTexture.path);
-            HashCombine(seed, material.emissiveTexture.path);
-            seed ^= static_cast<std::uint64_t>(material.alphaMode) << 8u;
-            seed ^= material.doubleSided ? 0x8000000000000000ull : 0ull;
+            HashCombine(seed, static_cast<std::uint64_t>(material.shadingModel));
+            HashCombine(seed, static_cast<std::uint64_t>(material.alphaMode));
+            HashCombine(seed, material.doubleSided ? 1ull : 0ull);
+            HashCombine(seed, material.castShadow ? 1ull : 0ull);
+            HashCombine(seed, material.baseColor);
+            HashCombine(seed, material.metallic);
+            HashCombine(seed, material.roughness);
+            HashCombine(seed, material.ambientOcclusion);
+            HashCombine(seed, material.alphaCutoff);
+            HashCombine(seed, material.emissiveColor);
+            HashCombine(seed, material.emissiveLuminance);
+            HashCombine(seed, material.normalScale);
+            HashCombine(seed, material.flipNormalY ? 1ull : 0ull);
+            HashCombine(seed, material.baseColorTexture);
+            HashCombine(seed, material.metallicRoughnessTexture);
+            HashCombine(seed, material.normalTexture);
+            HashCombine(seed, material.occlusionTexture);
+            HashCombine(seed, material.emissiveTexture);
             return seed;
         }
 
         std::uint64_t BuildMeshKey(const RenderMeshSubmission &submission)
         {
             std::uint64_t seed = HashString(submission.meshPath);
-            HashCombine(seed, submission.meshIndex);
+            HashCombine(seed, static_cast<std::uint64_t>(submission.meshIndex));
             return seed;
         }
 
         std::uint64_t BuildPrimitiveKey(const RenderMeshSubmission &submission)
         {
             std::uint64_t seed = BuildMeshKey(submission);
-            HashCombine(seed, submission.primitiveIndex);
+            HashCombine(seed, static_cast<std::uint64_t>(submission.primitiveIndex));
             return seed;
         }
     }

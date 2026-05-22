@@ -14,6 +14,7 @@
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/Resource/Types/Texture.hpp>
@@ -93,6 +94,7 @@ namespace Physara::Engine
             hash = UploadHash::Value(hash, material.emissiveColor);
             hash = UploadHash::Value(hash, material.emissiveLuminance);
             hash = UploadHash::Value(hash, material.normalScale);
+            hash = UploadHash::Value(hash, material.flipNormalY);
             hash = HashTextureSlot(hash, material.baseColorTexture);
             hash = HashTextureSlot(hash, material.metallicRoughnessTexture);
             hash = HashTextureSlot(hash, material.normalTexture);
@@ -212,7 +214,7 @@ namespace Physara::Engine
                 materialComponent.doubleSided ? 1.f : 0.f,
                 materialComponent.emissiveTexture.IsBound() ? 1.f : 0.f,
                 TextureCoordSetToShaderValue(materialComponent.emissiveTexture),
-                0.f);
+                materialComponent.flipNormalY ? 1.f : 0.f);
             return material;
         }
 
@@ -595,7 +597,16 @@ namespace Physara::Engine
             return cached->second.texture.get();
         }
 
-        const std::shared_ptr<Texture> texture = context.assetManager->GetByPath<Texture>(normalizedPath);
+        std::shared_ptr<Texture> texture = context.assetManager->GetByPath<Texture>(normalizedPath);
+        if (texture == nullptr && !context.assetManager->GetAssetsRoot().empty())
+        {
+            const std::filesystem::path absolutePath = context.assetManager->GetAssetsRoot() / normalizedPath;
+            texture = TextureLoader::LoadRGBA8(absolutePath);
+            if (texture != nullptr && texture->IsLoaded() && !texture->rgba8Pixels.empty())
+            {
+                (void)context.assetManager->RegisterAsset<Texture>(normalizedPath, texture);
+            }
+        }
         if (texture == nullptr || !texture->IsLoaded() || texture->rgba8Pixels.empty())
         {
             if (m_MissingTextureWarnings.insert(normalizedPath).second)

@@ -7,6 +7,9 @@
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/ShortcutRegistry.hpp>
+#include <Editor/Interaction/Gizmo.hpp>
+#include <Editor/Interaction/LightProxyPass.hpp>
+#include <Editor/Interaction/Picking.hpp>
 #include <Editor/Camera/EditorCamera.hpp>
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
@@ -20,6 +23,7 @@ namespace Physara::Editor
         RHI::ImGuiTextureHandle panel{0};
         RHI::ImGuiTextureHandle shortcut{0};
         RHI::ImGuiTextureHandle info{0};
+        RHI::ImGuiTextureHandle lightBillboard{0};
     };
 
     class SceneViewPanel final
@@ -48,6 +52,7 @@ namespace Physara::Editor
         bool DrawIconButton(const char *id, RHI::ImGuiTextureHandle icon, const char *fallback,
                             const char *tooltip, bool active);
         void UpdateSceneViewState(float width, float height);
+        void HandlePicking(const ImVec2 &origin, float width, float height);
         void ForwardInput();
 
     private:
@@ -57,6 +62,9 @@ namespace Physara::Editor
         SceneViewIconSet m_Icons{};
         ViewportResizeCallback m_ResizeCallback{};
         InputForwardCallback m_InputCallback{};
+        Picking m_Picking{};
+        Gizmo m_Gizmo{};
+        LightProxyPass m_LightProxyPass{};
         bool m_NavigationCaptureActive{false};
     };
 }

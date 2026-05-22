@@ -43,6 +43,7 @@ namespace Physara::Editor
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
         {
             m_Context.selectedEntity = Engine::NullEntity;
+            m_Context.selectedEntities.clear();
         }
 
         DrawEmptySceneContextMenu();
@@ -82,11 +83,15 @@ namespace Physara::Editor
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
             m_Context.selectedEntity = entity.GetHandle();
+            m_Context.selectedEntities.clear();
+            m_Context.selectedEntities.push_back(entity.GetHandle());
         }
 
         if (ImGui::BeginPopupContextItem())
         {
             m_Context.selectedEntity = entity.GetHandle();
+            m_Context.selectedEntities.clear();
+            m_Context.selectedEntities.push_back(entity.GetHandle());
 
             if (ImGui::BeginMenu("Create Child", !isSceneCamera))
             {
@@ -102,6 +107,7 @@ namespace Physara::Editor
                 const bool shouldPopTree = open && hasChildren;
                 m_Context.activeScene->DestroyEntity(entity);
                 m_Context.selectedEntity = Engine::NullEntity;
+                m_Context.selectedEntities.clear();
                 ImGui::EndPopup();
                 if (shouldPopTree)
                 {
@@ -294,6 +300,8 @@ namespace Physara::Editor
         }
 
         m_Context.selectedEntity = entity.GetHandle();
+        m_Context.selectedEntities.clear();
+        m_Context.selectedEntities.push_back(entity.GetHandle());
         return entity;
     }
 

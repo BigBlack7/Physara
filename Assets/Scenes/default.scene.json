@@ -10,6 +10,108 @@
                 ],
                 "castsShadow": true,
                 "color": [
+                    0.8938906788825989,
+                    0.1753290444612503,
+                    0.7298460602760315
+                ],
+                "colorTemperatureKelvin": 6500.0,
+                "directionalIlluminanceLux": 100000.0,
+                "iesProfilePath": "",
+                "innerConeAngleDegrees": 18.0,
+                "outerConeAngleDegrees": 32.0,
+                "pointLuminousPowerLumens": 800.0,
+                "rangeMeters": 25.0,
+                "shadowBias": 0.0010000000474974513,
+                "sourceRadiusMeters": 0.05000000074505806,
+                "spotLuminousIntensityCandela": 64870.0,
+                "type": "Spot",
+                "useColorTemperature": false
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Spot Light"
+            },
+            "transform": {
+                "position": [
+                    -1.0905637741088867,
+                    0.014210566878318787,
+                    4.178770542144775
+                ],
+                "rotationDegrees": [
+                    -36.99999237060547,
+                    -50.55382537841797,
+                    -1.075022646546131e-05
+                ],
+                "scale": [
+                    0.9999988675117493,
+                    0.9999989867210388,
+                    0.9999995827674866
+                ]
+            }
+        },
+        {
+            "id": 2,
+            "light": {
+                "areaLuminanceCandelaPerSquareMeter": 1000.0,
+                "areaSizeMeters": [
+                    1.0,
+                    1.0
+                ],
+                "castsShadow": true,
+                "color": [
+                    0.9324758648872375,
+                    0.44674891233444214,
+                    0.44674891233444214
+                ],
+                "colorTemperatureKelvin": 6500.0,
+                "directionalIlluminanceLux": 100000.0,
+                "iesProfilePath": "",
+                "innerConeAngleDegrees": 20.0,
+                "outerConeAngleDegrees": 35.0,
+                "pointLuminousPowerLumens": 200000.0,
+                "rangeMeters": 20.0,
+                "shadowBias": 0.0010000000474974513,
+                "sourceRadiusMeters": 0.05000000074505806,
+                "spotLuminousIntensityCandela": 1000.0,
+                "type": "Point",
+                "useColorTemperature": false
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Point Light"
+            },
+            "transform": {
+                "position": [
+                    0.6197104454040527,
+                    -0.08319148421287537,
+                    -1.7241374254226685
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 3,
+            "light": {
+                "areaLuminanceCandelaPerSquareMeter": 1000.0,
+                "areaSizeMeters": [
+                    1.0,
+                    1.0
+                ],
+                "castsShadow": true,
+                "color": [
                     1.0,
                     1.0,
                     1.0
@@ -35,14 +137,14 @@
             },
             "transform": {
                 "position": [
-                    0.0,
-                    0.0,
+                    0.23868903517723083,
+                    1.9925193786621094,
                     0.0
                 ],
                 "rotationDegrees": [
-                    -45.0,
+                    -45.000003814697266,
                     34.9999885559082,
-                    5.211325060372474e-06
+                    5.211324605625123e-06
                 ],
                 "scale": [
                     1.0,
@@ -65,7 +167,7 @@
                 "sensorWidthMillimeters": 36.0,
                 "shutterTimeSeconds": 0.00800000037997961
             },
-            "id": 2,
+            "id": 4,
             "relationship": {
                 "parent": 0
             },
@@ -74,13 +176,13 @@
             },
             "transform": {
                 "position": [
-                    0.6511420011520386,
-                    0.4063447117805481,
-                    1.521917700767517
+                    4.40724515914917,
+                    3.451862335205078,
+                    7.582954406738281
                 ],
                 "rotationDegrees": [
-                    -9.106183052062988,
-                    20.65241241455078,
+                    -25.912689208984375,
+                    29.532304763793945,
                     0.0
                 ],
                 "scale": [
@@ -91,17 +193,197 @@
             }
         },
         {
-            "id": 3,
+            "id": 5,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "Textures/wall/wall_albedo.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": false,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "flipNormalY": true,
+                "materialPath": "",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "Textures/wall/wall_normal.png",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 0.5,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "Builtin/Primitives/Cube",
+                "localBounds": {
+                    "center": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "max": [
+                        0.5,
+                        0.5,
+                        0.5
+                    ],
+                    "min": [
+                        -0.5,
+                        -0.5,
+                        -0.5
+                    ],
+                    "radius": 0.8659999966621399,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
             "relationship": {
                 "parent": 0
             },
             "tag": {
-                "name": "Camera"
+                "name": "Cube"
             },
             "transform": {
                 "position": [
+                    -1.5556892156600952,
                     0.0,
-                    0.15000000596046448,
+                    1.0946400165557861
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "id": 6,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "Textures/brain/brain_albedo.png",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": false,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "flipNormalY": true,
+                "materialPath": "",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "Textures/brain/brain_normal.png",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "roughness": 0.5,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "Builtin/Primitives/Sphere",
+                "localBounds": {
+                    "center": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "max": [
+                        0.5,
+                        0.5,
+                        0.5
+                    ],
+                    "min": [
+                        -0.5,
+                        -0.5,
+                        -0.5
+                    ],
+                    "radius": 0.5,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Sphere"
+            },
+            "transform": {
+                "position": [
+                    1.6742668151855469,
+                    1.4611281156539917,
                     0.0
                 ],
                 "rotationDegrees": [
@@ -117,7 +399,136 @@
             }
         },
         {
-            "id": 4,
+            "id": 7,
+            "material": {
+                "alphaCutoff": 0.5,
+                "alphaMode": "Opaque",
+                "ambientOcclusion": 1.0,
+                "baseColor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "baseColorTexture": {
+                    "path": "Textures/tile/slab_tiles_diff_2k.jpg",
+                    "texCoord": 0
+                },
+                "castShadow": true,
+                "doubleSided": false,
+                "emissiveColor": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "emissiveLuminance": 0.0,
+                "emissiveTexture": {
+                    "path": "",
+                    "texCoord": 0
+                },
+                "flipNormalY": true,
+                "materialPath": "",
+                "metallic": 0.0,
+                "metallicRoughnessTexture": {
+                    "path": "Textures/tile/slab_tiles_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "normalScale": 1.0,
+                "normalTexture": {
+                    "path": "Textures/tile/slab_tiles_nor_gl_2k.jpg",
+                    "texCoord": 0
+                },
+                "occlusionTexture": {
+                    "path": "Textures/tile/slab_tiles_arm_2k.jpg",
+                    "texCoord": 0
+                },
+                "roughness": 0.5,
+                "shadingModel": "Lit"
+            },
+            "mesh": {
+                "assetPath": "Builtin/Primitives/Plane",
+                "localBounds": {
+                    "center": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "max": [
+                        0.5,
+                        0.0010000000474974513,
+                        0.5
+                    ],
+                    "min": [
+                        -0.5,
+                        -0.0010000000474974513,
+                        -0.5
+                    ],
+                    "radius": 0.7070000171661377,
+                    "valid": true
+                },
+                "materialSlots": [
+                    {
+                        "materialPath": "",
+                        "slotIndex": 0
+                    }
+                ],
+                "meshIndex": 0,
+                "primitiveIndex": 0,
+                "receiveShadows": true,
+                "visible": true
+            },
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Plane"
+            },
+            "transform": {
+                "position": [
+                    -0.4307594895362854,
+                    -0.6886988282203674,
+                    0.0
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    9.194095611572266,
+                    0.682421863079071,
+                    11.409832000732422
+                ]
+            }
+        },
+        {
+            "id": 8,
+            "relationship": {
+                "parent": 0
+            },
+            "tag": {
+                "name": "Camera"
+            },
+            "transform": {
+                "position": [
+                    1.3520182371139526,
+                    -0.11829875409603119,
+                    1.2108370065689087
+                ],
+                "rotationDegrees": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "scale": [
+                    2.0,
+                    2.0,
+                    2.0
+                ]
+            }
+        },
+        {
+            "id": 9,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -144,6 +555,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/camera/camera.gltf#material/0",
                 "metallic": 1.0,
                 "metallicRoughnessTexture": {
@@ -195,7 +607,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 3
+                "parent": 8
             },
             "tag": {
                 "name": "Camera_01_strap"
@@ -219,9 +631,9 @@
             }
         },
         {
-            "id": 5,
+            "id": 10,
             "relationship": {
-                "parent": 3
+                "parent": 8
             },
             "tag": {
                 "name": "Camera_01"
@@ -245,7 +657,7 @@
             }
         },
         {
-            "id": 6,
+            "id": 11,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -272,6 +684,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/camera/camera.gltf#material/1",
                 "metallic": 1.0,
                 "metallicRoughnessTexture": {
@@ -323,7 +736,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 5
+                "parent": 10
             },
             "tag": {
                 "name": "Mesh.016 0"
@@ -347,7 +760,7 @@
             }
         },
         {
-            "id": 7,
+            "id": 12,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Blend",
@@ -374,6 +787,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/camera/camera.gltf#material/2",
                 "metallic": 0.0,
                 "metallicRoughnessTexture": {
@@ -425,7 +839,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 5
+                "parent": 10
             },
             "tag": {
                 "name": "Mesh.016 1"
@@ -449,7 +863,7 @@
             }
         },
         {
-            "id": 8,
+            "id": 13,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -476,6 +890,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/camera/camera.gltf#material/3",
                 "metallic": 1.0,
                 "metallicRoughnessTexture": {
@@ -527,7 +942,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 5
+                "parent": 10
             },
             "tag": {
                 "name": "Mesh.016 2"
@@ -551,7 +966,7 @@
             }
         },
         {
-            "id": 9,
+            "id": 14,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -578,6 +993,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/camera/camera.gltf#material/0",
                 "metallic": 1.0,
                 "metallicRoughnessTexture": {
@@ -629,7 +1045,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 5
+                "parent": 10
             },
             "tag": {
                 "name": "Mesh.016 3"
@@ -653,7 +1069,7 @@
             }
         },
         {
-            "id": 10,
+            "id": 15,
             "relationship": {
                 "parent": 0
             },
@@ -662,9 +1078,9 @@
             },
             "transform": {
                 "position": [
-                    0.0,
-                    -0.3499999940395355,
-                    0.0
+                    1.4090460538864136,
+                    -0.6058399081230164,
+                    1.2521724700927734
                 ],
                 "rotationDegrees": [
                     0.0,
@@ -679,7 +1095,7 @@
             }
         },
         {
-            "id": 11,
+            "id": 16,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -706,6 +1122,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
                 "metallic": 0.0,
                 "metallicRoughnessTexture": {
@@ -757,7 +1174,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 10
+                "parent": 15
             },
             "tag": {
                 "name": "gallinera_table"
@@ -781,7 +1198,7 @@
             }
         },
         {
-            "id": 12,
+            "id": 17,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -808,6 +1225,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
                 "metallic": 0.0,
                 "metallicRoughnessTexture": {
@@ -859,7 +1277,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 10
+                "parent": 15
             },
             "tag": {
                 "name": "gallinera_table_door_a"
@@ -883,7 +1301,7 @@
             }
         },
         {
-            "id": 13,
+            "id": 18,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -910,6 +1328,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/gallinera_table/gallinera_table.gltf#material/0",
                 "metallic": 0.0,
                 "metallicRoughnessTexture": {
@@ -961,7 +1380,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 10
+                "parent": 15
             },
             "tag": {
                 "name": "gallinera_table_door_b"
@@ -985,7 +1404,7 @@
             }
         },
         {
-            "id": 14,
+            "id": 19,
             "relationship": {
                 "parent": 0
             },
@@ -994,9 +1413,9 @@
             },
             "transform": {
                 "position": [
-                    -0.75,
-                    -0.3499999940395355,
-                    0.0
+                    0.0,
+                    -0.6225892901420593,
+                    1.1882858276367188
                 ],
                 "rotationDegrees": [
                     0.0,
@@ -1011,7 +1430,7 @@
             }
         },
         {
-            "id": 15,
+            "id": 20,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -1038,6 +1457,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/small_lpg_tank/small_lpg_tank.gltf#material/0",
                 "metallic": 1.0,
                 "metallicRoughnessTexture": {
@@ -1089,7 +1509,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 14
+                "parent": 19
             },
             "tag": {
                 "name": "small_lpg_tank"
@@ -1113,7 +1533,7 @@
             }
         },
         {
-            "id": 16,
+            "id": 21,
             "relationship": {
                 "parent": 0
             },
@@ -1122,26 +1542,26 @@
             },
             "transform": {
                 "position": [
-                    0.15000000596046448,
-                    -0.3499999940395355,
-                    -2.0999999046325684
+                    0.1725528985261917,
+                    -0.6500767469406128,
+                    3.1733388900756836
                 ],
                 "rotationDegrees": [
                     0.0,
-                    39.75,
+                    41.625980377197266,
                     0.0
                 ],
                 "scale": [
+                    0.999999463558197,
                     1.0,
-                    1.0,
-                    1.0
+                    0.999999463558197
                 ]
             }
         },
         {
-            "id": 17,
+            "id": 22,
             "relationship": {
-                "parent": 16
+                "parent": 21
             },
             "tag": {
                 "name": "RootNode"
@@ -1165,7 +1585,7 @@
             }
         },
         {
-            "id": 18,
+            "id": 23,
             "material": {
                 "alphaCutoff": 0.5,
                 "alphaMode": "Opaque",
@@ -1192,6 +1612,7 @@
                     "path": "",
                     "texCoord": 0
                 },
+                "flipNormalY": true,
                 "materialPath": "models/su7_ultra/su7_ultra.gltf#material/0",
                 "metallic": 0.4000000059604645,
                 "metallicRoughnessTexture": {
@@ -1243,7 +1664,7 @@
                 "visible": true
             },
             "relationship": {
-                "parent": 17
+                "parent": 22
             },
             "tag": {
                 "name": "Mesh1_Mesh1.008"
@@ -1263,210 +1684,6 @@
                     100.0,
                     100.0,
                     100.0
-                ]
-            }
-        },
-        {
-            "id": 19,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    0.3457263708114624,
-                    0.9035369753837585,
-                    0.44616809487342834,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": false,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "",
-                "metallic": 0.6079999804496765,
-                "metallicRoughnessTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 0.4320000112056732,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "Builtin/Primitives/Cube",
-                "localBounds": {
-                    "center": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "max": [
-                        0.5,
-                        0.5,
-                        0.5
-                    ],
-                    "min": [
-                        -0.5,
-                        -0.5,
-                        -0.5
-                    ],
-                    "radius": 0.8659999966621399,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 0,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "Cube"
-            },
-            "transform": {
-                "position": [
-                    -1.649999976158142,
-                    0.4000000059604645,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -22.249998092651367,
-                    0.0
-                ],
-                "scale": [
-                    1.0,
-                    1.0,
-                    1.0
-                ]
-            }
-        },
-        {
-            "id": 20,
-            "material": {
-                "alphaCutoff": 0.5,
-                "alphaMode": "Opaque",
-                "ambientOcclusion": 1.0,
-                "baseColor": [
-                    0.41645556688308716,
-                    0.6293701529502869,
-                    0.8520900011062622,
-                    1.0
-                ],
-                "baseColorTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "castShadow": true,
-                "doubleSided": false,
-                "emissiveColor": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "emissiveLuminance": 0.0,
-                "emissiveTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "materialPath": "",
-                "metallic": 0.3869999945163727,
-                "metallicRoughnessTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "normalScale": 1.0,
-                "normalTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "occlusionTexture": {
-                    "path": "",
-                    "texCoord": 0
-                },
-                "roughness": 0.7160000205039978,
-                "shadingModel": "Lit"
-            },
-            "mesh": {
-                "assetPath": "Builtin/Primitives/Plane",
-                "localBounds": {
-                    "center": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "max": [
-                        0.5,
-                        0.0010000000474974513,
-                        0.5
-                    ],
-                    "min": [
-                        -0.5,
-                        -0.0010000000474974513,
-                        -0.5
-                    ],
-                    "radius": 0.7070000171661377,
-                    "valid": true
-                },
-                "materialSlots": [
-                    {
-                        "materialPath": "",
-                        "slotIndex": 0
-                    }
-                ],
-                "meshIndex": 0,
-                "primitiveIndex": 0,
-                "receiveShadows": true,
-                "visible": true
-            },
-            "relationship": {
-                "parent": 0
-            },
-            "tag": {
-                "name": "Plane"
-            },
-            "transform": {
-                "position": [
-                    -0.6000000238418579,
-                    -0.44999998807907104,
-                    0.0
-                ],
-                "rotationDegrees": [
-                    0.0,
-                    -0.5,
-                    0.0
-                ],
-                "scale": [
-                    10.0,
-                    10.0,
-                    10.0
                 ]
             }
         }

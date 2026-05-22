@@ -28,6 +28,7 @@ namespace Physara::Engine
         float alphaCutoff{0.5f};
         glm::vec3 emissiveColor{0.f};
         float normalScale{1.f};
+        bool flipNormalY{true};
 
         TextureSlot baseColorTexture{};
         TextureSlot metallicRoughnessTexture{};

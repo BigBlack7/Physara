@@ -14,6 +14,12 @@ target_sources(Editor PRIVATE
     Core/IconManager.hpp
     Core/ShortcutRegistry.cpp
     Core/ShortcutRegistry.hpp
+    Interaction/Gizmo.cpp
+    Interaction/Gizmo.hpp
+    Interaction/LightProxyPass.cpp
+    Interaction/LightProxyPass.hpp
+    Interaction/Picking.cpp
+    Interaction/Picking.hpp
     Panels/ComponentDrawer.hpp
     Panels/ContentBrowserPanel.cpp
     Panels/ContentBrowserPanel.hpp

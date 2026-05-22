@@ -31,6 +31,7 @@ struct MaterialInputs
     bool hasOcclusionTexture;
     bool hasEmissiveTexture;
     bool doubleSided;
+    bool flipNormalY;
     uint baseColorTexCoord;
     uint metallicRoughnessTexCoord;
     uint normalTexCoord;
@@ -77,6 +78,7 @@ MaterialInputs DefaultMaterialInputs()
     material.hasOcclusionTexture = false;
     material.hasEmissiveTexture = false;
     material.doubleSided = false;
+    material.flipNormalY = true;
     material.baseColorTexCoord = 0u;
     material.metallicRoughnessTexCoord = 0u;
     material.normalTexCoord = 0u;
@@ -105,6 +107,7 @@ MaterialInputs UnpackMaterialData(MaterialData data)
     material.hasOcclusionTexture = data.textureFlags.w > 0.5;
     material.hasEmissiveTexture = data.materialFlags.y > 0.5;
     material.doubleSided = data.materialFlags.x > 0.5;
+    material.flipNormalY = data.materialFlags.w > 0.5;
     material.baseColorTexCoord = uint(data.textureCoordSets.x);
     material.metallicRoughnessTexCoord = uint(data.textureCoordSets.y);
     material.normalTexCoord = uint(data.textureCoordSets.z);

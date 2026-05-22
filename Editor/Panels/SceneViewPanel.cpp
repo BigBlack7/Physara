@@ -80,6 +80,7 @@ namespace Physara::Editor
     void SceneViewPanel::SetIconSet(const SceneViewIconSet &icons)
     {
         m_Icons = icons;
+        m_LightProxyPass.SetBillboardIcon(icons.lightBillboard);
     }
 
     void SceneViewPanel::SetViewportResizeCallback(ViewportResizeCallback callback)
@@ -107,9 +108,18 @@ namespace Physara::Editor
         {
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             const ImTextureID textureId = static_cast<ImTextureID>(m_PreviewTexture);
-            ImGui::Image(textureId, ImVec2(width, height), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
+            ImDrawList *drawList = ImGui::GetWindowDrawList();
+            drawList->AddImage(textureId,
+                               origin,
+                               ImVec2(origin.x + width, origin.y + height),
+                               ImVec2(0.f, 1.f),
+                               ImVec2(1.f, 0.f));
+            m_LightProxyPass.Draw(m_Context, origin, width, height);
+            m_Gizmo.Draw(m_Context, origin, width, height);
             DrawViewportToolbar(origin, width);
             DrawOverlay(origin, width, height);
+            HandlePicking(origin, width, height);
+            ImGui::Dummy(ImVec2(width, height));
         }
         else
         {
@@ -516,6 +526,40 @@ namespace Physara::Editor
         {
             m_ResizeCallback(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
         }
+    }
+
+    void SceneViewPanel::HandlePicking(const ImVec2 &origin, float width, float height)
+    {
+        if (m_Context.sceneView.inputCaptured || m_NavigationCaptureActive || m_Gizmo.IsUsingOrHovered())
+        {
+            return;
+        }
+
+        if (!m_Context.sceneView.hovered || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            return;
+        }
+
+        const ImGuiIO &io = ImGui::GetIO();
+        const ImVec2 mouse = io.MousePos;
+        if (mouse.x < origin.x || mouse.y < origin.y || mouse.x > origin.x + width || mouse.y > origin.y + height)
+        {
+            return;
+        }
+        const bool overTopToolbarBand = mouse.y <= origin.y + SceneViewPanelDetail::OverlayPadding + SceneViewPanelDetail::IconButtonSize + 10.f;
+        const bool overLeftToolbar = overTopToolbarBand && mouse.x <= origin.x + 190.f;
+        const bool overRightToolbar = overTopToolbarBand && mouse.x >= origin.x + width - 150.f;
+        if (overLeftToolbar || overRightToolbar)
+        {
+            return;
+        }
+
+        PickingRequest request{};
+        request.viewportPosition = {mouse.x - origin.x, mouse.y - origin.y};
+        request.appendSelection = io.KeyShift;
+        request.toggleSelection = io.KeyCtrl;
+        const Engine::EntityId picked = m_Picking.Pick(m_Context, request);
+        m_Picking.Select(m_Context, picked, request);
     }
 
     void SceneViewPanel::ForwardInput()

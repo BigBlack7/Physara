@@ -2,8 +2,10 @@
 
 #include <array>
 #include <filesystem>
+#include <vector>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/RenderView.hpp>
 #include <Engine/Scene/EntityId.hpp>
 
 namespace Physara::Engine
@@ -43,6 +45,7 @@ namespace Physara::Editor
         bool flyCameraMode{false};
         bool playFlyMode{false};
         bool inputCaptured{false};
+        Engine::RenderView lastRenderView{};
         Engine::FrameStatistics rendererStats{};
     };
 
@@ -116,6 +119,7 @@ namespace Physara::Editor
     {
         Engine::Scene *activeScene{nullptr};     // non-owning
         Engine::EntityId selectedEntity{Engine::NullEntity};
+        std::vector<Engine::EntityId> selectedEntities{};
 
         std::filesystem::path assetsRootPath{};
         std::filesystem::path currentContentPath{};

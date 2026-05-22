@@ -98,6 +98,7 @@ namespace Physara::Engine
         glm::vec3 emissiveColor{0.f, 0.f, 0.f};
         float emissiveLuminance{0.f}; // cd/m^2 for emissive surfaces.
         float normalScale{1.f};
+        bool flipNormalY{true};
 
         TextureSlot baseColorTexture{};
         TextureSlot metallicRoughnessTexture{};

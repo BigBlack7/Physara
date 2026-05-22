@@ -21,6 +21,7 @@ namespace Physara::Editor
         Panel,
         Shortcut,
         Info,
+        Billboard,
         Physara
     };
 

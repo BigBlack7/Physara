@@ -16,6 +16,7 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <imgui/ImGuizmo.h>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -128,7 +129,7 @@ namespace Physara::Editor
     }
 
     EditorApp::EditorApp() : m_HierarchyPanel(m_Context),
-                             m_InspectorPanel(m_Context),
+                             m_InspectorPanel(m_Context, m_AssetManager),
                              m_SceneViewPanel(m_Context, m_ShortcutRegistry),
                              m_ContentBrowserPanel(m_Context, m_IconManager, m_AssetManager),
                              m_RendererSettingsPanel(m_Context),
@@ -176,6 +177,7 @@ namespace Physara::Editor
         m_Renderer.reset();
         m_Context.activeScene = nullptr;
         m_Context.selectedEntity = Engine::NullEntity;
+        m_Context.selectedEntities.clear();
         m_EditorScene.reset();
         m_Device = nullptr;
         m_Backend = nullptr;
@@ -191,6 +193,7 @@ namespace Physara::Editor
 
         m_Backend->BeginFrame();
         ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
 
         HandleGlobalShortcuts();
         RenderSceneView();
@@ -254,6 +257,28 @@ namespace Physara::Editor
         if (!textInputActive && m_ShortcutRegistry.IsPressed("scene.save"))
         {
             RequestSaveScene();
+        }
+
+        if (!textInputActive && !m_Context.sceneView.inputCaptured)
+        {
+            if (m_ShortcutRegistry.IsPressed("gizmo.translate"))
+            {
+                m_Context.settings.gizmoOperation = GizmoOperation::Translate;
+            }
+            if (m_ShortcutRegistry.IsPressed("gizmo.rotate"))
+            {
+                m_Context.settings.gizmoOperation = GizmoOperation::Rotate;
+            }
+            if (m_ShortcutRegistry.IsPressed("gizmo.scale"))
+            {
+                m_Context.settings.gizmoOperation = GizmoOperation::Scale;
+            }
+            if (m_ShortcutRegistry.IsPressed("gizmo.space.toggle"))
+            {
+                m_Context.settings.gizmoSpace = m_Context.settings.gizmoSpace == GizmoSpace::Local
+                                                    ? GizmoSpace::World
+                                                    : GizmoSpace::Local;
+            }
         }
     }
 
@@ -391,6 +416,7 @@ namespace Physara::Editor
         Engine::RenderView view = m_EditorCamera.BuildRenderView(m_Context.activeScene);
         view.viewport.width = width;
         view.viewport.height = height;
+        m_Context.sceneView.lastRenderView = view;
         const std::filesystem::path environmentPath =
             m_Context.settings.environment.skyboxEnabled && !m_Context.settings.environment.skyboxPath.empty()
                 ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
@@ -578,6 +604,7 @@ namespace Physara::Editor
         icons.panel = m_IconManager.GetIcon(EditorIcon::Panel);
         icons.shortcut = m_IconManager.GetIcon(EditorIcon::Shortcut);
         icons.info = m_IconManager.GetIcon(EditorIcon::Info);
+        icons.lightBillboard = m_IconManager.GetIcon(EditorIcon::Billboard);
 
         m_SceneViewPanel.SetIconSet(icons);
     }
@@ -620,6 +647,8 @@ namespace Physara::Editor
         FrameEditorCameraToScene();
         m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
         m_Context.selectedEntity = entity.GetHandle();
+        m_Context.selectedEntities.clear();
+        m_Context.selectedEntities.push_back(entity.GetHandle());
     }
 
     void EditorApp::FrameEditorCameraToScene()
@@ -701,6 +730,7 @@ namespace Physara::Editor
         if (m_Context.activeScene == nullptr || !m_Context.activeScene->IsValid(m_Context.selectedEntity))
         {
             m_Context.selectedEntity = Engine::NullEntity;
+            m_Context.selectedEntities.clear();
             return;
         }
 
@@ -712,6 +742,7 @@ namespace Physara::Editor
 
         m_Context.activeScene->DestroyEntity(m_Context.selectedEntity);
         m_Context.selectedEntity = Engine::NullEntity;
+        m_Context.selectedEntities.clear();
     }
 
     void EditorApp::ConnectSceneViewCameraInput()
