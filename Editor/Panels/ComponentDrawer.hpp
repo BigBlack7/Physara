@@ -419,6 +419,10 @@ namespace Physara::Editor
         }
 
         changed |= ImGui::ColorEdit4("Base Color", &material.baseColor.x);
+        if (material.alphaMode != Engine::AlphaMode::Opaque)
+        {
+            changed |= ImGui::SliderFloat("Alpha", &material.baseColor.a, 0.f, 1.f, "%.3f");
+        }
         if (material.shadingModel == Engine::ShadingModel::Lit)
         {
             changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.f, 1.f);

@@ -78,12 +78,17 @@ namespace Physara::Editor
     {
         bool toneMappingEnabled{true};
         bool bloomEnabled{true};
-        bool fxaaEnabled{true};
+        int antiAliasingModeIndex{2};
+        int bloomModeIndex{1};
         int debugViewIndex{0};
         float bloomThreshold{1.f};
         float bloomKnee{0.5f};
-        float bloomIntensity{0.08f};
+        float bloomIntensity{0.12f};
         float bloomRadius{2.f};
+        float aaSubpixel{0.75f};
+        float aaEdgeThreshold{0.125f};
+        float aaEdgeThresholdMin{0.0312f};
+        float aaDepthSensitivity{24.f};
     };
 
     struct ShadowSettings

@@ -14,10 +14,12 @@ layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProce
     vec4 uBloomParams;
     vec4 uFlags;
     vec4 uExposureParams;
+    vec4 uAAParams;
 };
 
 layout(binding = PHYSARA_BINDING_SCENE_COLOR_TEXTURE)uniform sampler2D uSceneColor;
 layout(binding = PHYSARA_BINDING_SCENE_DEPTH_TEXTURE)uniform sampler2D uSceneDepth;
+layout(binding = PHYSARA_BINDING_BLOOM_TEXTURE)uniform sampler2D uBloomTexture;
 
 layout(location = 0)out vec4 outColor;
 
@@ -38,7 +40,7 @@ vec3 TonemapACES(vec3 color)
 
 vec3 SanitizeHDR(vec3 value)
 {
-    bvec3 invalid = bvec3(isnan(value.r)|| isinf(value.r), isnan(value.g)|| isinf(value.g), isnan(value.b)|| isinf(value.b));
+    bvec3 invalid = bvec3(isnan(value.r) || isinf(value.r), isnan(value.g) || isinf(value.g), isnan(value.b) || isinf(value.b));
     return clamp(mix(value, vec3(0.0), invalid), vec3(0.0), vec3(60000.0));
 }
 
@@ -58,7 +60,7 @@ float ResolveExposure()
         vec2(0.125, 0.625), vec2(0.375, 0.625), vec2(0.625, 0.625), vec2(0.875, 0.625),
         vec2(0.125, 0.875), vec2(0.375, 0.875), vec2(0.625, 0.875), vec2(0.875, 0.875));
         float luminanceSum = 0.0;
-        for(int i = 0; i < 16; ++ i)
+        for (int i = 0; i < 16; ++i)
         {
             luminanceSum += max(Luminance(SampleHDR(samples[i])), PHYSARA_EPSILON);
         }
@@ -68,25 +70,19 @@ float ResolveExposure()
     return ExposureFromEV100(ev100 - uExposureParams.y);
 }
 
-vec3 BloomContribution(vec2 uv)
+vec3 LegacyBloomContribution(vec2 uv)
 {
-    if (uFlags.y < 0.5)
-    {
-        return vec3(0.0);
-    }
-
     vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
     float threshold = uBloomParams.x;
     float knee = max(uBloomParams.y, 0.0001);
-    float intensity = uBloomParams.z;
     float radius = max(uBloomParams.w, 1.0);
     float exposure = ResolveExposure();
 
     vec3 sum = vec3(0.0);
     float weightSum = 0.0;
-    for(int y = -2; y <= 2; ++ y)
+    for (int y = -2; y <= 2; ++y)
     {
-        for(int x = -2; x <= 2; ++ x)
+        for (int x = -2; x <= 2; ++x)
         {
             vec2 offset = vec2(float(x), float(y)) * texel * radius;
             vec3 sampleColor = SampleHDR(uv + offset);
@@ -94,50 +90,126 @@ vec3 BloomContribution(vec2 uv)
             float brightness = max(max(exposedSample.r, exposedSample.g), exposedSample.b);
             float soft = clamp((brightness - threshold + knee) / (2.0 * knee), 0.0, 1.0);
             float contribution = max(brightness - threshold, 0.0) + soft * soft * knee;
-            float weight = contribution / max(brightness, PHYSARA_EPSILON);
-            sum += sampleColor * weight;
-            weightSum += weight;
+            float thresholdWeight = contribution / max(brightness, PHYSARA_EPSILON);
+            float gaussianWeight = 1.0 / (1.0 + dot(vec2(x, y), vec2(x, y)));
+            sum += sampleColor * thresholdWeight * gaussianWeight;
+            weightSum += thresholdWeight * gaussianWeight;
         }
     }
 
-    return weightSum > 0.0 ? sum / weightSum * intensity : vec3(0.0);
+    return weightSum > 0.0 ? sum / weightSum : vec3(0.0);
 }
 
-vec3 ResolveMappedColor(vec2 uv, bool includeBloom)
+vec3 ResolveMappedColor(vec2 uv)
 {
     vec3 hdrColor = SampleHDR(uv);
-    if (includeBloom)
+    if (uFlags.y > 0.5)
     {
-        hdrColor += BloomContribution(uv);
+        float bloomMode = uExposureParams.z;
+        vec3 bloom = bloomMode < 0.5 ? LegacyBloomContribution(uv) : SanitizeHDR(texture(uBloomTexture, uv).rgb);
+        hdrColor += bloom * uBloomParams.z;
     }
     vec3 exposed = hdrColor * ResolveExposure();
     return uFlags.x > 0.5 ? TonemapACES(exposed) : clamp(exposed, 0.0, 1.0);
 }
 
-vec3 ApplyFXAA(vec2 uv)
+float MappedLuma(vec2 uv)
+{
+    return Luminance(ResolveMappedColor(uv));
+}
+
+vec3 ApplyBasicFXAA(vec2 uv, vec3 center)
 {
     vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
-    vec3 center = ResolveMappedColor(uv, true);
-    if (uFlags.z < 0.5)
-    {
-        return center;
-    }
-
-    vec3 north = ResolveMappedColor(uv + vec2(0.0, texel.y), false);
-    vec3 south = ResolveMappedColor(uv - vec2(0.0, texel.y), false);
-    vec3 east = ResolveMappedColor(uv + vec2(texel.x, 0.0), false);
-    vec3 west = ResolveMappedColor(uv - vec2(texel.x, 0.0), false);
+    vec3 north = ResolveMappedColor(uv + vec2(0.0, texel.y));
+    vec3 south = ResolveMappedColor(uv - vec2(0.0, texel.y));
+    vec3 east = ResolveMappedColor(uv + vec2(texel.x, 0.0));
+    vec3 west = ResolveMappedColor(uv - vec2(texel.x, 0.0));
 
     float lumaCenter = Luminance(center);
     float lumaMin = min(lumaCenter, min(min(Luminance(north), Luminance(south)), min(Luminance(east), Luminance(west))));
     float lumaMax = max(lumaCenter, max(max(Luminance(north), Luminance(south)), max(Luminance(east), Luminance(west))));
     float edge = lumaMax - lumaMin;
-    if (edge < max(0.0312, lumaMax * 0.125))
+    if (edge < max(uAAParams.z, lumaMax * uAAParams.y))
     {
         return center;
     }
 
-    return (north + south + east + west + center * 2.0) / 6.0;
+    return mix((north + south + east + west + center * 2.0) / 6.0, center, 1.0 - uAAParams.x);
+}
+
+vec3 ApplyQualityFXAA(vec2 uv, vec3 center)
+{
+    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    vec3 rgbNW = ResolveMappedColor(uv + vec2(-1.0, 1.0) * texel);
+    vec3 rgbNE = ResolveMappedColor(uv + vec2(1.0, 1.0) * texel);
+    vec3 rgbSW = ResolveMappedColor(uv + vec2(-1.0, -1.0) * texel);
+    vec3 rgbSE = ResolveMappedColor(uv + vec2(1.0, -1.0) * texel);
+
+    float lumaNW = Luminance(rgbNW);
+    float lumaNE = Luminance(rgbNE);
+    float lumaSW = Luminance(rgbSW);
+    float lumaSE = Luminance(rgbSE);
+    float lumaM = Luminance(center);
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    if (lumaMax - lumaMin < max(uAAParams.z, lumaMax * uAAParams.y))
+    {
+        return center;
+    }
+
+    vec2 dir;
+    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+    dir.y = ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+    float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.03125, 0.0078125);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * texel;
+
+    vec3 rgbA = 0.5 * (
+        ResolveMappedColor(uv + dir * (1.0 / 3.0 - 0.5)) +
+        ResolveMappedColor(uv + dir * (2.0 / 3.0 - 0.5)));
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (
+        ResolveMappedColor(uv + dir * -0.5) +
+        ResolveMappedColor(uv + dir * 0.5));
+    float lumaB = Luminance(rgbB);
+    vec3 filtered = (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
+    return mix(center, filtered, uAAParams.x);
+}
+
+vec3 ApplySMAALite(vec2 uv, vec3 center)
+{
+    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    float c = Luminance(center);
+    float l = MappedLuma(uv - vec2(texel.x, 0.0));
+    float r = MappedLuma(uv + vec2(texel.x, 0.0));
+    float u = MappedLuma(uv + vec2(0.0, texel.y));
+    float d = MappedLuma(uv - vec2(0.0, texel.y));
+    float horizontal = abs(u - c) + abs(d - c);
+    float vertical = abs(l - c) + abs(r - c);
+    float edge = max(horizontal, vertical);
+    if (edge < max(uAAParams.z, c * uAAParams.y))
+    {
+        return center;
+    }
+
+    float depthC = texture(uSceneDepth, uv).r;
+    float depthL = texture(uSceneDepth, uv - vec2(texel.x, 0.0)).r;
+    float depthR = texture(uSceneDepth, uv + vec2(texel.x, 0.0)).r;
+    float depthU = texture(uSceneDepth, uv + vec2(0.0, texel.y)).r;
+    float depthD = texture(uSceneDepth, uv - vec2(0.0, texel.y)).r;
+    float depthEdge = max(max(abs(depthC - depthL), abs(depthC - depthR)), max(abs(depthC - depthU), abs(depthC - depthD)));
+    float depthWeight = clamp(depthEdge * uAAParams.w, 0.0, 1.0);
+
+    vec3 blendA = ResolveMappedColor(uv + vec2(texel.x, 0.0));
+    vec3 blendB = ResolveMappedColor(uv - vec2(texel.x, 0.0));
+    if (horizontal > vertical)
+    {
+        blendA = ResolveMappedColor(uv + vec2(0.0, texel.y));
+        blendB = ResolveMappedColor(uv - vec2(0.0, texel.y));
+    }
+
+    vec3 filtered = center * 0.5 + (blendA + blendB) * 0.25;
+    return mix(center, filtered, clamp(uAAParams.x + depthWeight * 0.25, 0.0, 1.0));
 }
 
 float LinearizeDepth(float depth)
@@ -165,6 +237,19 @@ void main()
         return;
     }
 
-    vec3 mapped = ApplyFXAA(inUV);
+    vec3 mapped = ResolveMappedColor(inUV);
+    uint aaMode = uint(uFlags.z + 0.5);
+    if (aaMode == 1u)
+    {
+        mapped = ApplyBasicFXAA(inUV, mapped);
+    }
+    else if (aaMode == 2u)
+    {
+        mapped = ApplyQualityFXAA(inUV, mapped);
+    }
+    else if (aaMode == 3u)
+    {
+        mapped = ApplySMAALite(inUV, mapped);
+    }
     outColor = vec4(LinearToSrgb(mapped), 1.0);
 }

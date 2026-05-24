@@ -73,13 +73,25 @@ namespace Physara::Editor
             const char *debugItems[] = {"None", "Normals", "Depth"};
             ImGui::Combo("Debug View", &m_Context.settings.postProcess.debugViewIndex, debugItems, IM_ARRAYSIZE(debugItems));
             ImGui::Checkbox("ACES Tone Mapping", &m_Context.settings.postProcess.toneMappingEnabled);
-            ImGui::Checkbox("FXAA", &m_Context.settings.postProcess.fxaaEnabled);
+            const char *aaItems[] = {"None", "FXAA Basic", "FXAA Quality", "SMAA Lite"};
+            ImGui::Combo("Anti-Aliasing", &m_Context.settings.postProcess.antiAliasingModeIndex, aaItems, IM_ARRAYSIZE(aaItems));
+            ImGui::BeginDisabled(m_Context.settings.postProcess.antiAliasingModeIndex == 0);
+            ImGui::SliderFloat("AA Subpixel", &m_Context.settings.postProcess.aaSubpixel, 0.f, 1.f, "%.2f");
+            ImGui::SliderFloat("AA Edge", &m_Context.settings.postProcess.aaEdgeThreshold, 0.0312f, 0.333f, "%.4f");
+            ImGui::SliderFloat("AA Edge Min", &m_Context.settings.postProcess.aaEdgeThresholdMin, 0.001f, 0.0833f, "%.4f");
+            if (m_Context.settings.postProcess.antiAliasingModeIndex == 3)
+            {
+                ImGui::SliderFloat("Depth Sensitivity", &m_Context.settings.postProcess.aaDepthSensitivity, 0.f, 64.f, "%.1f");
+            }
+            ImGui::EndDisabled();
             ImGui::Checkbox("Bloom", &m_Context.settings.postProcess.bloomEnabled);
             ImGui::BeginDisabled(!m_Context.settings.postProcess.bloomEnabled);
+            const char *bloomItems[] = {"Legacy 5x5", "Mip Chain", "Dual Kawase"};
+            ImGui::Combo("Bloom Mode", &m_Context.settings.postProcess.bloomModeIndex, bloomItems, IM_ARRAYSIZE(bloomItems));
             ImGui::SliderFloat("Threshold", &m_Context.settings.postProcess.bloomThreshold, 0.f, 10.f, "%.2f");
             ImGui::SliderFloat("Knee", &m_Context.settings.postProcess.bloomKnee, 0.f, 2.f, "%.2f");
-            ImGui::SliderFloat("Intensity", &m_Context.settings.postProcess.bloomIntensity, 0.f, 1.f, "%.3f");
-            ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 1.f, 8.f, "%.1f");
+            ImGui::SliderFloat("Intensity", &m_Context.settings.postProcess.bloomIntensity, 0.f, 4.f, "%.3f");
+            ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 0.5f, 8.f, "%.1f");
             ImGui::EndDisabled();
         }
     }

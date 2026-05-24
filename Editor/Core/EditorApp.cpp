@@ -428,7 +428,10 @@ namespace Physara::Editor
         Engine::PostProcessSettings postProcessSettings{};
         postProcessSettings.toneMappingEnabled = m_Context.settings.postProcess.toneMappingEnabled;
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
-        postProcessSettings.fxaaEnabled = m_Context.settings.postProcess.fxaaEnabled;
+        postProcessSettings.antiAliasingMode = static_cast<Engine::AntiAliasingMode>(
+            std::clamp(m_Context.settings.postProcess.antiAliasingModeIndex, 0, 3));
+        postProcessSettings.bloomMode = static_cast<Engine::BloomMode>(
+            std::clamp(m_Context.settings.postProcess.bloomModeIndex, 0, 2));
         postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
         if (m_Context.activeScene != nullptr)
         {
@@ -446,6 +449,10 @@ namespace Physara::Editor
         postProcessSettings.bloomKnee = m_Context.settings.postProcess.bloomKnee;
         postProcessSettings.bloomIntensity = m_Context.settings.postProcess.bloomIntensity;
         postProcessSettings.bloomRadius = m_Context.settings.postProcess.bloomRadius;
+        postProcessSettings.aaSubpixel = m_Context.settings.postProcess.aaSubpixel;
+        postProcessSettings.aaEdgeThreshold = m_Context.settings.postProcess.aaEdgeThreshold;
+        postProcessSettings.aaEdgeThresholdMin = m_Context.settings.postProcess.aaEdgeThresholdMin;
+        postProcessSettings.aaDepthSensitivity = m_Context.settings.postProcess.aaDepthSensitivity;
         m_Renderer->SetPostProcessSettings(postProcessSettings);
         Engine::ShadowSettings shadowSettings{};
         shadowSettings.algorithm = m_Context.settings.shadow.algorithmIndex == 0

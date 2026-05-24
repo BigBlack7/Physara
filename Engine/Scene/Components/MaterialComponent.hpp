@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include <glm/common.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -112,6 +113,7 @@ namespace Physara::Engine
 
         void Sanitize()
         {
+            baseColor = glm::clamp(baseColor, glm::vec4(0.f), glm::vec4(1.f));
             metallic = std::clamp(metallic, 0.f, 1.f);
             roughness = std::clamp(roughness, 0.045f, 1.f);
             ambientOcclusion = std::clamp(ambientOcclusion, 0.f, 1.f);
