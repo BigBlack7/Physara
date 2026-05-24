@@ -30,12 +30,20 @@ namespace Physara::Engine
         Depth = 2
     };
 
+    enum class ExposureMode : std::uint32_t
+    {
+        Manual = 0,
+        Auto = 1
+    };
+
     struct PostProcessSettings
     {
         bool toneMappingEnabled{true};
         bool bloomEnabled{true};
         bool fxaaEnabled{true};
         DebugViewMode debugView{DebugViewMode::None};
+        ExposureMode exposureMode{ExposureMode::Manual};
+        float exposureCompensationEV{0.f};
         float bloomThreshold{1.0f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.08f};

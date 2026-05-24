@@ -7,6 +7,8 @@ target_sources(Engine PRIVATE
     Core/Time.hpp
     Renderer/FrameData.cpp
     Renderer/FrameData.hpp
+    Renderer/IBLResources.cpp
+    Renderer/IBLResources.hpp
     Renderer/MeshGPUCache.cpp
     Renderer/MeshGPUCache.hpp
     Renderer/Passes/ForwardOpaquePass.cpp
@@ -17,6 +19,8 @@ target_sources(Engine PRIVATE
     Renderer/Passes/ShadowPass.hpp
     Renderer/Passes/SkyboxPass.cpp
     Renderer/Passes/SkyboxPass.hpp
+    Renderer/Precompute/IBLPrecompute.cpp
+    Renderer/Precompute/IBLPrecompute.hpp
     Renderer/PipelineStateCache.cpp
     Renderer/PipelineStateCache.hpp
     Renderer/Renderer.cpp

@@ -33,6 +33,7 @@ namespace Physara::Engine
         {
             glm::vec4 bloomParams{1.f, 0.5f, 0.08f, 2.f};
             glm::vec4 flags{1.f, 1.f, 1.f, 0.f};
+            glm::vec4 exposureParams{0.f, 0.f, 0.f, 0.f};
         };
 
         struct FrameGPUData
@@ -62,6 +63,11 @@ namespace Physara::Engine
                 settings.bloomEnabled ? 1.f : 0.f,
                 settings.fxaaEnabled ? 1.f : 0.f,
                 static_cast<float>(settings.debugView));
+            data.exposureParams = glm::vec4(
+                settings.exposureMode == ExposureMode::Auto ? 1.f : 0.f,
+                settings.exposureCompensationEV,
+                0.f,
+                0.f);
             return data;
         }
 

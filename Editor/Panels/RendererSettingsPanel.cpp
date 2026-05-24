@@ -106,8 +106,8 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::Checkbox("Skybox", &m_Context.settings.environment.skyboxEnabled);
-            ImGui::SliderFloat("Skybox EV", &m_Context.settings.environment.skyboxExposureCompensation, -8.f, 8.f, "%.2f");
+            ImGui::Checkbox("Show Skybox", &m_Context.settings.environment.skyboxEnabled);
+            ImGui::SliderFloat("Environment EV", &m_Context.settings.environment.skyboxExposureCompensation, -16.f, 16.f, "%.2f");
 
             const std::vector<std::filesystem::path> maps =
                 RendererSettingsPanelDetail::CollectEnvironmentMaps(m_Context.assetsRootPath);

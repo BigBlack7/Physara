@@ -28,6 +28,7 @@ namespace Physara::RHI
 namespace Physara::Engine
 {
     class AssetManager;
+    class IBLResources;
     class PipelineStateCache;
     class RenderProxy;
     class ShaderLibrary;
@@ -48,6 +49,8 @@ namespace Physara::Engine
         MeshGPUCache *meshCache{nullptr};
         AssetManager *assetManager{nullptr};
         RHI::RHITexture *shadowMap{nullptr};
+        const IBLResources *iblResources{nullptr};
+        float environmentExposureCompensation{0.f};
         glm::vec4 clearColor{0.f, 0.f, 0.f, 1.f};
         std::uint32_t debugView{0};
     };
@@ -96,10 +99,14 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHIBuffer> m_MaterialBuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_RenderSettingsBuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_ShadowBuffer{};
+        std::unique_ptr<RHI::RHIBuffer> m_IBLBuffer{};
         std::unique_ptr<RHI::RHISampler> m_LinearRepeatSampler{};
+        std::unique_ptr<RHI::RHISampler> m_LinearClampMipSampler{};
         std::unique_ptr<RHI::RHISampler> m_ShadowSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackWhiteTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackNormalTexture{};
+        std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};
+        std::unique_ptr<RHI::RHITexture> m_FallbackBRDFLut{};
         std::unordered_map<std::string, TextureGPUResource> m_TextureCache{};
         std::unordered_set<std::string> m_MissingTextureWarnings{};
         std::vector<ForwardMaterialGPUData> m_MaterialUploadScratch{};
@@ -112,6 +119,7 @@ namespace Physara::Engine
         std::uint64_t m_LastMaterialUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastRenderSettingsUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastShadowUploadSignature{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_LastIBLUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

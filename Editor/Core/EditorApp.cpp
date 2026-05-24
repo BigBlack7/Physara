@@ -28,6 +28,7 @@
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
+#include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Editor/Camera/EditorCamera.hpp>
@@ -418,7 +419,7 @@ namespace Physara::Editor
         view.viewport.height = height;
         m_Context.sceneView.lastRenderView = view;
         const std::filesystem::path environmentPath =
-            m_Context.settings.environment.skyboxEnabled && !m_Context.settings.environment.skyboxPath.empty()
+            !m_Context.settings.environment.skyboxPath.empty()
                 ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
                 : std::filesystem::path{};
         m_Renderer->SetSkyboxEnabled(m_Context.settings.environment.skyboxEnabled);
@@ -429,6 +430,18 @@ namespace Physara::Editor
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
         postProcessSettings.fxaaEnabled = m_Context.settings.postProcess.fxaaEnabled;
         postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
+        if (m_Context.activeScene != nullptr)
+        {
+            Engine::Entity sceneCamera = m_Context.activeScene->GetSceneCameraEntity();
+            if (sceneCamera.HasComponent<Engine::CameraComponent>())
+            {
+                const Engine::CameraComponent &camera = sceneCamera.GetComponent<Engine::CameraComponent>();
+                postProcessSettings.exposureMode = camera.exposureMode == Engine::CameraExposureMode::Auto
+                                                       ? Engine::ExposureMode::Auto
+                                                       : Engine::ExposureMode::Manual;
+                postProcessSettings.exposureCompensationEV = camera.exposureCompensationEV;
+            }
+        }
         postProcessSettings.bloomThreshold = m_Context.settings.postProcess.bloomThreshold;
         postProcessSettings.bloomKnee = m_Context.settings.postProcess.bloomKnee;
         postProcessSettings.bloomIntensity = m_Context.settings.postProcess.bloomIntensity;

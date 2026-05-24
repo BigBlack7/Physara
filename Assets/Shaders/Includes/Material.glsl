@@ -56,6 +56,7 @@ struct PixelMaterial
     float alphaCutoff;
     float normalScale;
     bool doubleSided;
+    vec3 energyCompensation;
     uint shadingModel;
     uint alphaMode;
 };
@@ -130,6 +131,7 @@ PixelMaterial PrepareMaterial(MaterialInputs inputs)
     material.alphaCutoff = Saturate(inputs.alphaCutoff);
     material.normalScale = max(inputs.normalScale, 0.0);
     material.doubleSided = inputs.doubleSided;
+    material.energyCompensation = vec3(1.0);
     material.shadingModel = inputs.shadingModel;
     material.alphaMode = inputs.alphaMode;
 
@@ -149,7 +151,9 @@ bool ShouldDiscardMaterial(PixelMaterial material)
 
 BRDFInputs BuildMaterialBRDFInputs(PixelMaterial material, vec3 normal, vec3 view, vec3 light)
 {
-    return BuildBRDFInputs(normal, view, light, material.diffuseColor, material.f0, material.perceptualRoughness);
+    BRDFInputs inputs = BuildBRDFInputs(normal, view, light, material.diffuseColor, material.f0, material.perceptualRoughness);
+    inputs.energyCompensation = material.energyCompensation;
+    return inputs;
 }
 
 #endif

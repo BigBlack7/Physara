@@ -1,6 +1,7 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
 #include "../../Includes/Lighting.glsl"
+#include "../../Includes/IBL.glsl"
 
 layout(location = 0)in vec3 inWorldPosition;
 layout(location = 1)in vec3 inWorldNormal;
@@ -156,6 +157,7 @@ void main()
     }
     context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, SelectTexCoord(inputs.normalTexCoord));
     context.view = normalize(GetCameraPosition(uCamera) - inWorldPosition);
+    material.energyCompensation = ComputeIBLEnergyCompensation(material, context.normal, context.view);
 
     uint debugView = uint(uDebugParams.x + 0.5);
     if (debugView == 1u)
@@ -171,8 +173,7 @@ void main()
         float shadowVisibility = SampleShadowPCF3x3(context.worldPosition, context.normal, uLights[i], i);
         color += EvaluateLight(material, context, uLights[i]) * shadowVisibility;
     }
-    vec3 ambient = material.diffuseColor * material.ambientOcclusion * 0.04;
-    color += ambient;
+    color += EvaluateIBL(material, context.normal, context.view);
     color += material.emissive;
     outColor = vec4(color, material.baseColor.a);
 }

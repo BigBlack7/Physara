@@ -16,6 +16,12 @@ namespace Physara::Engine
         Orthographic
     };
 
+    enum class CameraExposureMode
+    {
+        Manual,
+        Auto
+    };
+
     [[nodiscard]] inline constexpr std::string_view ToString(CameraProjectionType type)
     {
         return type == CameraProjectionType::Orthographic ? "Orthographic" : "Perspective";
@@ -24,6 +30,16 @@ namespace Physara::Engine
     [[nodiscard]] inline constexpr CameraProjectionType CameraProjectionTypeFromString(std::string_view type)
     {
         return type == "Orthographic" ? CameraProjectionType::Orthographic : CameraProjectionType::Perspective;
+    }
+
+    [[nodiscard]] inline constexpr std::string_view ToString(CameraExposureMode mode)
+    {
+        return mode == CameraExposureMode::Auto ? "Auto" : "Manual";
+    }
+
+    [[nodiscard]] inline constexpr CameraExposureMode CameraExposureModeFromString(std::string_view mode)
+    {
+        return mode == "Auto" ? CameraExposureMode::Auto : CameraExposureMode::Manual;
     }
 
     struct CameraComponent
@@ -77,6 +93,8 @@ namespace Physara::Engine
             6400(极高感光度)
         */
         float iso{100.f}; // 感光度, 单位-ISO
+        CameraExposureMode exposureMode{CameraExposureMode::Manual};
+        float exposureCompensationEV{0.f};
 
         float nearClipMeters{0.1f};
         float farClipMeters{1000.f};

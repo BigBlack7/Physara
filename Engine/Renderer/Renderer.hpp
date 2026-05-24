@@ -8,6 +8,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
 #include <Engine/Renderer/Passes/PostProcessPass.hpp>
@@ -96,6 +97,7 @@ namespace Physara::Engine
         ForwardOpaquePass m_ForwardOpaquePass{};
         SkyboxPass m_SkyboxPass{};
         PostProcessPass m_PostProcessPass{};
+        IBLResources m_IBLResources{};
         FrameData m_FrameData{};
         std::optional<CaptureDesc> m_PendingCapture{};
         glm::vec4 m_ClearColor{0.09f, 0.12f, 0.11f, 1.f};

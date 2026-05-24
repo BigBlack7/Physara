@@ -70,7 +70,7 @@ namespace Physara::Editor
     struct EnvironmentSettings
     {
         std::filesystem::path skyboxPath{};
-        float skyboxExposureCompensation{0.f};
+        float skyboxExposureCompensation{12.f};
         bool skyboxEnabled{true};
     };
 

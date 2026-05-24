@@ -14,6 +14,7 @@ struct BRDFInputs
     float NoL;
     float NoH;
     float LoH;
+    vec3 energyCompensation;
 };
 
 float D_GGX(float NoH, float roughness)
@@ -57,7 +58,8 @@ float Fd_Burley(float NoV, float NoL, float LoH, float roughness)
 
 vec3 EnergyCompensation(vec3 f0, vec2 dfg)
 {
-    return 1.0 + f0 * (1.0 / max(dfg.y, PHYSARA_EPSILON) - 1.0);
+    float inverseEnergy = 1.0 / max(dfg.y, 0.04);
+    return min(vec3(1.0) + f0 * (inverseEnergy - 1.0), vec3(16.0));
 }
 
 BRDFInputs BuildBRDFInputs(vec3 normal, vec3 view, vec3 light, vec3 diffuseColor, vec3 f0, float perceptualRoughness)
@@ -74,6 +76,7 @@ BRDFInputs BuildBRDFInputs(vec3 normal, vec3 view, vec3 light, vec3 diffuseColor
     inputs.NoL = Saturate(dot(normal, light));
     inputs.NoH = Saturate(dot(normal, halfVector));
     inputs.LoH = Saturate(dot(light, halfVector));
+    inputs.energyCompensation = vec3(1.0);
     return inputs;
 }
 
@@ -82,7 +85,7 @@ vec3 EvaluateSpecularBRDF(BRDFInputs inputs)
     float D = D_GGX(inputs.NoH, inputs.roughness);
     float V = V_SmithGGXCorrelated(inputs.NoV, inputs.NoL, inputs.roughness);
     vec3 F = F_Schlick(inputs.LoH, inputs.f0);
-    return (D * V) * F;
+    return (D * V) * F * inputs.energyCompensation;
 }
 
 vec3 EvaluateDiffuseBRDF(BRDFInputs inputs)

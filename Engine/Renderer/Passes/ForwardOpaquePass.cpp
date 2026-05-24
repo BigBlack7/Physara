@@ -9,6 +9,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
@@ -36,12 +37,15 @@ namespace Physara::Engine
         constexpr std::uint32_t LightBinding = 3u;
         constexpr std::uint32_t RenderSettingsBinding = 5u;
         constexpr std::uint32_t ShadowBinding = 6u;
+        constexpr std::uint32_t IBLBinding = 7u;
         constexpr std::uint32_t BaseColorTextureBinding = 0u;
         constexpr std::uint32_t MetallicRoughnessTextureBinding = 1u;
         constexpr std::uint32_t NormalTextureBinding = 2u;
         constexpr std::uint32_t OcclusionTextureBinding = 3u;
         constexpr std::uint32_t EmissiveTextureBinding = 4u;
         constexpr std::uint32_t ShadowTextureBinding = 8u;
+        constexpr std::uint32_t IBLPrefilteredTextureBinding = 9u;
+        constexpr std::uint32_t IBLBRDFLutBinding = 10u;
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -60,6 +64,12 @@ namespace Physara::Engine
         struct RenderSettingsGPUData
         {
             glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
+        };
+
+        struct IBLGPUData
+        {
+            glm::vec4 irradianceSH[9]{};
+            glm::vec4 params{0.f, 0.f, 0.f, 0.f};
         };
 
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
@@ -250,6 +260,27 @@ namespace Physara::Engine
             return data;
         }
 
+        IBLGPUData BuildIBLData(const ForwardPassContext &context)
+        {
+            IBLGPUData data{};
+            if (context.iblResources == nullptr || !context.iblResources->IsReady())
+            {
+                return data;
+            }
+
+            const std::array<glm::vec4, 9> &sh = context.iblResources->GetIrradianceSH();
+            for (std::size_t i = 0; i < sh.size(); ++i)
+            {
+                data.irradianceSH[i] = sh[i];
+            }
+            data.params = glm::vec4(
+                std::exp2(context.environmentExposureCompensation),
+                static_cast<float>(context.iblResources->GetSpecularMipCount() > 0u ? context.iblResources->GetSpecularMipCount() - 1u : 0u),
+                1.f,
+                0.f);
+            return data;
+        }
+
         void RecordBufferUpload(FrameStatistics *stats, std::uint64_t bytes)
         {
             if (stats != nullptr)
@@ -394,6 +425,13 @@ namespace Physara::Engine
             m_LastShadowUploadSignature = std::numeric_limits<std::uint64_t>::max();
         }
 
+        if (m_IBLBuffer == nullptr)
+        {
+            m_IBLBuffer = context.device->CreateBuffer(
+                ForwardOpaquePassDetail::DynamicBufferDesc(sizeof(ForwardOpaquePassDetail::IBLGPUData), RHI::BufferUsage::Uniform));
+            m_LastIBLUploadSignature = std::numeric_limits<std::uint64_t>::max();
+        }
+
         if (m_LastUploadedFrameIndex == frameData.frameIndex)
         {
             return;
@@ -422,6 +460,15 @@ namespace Physara::Engine
             m_ShadowBuffer->UploadData(&frameData.shadow, sizeof(ShadowData));
             ForwardOpaquePassDetail::RecordBufferUpload(context.stats, sizeof(ShadowData));
             m_LastShadowUploadSignature = shadowSignature;
+        }
+
+        const ForwardOpaquePassDetail::IBLGPUData iblData = ForwardOpaquePassDetail::BuildIBLData(context);
+        const std::uint64_t iblSignature = UploadHash::Value(UploadHash::Offset, iblData);
+        if (iblSignature != m_LastIBLUploadSignature)
+        {
+            m_IBLBuffer->UploadData(&iblData, sizeof(iblData));
+            ForwardOpaquePassDetail::RecordBufferUpload(context.stats, sizeof(iblData));
+            m_LastIBLUploadSignature = iblSignature;
         }
 
         const std::uint64_t objectSignature = UploadHash::Vector(UploadHash::Offset, frameData.objects);
@@ -521,6 +568,55 @@ namespace Physara::Engine
         {
             const std::uint8_t normal[4]{128u, 128u, 255u, 255u};
             m_FallbackNormalTexture = context.device->CreateTexture(ForwardOpaquePassDetail::TextureDesc(1u, 1u, normal));
+        }
+
+        if (m_LinearClampMipSampler == nullptr)
+        {
+            RHI::RHISamplerDesc desc{};
+            desc.minFilter = RHI::FilterMode::Linear;
+            desc.magFilter = RHI::FilterMode::Linear;
+            desc.mipFilter = RHI::FilterMode::Linear;
+            desc.wrapU = RHI::WrapMode::ClampToEdge;
+            desc.wrapV = RHI::WrapMode::ClampToEdge;
+            desc.wrapW = RHI::WrapMode::ClampToEdge;
+            desc.anisotropy = static_cast<float>(ForwardOpaquePassDetail::MaxValue(context.device->GetMaxAnisotropy(), 1));
+            m_LinearClampMipSampler = context.device->CreateSampler(desc);
+        }
+
+        if (m_FallbackBlackCubeTexture == nullptr)
+        {
+            const float black[4]{0.f, 0.f, 0.f, 1.f};
+            RHI::RHITextureDesc desc{};
+            desc.width = 1u;
+            desc.height = 1u;
+            desc.mipLevels = 1u;
+            desc.arrayLayers = 6u;
+            desc.format = RHI::TextureFormat::RGBA16F;
+            desc.dimension = RHI::TextureDimension::TexCube;
+            desc.usage = RHI::TextureUsage::Sampled;
+            m_FallbackBlackCubeTexture = context.device->CreateTexture(desc);
+            if (m_FallbackBlackCubeTexture != nullptr)
+            {
+                for (std::uint32_t face = 0; face < 6u; ++face)
+                {
+                    m_FallbackBlackCubeTexture->Upload(0u, face, black, 0u);
+                }
+            }
+        }
+
+        if (m_FallbackBRDFLut == nullptr)
+        {
+            const float brdf[2]{0.f, 0.f};
+            RHI::RHITextureDesc desc{};
+            desc.width = 1u;
+            desc.height = 1u;
+            desc.mipLevels = 1u;
+            desc.arrayLayers = 1u;
+            desc.format = RHI::TextureFormat::RG16F;
+            desc.dimension = RHI::TextureDimension::Tex2D;
+            desc.usage = RHI::TextureUsage::Sampled;
+            desc.initialData = brdf;
+            m_FallbackBRDFLut = context.device->CreateTexture(desc);
         }
 
         if (m_ShadowSampler == nullptr)
@@ -661,9 +757,21 @@ namespace Physara::Engine
     {
         context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::RenderSettingsBinding, m_RenderSettingsBuffer.get());
         context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::ShadowBinding, m_ShadowBuffer.get());
+        context.commandList->SetUniformBuffer(ForwardOpaquePassDetail::IBLBinding, m_IBLBuffer.get());
         if (context.shadowMap != nullptr)
         {
             context.commandList->SetTexture(ForwardOpaquePassDetail::ShadowTextureBinding, context.shadowMap, m_ShadowSampler.get());
+        }
+        RHI::RHITexture *iblSpecular = context.iblResources != nullptr && context.iblResources->IsReady()
+                                           ? context.iblResources->GetSpecularTexture()
+                                           : m_FallbackBlackCubeTexture.get();
+        RHI::RHITexture *iblBRDF = context.iblResources != nullptr && context.iblResources->IsReady()
+                                       ? context.iblResources->GetBRDFLut()
+                                       : m_FallbackBRDFLut.get();
+        if (iblSpecular != nullptr && iblBRDF != nullptr)
+        {
+            context.commandList->SetTexture(ForwardOpaquePassDetail::IBLPrefilteredTextureBinding, iblSpecular, m_LinearClampMipSampler.get());
+            context.commandList->SetTexture(ForwardOpaquePassDetail::IBLBRDFLutBinding, iblBRDF, m_LinearClampMipSampler.get());
         }
     }
 

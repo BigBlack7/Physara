@@ -90,6 +90,7 @@ namespace Physara::Engine
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
         m_ShadowPass.Reset();
+        m_IBLResources.Reset();
         m_MeshGPUCache.Reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
@@ -196,6 +197,7 @@ namespace Physara::Engine
 
         m_EnvironmentMapPath = std::move(path);
         m_SkyboxPass.InvalidateEnvironment();
+        m_IBLResources.Invalidate();
     }
 
     void Renderer::SetShadowSettings(const ShadowSettings &settings)
@@ -336,6 +338,10 @@ namespace Physara::Engine
         RenderGraphResourceHandle sceneHDR = m_RenderGraph.ImportTexture("SceneHDR", *m_SceneHDRColor);
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
+        if (!m_EnvironmentMapPath.empty())
+        {
+            (void)m_IBLResources.Ensure(m_Device, m_EnvironmentMapPath);
+        }
 
         if (m_ShadowSettings.algorithm != ShadowAlgorithm::None)
         {
@@ -387,6 +393,8 @@ namespace Physara::Engine
                             passContext.meshCache = &m_MeshGPUCache;
                             passContext.assetManager = m_AssetManager;
                             passContext.shadowMap = m_ShadowPass.GetShadowMap();
+                            passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+                            passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
                             passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
                             passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
                             const auto passStart = std::chrono::steady_clock::now();
@@ -486,6 +494,8 @@ namespace Physara::Engine
         passContext.meshCache = &m_MeshGPUCache;
         passContext.assetManager = m_AssetManager;
         passContext.shadowMap = m_ShadowPass.GetShadowMap();
+        passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+        passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
         passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
         const auto passStart = std::chrono::steady_clock::now();
         m_ForwardOpaquePass.ExecuteTransparent(passContext);

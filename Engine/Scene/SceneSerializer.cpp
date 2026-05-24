@@ -216,6 +216,8 @@ namespace Physara::Engine
                     cameraJson["apertureFStop"] = camera->apertureFStop;
                     cameraJson["shutterTimeSeconds"] = camera->shutterTimeSeconds;
                     cameraJson["iso"] = camera->iso;
+                    cameraJson["exposureMode"] = std::string(ToString(camera->exposureMode));
+                    cameraJson["exposureCompensationEV"] = camera->exposureCompensationEV;
                     cameraJson["nearClipMeters"] = camera->nearClipMeters;
                     cameraJson["farClipMeters"] = camera->farClipMeters;
                     cameraJson["orthographicHeightMeters"] = camera->orthographicHeightMeters;
@@ -355,6 +357,8 @@ namespace Physara::Engine
                     camera.apertureFStop = c.value("apertureFStop", camera.apertureFStop);
                     camera.shutterTimeSeconds = c.value("shutterTimeSeconds", camera.shutterTimeSeconds);
                     camera.iso = c.value("iso", camera.iso);
+                    camera.exposureMode = CameraExposureModeFromString(c.value("exposureMode", std::string{"Manual"}));
+                    camera.exposureCompensationEV = c.value("exposureCompensationEV", camera.exposureCompensationEV);
                     camera.nearClipMeters = c.value("nearClipMeters", camera.nearClipMeters);
                     camera.farClipMeters = c.value("farClipMeters", camera.farClipMeters);
                     camera.orthographicHeightMeters = c.value("orthographicHeightMeters", camera.orthographicHeightMeters);
