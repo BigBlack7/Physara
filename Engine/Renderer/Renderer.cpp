@@ -87,6 +87,7 @@ namespace Physara::Engine
     void Renderer::Shutdown()
     {
         m_RenderGraph.Reset();
+        m_RenderGraph.ReleasePooledResources();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
         m_ShadowPass.Reset();
@@ -161,7 +162,7 @@ namespace Physara::Engine
 
         const auto renderStart = std::chrono::steady_clock::now();
         BuildRenderGraph();
-        m_RenderGraph.Execute(*commandList);
+        m_RenderGraph.Execute(*commandList, m_Device);
         m_Device->SubmitCommandList();
         m_FrameData.stats.renderGraphCpuMs = RendererDetail::ElapsedMilliseconds(renderStart);
     }
@@ -236,6 +237,7 @@ namespace Physara::Engine
     void Renderer::RecreateRenderTarget()
     {
         m_RenderGraph.Reset();
+        m_RenderGraph.ReleasePooledResources();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
         m_SceneDepth.reset();
@@ -336,7 +338,9 @@ namespace Physara::Engine
         }
 
         RenderGraphResourceHandle sceneHDR = m_RenderGraph.ImportTexture("SceneHDR", *m_SceneHDRColor);
+        RenderGraphResourceHandle sceneDepth = m_RenderGraph.ImportTexture("SceneDepth", *m_SceneDepth);
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
+        m_RenderGraph.MarkOutput(sceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
         if (!m_EnvironmentMapPath.empty())
         {
@@ -346,6 +350,7 @@ namespace Physara::Engine
         if (m_ShadowSettings.algorithm != ShadowAlgorithm::None)
         {
             m_RenderGraph.AddPass("Shadow")
+                .SetSideEffect()
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 ShadowPassContext passContext{};
@@ -366,6 +371,7 @@ namespace Physara::Engine
 
         m_RenderGraph.AddPass("ForwardOpaque")
             .Write(sceneHDR)
+            .Write(sceneDepth)
             .SetExecute([this](RenderGraphContext &context)
                         {
                             if (m_ShadowPass.GetShadowMap() != nullptr && m_FrameData.shadow.params.x > 0.5f)
@@ -440,27 +446,10 @@ namespace Physara::Engine
 
         m_RenderGraph.AddPass("PostProcess")
             .Read(sceneHDR)
+            .Read(sceneDepth)
             .Write(sceneColor)
             .SetExecute([this](RenderGraphContext &context)
                         {
-                            RHI::RHIResourceBarrier barrier{};
-                            barrier.before = RHI::ResourceState::RenderTarget;
-                            barrier.after = RHI::ResourceState::ShaderResource;
-                            barrier.srcStages = RHI::ShaderStageBit::Fragment;
-                            barrier.dstStages = RHI::ShaderStageBit::Fragment;
-                            barrier.srcAccess = RHI::ResourceAccess::ColorAttachmentWrite;
-                            barrier.dstAccess = RHI::ResourceAccess::ShaderRead;
-                            context.commandList.TextureBarrier(m_SceneHDRColor.get(), barrier);
-
-                            RHI::RHIResourceBarrier depthBarrier{};
-                            depthBarrier.before = RHI::ResourceState::DepthWrite;
-                            depthBarrier.after = RHI::ResourceState::ShaderResource;
-                            depthBarrier.srcStages = RHI::ShaderStageBit::Fragment;
-                            depthBarrier.dstStages = RHI::ShaderStageBit::Fragment;
-                            depthBarrier.srcAccess = RHI::ResourceAccess::DepthStencilWrite;
-                            depthBarrier.dstAccess = RHI::ResourceAccess::ShaderRead;
-                            context.commandList.TextureBarrier(m_SceneDepth.get(), depthBarrier);
-
                             PostProcessPassContext passContext{};
                             passContext.device = m_Device;
                             passContext.commandList = &context.commandList;

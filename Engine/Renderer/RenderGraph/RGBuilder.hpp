@@ -13,6 +13,7 @@ namespace Physara::Engine
 
         RGBuilder &Read(RenderGraphResourceHandle resource);
         RGBuilder &Write(RenderGraphResourceHandle resource);
+        RGBuilder &SetSideEffect(bool sideEffect = true);
         RGBuilder &SetExecute(PassNode::ExecuteCallback callback);
 
     private:

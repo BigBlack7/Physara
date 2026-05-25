@@ -22,6 +22,12 @@ namespace Physara::Engine
         return *this;
     }
 
+    RGBuilder &RGBuilder::SetSideEffect(bool sideEffect)
+    {
+        GetPass().SetSideEffect(sideEffect);
+        return *this;
+    }
+
     RGBuilder &RGBuilder::SetExecute(PassNode::ExecuteCallback callback)
     {
         GetPass().SetExecuteCallback(std::move(callback));
