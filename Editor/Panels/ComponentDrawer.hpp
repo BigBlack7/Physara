@@ -295,12 +295,12 @@ namespace Physara::Editor
         changed |= ImGui::DragFloat("ISO", &camera.iso, 1.f, 1.f, 25600.f, "%.0f");
         int exposureModeIndex = static_cast<int>(camera.exposureMode);
         const char *exposureModeLabels[] = {"Manual", "Auto"};
-        if (ImGui::Combo("Exposure", &exposureModeIndex, exposureModeLabels, IM_ARRAYSIZE(exposureModeLabels)))
+        if (ImGui::Combo("Exposure Mode", &exposureModeIndex, exposureModeLabels, IM_ARRAYSIZE(exposureModeLabels)))
         {
             camera.exposureMode = static_cast<Engine::CameraExposureMode>(exposureModeIndex);
             changed = true;
         }
-        changed |= ImGui::SliderFloat("Exposure EV", &camera.exposureCompensationEV, -8.f, 8.f, "%.2f");
+        changed |= ImGui::SliderFloat("Exposure Compensation EV", &camera.exposureCompensationEV, -8.f, 8.f, "%.2f");
         changed |= ImGui::DragFloat("Near Clip", &camera.nearClipMeters, 0.01f, 0.001f, 100.f, "%.3f m");
         changed |= ImGui::DragFloat("Far Clip", &camera.farClipMeters, 1.f, 0.01f, 100000.f, "%.1f m");
 

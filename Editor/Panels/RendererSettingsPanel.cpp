@@ -72,7 +72,8 @@ namespace Physara::Editor
         {
             const char *debugItems[] = {"None", "Normals", "Depth"};
             ImGui::Combo("Debug View", &m_Context.settings.postProcess.debugViewIndex, debugItems, IM_ARRAYSIZE(debugItems));
-            ImGui::Checkbox("ACES Tone Mapping", &m_Context.settings.postProcess.toneMappingEnabled);
+            const char *toneMappingItems[] = {"None", "ACES", "Reinhard", "Filmic", "Neutral"};
+            ImGui::Combo("Tone Mapping", &m_Context.settings.postProcess.toneMappingModeIndex, toneMappingItems, IM_ARRAYSIZE(toneMappingItems));
             const char *aaItems[] = {"None", "FXAA Basic", "FXAA Quality", "SMAA Lite"};
             ImGui::Combo("Anti-Aliasing", &m_Context.settings.postProcess.antiAliasingModeIndex, aaItems, IM_ARRAYSIZE(aaItems));
             ImGui::BeginDisabled(m_Context.settings.postProcess.antiAliasingModeIndex == 0);
@@ -119,7 +120,7 @@ namespace Physara::Editor
         if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::Checkbox("Show Skybox", &m_Context.settings.environment.skyboxEnabled);
-            ImGui::SliderFloat("Environment EV", &m_Context.settings.environment.skyboxExposureCompensation, -16.f, 16.f, "%.2f");
+            ImGui::SliderFloat("Environment Intensity", &m_Context.settings.environment.skyboxIntensity, 0.f, 4.f, "%.2f");
 
             const std::vector<std::filesystem::path> maps =
                 RendererSettingsPanelDetail::CollectEnvironmentMaps(m_Context.assetsRootPath);

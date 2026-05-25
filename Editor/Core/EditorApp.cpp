@@ -127,6 +127,29 @@ namespace Physara::Editor
             maxBounds.z = std::max(maxBounds.z, point.z);
         }
 
+        float EnvironmentIntensityToEV(float intensity, float cameraEV100)
+        {
+            constexpr float blackEV = -32.f;
+            constexpr float nativeIntensity = 1.f;
+            constexpr float maxEditorIntensity = 4.f;
+            constexpr float maxBoostEV = 8.f;
+            constexpr float boostCurve = 1.45f;
+            constexpr float exposureCalibration = 1.2f;
+            const float neutralEV = std::max(cameraEV100, 0.f) + std::log2(exposureCalibration);
+
+            if (!std::isfinite(intensity) || intensity <= 0.f)
+            {
+                return blackEV;
+            }
+            if (intensity < nativeIntensity)
+            {
+                return neutralEV + std::log2(std::max(intensity, std::exp2(blackEV)));
+            }
+
+            const float t = std::clamp((intensity - nativeIntensity) / (maxEditorIntensity - nativeIntensity), 0.f, 1.f);
+            return neutralEV + maxBoostEV * std::pow(t, boostCurve);
+        }
+
     }
 
     EditorApp::EditorApp() : m_HierarchyPanel(m_Context),
@@ -423,10 +446,11 @@ namespace Physara::Editor
                 ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
                 : std::filesystem::path{};
         m_Renderer->SetSkyboxEnabled(m_Context.settings.environment.skyboxEnabled);
-        m_Renderer->SetSkyboxExposureCompensation(m_Context.settings.environment.skyboxExposureCompensation);
+        m_Renderer->SetSkyboxExposureCompensation(EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
         m_Renderer->SetEnvironmentMapPath(environmentPath);
         Engine::PostProcessSettings postProcessSettings{};
-        postProcessSettings.toneMappingEnabled = m_Context.settings.postProcess.toneMappingEnabled;
+        postProcessSettings.toneMappingMode = static_cast<Engine::ToneMappingMode>(
+            std::clamp(m_Context.settings.postProcess.toneMappingModeIndex, 0, 4));
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
         postProcessSettings.antiAliasingMode = static_cast<Engine::AntiAliasingMode>(
             std::clamp(m_Context.settings.postProcess.antiAliasingModeIndex, 0, 3));

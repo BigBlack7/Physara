@@ -70,13 +70,13 @@ namespace Physara::Editor
     struct EnvironmentSettings
     {
         std::filesystem::path skyboxPath{};
-        float skyboxExposureCompensation{12.f};
+        float skyboxIntensity{1.f};
         bool skyboxEnabled{true};
     };
 
     struct PostProcessSettings
     {
-        bool toneMappingEnabled{true};
+        int toneMappingModeIndex{1};
         bool bloomEnabled{true};
         int antiAliasingModeIndex{2};
         int bloomModeIndex{1};

@@ -37,6 +37,15 @@ namespace Physara::Engine
         Auto = 1
     };
 
+    enum class ToneMappingMode : std::uint32_t
+    {
+        None = 0,
+        ACES = 1,
+        Reinhard = 2,
+        Filmic = 3,
+        Neutral = 4
+    };
+
     enum class AntiAliasingMode : std::uint32_t
     {
         None = 0,
@@ -54,7 +63,7 @@ namespace Physara::Engine
 
     struct PostProcessSettings
     {
-        bool toneMappingEnabled{true};
+        ToneMappingMode toneMappingMode{ToneMappingMode::ACES};
         bool bloomEnabled{true};
         AntiAliasingMode antiAliasingMode{AntiAliasingMode::FXAAQuality};
         BloomMode bloomMode{BloomMode::MipChain};

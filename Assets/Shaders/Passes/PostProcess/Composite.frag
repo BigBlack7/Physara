@@ -25,7 +25,10 @@ layout(location = 0)out vec4 outColor;
 
 vec3 LinearToSrgb(vec3 value)
 {
-    return pow(max(value, vec3(0.0)), vec3(1.0 / 2.2));
+    value = max(value, vec3(0.0));
+    vec3 low = value * 12.92;
+    vec3 high = 1.055 * pow(value, vec3(1.0 / 2.4)) - 0.055;
+    return mix(low, high, step(vec3(0.0031308), value));
 }
 
 vec3 TonemapACES(vec3 color)
@@ -36,6 +39,70 @@ vec3 TonemapACES(vec3 color)
     const float d = 0.59;
     const float e = 0.14;
     return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
+}
+
+vec3 TonemapReinhard(vec3 color)
+{
+    return color / (vec3(1.0) + color);
+}
+
+vec3 Uncharted2Curve(vec3 color)
+{
+    const float a = 0.15;
+    const float b = 0.50;
+    const float c = 0.10;
+    const float d = 0.20;
+    const float e = 0.02;
+    const float f = 0.30;
+    return ((color * (a * color + c * b) + d * e) / (color * (a * color + b) + d * f)) - e / f;
+}
+
+vec3 TonemapFilmic(vec3 color)
+{
+    const float whitePoint = 11.2;
+    return clamp(Uncharted2Curve(color * 2.0) / Uncharted2Curve(vec3(whitePoint)), 0.0, 1.0);
+}
+
+vec3 TonemapNeutral(vec3 color)
+{
+    const float startCompression = 0.76;
+    const float desaturation = 0.15;
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color = max(color - offset, vec3(0.0));
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression)
+    {
+        return color;
+    }
+
+    float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / max(peak + d - startCompression, PHYSARA_EPSILON);
+    color *= newPeak / max(peak, PHYSARA_EPSILON);
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, vec3(newPeak), g);
+}
+
+vec3 ApplyToneMapping(vec3 color)
+{
+    uint mode = uint(uFlags.x + 0.5);
+    if (mode == 1u)
+    {
+        return TonemapACES(color);
+    }
+    if (mode == 2u)
+    {
+        return TonemapReinhard(color);
+    }
+    if (mode == 3u)
+    {
+        return TonemapFilmic(color);
+    }
+    if (mode == 4u)
+    {
+        return TonemapNeutral(color);
+    }
+    return clamp(color, 0.0, 1.0);
 }
 
 vec3 SanitizeHDR(vec3 value)
@@ -110,7 +177,7 @@ vec3 ResolveMappedColor(vec2 uv)
         hdrColor += bloom * uBloomParams.z;
     }
     vec3 exposed = hdrColor * ResolveExposure();
-    return uFlags.x > 0.5 ? TonemapACES(exposed) : clamp(exposed, 0.0, 1.0);
+    return ApplyToneMapping(exposed);
 }
 
 float MappedLuma(vec2 uv)

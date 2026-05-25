@@ -62,7 +62,7 @@ namespace Physara::Engine
                 std::max(settings.bloomIntensity, 0.f),
                 std::max(settings.bloomRadius, 1.f));
             data.flags = glm::vec4(
-                settings.toneMappingEnabled ? 1.f : 0.f,
+                static_cast<float>(settings.toneMappingMode),
                 settings.bloomEnabled ? 1.f : 0.f,
                 static_cast<float>(settings.antiAliasingMode),
                 static_cast<float>(settings.debugView));

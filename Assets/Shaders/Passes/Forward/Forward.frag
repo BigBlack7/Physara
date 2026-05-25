@@ -50,7 +50,10 @@ layout(location = 0)out vec4 outColor;
 
 vec3 SrgbToLinear(vec3 value)
 {
-    return pow(max(value, vec3(0.0)), vec3(2.2));
+    value = clamp(value, vec3(0.0), vec3(1.0));
+    vec3 low = value / 12.92;
+    vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
+    return mix(low, high, step(vec3(0.04045), value));
 }
 
 vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldTangent, vec2 texCoord)

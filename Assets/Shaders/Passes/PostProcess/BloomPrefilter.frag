@@ -29,7 +29,23 @@ vec3 SanitizeHDR(vec3 value)
 
 float ResolveExposure()
 {
-    return ExposureFromEV100(uViewportSizeEV100.z - uExposureParams.y);
+    float ev100 = uViewportSizeEV100.z;
+    if (uExposureParams.x > 0.5)
+    {
+        const vec2 samples[16] =
+        vec2[16](vec2(0.125, 0.125), vec2(0.375, 0.125), vec2(0.625, 0.125), vec2(0.875, 0.125),
+        vec2(0.125, 0.375), vec2(0.375, 0.375), vec2(0.625, 0.375), vec2(0.875, 0.375),
+        vec2(0.125, 0.625), vec2(0.375, 0.625), vec2(0.625, 0.625), vec2(0.875, 0.625),
+        vec2(0.125, 0.875), vec2(0.375, 0.875), vec2(0.625, 0.875), vec2(0.875, 0.875));
+        float luminanceSum = 0.0;
+        for (int i = 0; i < 16; ++i)
+        {
+            luminanceSum += max(Luminance(SanitizeHDR(texture(uSceneColor, samples[i]).rgb)), PHYSARA_EPSILON);
+        }
+        float averageLuminance = luminanceSum / 16.0;
+        ev100 = log2(max(averageLuminance / (0.18 * 1.2), PHYSARA_EPSILON));
+    }
+    return ExposureFromEV100(ev100 - uExposureParams.y);
 }
 
 float SoftThreshold(vec3 color)
