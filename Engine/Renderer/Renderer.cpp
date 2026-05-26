@@ -93,8 +93,10 @@ namespace Physara::Engine
         m_ShadowPass.Reset();
         m_IBLResources.Reset();
         m_MeshGPUCache.Reset();
+        m_SceneDepthMSAA.reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
+        m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
         m_ShaderLibrary.SetDevice(nullptr);
         m_PipelineStateCache.SetDevice(nullptr);
@@ -207,6 +209,18 @@ namespace Physara::Engine
         m_ShadowPass.SetSettings(settings);
     }
 
+    void Renderer::SetMSAASamples(std::uint32_t samples)
+    {
+        const std::uint32_t sanitized = samples >= 8u ? 8u : (samples >= 4u ? 4u : (samples >= 2u ? 2u : 1u));
+        if (m_MSAASamples == sanitized)
+        {
+            return;
+        }
+
+        m_MSAASamples = sanitized;
+        RecreateRenderTarget();
+    }
+
     bool Renderer::HasValidRenderTarget() const
     {
         return m_SceneHDRColor != nullptr && m_SceneColor != nullptr && m_Framebuffer != nullptr &&
@@ -240,14 +254,31 @@ namespace Physara::Engine
         m_RenderGraph.ReleasePooledResources();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
+        m_SceneDepthMSAA.reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
+        m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
 
         if (m_Device == nullptr || m_ViewportWidth == 0 || m_ViewportHeight == 0)
         {
             return;
         }
+
+        if (!m_RenderPassDesc.colorAttachments.empty())
+        {
+            m_RenderPassDesc.colorAttachments[0].samples = m_MSAASamples;
+        }
+        if (m_RenderPassDesc.hasDepth)
+        {
+            m_RenderPassDesc.depthAttachment.samples = m_MSAASamples;
+        }
+        m_SkyboxRenderPassDesc = m_RenderPassDesc;
+        if (!m_SkyboxRenderPassDesc.colorAttachments.empty())
+        {
+            m_SkyboxRenderPassDesc.colorAttachments[0].loadOp = RHI::LoadOp::Load;
+        }
+        m_SkyboxRenderPassDesc.depthAttachment.loadOp = RHI::LoadOp::Load;
 
         RHI::RHITextureDesc sceneHDRDesc{};
         sceneHDRDesc.width = m_ViewportWidth;
@@ -295,9 +326,38 @@ namespace Physara::Engine
             return;
         }
 
+        RHI::RHITexture *frameColor = m_SceneHDRColor.get();
+        RHI::RHITexture *frameDepth = m_SceneDepth.get();
+        if (m_MSAASamples > 1u)
+        {
+            RHI::RHITextureDesc sceneHDRMSAADesc = sceneHDRDesc;
+            sceneHDRMSAADesc.samples = m_MSAASamples;
+            sceneHDRMSAADesc.usage = RHI::TextureUsage::RenderTarget;
+            m_SceneHDRColorMSAA = m_Device->CreateTexture(sceneHDRMSAADesc);
+
+            RHI::RHITextureDesc sceneDepthMSAADesc = sceneDepthDesc;
+            sceneDepthMSAADesc.samples = m_MSAASamples;
+            sceneDepthMSAADesc.usage = RHI::TextureUsage::DepthStencil;
+            m_SceneDepthMSAA = m_Device->CreateTexture(sceneDepthMSAADesc);
+
+            if (m_SceneHDRColorMSAA == nullptr || m_SceneDepthMSAA == nullptr)
+            {
+                PHYSARA_CORE_ERROR("Renderer failed to create MSAA render targets.");
+                m_SceneHDRColorMSAA.reset();
+                m_SceneDepthMSAA.reset();
+                m_SceneHDRColor.reset();
+                m_SceneColor.reset();
+                m_SceneDepth.reset();
+                return;
+            }
+
+            frameColor = m_SceneHDRColorMSAA.get();
+            frameDepth = m_SceneDepthMSAA.get();
+        }
+
         RHI::RHIFramebufferDesc framebufferDesc{};
-        framebufferDesc.colorAttachments.push_back(m_SceneHDRColor.get());
-        framebufferDesc.depthAttachment = m_SceneDepth.get();
+        framebufferDesc.colorAttachments.push_back(frameColor);
+        framebufferDesc.depthAttachment = frameDepth;
         framebufferDesc.width = m_ViewportWidth;
         framebufferDesc.height = m_ViewportHeight;
         framebufferDesc.renderPassDesc = &m_RenderPassDesc;
@@ -340,6 +400,9 @@ namespace Physara::Engine
         RenderGraphResourceHandle sceneHDR = m_RenderGraph.ImportTexture("SceneHDR", *m_SceneHDRColor);
         RenderGraphResourceHandle sceneDepth = m_RenderGraph.ImportTexture("SceneDepth", *m_SceneDepth);
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
+        const bool msaaEnabled = m_MSAASamples > 1u && m_SceneHDRColorMSAA != nullptr && m_SceneDepthMSAA != nullptr;
+        RenderGraphResourceHandle renderHDR = msaaEnabled ? m_RenderGraph.ImportTexture("SceneHDRMSAA", *m_SceneHDRColorMSAA) : sceneHDR;
+        RenderGraphResourceHandle renderDepth = msaaEnabled ? m_RenderGraph.ImportTexture("SceneDepthMSAA", *m_SceneDepthMSAA) : sceneDepth;
         m_RenderGraph.MarkOutput(sceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
         if (!m_EnvironmentMapPath.empty())
@@ -369,9 +432,36 @@ namespace Physara::Engine
                             });
         }
 
+        if (drawSkybox)
+        {
+            m_RenderGraph.AddPass("Skybox")
+                .Write(renderHDR)
+                .Write(renderDepth)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                SkyboxPassContext passContext{};
+                                passContext.device = m_Device;
+                                passContext.commandList = &context.commandList;
+                                passContext.framebuffer = m_Framebuffer.get();
+                                passContext.renderPassDesc = &m_RenderPassDesc;
+                                passContext.shaderLibrary = &m_ShaderLibrary;
+                                passContext.pipelineCache = &m_PipelineStateCache;
+                                passContext.frameData = &m_FrameData;
+                                passContext.stats = &m_FrameData.stats;
+                                passContext.environmentPath = m_EnvironmentMapPath;
+                                passContext.exposureCompensation = m_SkyboxExposureCompensation;
+                                passContext.enabled = true;
+                                const auto passStart = std::chrono::steady_clock::now();
+                                m_SkyboxPass.Execute(passContext);
+                                m_FrameData.stats.skyboxCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                            });
+        }
+
         m_RenderGraph.AddPass("ForwardOpaque")
-            .Write(sceneHDR)
-            .Write(sceneDepth)
+            .Read(renderHDR)
+            .Read(renderDepth)
+            .Write(renderHDR)
+            .Write(renderDepth)
             .SetExecute([this](RenderGraphContext &context)
                         {
                             if (m_ShadowPass.GetShadowMap() != nullptr && m_FrameData.shadow.params.x > 0.5f)
@@ -390,7 +480,7 @@ namespace Physara::Engine
                             passContext.device = m_Device;
                             passContext.commandList = &context.commandList;
                             passContext.framebuffer = m_Framebuffer.get();
-                            passContext.renderPassDesc = &m_RenderPassDesc;
+                            passContext.renderPassDesc = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() ? &m_SkyboxRenderPassDesc : &m_RenderPassDesc;
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
@@ -408,39 +498,28 @@ namespace Physara::Engine
                             m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
                         });
 
-        if (drawSkybox)
-        {
-            m_RenderGraph.AddPass("Skybox")
-                .Read(sceneHDR)
-                .Write(sceneHDR)
-                .SetExecute([this](RenderGraphContext &context)
-                            {
-                                SkyboxPassContext passContext{};
-                                passContext.device = m_Device;
-                                passContext.commandList = &context.commandList;
-                                passContext.framebuffer = m_Framebuffer.get();
-                                passContext.renderPassDesc = &m_SkyboxRenderPassDesc;
-                                passContext.shaderLibrary = &m_ShaderLibrary;
-                                passContext.pipelineCache = &m_PipelineStateCache;
-                                passContext.frameData = &m_FrameData;
-                                passContext.stats = &m_FrameData.stats;
-                                passContext.environmentPath = m_EnvironmentMapPath;
-                                passContext.exposureCompensation = m_SkyboxExposureCompensation;
-                                passContext.enabled = true;
-                                const auto passStart = std::chrono::steady_clock::now();
-                                m_SkyboxPass.Execute(passContext);
-                                m_FrameData.stats.skyboxCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
-                            });
-        }
-
         if (!m_RenderProxy.GetBuckets().transparent.empty())
         {
             m_RenderGraph.AddPass("ForwardTransparent")
-                .Read(sceneHDR)
-                .Write(sceneHDR)
+                .Read(renderHDR)
+                .Write(renderHDR)
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 ExecuteTransparentForwardPass(context);
+                            });
+        }
+
+        if (msaaEnabled)
+        {
+            m_RenderGraph.AddPass("MSAAResolve")
+                .Read(renderHDR)
+                .Read(renderDepth)
+                .Write(sceneHDR)
+                .Write(sceneDepth)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                context.commandList.ResolveTexture(m_SceneHDRColorMSAA.get(), m_SceneHDRColor.get());
+                                context.commandList.ResolveTexture(m_SceneDepthMSAA.get(), m_SceneDepth.get());
                             });
         }
 

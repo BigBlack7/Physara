@@ -51,11 +51,23 @@ namespace Physara::RHI
             }
 
             auto *glTex = static_cast<OpenGLTexture *>(tex);
-            glNamedFramebufferTexture(
-                m_ID,
-                static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i),
-                glTex->GetGLID(),
-                static_cast<GLint>(m_Desc.mipLevel));
+            if (m_Desc.bindArrayLayer)
+            {
+                glNamedFramebufferTextureLayer(
+                    m_ID,
+                    static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i),
+                    glTex->GetGLID(),
+                    static_cast<GLint>(m_Desc.mipLevel),
+                    static_cast<GLint>(m_Desc.arrayLayer));
+            }
+            else
+            {
+                glNamedFramebufferTexture(
+                    m_ID,
+                    static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i),
+                    glTex->GetGLID(),
+                    static_cast<GLint>(m_Desc.mipLevel));
+            }
         }
 
         // 绑定深度/模板附件. Depth24Stencil8必须使用GL_DEPTH_STENCIL_ATTACHMENT
@@ -66,11 +78,23 @@ namespace Physara::RHI
                 glDepth->GetFormat() == TextureFormat::Depth24Stencil8
                     ? GL_DEPTH_STENCIL_ATTACHMENT
                     : GL_DEPTH_ATTACHMENT;
-            glNamedFramebufferTexture(
-                m_ID,
-                attachmentPoint,
-                glDepth->GetGLID(),
-                static_cast<GLint>(m_Desc.mipLevel));
+            if (m_Desc.bindArrayLayer)
+            {
+                glNamedFramebufferTextureLayer(
+                    m_ID,
+                    attachmentPoint,
+                    glDepth->GetGLID(),
+                    static_cast<GLint>(m_Desc.mipLevel),
+                    static_cast<GLint>(m_Desc.arrayLayer));
+            }
+            else
+            {
+                glNamedFramebufferTexture(
+                    m_ID,
+                    attachmentPoint,
+                    glDepth->GetGLID(),
+                    static_cast<GLint>(m_Desc.mipLevel));
+            }
         }
 
         // 指定fragment shader输出写入哪些color attachment. 纯深度FBO则设置0个draw buffer

@@ -62,6 +62,7 @@ namespace Physara::Engine
         void RepackObjectsForSortedBuckets(FrameData &frameData);
         [[nodiscard]] static std::uint64_t BuildSortKey(const RenderMeshSubmission &submission);
         [[nodiscard]] static ObjectData BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket);
+        [[nodiscard]] static RenderBucket GetBucket(const RenderMeshSubmission &submission);
 
     private:
         RenderDrawBuckets m_Buckets{};

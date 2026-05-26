@@ -145,12 +145,13 @@ namespace Physara::Engine
         context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, m_CameraBuffer.get());
         context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, m_SettingsBuffer.get());
         context.commandList->SetTexture(SkyboxPassDetail::SkyboxTextureBinding, m_SkyboxTexture.get(), m_Sampler.get());
-        context.commandList->Draw(36u, 1u, 0u, 0u);
+        constexpr std::uint32_t skySphereVertexCount = 64u * 32u * 6u;
+        context.commandList->Draw(skySphereVertexCount, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
             ++context.stats->drawCalls;
             ++context.stats->instances;
-            context.stats->triangles += 12u;
+            context.stats->triangles += skySphereVertexCount / 3u;
         }
         context.commandList->EndRenderPass();
     }
@@ -280,9 +281,9 @@ namespace Physara::Engine
         pipelineDesc.fragmentShader = variant->fragmentShader.get();
         pipelineDesc.renderPassDesc = context.renderPassDesc;
         pipelineDesc.rasterizerState.cullMode = RHI::CullMode::None;
-        pipelineDesc.depthStencilState.depthTest = true;
+        pipelineDesc.depthStencilState.depthTest = false;
         pipelineDesc.depthStencilState.depthWrite = false;
-        pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::LessEqual;
+        pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::Always;
         pipelineDesc.blendStates.push_back({});
         return context.pipelineCache->GetOrCreate(pipelineDesc);
     }

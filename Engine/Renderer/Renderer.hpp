@@ -62,6 +62,7 @@ namespace Physara::Engine
         void SetSkyboxExposureCompensation(float ev) { m_SkyboxExposureCompensation = ev; }
         void SetPostProcessSettings(const PostProcessSettings &settings) { m_PostProcessSettings = settings; }
         void SetShadowSettings(const ShadowSettings &settings);
+        void SetMSAASamples(std::uint32_t samples);
         [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
 
         [[nodiscard]] RHI::RHITexture *GetSceneColorTexture() const { return m_SceneColor.get(); }
@@ -84,8 +85,10 @@ namespace Physara::Engine
         RHI::RHIRenderPassDesc m_SkyboxRenderPassDesc{};
         RHI::RHIRenderPassDesc m_FinalRenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_SceneHDRColor{};
+        std::unique_ptr<RHI::RHITexture> m_SceneHDRColorMSAA{};
         std::unique_ptr<RHI::RHITexture> m_SceneColor{};
         std::unique_ptr<RHI::RHITexture> m_SceneDepth{};
+        std::unique_ptr<RHI::RHITexture> m_SceneDepthMSAA{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
         std::unique_ptr<RHI::RHIFramebuffer> m_FinalFramebuffer{};
         RenderGraph m_RenderGraph{};
@@ -109,5 +112,6 @@ namespace Physara::Engine
         std::uint64_t m_FrameIndex{0};
         std::uint32_t m_ViewportWidth{0};
         std::uint32_t m_ViewportHeight{0};
+        std::uint32_t m_MSAASamples{1};
     };
 }

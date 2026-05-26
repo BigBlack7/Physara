@@ -69,6 +69,19 @@ namespace Physara::Engine
         PipelineStateCacheDetail::HashCombine(seed, std::hash<const void *>{}(desc.fragmentShader));
         PipelineStateCacheDetail::HashCombine(seed, std::hash<const void *>{}(desc.computeShader));
         PipelineStateCacheDetail::HashCombine(seed, std::hash<const void *>{}(desc.renderPassDesc));
+        if (desc.renderPassDesc != nullptr)
+        {
+            PipelineStateCacheDetail::HashCombine(seed, std::hash<bool>{}(desc.renderPassDesc->hasDepth));
+            if (desc.renderPassDesc->hasDepth)
+            {
+                PipelineStateCacheDetail::HashCombine(seed, std::hash<std::uint32_t>{}(desc.renderPassDesc->depthAttachment.samples));
+            }
+            for (const RHI::RHIAttachmentDesc &attachment : desc.renderPassDesc->colorAttachments)
+            {
+                PipelineStateCacheDetail::HashCombine(seed, std::hash<std::uint32_t>{}(attachment.samples));
+                PipelineStateCacheDetail::HashCombine(seed, std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(attachment.format)));
+            }
+        }
         PipelineStateCacheDetail::HashCombine(seed, std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(desc.topology)));
 
         PipelineStateCacheDetail::HashCombine(seed, std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(desc.rasterizerState.cullMode)));

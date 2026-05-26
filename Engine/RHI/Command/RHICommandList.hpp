@@ -40,6 +40,12 @@ namespace Physara::RHI
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
         virtual void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) = 0;
         virtual void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
+        virtual void SetStorageTexture(
+            std::uint32_t slot,
+            RHITexture *texture,
+            std::uint32_t mipLevel = 0,
+            std::uint32_t arrayLayer = 0,
+            StorageTextureAccess access = StorageTextureAccess::ReadWrite) = 0;
 
         virtual void SetViewport(
             float x,
@@ -145,6 +151,7 @@ namespace Physara::RHI
 
         // 工具
         virtual void CopyTextureToTexture(RHITexture *src, RHITexture *dst) = 0;
+        virtual void ResolveTexture(RHITexture *src, RHITexture *dst) = 0;
         virtual void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) = 0;
         virtual void GenerateMipmaps(RHITexture *texture) = 0;
         virtual std::vector<std::uint8_t> ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc) = 0;

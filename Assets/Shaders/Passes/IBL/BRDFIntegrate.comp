@@ -1,0 +1,80 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1)in;
+layout(rg16f, binding = 0)writeonly uniform image2D uBRDFLut;
+
+const float PI = 3.14159265358979323846;
+
+float RadicalInverseVdC(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 Hammersley(uint i, uint count)
+{
+    return vec2(float(i) / float(count), RadicalInverseVdC(i));
+}
+
+vec3 ImportanceSampleGGX(vec2 xi, float roughness)
+{
+    float a = max(roughness * roughness, 0.001);
+    float phi = 2.0 * PI * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / max(1.0 + (a * a - 1.0) * xi.y, 0.001));
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    return vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+}
+
+float GeometrySchlickGGX(float NoV, float roughness)
+{
+    float k = (roughness * roughness) * 0.5;
+    return NoV / max(NoV * (1.0 - k) + k, 0.001);
+}
+
+float GeometrySmith(float NoV, float NoL, float roughness)
+{
+    return GeometrySchlickGGX(NoV, roughness) * GeometrySchlickGGX(NoL, roughness);
+}
+
+vec2 IntegrateBRDF(float NoV, float perceptualRoughness)
+{
+    vec3 view = vec3(sqrt(max(1.0 - NoV * NoV, 0.0)), 0.0, NoV);
+    float a = 0.0;
+    float b = 0.0;
+    const uint sampleCount = 256u;
+    for (uint i = 0u; i < sampleCount; ++i)
+    {
+        vec3 h = ImportanceSampleGGX(Hammersley(i, sampleCount), perceptualRoughness);
+        vec3 l = normalize(2.0 * dot(view, h) * h - view);
+        float NoL = max(l.z, 0.0);
+        float NoH = max(h.z, 0.0);
+        float VoH = max(dot(view, h), 0.0);
+        if (NoL > 0.0)
+        {
+            float roughness = perceptualRoughness * perceptualRoughness;
+            float g = GeometrySmith(NoV, NoL, roughness);
+            float gVis = (g * VoH) / max(NoH * NoV, 0.001);
+            float fc = pow(1.0 - VoH, 5.0);
+            a += fc * gVis;
+            b += gVis;
+        }
+    }
+    return vec2(a, b) / float(sampleCount);
+}
+
+void main()
+{
+    ivec2 size = imageSize(uBRDFLut);
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y)
+    {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(size);
+    imageStore(uBRDFLut, pixel, vec4(IntegrateBRDF(uv.x, uv.y), 0.0, 1.0));
+}

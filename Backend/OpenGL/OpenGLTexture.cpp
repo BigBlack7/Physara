@@ -12,11 +12,16 @@ namespace Physara::RHI
         assert(m_Desc.width > 0);
         assert(m_Desc.height > 0);
         assert(m_Desc.mipLevels > 0);
-        assert(m_Desc.samples == 1 && "MSAA textures are not supported yet."); // MSAA纹理暂不支持
 
         // RHI texture dimension -> OpenGL texture target. Cube map在 OpenGL下仍然是2D storage,
         // 但上传单面时使用3D-like subimage(layer = face index)的DSA接口
-        if (m_Desc.dimension == TextureDimension::Tex2D)
+        if (m_Desc.samples > 1)
+        {
+            assert(m_Desc.dimension == TextureDimension::Tex2D && "Only Tex2D MSAA textures are supported.");
+            assert(m_Desc.mipLevels == 1 && "MSAA textures cannot have mipmaps.");
+            m_Target = GL_TEXTURE_2D_MULTISAMPLE;
+        }
+        else if (m_Desc.dimension == TextureDimension::Tex2D)
         {
             m_Target = GL_TEXTURE_2D;
         }
@@ -40,7 +45,17 @@ namespace Physara::RHI
         glCreateTextures(m_Target, 1, &m_ID);
         const auto fmt = ToGLTextureFormat(m_Desc.format);
 
-        if (m_Target == GL_TEXTURE_2D || m_Target == GL_TEXTURE_CUBE_MAP)
+        if (m_Target == GL_TEXTURE_2D_MULTISAMPLE)
+        {
+            glTextureStorage2DMultisample(
+                m_ID,
+                static_cast<GLsizei>(m_Desc.samples),
+                fmt.internalFormat,
+                static_cast<GLsizei>(m_Desc.width),
+                static_cast<GLsizei>(m_Desc.height),
+                GL_TRUE);
+        }
+        else if (m_Target == GL_TEXTURE_2D || m_Target == GL_TEXTURE_CUBE_MAP)
         {
             // 不可变存储: 一次声明所有mip级别, 内存布局固定, 驱动优化更好
             glTextureStorage2D(
@@ -61,12 +76,15 @@ namespace Physara::RHI
                 static_cast<GLsizei>(m_Desc.arrayLayers));
         }
 
-        glTextureParameteri(m_ID, GL_TEXTURE_MIN_FILTER, m_Desc.mipLevels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
-        glTextureParameteri(m_ID, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTextureParameteri(m_ID, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(m_ID, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(m_ID, GL_TEXTURE_BASE_LEVEL, 0);
-        glTextureParameteri(m_ID, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(m_Desc.mipLevels - 1));
+        if (m_Target != GL_TEXTURE_2D_MULTISAMPLE)
+        {
+            glTextureParameteri(m_ID, GL_TEXTURE_MIN_FILTER, m_Desc.mipLevels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            glTextureParameteri(m_ID, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTextureParameteri(m_ID, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTextureParameteri(m_ID, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTextureParameteri(m_ID, GL_TEXTURE_BASE_LEVEL, 0);
+            glTextureParameteri(m_ID, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(m_Desc.mipLevels - 1));
+        }
         if (m_Desc.format == TextureFormat::Depth24Stencil8)
         {
             glTextureParameteri(m_ID, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
@@ -110,6 +128,11 @@ namespace Physara::RHI
         return m_Desc.arrayLayers;
     }
 
+    std::uint32_t OpenGLTexture::GetSamples() const
+    {
+        return m_Desc.samples;
+    }
+
     RHI::TextureFormat OpenGLTexture::GetFormat() const
     {
         return m_Desc.format;
@@ -131,6 +154,7 @@ namespace Physara::RHI
         // BC6H/BC7走glCompressedTextureSubImage*, 普通格式走glTextureSubImage*
         assert(data != nullptr);
         assert(mip < m_Desc.mipLevels);
+        assert(m_Target != GL_TEXTURE_2D_MULTISAMPLE && "MSAA textures cannot be uploaded directly.");
 
         const auto fmt = ToGLTextureFormat(m_Desc.format);
         const bool compressed = IsCompressedTextureFormat(m_Desc.format);

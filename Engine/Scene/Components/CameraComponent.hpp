@@ -114,6 +114,7 @@ namespace Physara::Engine
             nearClipMeters = std::max(nearClipMeters, 0.001f);
             farClipMeters = std::max(farClipMeters, nearClipMeters + 0.001f);
             orthographicHeightMeters = std::max(orthographicHeightMeters, 0.001f);
+            exposureMode = CameraExposureMode::Manual;
         }
 
         // 真实相机焦距到视野角-计算垂直视野角(弧度)

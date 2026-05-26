@@ -622,13 +622,13 @@ namespace Physara::Engine
         if (m_ShadowSampler == nullptr)
         {
             RHI::RHISamplerDesc desc{};
-            desc.minFilter = RHI::FilterMode::Linear;
-            desc.magFilter = RHI::FilterMode::Linear;
+            desc.minFilter = RHI::FilterMode::Nearest;
+            desc.magFilter = RHI::FilterMode::Nearest;
             desc.mipFilter = RHI::FilterMode::Nearest;
             desc.wrapU = RHI::WrapMode::ClampToEdge;
             desc.wrapV = RHI::WrapMode::ClampToEdge;
             desc.wrapW = RHI::WrapMode::ClampToEdge;
-            desc.compareOp = RHI::CompareOp::LessEqual;
+            desc.compareOp = RHI::CompareOp::None;
             desc.anisotropy = 1.f;
             m_ShadowSampler = context.device->CreateSampler(desc);
         }

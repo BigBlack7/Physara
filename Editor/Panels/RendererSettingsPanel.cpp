@@ -74,13 +74,19 @@ namespace Physara::Editor
             ImGui::Combo("Debug View", &m_Context.settings.postProcess.debugViewIndex, debugItems, IM_ARRAYSIZE(debugItems));
             const char *toneMappingItems[] = {"None", "ACES", "Reinhard", "Filmic", "Neutral"};
             ImGui::Combo("Tone Mapping", &m_Context.settings.postProcess.toneMappingModeIndex, toneMappingItems, IM_ARRAYSIZE(toneMappingItems));
-            const char *aaItems[] = {"None", "FXAA Basic", "FXAA Quality", "SMAA Lite"};
+            const char *aaItems[] = {"None", "MSAA", "FXAA Basic", "FXAA Quality", "SMAA Lite"};
             ImGui::Combo("Anti-Aliasing", &m_Context.settings.postProcess.antiAliasingModeIndex, aaItems, IM_ARRAYSIZE(aaItems));
-            ImGui::BeginDisabled(m_Context.settings.postProcess.antiAliasingModeIndex == 0);
+            if (m_Context.settings.postProcess.antiAliasingModeIndex == 1)
+            {
+                const char *msaaItems[] = {"2x", "4x", "8x"};
+                ImGui::Combo("MSAA Samples", &m_Context.settings.postProcess.msaaSamplesIndex, msaaItems, IM_ARRAYSIZE(msaaItems));
+            }
+            const bool postAA = m_Context.settings.postProcess.antiAliasingModeIndex >= 2;
+            ImGui::BeginDisabled(!postAA);
             ImGui::SliderFloat("AA Subpixel", &m_Context.settings.postProcess.aaSubpixel, 0.f, 1.f, "%.2f");
             ImGui::SliderFloat("AA Edge", &m_Context.settings.postProcess.aaEdgeThreshold, 0.0312f, 0.333f, "%.4f");
             ImGui::SliderFloat("AA Edge Min", &m_Context.settings.postProcess.aaEdgeThresholdMin, 0.001f, 0.0833f, "%.4f");
-            if (m_Context.settings.postProcess.antiAliasingModeIndex == 3)
+            if (m_Context.settings.postProcess.antiAliasingModeIndex == 4)
             {
                 ImGui::SliderFloat("Depth Sensitivity", &m_Context.settings.postProcess.aaDepthSensitivity, 0.f, 64.f, "%.1f");
             }
@@ -101,16 +107,21 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Shadow", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const char *algorithmItems[] = {"None", "Single Map PCF 3x3"};
+            const char *algorithmItems[] = {"None", "Hard", "PCF 3x3", "PCF 5x5", "Poisson 16", "PCSS"};
             ImGui::Combo("Algorithm", &m_Context.settings.shadow.algorithmIndex, algorithmItems, IM_ARRAYSIZE(algorithmItems));
 
             const bool shadowEnabled = m_Context.settings.shadow.algorithmIndex != 0;
             ImGui::BeginDisabled(!shadowEnabled);
-            const char *resolutionItems[] = {"1024", "2048", "4096"};
+            const char *resolutionItems[] = {"1024", "2048", "4096", "8192"};
             ImGui::Combo("Resolution", &m_Context.settings.shadow.resolutionIndex, resolutionItems, IM_ARRAYSIZE(resolutionItems));
             ImGui::SliderFloat("Depth Bias", &m_Context.settings.shadow.depthBias, 0.f, 8.f, "%.2f");
             ImGui::SliderFloat("Slope Bias", &m_Context.settings.shadow.slopeBias, 0.f, 8.f, "%.2f");
             ImGui::SliderFloat("Receiver Bias", &m_Context.settings.shadow.receiverBiasScale, 0.f, 4.f, "%.2f");
+            ImGui::SliderFloat("Filter Radius", &m_Context.settings.shadow.filterRadiusTexels, 0.25f, 16.f, "%.2f px");
+            if (m_Context.settings.shadow.algorithmIndex == 5)
+            {
+                ImGui::SliderFloat("Light Size", &m_Context.settings.shadow.lightSizeTexels, 0.25f, 96.f, "%.1f px");
+            }
             ImGui::EndDisabled();
         }
     }

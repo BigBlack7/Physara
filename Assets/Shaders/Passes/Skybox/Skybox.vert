@@ -1,5 +1,5 @@
 #version 460 core
-
+#extension GL_ARB_shading_language_include : require
 #include "../../Includes/Common.glsl"
 
 layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
@@ -9,30 +9,44 @@ layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
 
 layout(location = 0)out vec3 outDirection;
 
-const vec3 kPositions[36] = vec3[36](
-    vec3(-1.0, -1.0, 1.0), vec3(1.0, -1.0, 1.0), vec3(1.0, 1.0, 1.0),
-    vec3(1.0, 1.0, 1.0), vec3(-1.0, 1.0, 1.0), vec3(-1.0, -1.0, 1.0),
+const uint kSegments = 64u;
+const uint kRings = 32u;
 
-    vec3(1.0, -1.0, -1.0), vec3(-1.0, -1.0, -1.0), vec3(-1.0, 1.0, -1.0),
-    vec3(-1.0, 1.0, -1.0), vec3(1.0, 1.0, -1.0), vec3(1.0, -1.0, -1.0),
+vec2 SphereUVFromVertexID(uint vertexID)
+{
+    uint quad = vertexID / 6u;
+    uint vertex = vertexID - quad * 6u;
+    uint x = quad % kSegments;
+    uint y = quad / kSegments;
 
-    vec3(-1.0, -1.0, -1.0), vec3(-1.0, -1.0, 1.0), vec3(-1.0, 1.0, 1.0),
-    vec3(-1.0, 1.0, 1.0), vec3(-1.0, 1.0, -1.0), vec3(-1.0, -1.0, -1.0),
+    uint localX = 0u;
+    uint localY = 0u;
+    if (vertex == 1u || vertex == 2u || vertex == 4u)
+    {
+        localX = 1u;
+    }
+    if (vertex == 2u || vertex == 3u || vertex == 4u)
+    {
+        localY = 1u;
+    }
 
-    vec3(1.0, -1.0, 1.0), vec3(1.0, -1.0, -1.0), vec3(1.0, 1.0, -1.0),
-    vec3(1.0, 1.0, -1.0), vec3(1.0, 1.0, 1.0), vec3(1.0, -1.0, 1.0),
+    return vec2(float(x + localX) / float(kSegments), float(y + localY) / float(kRings));
+}
 
-    vec3(-1.0, 1.0, 1.0), vec3(1.0, 1.0, 1.0), vec3(1.0, 1.0, -1.0),
-    vec3(1.0, 1.0, -1.0), vec3(-1.0, 1.0, -1.0), vec3(-1.0, 1.0, 1.0),
-
-    vec3(-1.0, -1.0, -1.0), vec3(1.0, -1.0, -1.0), vec3(1.0, -1.0, 1.0),
-    vec3(1.0, -1.0, 1.0), vec3(-1.0, -1.0, 1.0), vec3(-1.0, -1.0, -1.0));
+vec3 DirectionFromSphereUV(vec2 uv)
+{
+    float phi = uv.x * 2.0 * PHYSARA_PI;
+    float theta = uv.y * PHYSARA_PI;
+    float sinTheta = sin(theta);
+    return vec3(cos(phi) * sinTheta, cos(theta), sin(phi) * sinTheta);
+}
 
 void main()
 {
-    vec3 position = kPositions[gl_VertexID];
+    vec3 localDirection = DirectionFromSphereUV(SphereUVFromVertexID(uint(gl_VertexID)));
+    float radius = max(uCamera.clipPlanes.y * 0.5, 1000.0);
     mat4 viewWithoutTranslation = mat4(mat3(uCamera.view));
-    vec4 clipPosition = uCamera.projection * viewWithoutTranslation * vec4(position, 1.0);
-    outDirection = position;
+    vec4 clipPosition = uCamera.projection * viewWithoutTranslation * vec4(localDirection * radius, 1.0);
+    outDirection = normalize(localDirection);
     gl_Position = clipPosition.xyww;
 }

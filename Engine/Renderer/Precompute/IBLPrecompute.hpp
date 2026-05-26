@@ -12,9 +12,9 @@ namespace Physara::Engine
 {
     struct IBLPrecomputeSettings
     {
-        std::uint32_t cubeSize{256};
+        std::uint32_t cubeSize{512};
         std::uint32_t brdfLutSize{256};
-        std::uint32_t specularSampleCount{64};
+        std::uint32_t specularSampleCount{128};
         std::uint32_t brdfSampleCount{256};
     };
 

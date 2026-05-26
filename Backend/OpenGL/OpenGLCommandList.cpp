@@ -379,6 +379,46 @@ namespace Physara::RHI
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
     }
 
+    void OpenGLCommandList::SetStorageTexture(
+        std::uint32_t slot,
+        RHITexture *texture,
+        std::uint32_t mipLevel,
+        std::uint32_t arrayLayer,
+        StorageTextureAccess access)
+    {
+        GLuint id = 0;
+        GLenum internalFormat = GL_RGBA8;
+        GLboolean layered = GL_FALSE;
+        GLint layer = static_cast<GLint>(arrayLayer);
+        if (texture != nullptr)
+        {
+            auto *glTex = static_cast<OpenGLTexture *>(texture);
+            id = glTex->GetGLID();
+            internalFormat = ToGLTextureFormat(glTex->GetFormat()).internalFormat;
+            layered = glTex->GetDimension() == TextureDimension::TexCube ? GL_TRUE : GL_FALSE;
+            layer = glTex->GetDimension() == TextureDimension::TexCube ? 0 : layer;
+        }
+
+        GLenum glAccess = GL_READ_WRITE;
+        if (access == StorageTextureAccess::ReadOnly)
+        {
+            glAccess = GL_READ_ONLY;
+        }
+        else if (access == StorageTextureAccess::WriteOnly)
+        {
+            glAccess = GL_WRITE_ONLY;
+        }
+
+        glBindImageTexture(
+            slot,
+            id,
+            static_cast<GLint>(mipLevel),
+            layered,
+            layer,
+            glAccess,
+            internalFormat);
+    }
+
     void OpenGLCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
     {
         // Viewport和depth range是动态状态; OpenGL坐标原点在左下
@@ -721,6 +761,54 @@ namespace Physara::RHI
             1);
     }
 
+    void OpenGLCommandList::ResolveTexture(RHITexture *src, RHITexture *dst)
+    {
+        auto *glSrc = static_cast<OpenGLTexture *>(src);
+        auto *glDst = static_cast<OpenGLTexture *>(dst);
+        if (!glSrc || !glDst)
+        {
+            PHYSARA_CORE_ERROR("ResolveTexture called with null texture.");
+            return;
+        }
+
+        GLuint readFbo = 0;
+        GLuint drawFbo = 0;
+        glCreateFramebuffers(1, &readFbo);
+        glCreateFramebuffers(1, &drawFbo);
+
+        const bool depth = glSrc->GetFormat() == TextureFormat::Depth24Stencil8 || glSrc->GetFormat() == TextureFormat::Depth32F;
+        const GLenum attachment = depth
+                                      ? (glSrc->GetFormat() == TextureFormat::Depth24Stencil8 ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT)
+                                      : GL_COLOR_ATTACHMENT0;
+        glNamedFramebufferTexture(readFbo, attachment, glSrc->GetGLID(), 0);
+        glNamedFramebufferTexture(drawFbo, attachment, glDst->GetGLID(), 0);
+
+        if (!depth)
+        {
+            const GLenum colorAttachment = GL_COLOR_ATTACHMENT0;
+            glNamedFramebufferDrawBuffers(drawFbo, 1, &colorAttachment);
+            glNamedFramebufferReadBuffer(readFbo, GL_COLOR_ATTACHMENT0);
+        }
+
+        const GLbitfield mask = depth ? GL_DEPTH_BUFFER_BIT : GL_COLOR_BUFFER_BIT;
+        glBlitNamedFramebuffer(
+            readFbo,
+            drawFbo,
+            0,
+            0,
+            static_cast<GLint>(std::min(glSrc->GetWidth(), glDst->GetWidth())),
+            static_cast<GLint>(std::min(glSrc->GetHeight(), glDst->GetHeight())),
+            0,
+            0,
+            static_cast<GLint>(std::min(glSrc->GetWidth(), glDst->GetWidth())),
+            static_cast<GLint>(std::min(glSrc->GetHeight(), glDst->GetHeight())),
+            mask,
+            GL_NEAREST);
+
+        glDeleteFramebuffers(1, &readFbo);
+        glDeleteFramebuffers(1, &drawFbo);
+    }
+
     void OpenGLCommandList::CopyBufferToTexture(RHIBuffer *src, RHITexture *dst)
     {
         // 通过PBO(GL_PIXEL_UNPACK_BUFFER)上传到texture, 这里data=nullptr表示从当前PBO的offset 0读取
@@ -782,9 +870,9 @@ namespace Physara::RHI
             return {};
         }
 
-        if (desc.format != RHI::TextureFormat::RGBA8 || glTex->GetFormat() != RHI::TextureFormat::RGBA8)
+        if (desc.format != glTex->GetFormat())
         {
-            PHYSARA_CORE_WARN("ReadTextureToCPU currently supports RGBA8 readback only.");
+            PHYSARA_CORE_WARN("ReadTextureToCPU format mismatch.");
             return {};
         }
 
@@ -795,7 +883,30 @@ namespace Physara::RHI
             return {};
         }
 
-        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(readWidth) * readHeight * 4u);
+        const auto fmt = ToGLTextureFormat(desc.format);
+        std::uint32_t channelCount = 4u;
+        std::uint32_t bytesPerChannel = 1u;
+        if (desc.format == RHI::TextureFormat::RG16F)
+        {
+            channelCount = 2u;
+            bytesPerChannel = sizeof(float);
+        }
+        else if (desc.format == RHI::TextureFormat::RGBA16F)
+        {
+            channelCount = 4u;
+            bytesPerChannel = sizeof(float);
+        }
+        else if (desc.format == RHI::TextureFormat::RGBA32F)
+        {
+            channelCount = 4u;
+            bytesPerChannel = sizeof(float);
+        }
+        else if (desc.format != RHI::TextureFormat::RGBA8)
+        {
+            PHYSARA_CORE_WARN("ReadTextureToCPU unsupported format.");
+            return {};
+        }
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(readWidth) * readHeight * channelCount * bytesPerChannel);
 
         GLint previousPackAlignment = 4;
         glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
@@ -810,8 +921,8 @@ namespace Physara::RHI
             static_cast<GLsizei>(readWidth),
             static_cast<GLsizei>(readHeight),
             1,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
+            fmt.baseFormat,
+            fmt.type,
             static_cast<GLsizei>(pixels.size()),
             pixels.data());
 

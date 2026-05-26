@@ -78,7 +78,8 @@ namespace Physara::Editor
     {
         int toneMappingModeIndex{1};
         bool bloomEnabled{true};
-        int antiAliasingModeIndex{2};
+        int antiAliasingModeIndex{3};
+        int msaaSamplesIndex{1};
         int bloomModeIndex{1};
         int debugViewIndex{0};
         float bloomThreshold{1.f};
@@ -93,11 +94,13 @@ namespace Physara::Editor
 
     struct ShadowSettings
     {
-        int algorithmIndex{1};
+        int algorithmIndex{2};
         int resolutionIndex{1};
         float depthBias{2.f};
         float slopeBias{2.f};
         float receiverBiasScale{1.f};
+        float filterRadiusTexels{1.5f};
+        float lightSizeTexels{24.f};
     };
 
     struct EditorUIState

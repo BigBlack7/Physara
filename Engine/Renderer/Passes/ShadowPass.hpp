@@ -28,7 +28,11 @@ namespace Physara::Engine
     enum class ShadowAlgorithm : std::uint32_t
     {
         None = 0,
-        SingleMapPCF3x3 = 1
+        SingleMapHard = 1,
+        SingleMapPCF3x3 = 2,
+        SingleMapPCF5x5 = 3,
+        SingleMapPoisson16 = 4,
+        SingleMapPCSS = 5
     };
 
     struct ShadowSettings
@@ -38,6 +42,8 @@ namespace Physara::Engine
         float depthBias{2.f};
         float slopeBias{2.f};
         float receiverBiasScale{1.f};
+        float filterRadiusTexels{1.5f};
+        float lightSizeTexels{24.f};
     };
 
     struct ShadowPassContext
@@ -65,7 +71,10 @@ namespace Physara::Engine
 
     private:
         void EnsureResources(const ShadowPassContext &context);
-        [[nodiscard]] bool BuildShadowData(const ShadowPassContext &context, CameraData &shadowCamera, std::uint32_t &lightIndex);
+        [[nodiscard]] bool BuildShadowData(
+            const ShadowPassContext &context,
+            CameraData &shadowCamera,
+            std::uint32_t &lightIndex);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ShadowPassContext &context);
         void UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera);
         void DrawShadowCasters(const ShadowPassContext &context);

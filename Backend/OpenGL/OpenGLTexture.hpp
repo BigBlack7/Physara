@@ -19,6 +19,7 @@ namespace Physara::RHI
         std::uint32_t GetHeight() const override;
         std::uint32_t GetMipLevels() const override;
         std::uint32_t GetArrayLayers() const override;
+        std::uint32_t GetSamples() const override;
         TextureFormat GetFormat() const override;
         TextureDimension GetDimension() const override;
         TextureUsageFlags GetUsage() const override;

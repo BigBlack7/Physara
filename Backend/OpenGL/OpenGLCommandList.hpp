@@ -23,6 +23,12 @@ namespace Physara::RHI
         void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
         void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) override;
         void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
+        void SetStorageTexture(
+            std::uint32_t slot,
+            RHITexture *texture,
+            std::uint32_t mipLevel = 0,
+            std::uint32_t arrayLayer = 0,
+            StorageTextureAccess access = StorageTextureAccess::ReadWrite) override;
 
         void SetViewport(float x, float y, float width, float height, float minDepth = 0.f, float maxDepth = 1.f) override;
         void SetScissor(std::int32_t x, std::int32_t y, std::uint32_t width, std::uint32_t height) override;
@@ -60,6 +66,7 @@ namespace Physara::RHI
         void BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier) override;
 
         void CopyTextureToTexture(RHITexture *src, RHITexture *dst) override;
+        void ResolveTexture(RHITexture *src, RHITexture *dst) override;
         void CopyBufferToTexture(RHIBuffer *src, RHITexture *dst) override;
         void GenerateMipmaps(RHITexture *texture) override;
         std::vector<std::uint8_t> ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc) override;

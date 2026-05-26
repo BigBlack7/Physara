@@ -115,6 +115,13 @@ namespace Physara::RHI
         Present
     };
 
+    enum class StorageTextureAccess : std::uint8_t
+    {
+        ReadOnly,
+        WriteOnly,
+        ReadWrite
+    };
+
     namespace ResourceAccess
     {
         constexpr ResourceAccessFlags None = 0u;

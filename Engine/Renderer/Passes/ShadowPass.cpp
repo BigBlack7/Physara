@@ -1,14 +1,15 @@
 #include "ShadowPass.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
+#include <limits>
 #include <span>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -63,6 +64,105 @@ namespace Physara::Engine
             }
             return worldUp;
         }
+
+        void ExpandBounds(glm::vec3 &minBounds, glm::vec3 &maxBounds, const glm::vec3 &center, float radius)
+        {
+            const glm::vec3 extent(std::max(radius, 0.05f));
+            minBounds = glm::min(minBounds, center - extent);
+            maxBounds = glm::max(maxBounds, center + extent);
+        }
+
+        bool BuildWorldCasterBounds(const RenderDrawBuckets &buckets, glm::vec3 &minBounds, glm::vec3 &maxBounds)
+        {
+            minBounds = glm::vec3(std::numeric_limits<float>::max());
+            maxBounds = glm::vec3(-std::numeric_limits<float>::max());
+            bool hasBounds = false;
+            for (const RenderDrawItem &item : buckets.shadowCasters)
+            {
+                if (item.submission == nullptr)
+                {
+                    continue;
+                }
+
+                const RenderMeshSubmission &submission = *item.submission;
+                if (submission.hasBounds)
+                {
+                    ExpandBounds(minBounds, maxBounds, submission.boundsCenter, submission.boundsRadius);
+                }
+                else
+                {
+                    ExpandBounds(minBounds, maxBounds, glm::vec3(submission.model[3]), 1.f);
+                }
+                hasBounds = true;
+            }
+            return hasBounds;
+        }
+
+        glm::mat4 BuildSingleMapLightViewProjection(
+            const RenderDrawBuckets &buckets,
+            const glm::vec3 &lightDirection,
+            std::uint32_t resolution)
+        {
+            glm::vec3 minWorld{};
+            glm::vec3 maxWorld{};
+            if (!BuildWorldCasterBounds(buckets, minWorld, maxWorld))
+            {
+                return glm::mat4(1.f);
+            }
+
+            const glm::vec3 center = (minWorld + maxWorld) * 0.5f;
+            const float radius = std::max(glm::length(maxWorld - center), 1.f);
+            const glm::mat4 lightView = glm::lookAt(center - lightDirection * radius * 2.5f, center, PickStableUpVector(lightDirection));
+
+            glm::vec3 minLS(std::numeric_limits<float>::max());
+            glm::vec3 maxLS(-std::numeric_limits<float>::max());
+            for (float z : {minWorld.z, maxWorld.z})
+            {
+                for (float y : {minWorld.y, maxWorld.y})
+                {
+                    for (float x : {minWorld.x, maxWorld.x})
+                    {
+                        const glm::vec3 pointLS = glm::vec3(lightView * glm::vec4(x, y, z, 1.f));
+                        minLS = glm::min(minLS, pointLS);
+                        maxLS = glm::max(maxLS, pointLS);
+                    }
+                }
+            }
+
+            const float paddingXY = std::max(radius * 0.05f, 0.5f);
+            minLS.x -= paddingXY;
+            minLS.y -= paddingXY;
+            maxLS.x += paddingXY;
+            maxLS.y += paddingXY;
+
+            const float minExtent = 1.f;
+            if (maxLS.x - minLS.x < minExtent)
+            {
+                const float centerX = (minLS.x + maxLS.x) * 0.5f;
+                minLS.x = centerX - minExtent * 0.5f;
+                maxLS.x = centerX + minExtent * 0.5f;
+            }
+            if (maxLS.y - minLS.y < minExtent)
+            {
+                const float centerY = (minLS.y + maxLS.y) * 0.5f;
+                minLS.y = centerY - minExtent * 0.5f;
+                maxLS.y = centerY + minExtent * 0.5f;
+            }
+
+            const float safeResolution = static_cast<float>(std::max(resolution, 1u));
+            const float texelSizeX = (maxLS.x - minLS.x) / safeResolution;
+            const float texelSizeY = (maxLS.y - minLS.y) / safeResolution;
+            minLS.x = std::floor(minLS.x / texelSizeX) * texelSizeX;
+            maxLS.x = std::floor(maxLS.x / texelSizeX) * texelSizeX;
+            minLS.y = std::floor(minLS.y / texelSizeY) * texelSizeY;
+            maxLS.y = std::floor(maxLS.y / texelSizeY) * texelSizeY;
+
+            const float depthPadding = std::max((maxLS.z - minLS.z) * 0.5f, 10.f);
+            const float nearDistance = std::max(0.01f, -maxLS.z - depthPadding);
+            const float farDistance = std::max(nearDistance + 0.01f, -minLS.z + depthPadding);
+            const glm::mat4 lightProjection = glm::ortho(minLS.x, maxLS.x, minLS.y, maxLS.y, nearDistance, farDistance);
+            return lightProjection * lightView;
+        }
     }
 
     void ShadowPass::Execute(const ShadowPassContext &context)
@@ -104,11 +204,16 @@ namespace Physara::Engine
         DrawShadowCasters(context);
         context.commandList->EndRenderPass();
 
-        context.frameData->shadow.params.x = 1.f;
-        context.frameData->shadow.params.y = static_cast<float>(m_Settings.resolution);
-        context.frameData->shadow.params.z = static_cast<float>(lightIndex);
-        context.frameData->shadow.params.w = 1.f / static_cast<float>(m_Settings.resolution);
-        context.frameData->shadow.controls.x = std::max(m_Settings.receiverBiasScale, 0.f);
+        context.frameData->shadow.params = glm::vec4(
+            1.f,
+            static_cast<float>(m_Settings.resolution),
+            static_cast<float>(lightIndex),
+            1.f / static_cast<float>(m_Settings.resolution));
+        context.frameData->shadow.controls = glm::vec4(
+            std::max(m_Settings.receiverBiasScale, 0.f),
+            static_cast<float>(m_Settings.algorithm),
+            m_Settings.filterRadiusTexels,
+            m_Settings.lightSizeTexels);
     }
 
     void ShadowPass::Reset()
@@ -128,6 +233,8 @@ namespace Physara::Engine
         sanitized.depthBias = std::max(sanitized.depthBias, 0.f);
         sanitized.slopeBias = std::max(sanitized.slopeBias, 0.f);
         sanitized.receiverBiasScale = std::max(sanitized.receiverBiasScale, 0.f);
+        sanitized.filterRadiusTexels = std::clamp(sanitized.filterRadiusTexels, 0.25f, 32.f);
+        sanitized.lightSizeTexels = std::clamp(sanitized.lightSizeTexels, 0.25f, 128.f);
         if (m_Settings.resolution != sanitized.resolution)
         {
             Reset();
@@ -189,7 +296,10 @@ namespace Physara::Engine
         }
     }
 
-    bool ShadowPass::BuildShadowData(const ShadowPassContext &context, CameraData &shadowCamera, std::uint32_t &lightIndex)
+    bool ShadowPass::BuildShadowData(
+        const ShadowPassContext &context,
+        CameraData &shadowCamera,
+        std::uint32_t &lightIndex)
     {
         const FrameData &frameData = *context.frameData;
         const RenderDrawBuckets &buckets = context.renderProxy->GetBuckets();
@@ -213,57 +323,34 @@ namespace Physara::Engine
             return false;
         }
 
-        bool hasBounds = false;
-        glm::vec3 minBounds(0.f);
-        glm::vec3 maxBounds(0.f);
-        for (const RenderDrawItem &item : buckets.shadowCasters)
-        {
-            if (item.objectIndex >= frameData.objects.size())
-            {
-                continue;
-            }
-
-            const glm::vec4 bounds = frameData.objects[item.objectIndex].boundsCenterRadius;
-            const glm::vec3 radius(bounds.w);
-            const glm::vec3 itemMin = glm::vec3(bounds) - radius;
-            const glm::vec3 itemMax = glm::vec3(bounds) + radius;
-            if (!hasBounds)
-            {
-                minBounds = itemMin;
-                maxBounds = itemMax;
-                hasBounds = true;
-            }
-            else
-            {
-                minBounds = glm::min(minBounds, itemMin);
-                maxBounds = glm::max(maxBounds, itemMax);
-            }
-        }
-        if (!hasBounds)
-        {
-            return false;
-        }
-
         const LightData &light = frameData.lights[lightIndex];
         const glm::vec3 lightDirection = glm::normalize(glm::vec3(light.directionType));
-        const glm::vec3 center = (minBounds + maxBounds) * 0.5f;
-        const float radius = std::max(glm::length(maxBounds - minBounds) * 0.5f, 1.f);
-        const glm::vec3 lightPosition = center - lightDirection * radius * 2.f;
-        const glm::mat4 view = glm::lookAt(lightPosition, center, ShadowPassDetail::PickStableUpVector(lightDirection));
-        const glm::mat4 projection = glm::ortho(-radius, radius, -radius, radius, 0.1f, radius * 4.f);
+        const glm::mat4 lightViewProjection = ShadowPassDetail::BuildSingleMapLightViewProjection(
+            buckets,
+            lightDirection,
+            m_Settings.resolution);
 
         RenderView shadowView = RenderView::FromMatrices(
-            view,
-            projection,
-            lightPosition,
+            glm::mat4(1.f),
+            lightViewProjection,
+            frameData.view.position,
             ViewportRect{0u, 0u, m_Settings.resolution, m_Settings.resolution},
             frameData.view.ev100,
-            0.1f,
-            radius * 4.f);
+            0.01f,
+            1.f);
+        shadowView.viewProjection = lightViewProjection;
         shadowCamera = BuildCameraData(shadowView);
-        context.frameData->shadow.lightViewProjection = shadowView.viewProjection;
-        context.frameData->shadow.params = glm::vec4(1.f, static_cast<float>(m_Settings.resolution), static_cast<float>(lightIndex), 1.f / static_cast<float>(m_Settings.resolution));
-        context.frameData->shadow.controls = glm::vec4(std::max(m_Settings.receiverBiasScale, 0.f), 0.f, 0.f, 0.f);
+        context.frameData->shadow.lightViewProjection = lightViewProjection;
+        context.frameData->shadow.params = glm::vec4(
+            1.f,
+            static_cast<float>(m_Settings.resolution),
+            static_cast<float>(lightIndex),
+            1.f / static_cast<float>(m_Settings.resolution));
+        context.frameData->shadow.controls = glm::vec4(
+            std::max(m_Settings.receiverBiasScale, 0.f),
+            static_cast<float>(m_Settings.algorithm),
+            m_Settings.filterRadiusTexels,
+            m_Settings.lightSizeTexels);
         return true;
     }
 
@@ -291,7 +378,7 @@ namespace Physara::Engine
         pipelineDesc.renderPassDesc = &m_RenderPassDesc;
         pipelineDesc.vertexBindings.push_back({0u, ShadowPassDetail::VertexStride, 0u});
         pipelineDesc.vertexAttributes.push_back({0u, 0u, RHI::VertexFormat::RGB32F, static_cast<std::uint32_t>(offsetof(MeshVertex, position))});
-        pipelineDesc.rasterizerState.cullMode = RHI::CullMode::Back;
+        pipelineDesc.rasterizerState.cullMode = RHI::CullMode::Front;
         pipelineDesc.rasterizerState.depthBias = m_Settings.depthBias;
         pipelineDesc.rasterizerState.depthBiasSlope = m_Settings.slopeBias;
         pipelineDesc.depthStencilState.depthTest = true;

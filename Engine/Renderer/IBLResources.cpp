@@ -3,11 +3,74 @@
 #include <algorithm>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
+#include <Engine/RHI/Pipeline/RHIPipelineState.hpp>
+#include <Engine/RHI/Resource/RHIShader.hpp>
+#include <Engine/Resource/Loaders/ShaderLoader.hpp>
 
 namespace Physara::Engine
 {
+    namespace IBLResourcesDetail
+    {
+        std::unique_ptr<RHI::RHITexture> CreateBRDFLutWithCompute(RHI::RHIDevice *device, std::uint32_t size)
+        {
+            if (device == nullptr)
+            {
+                return {};
+            }
+
+            ShaderSource source = ShaderLoader::Load({
+                RHI::ShaderStage::Compute,
+                "Shaders/Passes/IBL/BRDFIntegrate.comp",
+                ShaderFeature::None,
+                {}});
+            std::unique_ptr<RHI::RHIShader> shader = device->CreateShader(RHI::ShaderStage::Compute, source.source);
+            if (shader == nullptr || !shader->IsValid())
+            {
+                return {};
+            }
+
+            RHI::RHIPipelineStateDesc pipelineDesc{};
+            pipelineDesc.computeShader = shader.get();
+            std::unique_ptr<RHI::RHIPipelineState> pipeline = device->CreatePipelineState(pipelineDesc);
+            if (pipeline == nullptr || !pipeline->IsValid())
+            {
+                return {};
+            }
+
+            RHI::RHITextureDesc desc{};
+            desc.width = size;
+            desc.height = size;
+            desc.format = RHI::TextureFormat::RG16F;
+            desc.dimension = RHI::TextureDimension::Tex2D;
+            desc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::Storage;
+            desc.mipLevels = 1u;
+            desc.arrayLayers = 1u;
+            std::unique_ptr<RHI::RHITexture> texture = device->CreateTexture(desc);
+            if (texture == nullptr)
+            {
+                return {};
+            }
+
+            RHI::RHICommandList *commandList = device->GetCommandList();
+            if (commandList == nullptr)
+            {
+                return {};
+            }
+
+            commandList->BeginDebugLabel("IBL BRDFIntegrate.compute");
+            commandList->SetPipelineState(pipeline.get());
+            commandList->SetStorageTexture(0u, texture.get(), 0u, 0u, RHI::StorageTextureAccess::WriteOnly);
+            commandList->Dispatch((size + 7u) / 8u, (size + 7u) / 8u, 1u);
+            commandList->TextureBarrier(texture.get(), RHI::ShaderStage::Compute, RHI::ShaderStage::Fragment);
+            commandList->EndDebugLabel();
+            PHYSARA_CORE_INFO("Generated BRDF integration LUT with GPU compute: {}x{}.", size, size);
+            return texture;
+        }
+    }
+
     void IBLResources::Reset()
     {
         m_LoadedEnvironmentPath.clear();
@@ -88,16 +151,20 @@ namespace Physara::Engine
             }
         }
 
-        RHI::RHITextureDesc brdfDesc{};
-        brdfDesc.width = result.brdfLutSize;
-        brdfDesc.height = result.brdfLutSize;
-        brdfDesc.format = RHI::TextureFormat::RG16F;
-        brdfDesc.dimension = RHI::TextureDimension::Tex2D;
-        brdfDesc.usage = RHI::TextureUsage::Sampled;
-        brdfDesc.mipLevels = 1u;
-        brdfDesc.arrayLayers = 1u;
-        brdfDesc.initialData = result.brdfLutRG32F.data();
-        m_BRDFLut = device->CreateTexture(brdfDesc);
+        m_BRDFLut = IBLResourcesDetail::CreateBRDFLutWithCompute(device, result.brdfLutSize);
+        if (m_BRDFLut == nullptr)
+        {
+            RHI::RHITextureDesc brdfDesc{};
+            brdfDesc.width = result.brdfLutSize;
+            brdfDesc.height = result.brdfLutSize;
+            brdfDesc.format = RHI::TextureFormat::RG16F;
+            brdfDesc.dimension = RHI::TextureDimension::Tex2D;
+            brdfDesc.usage = RHI::TextureUsage::Sampled;
+            brdfDesc.mipLevels = 1u;
+            brdfDesc.arrayLayers = 1u;
+            brdfDesc.initialData = result.brdfLutRG32F.data();
+            m_BRDFLut = device->CreateTexture(brdfDesc);
+        }
         if (m_BRDFLut == nullptr)
         {
             m_SpecularTexture.reset();

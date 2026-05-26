@@ -24,6 +24,7 @@ layout(location = 2)out vec4 outWorldTangent;
 layout(location = 3)out vec2 outTexCoord0;
 layout(location = 4)out vec2 outTexCoord1;
 layout(location = 5)flat out uint outMaterialIndex;
+layout(location = 6)flat out uint outObjectFlags;
 
 void main()
 {
@@ -36,6 +37,7 @@ void main()
     outTexCoord0 = inTexCoord0;
     outTexCoord1 = inTexCoord1;
     outMaterialIndex = objectData.indicesAndFlags.z;
+    outObjectFlags = objectData.indicesAndFlags.w;
     
     gl_Position = uCamera.viewProjection * worldPosition;
 }

@@ -189,19 +189,29 @@ namespace Physara::Engine
 
         for (const RenderMeshSubmission &submission : submissions)
         {
-            if (submission.hasBounds &&
-                !RenderProxyDetail::SphereIntersectsFrustum(submission.boundsCenter, submission.boundsRadius, frustumPlanes))
+            if (submission.material.castShadow && submission.material.alphaMode == AlphaMode::Opaque)
+            {
+                RenderDrawItem item{};
+                item.submission = &submission;
+                item.sortKey = BuildSortKey(submission);
+                item.meshKey = RenderProxyDetail::BuildMeshKey(submission);
+                item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(submission);
+                item.doubleSided = submission.material.doubleSided;
+                m_Buckets.shadowCasters.push_back(item);
+            }
+
+            const bool visible = !submission.hasBounds ||
+                                 RenderProxyDetail::SphereIntersectsFrustum(submission.boundsCenter, submission.boundsRadius, frustumPlanes);
+            if (!visible)
             {
                 continue;
             }
 
-            const bool transparent = submission.material.IsTransparent();
-            const bool unlit = submission.material.shadingModel == ShadingModel::Unlit;
-            const RenderBucket bucket = transparent ? RenderBucket::Transparent : (unlit ? RenderBucket::Unlit : RenderBucket::Opaque);
+            const RenderBucket bucket = GetBucket(submission);
 
             const std::uint32_t submissionOrder = static_cast<std::uint32_t>(m_VisibleSubmissions.size());
             m_VisibleSubmissions.push_back(submission);
-            const RenderMeshSubmission &visibleSubmission = m_VisibleSubmissions.back();
+            const RenderMeshSubmission &visibleSubmission = submission;
 
             RenderDrawItem item{};
             item.submission = &visibleSubmission;
@@ -213,22 +223,17 @@ namespace Physara::Engine
             item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(visibleSubmission);
             item.doubleSided = visibleSubmission.material.doubleSided;
 
-            if (transparent)
+            if (bucket == RenderBucket::Transparent)
             {
                 m_Buckets.transparent.push_back(item);
             }
-            else if (unlit)
+            else if (bucket == RenderBucket::Unlit)
             {
                 m_Buckets.unlit.push_back(item);
             }
             else
             {
                 m_Buckets.opaque.push_back(item);
-            }
-
-            if (submission.material.castShadow)
-            {
-                m_Buckets.shadowCasters.push_back(item);
             }
         }
     }
@@ -256,7 +261,7 @@ namespace Physara::Engine
     void RenderProxy::RepackObjectsForSortedBuckets(FrameData &frameData)
     {
         frameData.objects.clear();
-        frameData.objects.reserve(m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
+        frameData.objects.reserve(m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size() + m_Buckets.shadowCasters.size());
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
         objectIndexBySubmission.reserve(frameData.objects.capacity());
 
@@ -270,11 +275,7 @@ namespace Physara::Engine
                 }
 
                 const RenderMeshSubmission &submission = *item.submission;
-                ObjectData object = RenderProxy::BuildObjectData(
-                    submission,
-                    submission.material.IsTransparent()
-                        ? RenderBucket::Transparent
-                        : (submission.material.shadingModel == ShadingModel::Unlit ? RenderBucket::Unlit : RenderBucket::Opaque));
+                ObjectData object = RenderProxy::BuildObjectData(submission, RenderProxy::GetBucket(submission));
                 item.objectIndex = static_cast<std::uint32_t>(objects.size());
                 object.materialIndex = item.objectIndex;
                 objectIndexBySubmission.emplace(item.submission, item.objectIndex);
@@ -292,6 +293,14 @@ namespace Physara::Engine
             if (found != objectIndexBySubmission.end())
             {
                 item.objectIndex = found->second;
+                continue;
+            }
+
+            if (item.submission != nullptr)
+            {
+                const RenderMeshSubmission &submission = *item.submission;
+                item.objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
+                frameData.objects.push_back(RenderProxy::BuildObjectData(submission, GetBucket(submission)));
             }
         }
     }
@@ -333,5 +342,18 @@ namespace Physara::Engine
         }
         object.flags = flags;
         return object;
+    }
+
+    RenderBucket RenderProxy::GetBucket(const RenderMeshSubmission &submission)
+    {
+        if (submission.material.IsTransparent())
+        {
+            return RenderBucket::Transparent;
+        }
+        if (submission.material.shadingModel == ShadingModel::Unlit)
+        {
+            return RenderBucket::Unlit;
+        }
+        return RenderBucket::Opaque;
     }
 }

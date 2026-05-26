@@ -25,7 +25,7 @@ namespace Physara::Engine
     {
         constexpr float Pi = 3.14159265358979323846f;
         constexpr float InvPi = 0.31830988618379067154f;
-        constexpr std::uint32_t CacheVersion = 2u;
+        constexpr std::uint32_t CacheVersion = 3u;
 
         struct CacheHeader
         {
@@ -599,7 +599,7 @@ namespace Physara::Engine
             std::clamp(settings.brdfSampleCount, 16u, 2048u)};
         const IBLPrecomputeDetail::CacheHeader expectedHeader = IBLPrecomputeDetail::BuildHeader(environmentPath, clampedSettings);
         const std::filesystem::path cacheDirectory = GetCacheDirectory(environmentPath);
-        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v2.bin";
+        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v3.bin";
 
         if (std::shared_ptr<IBLPrecomputeResult> cached = IBLPrecomputeDetail::ReadCache(cachePath, expectedHeader))
         {

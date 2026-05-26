@@ -171,7 +171,7 @@ namespace Physara::Engine
         desc.usage = texture.GetUsage();
         desc.mipLevels = texture.GetMipLevels();
         desc.arrayLayers = texture.GetArrayLayers();
-        desc.samples = 1;
+        desc.samples = texture.GetSamples();
 
         const std::uint32_t index = static_cast<std::uint32_t>(m_Resources.size());
         m_Resources.emplace_back(std::move(name), desc, &texture, true);

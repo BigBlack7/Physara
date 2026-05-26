@@ -452,8 +452,10 @@ namespace Physara::Editor
         postProcessSettings.toneMappingMode = static_cast<Engine::ToneMappingMode>(
             std::clamp(m_Context.settings.postProcess.toneMappingModeIndex, 0, 4));
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
-        postProcessSettings.antiAliasingMode = static_cast<Engine::AntiAliasingMode>(
-            std::clamp(m_Context.settings.postProcess.antiAliasingModeIndex, 0, 3));
+        const int aaIndex = std::clamp(m_Context.settings.postProcess.antiAliasingModeIndex, 0, 4);
+        postProcessSettings.antiAliasingMode = aaIndex <= 1
+                                                   ? Engine::AntiAliasingMode::None
+                                                   : static_cast<Engine::AntiAliasingMode>(aaIndex - 1);
         postProcessSettings.bloomMode = static_cast<Engine::BloomMode>(
             std::clamp(m_Context.settings.postProcess.bloomModeIndex, 0, 2));
         postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
@@ -463,9 +465,7 @@ namespace Physara::Editor
             if (sceneCamera.HasComponent<Engine::CameraComponent>())
             {
                 const Engine::CameraComponent &camera = sceneCamera.GetComponent<Engine::CameraComponent>();
-                postProcessSettings.exposureMode = camera.exposureMode == Engine::CameraExposureMode::Auto
-                                                       ? Engine::ExposureMode::Auto
-                                                       : Engine::ExposureMode::Manual;
+                postProcessSettings.exposureMode = Engine::ExposureMode::Manual;
                 postProcessSettings.exposureCompensationEV = camera.exposureCompensationEV;
             }
         }
@@ -478,16 +478,19 @@ namespace Physara::Editor
         postProcessSettings.aaEdgeThresholdMin = m_Context.settings.postProcess.aaEdgeThresholdMin;
         postProcessSettings.aaDepthSensitivity = m_Context.settings.postProcess.aaDepthSensitivity;
         m_Renderer->SetPostProcessSettings(postProcessSettings);
+        const std::uint32_t msaaSamples[] = {2u, 4u, 8u};
+        m_Renderer->SetMSAASamples(aaIndex == 1 ? msaaSamples[std::clamp(m_Context.settings.postProcess.msaaSamplesIndex, 0, 2)] : 1u);
         Engine::ShadowSettings shadowSettings{};
-        shadowSettings.algorithm = m_Context.settings.shadow.algorithmIndex == 0
-                                       ? Engine::ShadowAlgorithm::None
-                                       : Engine::ShadowAlgorithm::SingleMapPCF3x3;
-        const std::uint32_t shadowResolutions[] = {1024u, 2048u, 4096u};
-        const int shadowResolutionIndex = std::clamp(m_Context.settings.shadow.resolutionIndex, 0, 2);
+        const int shadowAlgorithmIndex = std::clamp(m_Context.settings.shadow.algorithmIndex, 0, 5);
+        shadowSettings.algorithm = static_cast<Engine::ShadowAlgorithm>(shadowAlgorithmIndex);
+        const std::uint32_t shadowResolutions[] = {1024u, 2048u, 4096u, 8192u};
+        const int shadowResolutionIndex = std::clamp(m_Context.settings.shadow.resolutionIndex, 0, 3);
         shadowSettings.resolution = shadowResolutions[shadowResolutionIndex];
         shadowSettings.depthBias = m_Context.settings.shadow.depthBias;
         shadowSettings.slopeBias = m_Context.settings.shadow.slopeBias;
         shadowSettings.receiverBiasScale = m_Context.settings.shadow.receiverBiasScale;
+        shadowSettings.filterRadiusTexels = m_Context.settings.shadow.filterRadiusTexels;
+        shadowSettings.lightSizeTexels = m_Context.settings.shadow.lightSizeTexels;
         m_Renderer->SetShadowSettings(shadowSettings);
         if (m_Context.activeScene != nullptr)
         {
