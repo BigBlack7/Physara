@@ -59,13 +59,13 @@ float Fd_Burley(float NoV, float NoL, float LoH, float roughness)
 vec3 EnergyCompensation(vec3 f0, vec2 dfg)
 {
     float inverseEnergy = 1.0 / max(dfg.y, 0.04);
-    return min(vec3(1.0) + f0 * (inverseEnergy - 1.0), vec3(16.0));
+    return vec3(1.0) + f0 * (inverseEnergy - 1.0);
 }
 
 BRDFInputs BuildBRDFInputs(vec3 normal, vec3 view, vec3 light, vec3 diffuseColor, vec3 f0, float perceptualRoughness)
 {
     vec3 halfVector = SafeNormalize(view + light);
-
+    
     BRDFInputs inputs;
     inputs.diffuseColor = diffuseColor;
     inputs.f0 = f0;

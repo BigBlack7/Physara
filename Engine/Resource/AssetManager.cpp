@@ -44,9 +44,14 @@ namespace Physara::Engine
     {
         for (AssetRecord &record : m_Records)
         {
-            if (record.referenceCount == 0)
+            if (record.referenceCount == 0 && record.resource != nullptr)
             {
                 record.resource.reset();
+                ++record.generation;
+                if (record.generation == InvalidResourceGeneration)
+                {
+                    ++record.generation;
+                }
             }
         }
     }
@@ -54,6 +59,7 @@ namespace Physara::Engine
     void AssetManager::Clear()
     {
         m_PathToIndex.clear();
+        m_IdToIndex.clear();
         m_Records.clear();
         m_NextId = 1;
     }
@@ -81,6 +87,7 @@ namespace Physara::Engine
         m_Records.push_back(std::move(record));
         const std::size_t index = m_Records.size() - 1u;
         m_PathToIndex.emplace(m_Records[index].key, index);
+        m_IdToIndex.emplace(m_Records[index].id, index);
         return m_Records[index];
     }
 
@@ -97,14 +104,13 @@ namespace Physara::Engine
             return nullptr;
         }
 
-        for (const AssetRecord &record : m_Records)
+        const auto found = m_IdToIndex.find(handle.id);
+        if (found == m_IdToIndex.end() || found->second >= m_Records.size())
         {
-            if (record.id == handle.id && record.generation == handle.generation)
-            {
-                return &record;
-            }
+            return nullptr;
         }
 
-        return nullptr;
+        const AssetRecord &record = m_Records[found->second];
+        return record.generation == handle.generation ? &record : nullptr;
     }
 }

@@ -8,6 +8,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/RenderView.hpp>
+#include <Engine/Scene/Components/MaterialComponent.hpp>
 
 namespace Physara::Engine
 {
@@ -93,6 +94,7 @@ namespace Physara::Engine
         CameraData camera{};
         ShadowData shadow{};
         std::vector<ObjectData> objects{};
+        std::vector<MaterialComponent> materials{};
         std::vector<LightData> lights{};
         FrameStatistics stats{};
         std::uint64_t frameIndex{0};

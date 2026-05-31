@@ -147,10 +147,23 @@ namespace Physara::RHI
             static_cast<GLsizeiptr>(kPushConstantsSize),
             nullptr,
             GL_DYNAMIC_STORAGE_BIT);
+
+        glCreateFramebuffers(1, &m_ResolveReadFramebuffer);
+        glCreateFramebuffers(1, &m_ResolveDrawFramebuffer);
     }
 
     OpenGLCommandList::~OpenGLCommandList()
     {
+        if (m_ResolveReadFramebuffer != 0)
+        {
+            glDeleteFramebuffers(1, &m_ResolveReadFramebuffer);
+            m_ResolveReadFramebuffer = 0;
+        }
+        if (m_ResolveDrawFramebuffer != 0)
+        {
+            glDeleteFramebuffers(1, &m_ResolveDrawFramebuffer);
+            m_ResolveDrawFramebuffer = 0;
+        }
         if (m_PushConstantsBuffer != 0)
         {
             glDeleteBuffers(1, &m_PushConstantsBuffer);
@@ -771,29 +784,35 @@ namespace Physara::RHI
             return;
         }
 
-        GLuint readFbo = 0;
-        GLuint drawFbo = 0;
-        glCreateFramebuffers(1, &readFbo);
-        glCreateFramebuffers(1, &drawFbo);
+        if (m_ResolveReadFramebuffer == 0 || m_ResolveDrawFramebuffer == 0)
+        {
+            PHYSARA_CORE_ERROR("ResolveTexture called before resolve framebuffers were initialized.");
+            return;
+        }
 
         const bool depth = glSrc->GetFormat() == TextureFormat::Depth24Stencil8 || glSrc->GetFormat() == TextureFormat::Depth32F;
         const GLenum attachment = depth
                                       ? (glSrc->GetFormat() == TextureFormat::Depth24Stencil8 ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT)
                                       : GL_COLOR_ATTACHMENT0;
-        glNamedFramebufferTexture(readFbo, attachment, glSrc->GetGLID(), 0);
-        glNamedFramebufferTexture(drawFbo, attachment, glDst->GetGLID(), 0);
+        glNamedFramebufferTexture(m_ResolveReadFramebuffer, attachment, glSrc->GetGLID(), 0);
+        glNamedFramebufferTexture(m_ResolveDrawFramebuffer, attachment, glDst->GetGLID(), 0);
 
         if (!depth)
         {
             const GLenum colorAttachment = GL_COLOR_ATTACHMENT0;
-            glNamedFramebufferDrawBuffers(drawFbo, 1, &colorAttachment);
-            glNamedFramebufferReadBuffer(readFbo, GL_COLOR_ATTACHMENT0);
+            glNamedFramebufferDrawBuffers(m_ResolveDrawFramebuffer, 1, &colorAttachment);
+            glNamedFramebufferReadBuffer(m_ResolveReadFramebuffer, GL_COLOR_ATTACHMENT0);
+        }
+        else
+        {
+            glNamedFramebufferDrawBuffers(m_ResolveDrawFramebuffer, 0, nullptr);
+            glNamedFramebufferReadBuffer(m_ResolveReadFramebuffer, GL_NONE);
         }
 
         const GLbitfield mask = depth ? GL_DEPTH_BUFFER_BIT : GL_COLOR_BUFFER_BIT;
         glBlitNamedFramebuffer(
-            readFbo,
-            drawFbo,
+            m_ResolveReadFramebuffer,
+            m_ResolveDrawFramebuffer,
             0,
             0,
             static_cast<GLint>(std::min(glSrc->GetWidth(), glDst->GetWidth())),
@@ -804,9 +823,8 @@ namespace Physara::RHI
             static_cast<GLint>(std::min(glSrc->GetHeight(), glDst->GetHeight())),
             mask,
             GL_NEAREST);
-
-        glDeleteFramebuffers(1, &readFbo);
-        glDeleteFramebuffers(1, &drawFbo);
+        glNamedFramebufferTexture(m_ResolveReadFramebuffer, attachment, 0, 0);
+        glNamedFramebufferTexture(m_ResolveDrawFramebuffer, attachment, 0, 0);
     }
 
     void OpenGLCommandList::CopyBufferToTexture(RHIBuffer *src, RHITexture *dst)

@@ -56,6 +56,7 @@ namespace Physara::Engine
         camera = BuildCameraData(renderView);
         shadow = {};
         objects.clear();
+        materials.clear();
         lights.clear();
         stats.Reset();
         frameIndex = newFrameIndex;

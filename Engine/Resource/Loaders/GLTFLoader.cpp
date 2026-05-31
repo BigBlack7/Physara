@@ -732,6 +732,7 @@ namespace Physara::Engine
             component.baseColor = material.baseColor;
             component.metallic = material.metallic;
             component.roughness = material.roughness;
+            component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
             component.emissiveColor = material.emissiveColor;

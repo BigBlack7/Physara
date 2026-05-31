@@ -287,7 +287,7 @@ namespace Physara::Engine
         }
 
         const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
-            ShadowPassDetail::MaxValue<std::size_t>(context.frameData->objects.size(), 1u) * sizeof(ObjectData));
+            ShadowPassDetail::MaxValue<std::size_t>(context.renderProxy->GetBuckets().shadowCasters.size(), 1u) * sizeof(glm::mat4));
         if (m_ObjectBuffer == nullptr || m_ObjectBuffer->GetSize() < objectBufferSize)
         {
             m_ObjectBuffer = context.device->CreateBuffer(
@@ -400,12 +400,22 @@ namespace Physara::Engine
             m_LastCameraUploadSignature = cameraSignature;
         }
 
-        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
-            ShadowPassDetail::MaxValue<std::size_t>(context.frameData->objects.size(), 1u) * sizeof(ObjectData));
-        const std::uint64_t objectSignature = UploadHash::Vector(UploadHash::Offset, context.frameData->objects);
-        if (!context.frameData->objects.empty() && objectSignature != m_LastObjectUploadSignature)
+        m_ObjectUploadScratch.clear();
+        m_ObjectUploadScratch.reserve(context.renderProxy->GetBuckets().shadowCasters.size());
+        for (const RenderDrawItem &item : context.renderProxy->GetBuckets().shadowCasters)
         {
-            m_ObjectBuffer->UploadData(context.frameData->objects.data(), objectBufferSize);
+            if (item.submission != nullptr)
+            {
+                m_ObjectUploadScratch.push_back(item.submission->model);
+            }
+        }
+
+        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
+            ShadowPassDetail::MaxValue<std::size_t>(m_ObjectUploadScratch.size(), 1u) * sizeof(glm::mat4));
+        const std::uint64_t objectSignature = UploadHash::Vector(UploadHash::Offset, m_ObjectUploadScratch);
+        if (!m_ObjectUploadScratch.empty() && objectSignature != m_LastObjectUploadSignature)
+        {
+            m_ObjectBuffer->UploadData(m_ObjectUploadScratch.data(), objectBufferSize);
             if (context.stats != nullptr)
             {
                 context.stats->bufferUploadBytes += objectBufferSize;
@@ -416,8 +426,15 @@ namespace Physara::Engine
 
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
+        std::uint32_t shadowObjectIndex = 0u;
         for (const RenderDrawItem &item : context.renderProxy->GetBuckets().shadowCasters)
         {
+            if (item.submission == nullptr)
+            {
+                continue;
+            }
+
+            const std::uint32_t drawObjectIndex = shadowObjectIndex++;
             MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats);
             if (primitive == nullptr || primitive->indexCount == 0)
             {
@@ -426,7 +443,7 @@ namespace Physara::Engine
 
             context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer.get());
             context.commandList->SetIndexBuffer(primitive->indexBuffer.get());
-            context.commandList->DrawIndexed(primitive->indexCount, 1u, 0u, 0, item.objectIndex);
+            context.commandList->DrawIndexed(primitive->indexCount, 1u, 0u, 0, drawObjectIndex);
             if (context.stats != nullptr)
             {
                 ++context.stats->drawCalls;

@@ -7,6 +7,7 @@ layout(location = 0)in vec2 inUV;
 layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform PostProcessFrameBuffer
 {
     vec4 uViewportSizeEV100;
+    vec4 uClipPlanes;
 };
 
 layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProcessSettingsBuffer
@@ -281,8 +282,8 @@ vec3 ApplySMAALite(vec2 uv, vec3 center)
 
 float LinearizeDepth(float depth)
 {
-    float nearClip = max(uViewportSizeEV100.w, 0.0001);
-    float farClip = 1000.0;
+    float nearClip = max(uClipPlanes.x, 0.0001);
+    float farClip = max(uClipPlanes.y, nearClip + 0.0001);
     float z = depth * 2.0 - 1.0;
     return (2.0 * nearClip * farClip) / max(farClip + nearClip - z * (farClip - nearClip), PHYSARA_EPSILON);
 }

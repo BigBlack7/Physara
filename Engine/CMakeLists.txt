@@ -1,3 +1,5 @@
+set(PHYSARA_ENABLE_DEBUG_FEATURES ON CACHE BOOL "Enable PHYSARA_DEBUG diagnostics in non-Debug configurations." FORCE)
+
 add_library(Engine STATIC)
 
 target_sources(Engine PRIVATE
@@ -100,7 +102,7 @@ target_include_directories(Engine PUBLIC
 )
 
 target_compile_definitions(Engine PUBLIC
-    $<$<CONFIG:Debug>:PHYSARA_DEBUG>
+    $<$<OR:$<CONFIG:Debug>,$<BOOL:${PHYSARA_ENABLE_DEBUG_FEATURES}>>:PHYSARA_DEBUG>
 )
 
 target_link_libraries(Engine PUBLIC

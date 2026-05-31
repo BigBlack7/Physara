@@ -99,6 +99,7 @@ namespace Physara::Engine
             hash = UploadHash::Value(hash, material.baseColor);
             hash = UploadHash::Value(hash, material.metallic);
             hash = UploadHash::Value(hash, material.roughness);
+            hash = UploadHash::Value(hash, material.reflectance);
             hash = UploadHash::Value(hash, material.ambientOcclusion);
             hash = UploadHash::Value(hash, material.alphaCutoff);
             hash = UploadHash::Value(hash, material.emissiveColor);
@@ -120,27 +121,14 @@ namespace Physara::Engine
             return UploadHash::Value(hash, baseColorHasTransparentPixels);
         }
 
-        std::uint64_t HashMaterialLayout(const RenderProxy &renderProxy, const AssetManager *assetManager)
+        std::uint64_t HashMaterialTable(const FrameData &frameData, const AssetManager *assetManager)
         {
             std::uint64_t hash = UploadHash::Offset;
-            const RenderDrawBuckets &buckets = renderProxy.GetBuckets();
-            const auto hashBucket = [&hash, assetManager](const std::vector<RenderDrawItem> &bucket)
+            hash = UploadHash::Value(hash, frameData.materials.size());
+            for (const MaterialComponent &material : frameData.materials)
             {
-                hash = UploadHash::Value(hash, bucket.size());
-                for (const RenderDrawItem &item : bucket)
-                {
-                    hash = UploadHash::Value(hash, item.objectIndex);
-                    hash = UploadHash::Value(hash, item.sortKey);
-                    if (item.submission != nullptr)
-                    {
-                        hash = HashMaterialComponent(hash, item.submission->material, assetManager);
-                    }
-                }
-            };
-
-            hashBucket(buckets.opaque);
-            hashBucket(buckets.unlit);
-            hashBucket(buckets.transparent);
+                hash = HashMaterialComponent(hash, material, assetManager);
+            }
             return hash;
         }
 
@@ -203,7 +191,7 @@ namespace Physara::Engine
             material.metallicRoughnessReflectanceAO = glm::vec4(
                 materialComponent.metallic,
                 materialComponent.roughness,
-                0.5f,
+                materialComponent.reflectance,
                 materialComponent.ambientOcclusion);
             material.alphaNormalFlags = glm::vec4(
                 materialComponent.alphaCutoff,
@@ -403,7 +391,7 @@ namespace Physara::Engine
         }
 
         const std::uint32_t materialBufferSize =
-            static_cast<std::uint32_t>(ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.objects.size(), 1u) * sizeof(ForwardMaterialGPUData));
+            static_cast<std::uint32_t>(ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.materials.size(), 1u) * sizeof(ForwardMaterialGPUData));
         if (m_MaterialBuffer == nullptr || m_MaterialBuffer->GetSize() < materialBufferSize)
         {
             m_MaterialBuffer = context.device->CreateBuffer(
@@ -499,9 +487,7 @@ namespace Physara::Engine
             m_LastLightUploadSignature = lightSignature;
         }
 
-        const std::uint64_t materialSignature = context.renderProxy != nullptr
-                                                   ? ForwardOpaquePassDetail::HashMaterialLayout(*context.renderProxy, context.assetManager)
-                                                   : UploadHash::Offset;
+        const std::uint64_t materialSignature = ForwardOpaquePassDetail::HashMaterialTable(frameData, context.assetManager);
         if (materialSignature == m_LastMaterialUploadSignature)
         {
             m_LastUploadedFrameIndex = frameData.frameIndex;
@@ -509,26 +495,12 @@ namespace Physara::Engine
         }
 
         m_MaterialUploadScratch.assign(
-            ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.objects.size(), 1u),
+            ForwardOpaquePassDetail::MaxValue<std::size_t>(frameData.materials.size(), 1u),
             ForwardOpaquePassDetail::BuildDefaultMaterial());
         auto &materials = m_MaterialUploadScratch;
-        const auto fillMaterials = [&materials, &context](const std::vector<RenderDrawItem> &bucket)
+        for (std::size_t i = 0; i < frameData.materials.size(); ++i)
         {
-            for (const RenderDrawItem &item : bucket)
-            {
-                if (item.submission != nullptr && item.objectIndex < materials.size())
-                {
-                    materials[item.objectIndex] = ForwardOpaquePassDetail::BuildMaterial(item.submission->material, context.assetManager);
-                }
-            }
-        };
-
-        if (context.renderProxy != nullptr)
-        {
-            const RenderDrawBuckets &buckets = context.renderProxy->GetBuckets();
-            fillMaterials(buckets.opaque);
-            fillMaterials(buckets.unlit);
-            fillMaterials(buckets.transparent);
+            materials[i] = ForwardOpaquePassDetail::BuildMaterial(frameData.materials[i], context.assetManager);
         }
         m_MaterialBuffer->UploadData(materials.data(), static_cast<std::uint32_t>(materials.size() * sizeof(ForwardMaterialGPUData)));
         ForwardOpaquePassDetail::RecordBufferUpload(

@@ -168,6 +168,7 @@ namespace Physara::Engine
         std::filesystem::path m_AssetsRoot{};
         ResourceId m_NextId{1};
         std::unordered_map<AssetKey, std::size_t, AssetKeyHash> m_PathToIndex{};
+        std::unordered_map<ResourceId, std::size_t> m_IdToIndex{};
         std::vector<AssetRecord> m_Records{};
     };
 }

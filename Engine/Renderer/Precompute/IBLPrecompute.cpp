@@ -25,7 +25,7 @@ namespace Physara::Engine
     {
         constexpr float Pi = 3.14159265358979323846f;
         constexpr float InvPi = 0.31830988618379067154f;
-        constexpr std::uint32_t CacheVersion = 3u;
+        constexpr std::uint32_t CacheVersion = 8u;
 
         struct CacheHeader
         {
@@ -34,7 +34,8 @@ namespace Physara::Engine
             std::uint32_t cubeSize{0};
             std::uint32_t specularMipCount{0};
             std::uint32_t brdfLutSize{0};
-            std::uint32_t reserved0{0};
+            std::uint32_t specularSampleCount{0};
+            std::uint32_t brdfSampleCount{0};
             std::uint64_t sourceFileSize{0};
             std::int64_t sourceWriteTime{0};
         };
@@ -69,6 +70,8 @@ namespace Physara::Engine
             header.cubeSize = settings.cubeSize;
             header.specularMipCount = CalculateMipCount(settings.cubeSize);
             header.brdfLutSize = settings.brdfLutSize;
+            header.specularSampleCount = settings.specularSampleCount;
+            header.brdfSampleCount = settings.brdfSampleCount;
             header.sourceFileSize = FileSize(environmentPath);
             header.sourceWriteTime = FileWriteTime(environmentPath);
             return header;
@@ -81,6 +84,8 @@ namespace Physara::Engine
                    lhs.cubeSize == rhs.cubeSize &&
                    lhs.specularMipCount == rhs.specularMipCount &&
                    lhs.brdfLutSize == rhs.brdfLutSize &&
+                   lhs.specularSampleCount == rhs.specularSampleCount &&
+                   lhs.brdfSampleCount == rhs.brdfSampleCount &&
                    lhs.sourceFileSize == rhs.sourceFileSize &&
                    lhs.sourceWriteTime == rhs.sourceWriteTime;
         }
@@ -160,6 +165,96 @@ namespace Physara::Engine
             const glm::vec3 a = glm::mix(read(x0, y0), read(x0 + 1, y0), tx);
             const glm::vec3 b = glm::mix(read(x0, y0 + 1), read(x0 + 1, y0 + 1), tx);
             return glm::mix(a, b, ty);
+        }
+
+        struct PanoramaMip
+        {
+            std::uint32_t width{0};
+            std::uint32_t height{0};
+            std::vector<float> rgba32f{};
+        };
+
+        [[nodiscard]] glm::vec3 ReadMipTexel(const PanoramaMip &mip, int px, int py)
+        {
+            if (mip.rgba32f.empty() || mip.width == 0u || mip.height == 0u)
+            {
+                return glm::vec3(0.f);
+            }
+
+            const int wrappedX = (px % static_cast<int>(mip.width) + static_cast<int>(mip.width)) % static_cast<int>(mip.width);
+            const int clampedY = std::clamp(py, 0, static_cast<int>(mip.height) - 1);
+            const std::size_t base = (static_cast<std::size_t>(clampedY) * mip.width + static_cast<std::size_t>(wrappedX)) * 4u;
+            return SanitizeHDR(glm::vec3(mip.rgba32f[base + 0u], mip.rgba32f[base + 1u], mip.rgba32f[base + 2u]));
+        }
+
+        [[nodiscard]] glm::vec3 SamplePanoramaMip(const PanoramaMip &mip, glm::vec3 direction)
+        {
+            if (mip.rgba32f.empty() || mip.width == 0u || mip.height == 0u)
+            {
+                return glm::vec3(0.f);
+            }
+
+            const glm::vec2 uv = EquirectUV(direction);
+            const float x = uv.x * static_cast<float>(mip.width) - 0.5f;
+            const float y = uv.y * static_cast<float>(mip.height) - 0.5f;
+            const int x0 = static_cast<int>(std::floor(x));
+            const int y0 = static_cast<int>(std::floor(y));
+            const float tx = x - static_cast<float>(x0);
+            const float ty = y - static_cast<float>(y0);
+            const glm::vec3 a = glm::mix(ReadMipTexel(mip, x0, y0), ReadMipTexel(mip, x0 + 1, y0), tx);
+            const glm::vec3 b = glm::mix(ReadMipTexel(mip, x0, y0 + 1), ReadMipTexel(mip, x0 + 1, y0 + 1), tx);
+            return glm::mix(a, b, ty);
+        }
+
+        [[nodiscard]] std::vector<PanoramaMip> BuildPanoramaMipChain(const Texture &panorama)
+        {
+            std::vector<PanoramaMip> mips;
+            if (panorama.rgba32fPixels.empty() || panorama.width == 0u || panorama.height == 0u)
+            {
+                return mips;
+            }
+
+            mips.push_back(PanoramaMip{panorama.width, panorama.height, panorama.rgba32fPixels});
+            while (mips.back().width > 1u || mips.back().height > 1u)
+            {
+                const PanoramaMip &src = mips.back();
+                PanoramaMip dst{};
+                dst.width = std::max(src.width / 2u, 1u);
+                dst.height = std::max(src.height / 2u, 1u);
+                dst.rgba32f.assign(static_cast<std::size_t>(dst.width) * dst.height * 4u, 1.f);
+                for (std::uint32_t y = 0; y < dst.height; ++y)
+                {
+                    for (std::uint32_t x = 0; x < dst.width; ++x)
+                    {
+                        glm::vec3 color(0.f);
+                        color += ReadMipTexel(src, static_cast<int>(x * 2u), static_cast<int>(y * 2u));
+                        color += ReadMipTexel(src, static_cast<int>(x * 2u + 1u), static_cast<int>(y * 2u));
+                        color += ReadMipTexel(src, static_cast<int>(x * 2u), static_cast<int>(y * 2u + 1u));
+                        color += ReadMipTexel(src, static_cast<int>(x * 2u + 1u), static_cast<int>(y * 2u + 1u));
+                        color *= 0.25f;
+                        const std::size_t base = (static_cast<std::size_t>(y) * dst.width + x) * 4u;
+                        dst.rgba32f[base + 0u] = color.r;
+                        dst.rgba32f[base + 1u] = color.g;
+                        dst.rgba32f[base + 2u] = color.b;
+                    }
+                }
+                mips.push_back(std::move(dst));
+            }
+            return mips;
+        }
+
+        [[nodiscard]] glm::vec3 SamplePanoramaMipChain(const std::vector<PanoramaMip> &mips, glm::vec3 direction, float lod)
+        {
+            if (mips.empty())
+            {
+                return glm::vec3(0.f);
+            }
+
+            const float clampedLod = std::clamp(lod, 0.f, static_cast<float>(mips.size() - 1u));
+            const std::uint32_t mip0 = static_cast<std::uint32_t>(std::floor(clampedLod));
+            const std::uint32_t mip1 = std::min(mip0 + 1u, static_cast<std::uint32_t>(mips.size() - 1u));
+            const float t = clampedLod - static_cast<float>(mip0);
+            return glm::mix(SamplePanoramaMip(mips[mip0], direction), SamplePanoramaMip(mips[mip1], direction), t);
         }
 
         [[nodiscard]] std::array<float, 9> SHBasis(glm::vec3 d)
@@ -268,9 +363,23 @@ namespace Physara::Engine
             return glm::normalize(tangent * h.x + bitangent * h.y + normal * h.z);
         }
 
-        [[nodiscard]] std::array<IBLCubeFace, 6> PrefilterMip(const Texture &panorama, std::uint32_t size, float roughness, std::uint32_t sampleCount)
+        [[nodiscard]] float DistributionGGX(float NoH, float perceptualRoughness)
+        {
+            const float alpha = std::max(perceptualRoughness * perceptualRoughness, 0.001f);
+            const float alpha2 = alpha * alpha;
+            const float denominator = NoH * NoH * (alpha2 - 1.f) + 1.f;
+            return alpha2 / std::max(Pi * denominator * denominator, 0.001f);
+        }
+
+        [[nodiscard]] std::array<IBLCubeFace, 6> PrefilterMip(
+            const Texture &panorama,
+            const std::vector<PanoramaMip> &panoramaMips,
+            std::uint32_t size,
+            float roughness,
+            std::uint32_t sampleCount)
         {
             std::array<IBLCubeFace, 6> faces{};
+            const float sourceSolidAngle = 4.f * Pi / static_cast<float>(std::max(panorama.width * panorama.height, 1u));
             for (std::uint32_t face = 0; face < 6u; ++face)
             {
                 faces[face].width = size;
@@ -289,9 +398,14 @@ namespace Physara::Engine
                             const glm::vec3 halfVector = ImportanceSampleGGX(Hammersley(i, sampleCount), normal, roughness);
                             const glm::vec3 light = glm::normalize(2.f * glm::dot(view, halfVector) * halfVector - view);
                             const float NoL = std::max(glm::dot(normal, light), 0.f);
-                            if (NoL > 0.f)
+                            const float NoH = std::max(glm::dot(normal, halfVector), 0.f);
+                            const float VoH = std::max(glm::dot(view, halfVector), 0.f);
+                            if (NoL > 0.f && NoH > 0.f && VoH > 0.f)
                             {
-                                sum += SamplePanorama(panorama, light) * NoL;
+                                const float pdf = DistributionGGX(NoH, roughness) * NoH / std::max(4.f * VoH, 0.001f);
+                                const float sampleSolidAngle = 1.f / std::max(static_cast<float>(sampleCount) * pdf, 0.001f);
+                                const float sourceMipLevel = roughness <= 0.f ? 0.f : std::max(0.f, 0.5f * std::log2(sampleSolidAngle / sourceSolidAngle));
+                                sum += SamplePanoramaMipChain(panoramaMips, light, sourceMipLevel) * NoL;
                                 weightSum += NoL;
                             }
                         }
@@ -308,16 +422,12 @@ namespace Physara::Engine
             return faces;
         }
 
-        [[nodiscard]] float GeometrySchlickGGX(float NoV, float roughness)
+        [[nodiscard]] float GeometryDFG(float NoV, float NoL, float roughness)
         {
-            const float a = roughness;
-            const float k = (a * a) / 2.f;
-            return NoV / std::max(NoV * (1.f - k) + k, 0.001f);
-        }
-
-        [[nodiscard]] float GeometrySmith(float NoV, float NoL, float roughness)
-        {
-            return GeometrySchlickGGX(NoV, roughness) * GeometrySchlickGGX(NoL, roughness);
+            const float a2 = roughness * roughness;
+            const float ggxL = NoV * std::sqrt(std::max((1.f - a2) * NoL * NoL + a2, 0.f));
+            const float ggxV = NoL * std::sqrt(std::max((1.f - a2) * NoV * NoV + a2, 0.f));
+            return (2.f * NoL) / std::max(ggxV + ggxL, 0.001f);
         }
 
         [[nodiscard]] glm::vec2 IntegrateBRDF(float NoV, float perceptualRoughness, std::uint32_t sampleCount)
@@ -333,11 +443,11 @@ namespace Physara::Engine
                 const float NoL = std::max(light.z, 0.f);
                 const float NoH = std::max(halfVector.z, 0.f);
                 const float VoH = std::max(glm::dot(view, halfVector), 0.f);
-                if (NoL > 0.f)
+                if (NoL > 0.f && NoH > 0.f)
                 {
                     const float roughness = perceptualRoughness * perceptualRoughness;
-                    const float g = GeometrySmith(NoV, NoL, roughness);
-                    const float gVis = (g * VoH) / std::max(NoH * NoV, 0.001f);
+                    const float g = GeometryDFG(NoV, NoL, roughness);
+                    const float gVis = (g * VoH) / std::max(NoH, 0.001f);
                     const float fc = std::pow(1.f - VoH, 5.f);
                     a += fc * gVis;
                     b += gVis;
@@ -441,13 +551,13 @@ namespace Physara::Engine
             return result;
         }
 
-        void WriteCache(const std::filesystem::path &cachePath, const CacheHeader &header, const IBLPrecomputeResult &result)
+        [[nodiscard]] bool WriteCache(const std::filesystem::path &cachePath, const CacheHeader &header, const IBLPrecomputeResult &result)
         {
             std::ofstream stream(cachePath, std::ios::binary | std::ios::trunc);
             if (!stream)
             {
                 PHYSARA_CORE_WARN("Failed to write IBL cache '{}'.", cachePath.string());
-                return;
+                return false;
             }
 
             WriteValue(stream, header);
@@ -462,6 +572,13 @@ namespace Physara::Engine
                 }
             }
             WriteFloatVector(stream, result.brdfLutRG32F);
+            if (!stream)
+            {
+                PHYSARA_CORE_WARN("Failed while writing IBL cache '{}'.", cachePath.string());
+                return false;
+            }
+            PHYSARA_CORE_INFO("Wrote IBL binary cache '{}'.", cachePath.string());
+            return true;
         }
 
         void WriteSHText(const std::filesystem::path &path, const std::array<glm::vec4, 9> &sh)
@@ -473,11 +590,11 @@ namespace Physara::Engine
             }
         }
 
-        void WriteEXRRGBA(const std::filesystem::path &path, const std::vector<float> &rgba, std::uint32_t width, std::uint32_t height)
+        [[nodiscard]] bool WriteEXRRGBA(const std::filesystem::path &path, const std::vector<float> &rgba, std::uint32_t width, std::uint32_t height)
         {
             if (rgba.empty() || width == 0u || height == 0u)
             {
-                return;
+                return false;
             }
 
             const char *error = nullptr;
@@ -496,7 +613,9 @@ namespace Physara::Engine
                 {
                     FreeEXRErrorMessage(error);
                 }
+                return false;
             }
+            return true;
         }
 
         void WriteBRDFLutEXR(const std::filesystem::path &path, const std::vector<float> &rg, std::uint32_t size)
@@ -507,26 +626,60 @@ namespace Physara::Engine
             }
 
             std::vector<float> rgba(static_cast<std::size_t>(size) * size * 4u, 0.f);
-            for (std::size_t i = 0u; i < static_cast<std::size_t>(size) * size; ++i)
+            for (std::uint32_t y = 0u; y < size; ++y)
             {
-                rgba[i * 4u + 0u] = rg[i * 2u + 0u];
-                rgba[i * 4u + 1u] = rg[i * 2u + 1u];
-                rgba[i * 4u + 3u] = 1.f;
+                const std::uint32_t sourceY = size - 1u - y;
+                for (std::uint32_t x = 0u; x < size; ++x)
+                {
+                    const std::size_t source = (static_cast<std::size_t>(sourceY) * size + x) * 2u;
+                    const std::size_t destination = (static_cast<std::size_t>(y) * size + x) * 4u;
+                    rgba[destination + 0u] = rg[source + 0u];
+                    rgba[destination + 1u] = rg[source + 1u];
+                    rgba[destination + 3u] = 1.f;
+                }
             }
-            WriteEXRRGBA(path, rgba, size, size);
+            (void)WriteEXRRGBA(path, rgba, size, size);
         }
 
-        [[nodiscard]] bool DebugEXROutputsExist(const std::filesystem::path &cacheDirectory, const IBLPrecomputeResult &result)
+        [[nodiscard]] glm::vec3 EvaluateIrradianceSH(const std::array<glm::vec4, 9> &sh, glm::vec3 normal)
         {
-            if (result.specularMipChain.empty())
+            const std::array<float, 9> basis = SHBasis(glm::normalize(normal));
+            glm::vec3 result(0.f);
+            for (std::size_t i = 0u; i < sh.size(); ++i)
             {
-                return false;
+                result += glm::vec3(sh[i]) * basis[i];
             }
+            return SanitizeHDR(glm::max(result, glm::vec3(0.f)));
+        }
 
-            std::error_code error{};
-            return std::filesystem::exists(cacheDirectory / "brdf_integrate.exr", error) &&
-                   std::filesystem::exists(cacheDirectory / "equirect_to_cube_face0.exr", error) &&
-                   std::filesystem::exists(cacheDirectory / "specular_prefilter_mip0_face0.exr", error);
+        void WriteIrradianceSHCubemap(const std::filesystem::path &cacheDirectory, const std::array<glm::vec4, 9> &sh)
+        {
+            constexpr std::uint32_t Size = 64u;
+            std::uint32_t writtenCount = 0u;
+            for (std::uint32_t face = 0; face < 6u; ++face)
+            {
+                std::vector<float> rgba(static_cast<std::size_t>(Size) * Size * 4u, 1.f);
+                for (std::uint32_t y = 0; y < Size; ++y)
+                {
+                    for (std::uint32_t x = 0; x < Size; ++x)
+                    {
+                        const glm::vec3 color = EvaluateIrradianceSH(sh, DirectionFromCubeFace(face, x, y, Size));
+                        const std::size_t base = (static_cast<std::size_t>(y) * Size + x) * 4u;
+                        rgba[base + 0u] = color.r;
+                        rgba[base + 1u] = color.g;
+                        rgba[base + 2u] = color.b;
+                    }
+                }
+                if (WriteEXRRGBA(
+                    cacheDirectory / ("irradiance_sh_face" + std::to_string(face) + ".exr"),
+                    rgba,
+                    Size,
+                    Size))
+                {
+                    ++writtenCount;
+                }
+            }
+            PHYSARA_CORE_INFO("Wrote {} irradiance SH debug EXR faces into '{}'.", writtenCount, cacheDirectory.string());
         }
 
         void WriteDebugEXROutputs(const std::filesystem::path &cacheDirectory, const IBLPrecomputeResult &result)
@@ -553,27 +706,40 @@ namespace Physara::Engine
             }
 
             WriteSHText(cacheDirectory / "irradiance_sh.txt", result.irradianceSH);
+            WriteIrradianceSHCubemap(cacheDirectory, result.irradianceSH);
             WriteBRDFLutEXR(cacheDirectory / "brdf_integrate.exr", result.brdfLutRG32F, result.brdfLutSize);
+            std::uint32_t specularCount = 0u;
+            std::uint32_t cubeCount = 0u;
             for (std::uint32_t mip = 0; mip < result.specularMipCount; ++mip)
             {
                 for (std::uint32_t face = 0; face < 6u; ++face)
                 {
                     const IBLCubeFace &cubeFace = result.specularMipChain[mip][face];
-                    WriteEXRRGBA(
+                    if (WriteEXRRGBA(
                         cacheDirectory / ("specular_prefilter_mip" + std::to_string(mip) + "_face" + std::to_string(face) + ".exr"),
                         cubeFace.rgba32f,
                         cubeFace.width,
-                        cubeFace.height);
+                        cubeFace.height))
+                    {
+                        ++specularCount;
+                    }
                     if (mip == 0u)
                     {
-                        WriteEXRRGBA(
+                        if (WriteEXRRGBA(
                             cacheDirectory / ("equirect_to_cube_face" + std::to_string(face) + ".exr"),
                             cubeFace.rgba32f,
                             cubeFace.width,
-                            cubeFace.height);
+                            cubeFace.height))
+                        {
+                            ++cubeCount;
+                        }
                     }
                 }
             }
+            PHYSARA_CORE_INFO("Wrote IBL debug EXR outputs into '{}': cubeFaces={}, specularFaces={}, brdf=1.",
+                              cacheDirectory.string(),
+                              cubeCount,
+                              specularCount);
         }
     }
 
@@ -595,25 +761,40 @@ namespace Physara::Engine
         const IBLPrecomputeSettings clampedSettings{
             std::clamp(settings.cubeSize, 16u, 512u),
             std::clamp(settings.brdfLutSize, 32u, 512u),
-            std::clamp(settings.specularSampleCount, 8u, 1024u),
-            std::clamp(settings.brdfSampleCount, 16u, 2048u)};
+            std::clamp(settings.specularSampleCount, 8u, 4096u),
+            std::clamp(settings.brdfSampleCount, 16u, 4096u),
+            settings.useCache,
+            settings.createIfMissing,
+            settings.writeCache,
+            settings.writeDebugOutputs};
         const IBLPrecomputeDetail::CacheHeader expectedHeader = IBLPrecomputeDetail::BuildHeader(environmentPath, clampedSettings);
         const std::filesystem::path cacheDirectory = GetCacheDirectory(environmentPath);
-        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v3.bin";
+        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v8.bin";
 
-        if (std::shared_ptr<IBLPrecomputeResult> cached = IBLPrecomputeDetail::ReadCache(cachePath, expectedHeader))
+        if (clampedSettings.useCache)
         {
-            if (!IBLPrecomputeDetail::DebugEXROutputsExist(cacheDirectory, *cached))
+            if (std::shared_ptr<IBLPrecomputeResult> cached = IBLPrecomputeDetail::ReadCache(cachePath, expectedHeader))
             {
-                std::error_code error{};
-                std::filesystem::create_directories(cacheDirectory, error);
-                if (!error)
-                {
-                    IBLPrecomputeDetail::WriteDebugEXROutputs(cacheDirectory, *cached);
-                }
+                PHYSARA_CORE_INFO("Loaded IBL precompute cache '{}'.", cachePath.string());
+                return cached;
             }
-            PHYSARA_CORE_INFO("Loaded IBL precompute cache '{}'.", cachePath.string());
-            return cached;
+        }
+
+        if (!clampedSettings.createIfMissing)
+        {
+            return {};
+        }
+
+        if (clampedSettings.writeCache || clampedSettings.writeDebugOutputs)
+        {
+            std::error_code error{};
+            std::filesystem::create_directories(cacheDirectory, error);
+            if (error)
+            {
+                PHYSARA_CORE_WARN("Failed to create IBL cache directory '{}': {}.", cacheDirectory.string(), error.message());
+                return {};
+            }
+            PHYSARA_CORE_INFO("IBL cache directory ready '{}'.", cacheDirectory.string());
         }
 
         const std::shared_ptr<Texture> panorama = TextureLoader::LoadRGBA32F(environmentPath);
@@ -623,19 +804,29 @@ namespace Physara::Engine
             return {};
         }
 
-        PHYSARA_CORE_INFO("Precomputing IBL for '{}' into '{}'.", environmentPath.string(), cacheDirectory.string());
+        PHYSARA_CORE_INFO("Precomputing IBL for '{}' into '{}': cache={}, debugEXR={}.",
+                          environmentPath.string(),
+                          cacheDirectory.string(),
+                          clampedSettings.writeCache,
+                          clampedSettings.writeDebugOutputs);
         auto result = std::make_shared<IBLPrecomputeResult>();
         result->cubeSize = clampedSettings.cubeSize;
         result->specularMipCount = IBLPrecomputeDetail::CalculateMipCount(clampedSettings.cubeSize);
         result->brdfLutSize = clampedSettings.brdfLutSize;
         result->irradianceSH = IBLPrecomputeDetail::ComputeIrradianceSH(*panorama);
+        const std::vector<IBLPrecomputeDetail::PanoramaMip> panoramaMips = IBLPrecomputeDetail::BuildPanoramaMipChain(*panorama);
         result->specularMipChain.resize(result->specularMipCount);
         result->specularMipChain[0] = IBLPrecomputeDetail::EquirectToCube(*panorama, clampedSettings.cubeSize);
         for (std::uint32_t mip = 1u; mip < result->specularMipCount; ++mip)
         {
             const std::uint32_t mipSize = std::max(1u, clampedSettings.cubeSize >> mip);
             const float roughness = static_cast<float>(mip) / static_cast<float>(std::max(result->specularMipCount - 1u, 1u));
-            result->specularMipChain[mip] = IBLPrecomputeDetail::PrefilterMip(*panorama, mipSize, roughness, clampedSettings.specularSampleCount);
+            result->specularMipChain[mip] = IBLPrecomputeDetail::PrefilterMip(
+                *panorama,
+                panoramaMips,
+                mipSize,
+                roughness,
+                clampedSettings.specularSampleCount);
         }
         result->brdfLutRG32F = IBLPrecomputeDetail::BuildBRDFLut(clampedSettings.brdfLutSize, clampedSettings.brdfSampleCount);
 
@@ -645,12 +836,16 @@ namespace Physara::Engine
             return {};
         }
 
-        std::error_code error{};
-        std::filesystem::create_directories(cacheDirectory, error);
-        if (!error)
+        if (clampedSettings.writeCache || clampedSettings.writeDebugOutputs)
         {
-            IBLPrecomputeDetail::WriteCache(cachePath, expectedHeader, *result);
-            IBLPrecomputeDetail::WriteDebugEXROutputs(cacheDirectory, *result);
+            if (clampedSettings.writeCache)
+            {
+                (void)IBLPrecomputeDetail::WriteCache(cachePath, expectedHeader, *result);
+            }
+            if (clampedSettings.writeDebugOutputs)
+            {
+                IBLPrecomputeDetail::WriteDebugEXROutputs(cacheDirectory, *result);
+            }
         }
 
         return result;

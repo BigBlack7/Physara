@@ -34,6 +34,7 @@ namespace Physara::Engine
             component.baseColor = material.baseColor;
             component.metallic = material.metallic;
             component.roughness = material.roughness;
+            component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
             component.emissiveColor = material.emissiveColor;
@@ -59,6 +60,24 @@ namespace Physara::Engine
             material.castShadow = false;
         }
 
+        const MaterialSlotRef *FindMaterialSlot(const MeshComponent &mesh)
+        {
+            const auto exact = std::find_if(mesh.materialSlots.begin(), mesh.materialSlots.end(), [&mesh](const MaterialSlotRef &slot)
+                                            {
+                                                return slot.slotIndex == mesh.primitive.primitiveIndex;
+                                            });
+            if (exact != mesh.materialSlots.end())
+            {
+                return &*exact;
+            }
+
+            const auto fallback = std::find_if(mesh.materialSlots.begin(), mesh.materialSlots.end(), [](const MaterialSlotRef &slot)
+                                               {
+                                                   return slot.slotIndex == 0u;
+                                               });
+            return fallback != mesh.materialSlots.end() ? &*fallback : nullptr;
+        }
+
         MaterialComponent GetMaterial(const entt::registry &registry, EntityId entity, const MeshComponent &mesh, AssetManager *assetManager)
         {
             MaterialComponent material{};
@@ -67,9 +86,10 @@ namespace Physara::Engine
                 material = *component;
             }
 
-            if (!mesh.materialSlots.empty() && mesh.materialSlots.front().HasOverride())
+            const MaterialSlotRef *slot = FindMaterialSlot(mesh);
+            if (slot != nullptr && slot->HasOverride())
             {
-                material.materialPath = mesh.materialSlots.front().materialPath;
+                material.materialPath = slot->materialPath;
             }
 
             if (assetManager != nullptr && !material.materialPath.empty())

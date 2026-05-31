@@ -72,7 +72,7 @@ vec3 EvaluateIBL(PixelMaterial material, vec3 normal, vec3 view)
     vec3 prefiltered1 = textureLod(uIBLPrefilteredTexture, reflection, lod1).rgb;
     vec3 prefiltered = mix(prefiltered0, prefiltered1, lodWeight) * uIBLParams.x;
     vec2 dfg = SampleIBLDFG(NoV, material.perceptualRoughness);
-    vec3 specularColor = material.f0 * (dfg.y - dfg.x) + material.f90 * dfg.x;
+    vec3 specularColor = mix(dfg.xxx, dfg.yyy, material.f0);
     vec3 specular = prefiltered * specularColor * material.energyCompensation;
     specular *= ComputeSpecularAO(NoV, material.ambientOcclusion, material.roughness);
 

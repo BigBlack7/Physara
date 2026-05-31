@@ -3,6 +3,8 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <utility>
 
 #include <glm/vec4.hpp>
 
@@ -30,10 +32,29 @@ namespace Physara::Engine
         [[nodiscard]] RHI::RHITexture *GetBRDFLut() const { return m_BRDFLut.get(); }
 
     private:
+        struct PendingPrecompute
+        {
+            explicit PendingPrecompute(std::filesystem::path requestedPath)
+                : path(std::move(requestedPath))
+            {
+            }
+
+            std::filesystem::path path{};
+            std::mutex mutex{};
+            std::shared_ptr<IBLPrecomputeResult> previewResult{};
+            std::shared_ptr<IBLPrecomputeResult> finalResult{};
+            bool previewFinished{false};
+            bool finalFinished{false};
+        };
+
         bool Upload(RHI::RHIDevice *device, const IBLPrecomputeResult &result);
+        void ReleaseGPUResources();
+        void StartPrecompute(const std::filesystem::path &environmentPath);
 
     private:
         std::filesystem::path m_LoadedEnvironmentPath{};
+        std::shared_ptr<PendingPrecompute> m_PendingPrecompute{};
+        bool m_UsingPreview{false};
         std::unique_ptr<RHI::RHITexture> m_SpecularTexture{};
         std::unique_ptr<RHI::RHITexture> m_BRDFLut{};
         std::array<glm::vec4, 9> m_IrradianceSH{};

@@ -276,6 +276,7 @@ namespace Physara::Engine
                     materialJson["baseColor"] = SceneSerializerDetail::Vec4ToJson(material->baseColor);
                     materialJson["metallic"] = material->metallic;
                     materialJson["roughness"] = material->roughness;
+                    materialJson["reflectance"] = material->reflectance;
                     materialJson["ambientOcclusion"] = material->ambientOcclusion;
                     materialJson["alphaCutoff"] = material->alphaCutoff;
                     materialJson["emissiveColor"] = SceneSerializerDetail::Vec3ToJson(material->emissiveColor);
@@ -431,6 +432,7 @@ namespace Physara::Engine
                     material.baseColor = SceneSerializerDetail::JsonToVec4(m.value("baseColor", SceneSerializerDetail::json::array()), material.baseColor);
                     material.metallic = m.value("metallic", material.metallic);
                     material.roughness = m.value("roughness", material.roughness);
+                    material.reflectance = m.value("reflectance", material.reflectance);
                     material.ambientOcclusion = m.value("ambientOcclusion", material.ambientOcclusion);
                     material.alphaCutoff = m.value("alphaCutoff", material.alphaCutoff);
                     material.emissiveColor = SceneSerializerDetail::JsonToVec3(m.value("emissiveColor", SceneSerializerDetail::json::array()), material.emissiveColor);

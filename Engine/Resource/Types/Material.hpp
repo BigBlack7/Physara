@@ -24,6 +24,7 @@ namespace Physara::Engine
         glm::vec4 baseColor{1.f};
         float metallic{1.f};
         float roughness{1.f};
+        float reflectance{0.5f};
         float ambientOcclusion{1.f};
         float alphaCutoff{0.5f};
         glm::vec3 emissiveColor{0.f};

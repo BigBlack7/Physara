@@ -178,6 +178,7 @@ namespace Physara::Editor
             component.baseColor = material.baseColor;
             component.metallic = material.metallic;
             component.roughness = material.roughness;
+            component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
             component.emissiveColor = material.emissiveColor;
@@ -421,6 +422,7 @@ namespace Physara::Editor
         {
             changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.f, 1.f);
             changed |= ImGui::SliderFloat("Roughness", &material.roughness, 0.045f, 1.f);
+            changed |= ImGui::SliderFloat("Reflectance", &material.reflectance, 0.f, 1.f);
             changed |= ImGui::SliderFloat("AO", &material.ambientOcclusion, 0.f, 1.f);
             changed |= ImGui::SliderFloat("Normal Scale", &material.normalScale, 0.f, 4.f);
             changed |= ImGui::Checkbox("Flip Normal Y", &material.flipNormalY);

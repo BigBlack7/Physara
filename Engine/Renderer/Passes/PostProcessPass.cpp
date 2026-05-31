@@ -42,6 +42,7 @@ namespace Physara::Engine
         struct FrameGPUData
         {
             glm::vec4 viewportSizeEV100{1.f, 1.f, 0.f, 0.f};
+            glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
         };
 
         RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
@@ -86,7 +87,12 @@ namespace Physara::Engine
                 static_cast<float>(frameData.view.viewport.width),
                 static_cast<float>(frameData.view.viewport.height),
                 frameData.view.ev100,
-                frameData.view.nearClipMeters);
+                0.f);
+            data.clipPlanes = glm::vec4(
+                frameData.view.nearClipMeters,
+                frameData.view.farClipMeters,
+                0.f,
+                0.f);
             return data;
         }
     }

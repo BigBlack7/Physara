@@ -1,84 +1,21 @@
 #include "IBLResources.hpp"
 
 #include <algorithm>
+#include <exception>
+#include <thread>
+#include <utility>
 
 #include <Engine/Core/Log.hpp>
-#include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
-#include <Engine/RHI/Pipeline/RHIPipelineState.hpp>
-#include <Engine/RHI/Resource/RHIShader.hpp>
-#include <Engine/Resource/Loaders/ShaderLoader.hpp>
 
 namespace Physara::Engine
 {
-    namespace IBLResourcesDetail
-    {
-        std::unique_ptr<RHI::RHITexture> CreateBRDFLutWithCompute(RHI::RHIDevice *device, std::uint32_t size)
-        {
-            if (device == nullptr)
-            {
-                return {};
-            }
-
-            ShaderSource source = ShaderLoader::Load({
-                RHI::ShaderStage::Compute,
-                "Shaders/Passes/IBL/BRDFIntegrate.comp",
-                ShaderFeature::None,
-                {}});
-            std::unique_ptr<RHI::RHIShader> shader = device->CreateShader(RHI::ShaderStage::Compute, source.source);
-            if (shader == nullptr || !shader->IsValid())
-            {
-                return {};
-            }
-
-            RHI::RHIPipelineStateDesc pipelineDesc{};
-            pipelineDesc.computeShader = shader.get();
-            std::unique_ptr<RHI::RHIPipelineState> pipeline = device->CreatePipelineState(pipelineDesc);
-            if (pipeline == nullptr || !pipeline->IsValid())
-            {
-                return {};
-            }
-
-            RHI::RHITextureDesc desc{};
-            desc.width = size;
-            desc.height = size;
-            desc.format = RHI::TextureFormat::RG16F;
-            desc.dimension = RHI::TextureDimension::Tex2D;
-            desc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::Storage;
-            desc.mipLevels = 1u;
-            desc.arrayLayers = 1u;
-            std::unique_ptr<RHI::RHITexture> texture = device->CreateTexture(desc);
-            if (texture == nullptr)
-            {
-                return {};
-            }
-
-            RHI::RHICommandList *commandList = device->GetCommandList();
-            if (commandList == nullptr)
-            {
-                return {};
-            }
-
-            commandList->BeginDebugLabel("IBL BRDFIntegrate.compute");
-            commandList->SetPipelineState(pipeline.get());
-            commandList->SetStorageTexture(0u, texture.get(), 0u, 0u, RHI::StorageTextureAccess::WriteOnly);
-            commandList->Dispatch((size + 7u) / 8u, (size + 7u) / 8u, 1u);
-            commandList->TextureBarrier(texture.get(), RHI::ShaderStage::Compute, RHI::ShaderStage::Fragment);
-            commandList->EndDebugLabel();
-            PHYSARA_CORE_INFO("Generated BRDF integration LUT with GPU compute: {}x{}.", size, size);
-            return texture;
-        }
-    }
-
     void IBLResources::Reset()
     {
         m_LoadedEnvironmentPath.clear();
-        m_SpecularTexture.reset();
-        m_BRDFLut.reset();
-        m_IrradianceSH = {};
-        m_SpecularMipCount = 0;
-        m_Ready = false;
+        m_PendingPrecompute.reset();
+        ReleaseGPUResources();
     }
 
     void IBLResources::Invalidate()
@@ -97,30 +34,155 @@ namespace Physara::Engine
         const std::filesystem::path normalizedPath = environmentPath.lexically_normal();
         if (m_Ready && m_LoadedEnvironmentPath == normalizedPath)
         {
-            return true;
+            if (!m_UsingPreview || m_PendingPrecompute == nullptr)
+            {
+                return true;
+            }
         }
 
-        Reset();
-        std::shared_ptr<IBLPrecomputeResult> result = IBLPrecompute::LoadOrCreate(normalizedPath);
+        if (m_LoadedEnvironmentPath != normalizedPath)
+        {
+            m_LoadedEnvironmentPath.clear();
+            ReleaseGPUResources();
+        }
+
+        if (m_PendingPrecompute == nullptr || m_PendingPrecompute->path != normalizedPath)
+        {
+            StartPrecompute(normalizedPath);
+            return false;
+        }
+
+        std::shared_ptr<IBLPrecomputeResult> result;
+        bool finalResult = false;
+        {
+            std::lock_guard lock(m_PendingPrecompute->mutex);
+            if (m_PendingPrecompute->finalFinished)
+            {
+                result = m_PendingPrecompute->finalResult;
+                finalResult = true;
+            }
+            else if (!m_Ready && m_PendingPrecompute->previewFinished && m_PendingPrecompute->previewResult != nullptr)
+            {
+                result = m_PendingPrecompute->previewResult;
+            }
+            else
+            {
+                return m_Ready;
+            }
+        }
+
         if (result == nullptr || !result->IsValid())
         {
-            return false;
+            PHYSARA_CORE_WARN("IBL precompute for '{}' finished without valid resources.", normalizedPath.string());
+            if (finalResult)
+            {
+                m_PendingPrecompute.reset();
+            }
+            return m_Ready;
         }
 
         if (!Upload(device, *result))
         {
-            Reset();
+            m_PendingPrecompute.reset();
+            ReleaseGPUResources();
             return false;
         }
 
         m_LoadedEnvironmentPath = normalizedPath;
+        m_UsingPreview = !finalResult;
+        if (finalResult)
+        {
+            m_PendingPrecompute.reset();
+        }
         m_Ready = true;
-        PHYSARA_CORE_INFO("IBL resources ready for '{}': cube={}px, mips={}, brdf={}px.",
+        PHYSARA_CORE_INFO("IBL {} resources ready for '{}': cube={}px, mips={}, brdf={}px.",
+                          finalResult ? "final" : "preview",
                           normalizedPath.string(),
                           result->cubeSize,
                           result->specularMipCount,
                           result->brdfLutSize);
         return true;
+    }
+
+    void IBLResources::ReleaseGPUResources()
+    {
+        m_SpecularTexture.reset();
+        m_BRDFLut.reset();
+        m_IrradianceSH = {};
+        m_SpecularMipCount = 0;
+        m_UsingPreview = false;
+        m_Ready = false;
+    }
+
+    void IBLResources::StartPrecompute(const std::filesystem::path &environmentPath)
+    {
+        auto pending = std::make_shared<PendingPrecompute>(environmentPath);
+        m_PendingPrecompute = pending;
+        PHYSARA_CORE_INFO("Queued IBL precompute for '{}'.", environmentPath.string());
+        std::thread(
+            [pending]()
+            {
+                try
+                {
+                    IBLPrecomputeSettings cacheOnlySettings{};
+                    cacheOnlySettings.createIfMissing = false;
+                    cacheOnlySettings.writeDebugOutputs = false;
+                    std::shared_ptr<IBLPrecomputeResult> cached = IBLPrecompute::LoadOrCreate(pending->path, cacheOnlySettings);
+                    if (cached != nullptr && cached->IsValid())
+                    {
+                        std::lock_guard lock(pending->mutex);
+                        pending->finalResult = std::move(cached);
+                        pending->finalFinished = true;
+                        return;
+                    }
+
+                    std::thread(
+                        [pending]()
+                        {
+                            try
+                            {
+                                PHYSARA_CORE_INFO("Starting final IBL cache build for '{}'.", pending->path.string());
+                                std::shared_ptr<IBLPrecomputeResult> final = IBLPrecompute::LoadOrCreate(pending->path);
+                                PHYSARA_CORE_INFO("Finished final IBL cache build for '{}': valid={}.",
+                                                  pending->path.string(),
+                                                  final != nullptr && final->IsValid());
+                                std::lock_guard lock(pending->mutex);
+                                pending->finalResult = std::move(final);
+                                pending->finalFinished = true;
+                            }
+                            catch (const std::exception &exception)
+                            {
+                                PHYSARA_CORE_ERROR("Final IBL precompute for '{}' failed: {}", pending->path.string(), exception.what());
+                                std::lock_guard lock(pending->mutex);
+                                pending->finalFinished = true;
+                            }
+                        })
+                        .detach();
+
+                    IBLPrecomputeSettings previewSettings{};
+                    previewSettings.cubeSize = 128u;
+                    previewSettings.brdfLutSize = 128u;
+                    previewSettings.specularSampleCount = 32u;
+                    previewSettings.brdfSampleCount = 256u;
+                    previewSettings.useCache = false;
+                    previewSettings.writeCache = false;
+                    previewSettings.writeDebugOutputs = false;
+                    std::shared_ptr<IBLPrecomputeResult> preview = IBLPrecompute::LoadOrCreate(pending->path, previewSettings);
+                    {
+                        std::lock_guard lock(pending->mutex);
+                        pending->previewResult = std::move(preview);
+                        pending->previewFinished = true;
+                    }
+                }
+                catch (const std::exception &exception)
+                {
+                    PHYSARA_CORE_ERROR("IBL precompute for '{}' failed: {}", pending->path.string(), exception.what());
+                    std::lock_guard lock(pending->mutex);
+                    pending->previewFinished = true;
+                    pending->finalFinished = true;
+                }
+            })
+            .detach();
     }
 
     bool IBLResources::Upload(RHI::RHIDevice *device, const IBLPrecomputeResult &result)
@@ -151,20 +213,16 @@ namespace Physara::Engine
             }
         }
 
-        m_BRDFLut = IBLResourcesDetail::CreateBRDFLutWithCompute(device, result.brdfLutSize);
-        if (m_BRDFLut == nullptr)
-        {
-            RHI::RHITextureDesc brdfDesc{};
-            brdfDesc.width = result.brdfLutSize;
-            brdfDesc.height = result.brdfLutSize;
-            brdfDesc.format = RHI::TextureFormat::RG16F;
-            brdfDesc.dimension = RHI::TextureDimension::Tex2D;
-            brdfDesc.usage = RHI::TextureUsage::Sampled;
-            brdfDesc.mipLevels = 1u;
-            brdfDesc.arrayLayers = 1u;
-            brdfDesc.initialData = result.brdfLutRG32F.data();
-            m_BRDFLut = device->CreateTexture(brdfDesc);
-        }
+        RHI::RHITextureDesc brdfDesc{};
+        brdfDesc.width = result.brdfLutSize;
+        brdfDesc.height = result.brdfLutSize;
+        brdfDesc.format = RHI::TextureFormat::RG16F;
+        brdfDesc.dimension = RHI::TextureDimension::Tex2D;
+        brdfDesc.usage = RHI::TextureUsage::Sampled;
+        brdfDesc.mipLevels = 1u;
+        brdfDesc.arrayLayers = 1u;
+        brdfDesc.initialData = result.brdfLutRG32F.data();
+        m_BRDFLut = device->CreateTexture(brdfDesc);
         if (m_BRDFLut == nullptr)
         {
             m_SpecularTexture.reset();

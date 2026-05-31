@@ -106,5 +106,7 @@ namespace Physara::RHI
         const RHIPipelineStateDesc *m_CurrentPipelineDesc{nullptr};
 
         GLuint m_PushConstantsBuffer{0};
+        GLuint m_ResolveReadFramebuffer{0};
+        GLuint m_ResolveDrawFramebuffer{0};
     };
 }
