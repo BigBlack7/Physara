@@ -45,7 +45,7 @@ namespace Physara::Editor
     struct EditorCameraSettings
     {
         float rotationSensitivity{0.12f};
-        float flySpeedMetersPerSecond{5.f};
+        float flySpeedMetersPerSecond{15.f};
         float boostMultiplier{4.f};
         float wheelDollyMeters{1.f};
     };

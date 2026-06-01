@@ -15,7 +15,6 @@
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/AssetManager.hpp>
-#include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/Resource/Types/Texture.hpp>
@@ -60,17 +59,20 @@ namespace Physara::Engine
             std::uint32_t padding1{0};
             std::uint32_t padding2{0};
         };
+        static_assert(sizeof(LightBufferHeader) % 16 == 0);
 
-        struct RenderSettingsGPUData
+        struct alignas(16) RenderSettingsGPUData
         {
             glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
         };
+        static_assert(sizeof(RenderSettingsGPUData) % 16 == 0);
 
-        struct IBLGPUData
+        struct alignas(16) IBLGPUData
         {
             glm::vec4 irradianceSH[9]{};
             glm::vec4 params{0.f, 0.f, 0.f, 0.f};
         };
+        static_assert(sizeof(IBLGPUData) % 16 == 0);
 
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
 
@@ -665,16 +667,7 @@ namespace Physara::Engine
             return cached->second.texture.get();
         }
 
-        std::shared_ptr<Texture> texture = context.assetManager->GetByPath<Texture>(normalizedPath);
-        if (texture == nullptr && !context.assetManager->GetAssetsRoot().empty())
-        {
-            const std::filesystem::path absolutePath = context.assetManager->GetAssetsRoot() / normalizedPath;
-            texture = TextureLoader::LoadRGBA8(absolutePath);
-            if (texture != nullptr && texture->IsLoaded() && !texture->rgba8Pixels.empty())
-            {
-                (void)context.assetManager->RegisterAsset<Texture>(normalizedPath, texture);
-            }
-        }
+        const std::shared_ptr<Texture> texture = context.assetManager->GetByPath<Texture>(normalizedPath);
         if (texture == nullptr || !texture->IsLoaded() || texture->rgba8Pixels.empty())
         {
             if (m_MissingTextureWarnings.insert(normalizedPath).second)

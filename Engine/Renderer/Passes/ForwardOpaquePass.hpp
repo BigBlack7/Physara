@@ -55,7 +55,7 @@ namespace Physara::Engine
         std::uint32_t debugView{0};
     };
 
-    struct ForwardMaterialGPUData
+    struct alignas(16) ForwardMaterialGPUData
     {
         glm::vec4 baseColor{1.f};
         glm::vec4 emissiveColorLuminance{0.f, 0.f, 0.f, 0.f};
@@ -65,6 +65,8 @@ namespace Physara::Engine
         glm::vec4 textureCoordSets{0.f, 0.f, 0.f, 0.f};
         glm::vec4 materialFlags{0.f, 0.f, 0.f, 0.f};
     };
+
+    static_assert(sizeof(ForwardMaterialGPUData) % 16 == 0);
 
     class ForwardOpaquePass final
     {

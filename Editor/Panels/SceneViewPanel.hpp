@@ -13,6 +13,11 @@
 #include <Editor/Camera/EditorCamera.hpp>
 #include <Engine/RHI/Core/IImGuiBackend.hpp>
 
+namespace Physara::Engine
+{
+    class AssetManager;
+}
+
 namespace Physara::Editor
 {
     struct SceneViewIconSet
@@ -32,7 +37,7 @@ namespace Physara::Editor
         using ViewportResizeCallback = std::function<void(std::uint32_t width, std::uint32_t height)>;
         using InputForwardCallback = std::function<void(const EditorCameraInputFrame &input)>;
 
-        SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry);
+        SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry, Engine::AssetManager &assetManager);
 
         void Draw();
         void SetPreviewTexture(RHI::ImGuiTextureHandle texture);
@@ -58,6 +63,7 @@ namespace Physara::Editor
     private:
         EditorContext &m_Context;
         const ShortcutRegistry &m_ShortcutRegistry;
+        Engine::AssetManager &m_AssetManager;
         RHI::ImGuiTextureHandle m_PreviewTexture{0};
         SceneViewIconSet m_Icons{};
         ViewportResizeCallback m_ResizeCallback{};

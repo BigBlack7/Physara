@@ -76,6 +76,7 @@ namespace Physara::RHI
 
     private:
         static constexpr std::uint32_t kMaxColorAttachments = 4;
+        static constexpr std::uint32_t kMaxVertexBindings = 16;
         static constexpr std::uint32_t kPushConstantsSize = 256;
 
         struct GLState
@@ -101,6 +102,43 @@ namespace Physara::RHI
             GLenum indexType = GL_UNSIGNED_INT;
         };
 
+        struct VertexBufferBindingState
+        {
+            GLuint buffer{0};
+            std::uint32_t offset{0};
+            std::uint32_t stride{0};
+            bool valid{false};
+        };
+
+        struct IndexBufferBindingState
+        {
+            GLuint buffer{0};
+            std::uint32_t offset{0};
+            GLenum indexType{GL_UNSIGNED_INT};
+            bool valid{false};
+        };
+
+        struct ViewportState
+        {
+            float x{0.f};
+            float y{0.f};
+            float width{0.f};
+            float height{0.f};
+            float minDepth{0.f};
+            float maxDepth{1.f};
+            bool valid{false};
+        };
+
+        struct ScissorState
+        {
+            std::int32_t x{0};
+            std::int32_t y{0};
+            std::uint32_t width{0};
+            std::uint32_t height{0};
+            bool enabled{false};
+            bool valid{false};
+        };
+
         GLState m_State{};
         const RHIRenderPassDesc *m_CurrentPassDesc{nullptr};
         const RHIPipelineStateDesc *m_CurrentPipelineDesc{nullptr};
@@ -108,5 +146,19 @@ namespace Physara::RHI
         GLuint m_PushConstantsBuffer{0};
         GLuint m_ResolveReadFramebuffer{0};
         GLuint m_ResolveDrawFramebuffer{0};
+        std::array<GLuint, 32> m_UniformBufferBindings{};
+        std::array<GLuint, 32> m_StorageBufferBindings{};
+        std::array<GLuint, 32> m_TextureBindings{};
+        std::array<GLuint, 32> m_SamplerBindings{};
+        bool m_PipelineStateValid{false};
+        std::array<VertexBufferBindingState, kMaxVertexBindings> m_VertexBufferBindings{};
+        IndexBufferBindingState m_IndexBufferBinding{};
+        ViewportState m_ViewportState{};
+        ScissorState m_ScissorState{};
+
+        void InvalidateBindingCache();
+        void InvalidatePipelineState();
+        void InvalidateVertexInputCache();
+        void InvalidateDynamicStateCache();
     };
 }

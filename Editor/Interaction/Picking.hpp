@@ -5,6 +5,11 @@
 #include <Editor/Core/EditorContext.hpp>
 #include <Engine/Scene/EntityId.hpp>
 
+namespace Physara::Engine
+{
+    class AssetManager;
+}
+
 namespace Physara::Editor
 {
     struct PickingRequest
@@ -17,11 +22,11 @@ namespace Physara::Editor
     class Picking final
     {
     public:
-        [[nodiscard]] Engine::EntityId Pick(const EditorContext &context, const PickingRequest &request) const;
+        [[nodiscard]] Engine::EntityId Pick(const EditorContext &context, const PickingRequest &request, Engine::AssetManager *assetManager) const;
         void Select(EditorContext &context, Engine::EntityId entity, const PickingRequest &request) const;
 
     private:
-        [[nodiscard]] Engine::EntityId PickMesh(const EditorContext &context, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, float &closestT) const;
+        [[nodiscard]] Engine::EntityId PickMesh(const EditorContext &context, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, float &closestT, Engine::AssetManager *assetManager) const;
         [[nodiscard]] Engine::EntityId PickLightProxy(const EditorContext &context, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, float &closestT) const;
     };
 }

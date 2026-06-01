@@ -1,8 +1,12 @@
 #include "Picking.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <string>
 
 #include <glm/common.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -14,6 +18,8 @@
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
+#include <Engine/Resource/AssetManager.hpp>
+#include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
@@ -55,7 +61,12 @@ namespace Physara::Editor
                 }
             }
 
-            outT = tMin;
+            if (tMax <= RayEpsilon)
+            {
+                return false;
+            }
+
+            outT = tMin > RayEpsilon ? tMin : tMax;
             return true;
         }
 
@@ -74,6 +85,36 @@ namespace Physara::Editor
             const float t = -b - root;
             outT = t > 0.f ? t : -b + root;
             return outT > 0.f;
+        }
+
+        bool RayIntersectsTriangle(const glm::vec3 &origin, const glm::vec3 &direction, const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &c, float &outT)
+        {
+            const glm::vec3 edgeAB = b - a;
+            const glm::vec3 edgeAC = c - a;
+            const glm::vec3 p = glm::cross(direction, edgeAC);
+            const float determinant = glm::dot(edgeAB, p);
+            if (std::abs(determinant) < RayEpsilon)
+            {
+                return false;
+            }
+
+            const float invDeterminant = 1.f / determinant;
+            const glm::vec3 t = origin - a;
+            const float u = glm::dot(t, p) * invDeterminant;
+            if (u < 0.f || u > 1.f)
+            {
+                return false;
+            }
+
+            const glm::vec3 q = glm::cross(t, edgeAB);
+            const float v = glm::dot(direction, q) * invDeterminant;
+            if (v < 0.f || u + v > 1.f)
+            {
+                return false;
+            }
+
+            outT = glm::dot(edgeAC, q) * invDeterminant;
+            return outT > RayEpsilon;
         }
 
         void Expand(glm::vec3 &minBounds, glm::vec3 &maxBounds, const glm::vec3 &point)
@@ -108,9 +149,67 @@ namespace Physara::Editor
         {
             selection.erase(std::remove(selection.begin(), selection.end(), entity), selection.end());
         }
+
+        std::string MeshResourcePath(const Engine::MeshComponent &mesh)
+        {
+            if (mesh.primitive.assetPath.find("#mesh/") != std::string::npos)
+            {
+                return mesh.primitive.assetPath;
+            }
+
+            return mesh.primitive.assetPath + "#mesh/" + std::to_string(mesh.primitive.meshIndex);
+        }
+
+        bool RayIntersectsMeshPrimitive(const Engine::MeshComponent &mesh, const glm::mat4 &world, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, Engine::AssetManager *assetManager, bool &testedGeometry, float &outT)
+        {
+            testedGeometry = false;
+            if (assetManager == nullptr || !mesh.HasMesh())
+            {
+                return false;
+            }
+
+            const std::shared_ptr<Engine::Mesh> meshResource = assetManager->GetByPath<Engine::Mesh>(MeshResourcePath(mesh));
+            if (meshResource == nullptr || mesh.primitive.primitiveIndex >= meshResource->primitives.size())
+            {
+                return false;
+            }
+
+            const Engine::MeshPrimitive &primitive = meshResource->primitives[mesh.primitive.primitiveIndex];
+            if (!primitive.HasGeometry())
+            {
+                return false;
+            }
+
+            testedGeometry = true;
+            bool hit = false;
+            float closestT = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i + 2u < primitive.indices.size(); i += 3u)
+            {
+                const std::uint32_t ia = primitive.indices[i];
+                const std::uint32_t ib = primitive.indices[i + 1u];
+                const std::uint32_t ic = primitive.indices[i + 2u];
+                if (ia >= primitive.vertices.size() || ib >= primitive.vertices.size() || ic >= primitive.vertices.size())
+                {
+                    continue;
+                }
+
+                const glm::vec3 a = glm::vec3(world * glm::vec4(primitive.vertices[ia].position, 1.f));
+                const glm::vec3 b = glm::vec3(world * glm::vec4(primitive.vertices[ib].position, 1.f));
+                const glm::vec3 c = glm::vec3(world * glm::vec4(primitive.vertices[ic].position, 1.f));
+                float t = 0.f;
+                if (RayIntersectsTriangle(rayOrigin, rayDirection, a, b, c, t) && t < closestT)
+                {
+                    closestT = t;
+                    hit = true;
+                }
+            }
+
+            outT = closestT;
+            return hit;
+        }
     }
 
-    Engine::EntityId Picking::Pick(const EditorContext &context, const PickingRequest &request) const
+    Engine::EntityId Picking::Pick(const EditorContext &context, const PickingRequest &request, Engine::AssetManager *assetManager) const
     {
         if (context.activeScene == nullptr || context.sceneView.width <= 0.f || context.sceneView.height <= 0.f)
         {
@@ -126,13 +225,15 @@ namespace Physara::Editor
         const glm::vec3 farPoint = glm::vec3(farH) / farH.w;
         const glm::vec3 rayDirection = glm::normalize(farPoint - nearPoint);
 
-        float closestT = std::numeric_limits<float>::max();
-        Engine::EntityId selected = PickMesh(context, nearPoint, rayDirection, closestT);
-        const Engine::EntityId light = PickLightProxy(context, nearPoint, rayDirection, closestT);
+        float lightClosestT = std::numeric_limits<float>::max();
+        const Engine::EntityId light = PickLightProxy(context, nearPoint, rayDirection, lightClosestT);
         if (light != Engine::NullEntity)
         {
-            selected = light;
+            return light;
         }
+
+        float closestT = std::numeric_limits<float>::max();
+        Engine::EntityId selected = PickMesh(context, nearPoint, rayDirection, closestT, assetManager);
         return selected;
     }
 
@@ -186,7 +287,7 @@ namespace Physara::Editor
         context.selectedEntities.push_back(entity);
     }
 
-    Engine::EntityId Picking::PickMesh(const EditorContext &context, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, float &closestT) const
+    Engine::EntityId Picking::PickMesh(const EditorContext &context, const glm::vec3 &rayOrigin, const glm::vec3 &rayDirection, float &closestT, Engine::AssetManager *assetManager) const
     {
         Engine::EntityId result = Engine::NullEntity;
         auto &registry = context.activeScene->GetRegistry();
@@ -200,10 +301,28 @@ namespace Physara::Editor
 
             glm::vec3 minBounds{};
             glm::vec3 maxBounds{};
-            PickingDetail::BuildWorldAABB(mesh.localBounds, transform.GetWorldMatrix(), minBounds, maxBounds);
+            const glm::mat4 &world = transform.GetWorldMatrix();
+            PickingDetail::BuildWorldAABB(mesh.localBounds, world, minBounds, maxBounds);
+
+            float aabbT = 0.f;
+            if (!PickingDetail::RayIntersectsAABB(rayOrigin, rayDirection, minBounds, maxBounds, aabbT) || aabbT >= closestT)
+            {
+                return;
+            }
 
             float t = 0.f;
-            if (PickingDetail::RayIntersectsAABB(rayOrigin, rayDirection, minBounds, maxBounds, t) && t < closestT)
+            bool testedGeometry = false;
+            const bool preciseHit = PickingDetail::RayIntersectsMeshPrimitive(mesh, world, rayOrigin, rayDirection, assetManager, testedGeometry, t);
+            if (testedGeometry && !preciseHit)
+            {
+                return;
+            }
+            if (!testedGeometry)
+            {
+                t = aabbT;
+            }
+
+            if (t < closestT)
             {
                 closestT = t;
                 result = entity;

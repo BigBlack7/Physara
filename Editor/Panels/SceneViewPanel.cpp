@@ -39,8 +39,8 @@ namespace Physara::Editor
         }
     }
 
-    SceneViewPanel::SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry)
-        : m_Context(context), m_ShortcutRegistry(shortcutRegistry)
+    SceneViewPanel::SceneViewPanel(EditorContext &context, const ShortcutRegistry &shortcutRegistry, Engine::AssetManager &assetManager)
+        : m_Context(context), m_ShortcutRegistry(shortcutRegistry), m_AssetManager(assetManager)
     {
     }
 
@@ -558,7 +558,7 @@ namespace Physara::Editor
         request.viewportPosition = {mouse.x - origin.x, mouse.y - origin.y};
         request.appendSelection = io.KeyShift;
         request.toggleSelection = io.KeyCtrl;
-        const Engine::EntityId picked = m_Picking.Pick(m_Context, request);
+        const Engine::EntityId picked = m_Picking.Pick(m_Context, request, &m_AssetManager);
         m_Picking.Select(m_Context, picked, request);
     }
 

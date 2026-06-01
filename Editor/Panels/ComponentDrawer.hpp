@@ -296,6 +296,7 @@ namespace Physara::Editor
         changed |= ImGui::DragFloat("ISO", &camera.iso, 1.f, 1.f, 25600.f, "%.0f");
         camera.exposureMode = Engine::CameraExposureMode::Manual;
         changed |= ImGui::SliderFloat("Exposure Compensation EV", &camera.exposureCompensationEV, -8.f, 8.f, "%.2f");
+        changed |= ImGui::SliderFloat("Navigation Speed", &camera.navigationSpeedMetersPerSecond, 0.1f, 100.f, "%.1f m/s", ImGuiSliderFlags_Logarithmic);
         changed |= ImGui::DragFloat("Near Clip", &camera.nearClipMeters, 0.01f, 0.001f, 100.f, "%.3f m");
         changed |= ImGui::DragFloat("Far Clip", &camera.farClipMeters, 1.f, 0.01f, 100000.f, "%.1f m");
 

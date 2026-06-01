@@ -99,6 +99,7 @@ namespace Physara::Engine
         float nearClipMeters{0.1f};
         float farClipMeters{1000.f};
         float orthographicHeightMeters{10.f};
+        float navigationSpeedMetersPerSecond{15.f};
 
         CameraComponent() = default;
         explicit CameraComponent(bool isPrimary) : primary(isPrimary) {}
@@ -114,7 +115,7 @@ namespace Physara::Engine
             nearClipMeters = std::max(nearClipMeters, 0.001f);
             farClipMeters = std::max(farClipMeters, nearClipMeters + 0.001f);
             orthographicHeightMeters = std::max(orthographicHeightMeters, 0.001f);
-            exposureMode = CameraExposureMode::Manual;
+            navigationSpeedMetersPerSecond = std::clamp(navigationSpeedMetersPerSecond, 0.01f, 1000.f);
         }
 
         // 真实相机焦距到视野角-计算垂直视野角(弧度)

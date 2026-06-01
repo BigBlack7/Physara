@@ -163,6 +163,13 @@ namespace Physara::Engine
             const glm::mat4 lightProjection = glm::ortho(minLS.x, maxLS.x, minLS.y, maxLS.y, nearDistance, farDistance);
             return lightProjection * lightView;
         }
+
+        bool CanInstanceTogether(const RenderDrawItem &first, const RenderDrawItem &candidate)
+        {
+            return first.submission != nullptr &&
+                   candidate.submission != nullptr &&
+                   first.primitiveKey == candidate.primitiveKey;
+        }
     }
 
     void ShadowPass::Execute(const ShadowPassContext &context)
@@ -427,29 +434,44 @@ namespace Physara::Engine
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
         std::uint32_t shadowObjectIndex = 0u;
-        for (const RenderDrawItem &item : context.renderProxy->GetBuckets().shadowCasters)
+        const std::vector<RenderDrawItem> &shadowCasters = context.renderProxy->GetBuckets().shadowCasters;
+        for (std::size_t i = 0; i < shadowCasters.size();)
         {
+            const RenderDrawItem &item = shadowCasters[i];
             if (item.submission == nullptr)
             {
+                ++i;
                 continue;
             }
 
-            const std::uint32_t drawObjectIndex = shadowObjectIndex++;
+            const std::uint32_t drawObjectIndex = shadowObjectIndex;
             MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats);
             if (primitive == nullptr || primitive->indexCount == 0)
             {
+                ++i;
+                ++shadowObjectIndex;
                 continue;
+            }
+
+            std::uint32_t instanceCount = 1u;
+            while (i + instanceCount < shadowCasters.size() &&
+                   ShadowPassDetail::CanInstanceTogether(item, shadowCasters[i + instanceCount]))
+            {
+                ++instanceCount;
             }
 
             context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer.get());
             context.commandList->SetIndexBuffer(primitive->indexBuffer.get());
-            context.commandList->DrawIndexed(primitive->indexCount, 1u, 0u, 0, drawObjectIndex);
+            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, 0u, 0, drawObjectIndex);
             if (context.stats != nullptr)
             {
                 ++context.stats->drawCalls;
-                ++context.stats->instances;
-                context.stats->triangles += primitive->indexCount / 3u;
+                context.stats->instances += instanceCount;
+                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * instanceCount;
             }
+
+            i += instanceCount;
+            shadowObjectIndex += instanceCount;
         }
     }
 }

@@ -154,7 +154,7 @@ namespace Physara::Editor
 
     EditorApp::EditorApp() : m_HierarchyPanel(m_Context),
                              m_InspectorPanel(m_Context, m_AssetManager),
-                             m_SceneViewPanel(m_Context, m_ShortcutRegistry),
+                             m_SceneViewPanel(m_Context, m_ShortcutRegistry, m_AssetManager),
                              m_ContentBrowserPanel(m_Context, m_IconManager, m_AssetManager),
                              m_RendererSettingsPanel(m_Context),
                              m_HelpShortcutsPanel(m_Context, m_ShortcutRegistry)
@@ -690,9 +690,16 @@ namespace Physara::Editor
         }
 
         Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
-        entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
-        FrameEditorCameraToScene();
-        m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
+        if (loadedDefaultScene)
+        {
+            m_EditorCamera.SyncFromSceneCamera(m_EditorScene.get());
+        }
+        else
+        {
+            entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
+            FrameEditorCameraToScene();
+            m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
+        }
         m_Context.selectedEntity = entity.GetHandle();
         m_Context.selectedEntities.clear();
         m_Context.selectedEntities.push_back(entity.GetHandle());

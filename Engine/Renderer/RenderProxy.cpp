@@ -169,7 +169,7 @@ namespace Physara::Engine
         CullAndBucket(m_SubmissionScratch, view, frameData);
         SortBuckets();
         RepackObjectsForSortedBuckets(frameData);
-        frameData.stats.visibleSubmissions = static_cast<std::uint32_t>(m_VisibleSubmissions.size());
+        frameData.stats.visibleSubmissions = m_VisibleSubmissionCount;
         frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.size());
         frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.size());
         frameData.stats.transparentItems = static_cast<std::uint32_t>(m_Buckets.transparent.size());
@@ -178,19 +178,18 @@ namespace Physara::Engine
     void RenderProxy::Reset()
     {
         m_Buckets.Clear();
-        m_VisibleSubmissions.clear();
         m_SubmissionScratch.clear();
+        m_VisibleSubmissionCount = 0;
     }
 
     void RenderProxy::CullAndBucket(const std::vector<RenderMeshSubmission> &submissions, const RenderView &view, FrameData &frameData)
     {
         const auto frustumPlanes = RenderProxyDetail::BuildFrustumPlanes(view.viewProjection);
 
-        m_VisibleSubmissions.reserve(submissions.size());
-
         for (const RenderMeshSubmission &submission : submissions)
         {
-            if (submission.material.castShadow && submission.material.alphaMode == AlphaMode::Opaque)
+            if (submission.material.castShadow &&
+                (submission.material.alphaMode == AlphaMode::Opaque || submission.material.alphaMode == AlphaMode::Mask))
             {
                 RenderDrawItem item{};
                 item.submission = &submission;
@@ -210,13 +209,11 @@ namespace Physara::Engine
 
             const RenderBucket bucket = GetBucket(submission);
 
-            const std::uint32_t submissionOrder = static_cast<std::uint32_t>(m_VisibleSubmissions.size());
-            m_VisibleSubmissions.push_back(submission);
             const RenderMeshSubmission &visibleSubmission = submission;
 
             RenderDrawItem item{};
             item.submission = &visibleSubmission;
-            item.objectIndex = submissionOrder;
+            item.objectIndex = m_VisibleSubmissionCount++;
             item.sortKey = BuildSortKey(visibleSubmission);
             const glm::vec3 cameraToObject = visibleSubmission.boundsCenter - view.position;
             item.cameraDistanceSq = glm::dot(cameraToObject, cameraToObject);
@@ -263,36 +260,50 @@ namespace Physara::Engine
     {
         frameData.objects.clear();
         frameData.materials.clear();
-        frameData.objects.reserve(m_SubmissionScratch.size());
+        frameData.objects.reserve(m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
         frameData.materials.reserve(m_SubmissionScratch.size());
 
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
-        objectIndexBySubmission.reserve(m_SubmissionScratch.size());
+        objectIndexBySubmission.reserve(frameData.objects.capacity());
         std::unordered_map<std::uint64_t, std::uint32_t> materialIndexBySignature{};
         materialIndexBySignature.reserve(m_SubmissionScratch.size());
 
-        for (const RenderMeshSubmission &submission : m_SubmissionScratch)
+        const auto appendBucketObjects = [&](std::vector<RenderDrawItem> &bucket)
         {
-            const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(submission.material);
-            std::uint32_t materialIndex = 0u;
-            const auto existingMaterial = materialIndexBySignature.find(materialSignature);
-            if (existingMaterial != materialIndexBySignature.end())
+            for (RenderDrawItem &item : bucket)
             {
-                materialIndex = existingMaterial->second;
-            }
-            else
-            {
-                materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
-                materialIndexBySignature.emplace(materialSignature, materialIndex);
-                frameData.materials.push_back(submission.material);
-            }
+                if (item.submission == nullptr)
+                {
+                    continue;
+                }
 
-            ObjectData object = BuildObjectData(submission, GetBucket(submission));
-            object.materialIndex = materialIndex;
-            const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
-            objectIndexBySubmission.emplace(&submission, objectIndex);
-            frameData.objects.push_back(object);
-        }
+                const RenderMeshSubmission &submission = *item.submission;
+                const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(submission.material);
+                std::uint32_t materialIndex = 0u;
+                const auto existingMaterial = materialIndexBySignature.find(materialSignature);
+                if (existingMaterial != materialIndexBySignature.end())
+                {
+                    materialIndex = existingMaterial->second;
+                }
+                else
+                {
+                    materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
+                    materialIndexBySignature.emplace(materialSignature, materialIndex);
+                    frameData.materials.push_back(submission.material);
+                }
+
+                ObjectData object = BuildObjectData(submission, GetBucket(submission));
+                object.materialIndex = materialIndex;
+                const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
+                objectIndexBySubmission.emplace(&submission, objectIndex);
+                item.objectIndex = objectIndex;
+                frameData.objects.push_back(object);
+            }
+        };
+
+        appendBucketObjects(m_Buckets.opaque);
+        appendBucketObjects(m_Buckets.unlit);
+        appendBucketObjects(m_Buckets.transparent);
 
         const auto bindObjectIndices = [&objectIndexBySubmission](std::vector<RenderDrawItem> &bucket)
         {

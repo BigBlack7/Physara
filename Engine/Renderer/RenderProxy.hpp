@@ -66,7 +66,7 @@ namespace Physara::Engine
 
     private:
         RenderDrawBuckets m_Buckets{};
-        std::vector<RenderMeshSubmission> m_VisibleSubmissions{};
         std::vector<RenderMeshSubmission> m_SubmissionScratch{};
+        std::uint32_t m_VisibleSubmissionCount{0};
     };
 }

@@ -13,7 +13,9 @@
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 #include <Engine/Resource/Loaders/GLTFLoader.hpp>
+#include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
+#include <Engine/Resource/Types/Texture.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
@@ -148,6 +150,60 @@ namespace Physara::Engine
         {
             return assetPath + "#mesh/" + std::to_string(meshIndex);
         }
+
+        void TryRegisterTexture(const TextureSlot &slot, AssetManager *assetManager, std::unordered_set<std::string> &registered)
+        {
+            if (!slot.IsBound() || assetManager == nullptr)
+            {
+                return;
+            }
+
+            const std::string normalizedPath = assetManager->NormalizePath(slot.path);
+            if (!registered.insert(normalizedPath).second || assetManager->GetByPath<Texture>(normalizedPath) != nullptr)
+            {
+                return;
+            }
+
+            std::shared_ptr<Texture> texture = TextureLoader::LoadRGBA8(normalizedPath);
+            if (texture == nullptr || !texture->IsLoaded())
+            {
+                PHYSARA_CORE_WARN("Scene material texture '{}' could not be loaded.", normalizedPath);
+                return;
+            }
+
+            texture->path = normalizedPath;
+            (void)assetManager->RegisterAsset<Texture>(normalizedPath, texture);
+            PHYSARA_CORE_INFO("Registered scene material texture '{}': {}x{}.", normalizedPath, texture->width, texture->height);
+        }
+
+        void RegisterMaterialTextures(const MaterialComponent &material, AssetManager *assetManager, std::unordered_set<std::string> &registered)
+        {
+            TryRegisterTexture(material.baseColorTexture, assetManager, registered);
+            TryRegisterTexture(material.metallicRoughnessTexture, assetManager, registered);
+            TryRegisterTexture(material.normalTexture, assetManager, registered);
+            TryRegisterTexture(material.occlusionTexture, assetManager, registered);
+            TryRegisterTexture(material.emissiveTexture, assetManager, registered);
+        }
+
+        void ApplyBaseColorAlphaPolicy(MaterialComponent &material, AssetManager *assetManager)
+        {
+            if (assetManager == nullptr || !material.baseColorTexture.IsBound())
+            {
+                return;
+            }
+
+            const std::shared_ptr<Texture> texture = assetManager->GetByPath<Texture>(material.baseColorTexture.path);
+            if (texture == nullptr || !texture->hasTransparentPixels)
+            {
+                return;
+            }
+
+            material.alphaMode = texture->hasPartialAlphaPixels ? AlphaMode::Blend : AlphaMode::Mask;
+            if (material.alphaMode == AlphaMode::Blend)
+            {
+                material.castShadow = false;
+            }
+        }
     }
 
     bool SceneSerializer::Serialize(const Scene &scene, const std::filesystem::path &path)
@@ -221,6 +277,7 @@ namespace Physara::Engine
                     cameraJson["nearClipMeters"] = camera->nearClipMeters;
                     cameraJson["farClipMeters"] = camera->farClipMeters;
                     cameraJson["orthographicHeightMeters"] = camera->orthographicHeightMeters;
+                    cameraJson["navigationSpeedMetersPerSecond"] = camera->navigationSpeedMetersPerSecond;
                     e["camera"] = std::move(cameraJson);
                 }
 
@@ -330,6 +387,7 @@ namespace Physara::Engine
             std::unordered_map<std::uint64_t, Entity> idToEntity;
             idToEntity.reserve(entities.size());
             std::unordered_map<std::string, std::uint32_t> meshAssetPaths;
+            std::unordered_set<std::string> registeredMaterialTextures;
 
             for (const SceneSerializerDetail::json &serialized : entities)
             {
@@ -363,6 +421,7 @@ namespace Physara::Engine
                     camera.nearClipMeters = c.value("nearClipMeters", camera.nearClipMeters);
                     camera.farClipMeters = c.value("farClipMeters", camera.farClipMeters);
                     camera.orthographicHeightMeters = c.value("orthographicHeightMeters", camera.orthographicHeightMeters);
+                    camera.navigationSpeedMetersPerSecond = c.value("navigationSpeedMetersPerSecond", camera.navigationSpeedMetersPerSecond);
                     camera.Sanitize();
                     entity.AddOrReplaceComponent<CameraComponent>(camera);
                 }
@@ -445,6 +504,8 @@ namespace Physara::Engine
                     material.normalTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("normalTexture", SceneSerializerDetail::json::object()));
                     material.occlusionTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("occlusionTexture", SceneSerializerDetail::json::object()));
                     material.emissiveTexture = SceneSerializerDetail::JsonToTextureSlot(m.value("emissiveTexture", SceneSerializerDetail::json::object()));
+                    SceneSerializerDetail::RegisterMaterialTextures(material, assetManager, registeredMaterialTextures);
+                    SceneSerializerDetail::ApplyBaseColorAlphaPolicy(material, assetManager);
                     material.Sanitize();
                     entity.AddOrReplaceComponent<MaterialComponent>(std::move(material));
                 }

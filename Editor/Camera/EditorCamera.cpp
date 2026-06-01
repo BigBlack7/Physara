@@ -66,6 +66,12 @@ namespace Physara::Editor
 
         const Engine::TransformComponent &transform = entity.GetComponent<Engine::TransformComponent>();
         m_Position = transform.localPosition;
+        if (entity.HasComponent<Engine::CameraComponent>())
+        {
+            Engine::CameraComponent camera = entity.GetComponent<Engine::CameraComponent>();
+            camera.Sanitize();
+            m_Settings.flySpeedMetersPerSecond = camera.navigationSpeedMetersPerSecond;
+        }
 
         glm::vec3 forward = transform.localRotationQuat * glm::vec3(0.f, 0.f, -1.f);
         if (glm::dot(forward, forward) <= 0.f)
@@ -99,6 +105,7 @@ namespace Physara::Editor
         {
             auto &camera = entity.GetComponent<Engine::CameraComponent>();
             camera.primary = true;
+            camera.navigationSpeedMetersPerSecond = m_Settings.flySpeedMetersPerSecond;
             camera.Sanitize();
         }
     }
@@ -200,6 +207,7 @@ namespace Physara::Editor
     Engine::CameraComponent EditorCamera::ToCameraComponent() const
     {
         Engine::CameraComponent camera{};
+        camera.navigationSpeedMetersPerSecond = m_Settings.flySpeedMetersPerSecond;
         camera.Sanitize();
         return camera;
     }

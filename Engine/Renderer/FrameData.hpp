@@ -20,7 +20,7 @@ namespace Physara::Engine
         Area = 3
     };
 
-    struct CameraData
+    struct alignas(16) CameraData
     {
         glm::mat4 view{1.f};
         glm::mat4 projection{1.f};
@@ -34,7 +34,7 @@ namespace Physara::Engine
         glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
     };
 
-    struct ObjectData
+    struct alignas(16) ObjectData
     {
         glm::mat4 model{1.f};
         glm::mat4 inverseTransposeModel{1.f};
@@ -45,7 +45,7 @@ namespace Physara::Engine
         std::uint32_t flags{0};
     };
 
-    struct LightData
+    struct alignas(16) LightData
     {
         glm::vec4 positionRange{0.f, 0.f, 0.f, 0.f};
         glm::vec4 directionType{0.f, -1.f, 0.f, 0.f};
@@ -54,12 +54,17 @@ namespace Physara::Engine
         glm::vec4 shadowParams{0.f, 0.f, 0.f, 0.f};
     };
 
-    struct ShadowData
+    struct alignas(16) ShadowData
     {
         glm::mat4 lightViewProjection{1.f};
         glm::vec4 params{0.f, 0.f, 0.f, 0.f};
         glm::vec4 controls{1.f, 0.f, 0.f, 0.f};
     };
+
+    static_assert(sizeof(CameraData) % 16 == 0);
+    static_assert(sizeof(ObjectData) % 16 == 0);
+    static_assert(sizeof(LightData) % 16 == 0);
+    static_assert(sizeof(ShadowData) % 16 == 0);
 
     struct FrameStatistics
     {

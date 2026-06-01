@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <glm/vec4.hpp>
@@ -133,6 +134,8 @@ namespace Physara::RHI
 
     OpenGLCommandList::OpenGLCommandList()
     {
+        InvalidateBindingCache();
+
         // 用一个小UBO模拟push constants. OpenGL没有原生push constant;
         // 这里固定绑定到slot 0, 后续shader约定一个小uniform block即可读取
         glCreateBuffers(1, &m_PushConstantsBuffer);
@@ -150,6 +153,37 @@ namespace Physara::RHI
 
         glCreateFramebuffers(1, &m_ResolveReadFramebuffer);
         glCreateFramebuffers(1, &m_ResolveDrawFramebuffer);
+    }
+
+    void OpenGLCommandList::InvalidateBindingCache()
+    {
+        m_UniformBufferBindings.fill(std::numeric_limits<GLuint>::max());
+        m_StorageBufferBindings.fill(std::numeric_limits<GLuint>::max());
+        m_TextureBindings.fill(std::numeric_limits<GLuint>::max());
+        m_SamplerBindings.fill(std::numeric_limits<GLuint>::max());
+    }
+
+    void OpenGLCommandList::InvalidatePipelineState()
+    {
+        m_PipelineStateValid = false;
+        m_State.program = 0;
+        m_State.vao = 0;
+        InvalidateVertexInputCache();
+    }
+
+    void OpenGLCommandList::InvalidateVertexInputCache()
+    {
+        for (VertexBufferBindingState &binding : m_VertexBufferBindings)
+        {
+            binding.valid = false;
+        }
+        m_IndexBufferBinding.valid = false;
+    }
+
+    void OpenGLCommandList::InvalidateDynamicStateCache()
+    {
+        m_ViewportState.valid = false;
+        m_ScissorState.valid = false;
     }
 
     OpenGLCommandList::~OpenGLCommandList()
@@ -182,13 +216,23 @@ namespace Physara::RHI
             return;
         }
 
-        glUseProgram(gl->GetProgram());
-        m_State.program = gl->GetProgram();
+        const bool invalidState = !m_PipelineStateValid;
+        const GLuint program = gl->GetProgram();
+        if (invalidState || m_State.program != program)
+        {
+            glUseProgram(program);
+            m_State.program = program;
+        }
 
         if (!gl->IsCompute())
         {
-            glBindVertexArray(gl->GetVAO());
-            m_State.vao = gl->GetVAO();
+            const GLuint vao = gl->GetVAO();
+            if (invalidState || m_State.vao != vao)
+            {
+                glBindVertexArray(vao);
+                m_State.vao = vao;
+                InvalidateVertexInputCache();
+            }
         }
 
         const auto &desc = gl->GetDesc();
@@ -197,55 +241,85 @@ namespace Physara::RHI
         if (gl->IsCompute())
         {
             // Compute pipeline只需要program, 后面的raster/depth/blend状态对compute无意义
+            m_PipelineStateValid = true;
             return;
         }
 
-        glDisable(GL_RASTERIZER_DISCARD);
-        glDisable(GL_STENCIL_TEST);
-        glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-        glDisable(GL_SAMPLE_COVERAGE);
-
-        if (desc.rasterizerState.cullMode == CullMode::None)
+        if (invalidState)
         {
-            glDisable(GL_CULL_FACE);
+            glDisable(GL_RASTERIZER_DISCARD);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+            glDisable(GL_SAMPLE_COVERAGE);
         }
-        else
+
+        if (invalidState || m_State.cullMode != desc.rasterizerState.cullMode)
         {
-            glEnable(GL_CULL_FACE);
-            glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
+            if (desc.rasterizerState.cullMode == CullMode::None)
+            {
+                glDisable(GL_CULL_FACE);
+            }
+            else
+            {
+                glEnable(GL_CULL_FACE);
+                glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
+            }
+            m_State.cullMode = desc.rasterizerState.cullMode;
         }
-        m_State.cullMode = desc.rasterizerState.cullMode;
 
-        glPolygonMode(GL_FRONT_AND_BACK, ToGLPolygonMode(desc.rasterizerState.polygonMode));
-        m_State.polygonMode = desc.rasterizerState.polygonMode;
-
-        if (desc.rasterizerState.depthBias != 0.f || desc.rasterizerState.depthBiasSlope != 0.f)
+        if (invalidState || m_State.polygonMode != desc.rasterizerState.polygonMode)
         {
-            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonMode(GL_FRONT_AND_BACK, ToGLPolygonMode(desc.rasterizerState.polygonMode));
+            m_State.polygonMode = desc.rasterizerState.polygonMode;
+        }
+
+        const bool currentDepthBiasEnabled = m_State.depthBias != 0.f || m_State.depthBiasSlope != 0.f;
+        const bool targetDepthBiasEnabled = desc.rasterizerState.depthBias != 0.f || desc.rasterizerState.depthBiasSlope != 0.f;
+        if (invalidState || currentDepthBiasEnabled != targetDepthBiasEnabled)
+        {
+            if (targetDepthBiasEnabled)
+            {
+                glEnable(GL_POLYGON_OFFSET_FILL);
+            }
+            else
+            {
+                glDisable(GL_POLYGON_OFFSET_FILL);
+            }
+        }
+        if (targetDepthBiasEnabled &&
+            (invalidState ||
+             m_State.depthBias != desc.rasterizerState.depthBias ||
+             m_State.depthBiasSlope != desc.rasterizerState.depthBiasSlope))
+        {
             glPolygonOffset(desc.rasterizerState.depthBiasSlope, desc.rasterizerState.depthBias);
-        }
-        else
-        {
-            glDisable(GL_POLYGON_OFFSET_FILL);
         }
         m_State.depthBias = desc.rasterizerState.depthBias;
         m_State.depthBiasSlope = desc.rasterizerState.depthBiasSlope;
 
-        if (desc.depthStencilState.depthTest)
+        if (invalidState || m_State.depthTest != desc.depthStencilState.depthTest)
         {
-            glEnable(GL_DEPTH_TEST);
+            if (desc.depthStencilState.depthTest)
+            {
+                glEnable(GL_DEPTH_TEST);
+            }
+            else
+            {
+                glDisable(GL_DEPTH_TEST);
+            }
+            m_State.depthTest = desc.depthStencilState.depthTest;
         }
-        else
+
+        if (invalidState || m_State.depthWrite != desc.depthStencilState.depthWrite)
         {
-            glDisable(GL_DEPTH_TEST);
+            glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
+            m_State.depthWrite = desc.depthStencilState.depthWrite;
         }
-        m_State.depthTest = desc.depthStencilState.depthTest;
 
-        glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
-        m_State.depthWrite = desc.depthStencilState.depthWrite;
-
-        glDepthFunc(ToGLDepthFunc(desc.depthStencilState.compareOp));
-        m_State.depthFunc = desc.depthStencilState.compareOp;
+        if (invalidState || m_State.depthFunc != desc.depthStencilState.compareOp)
+        {
+            glDepthFunc(ToGLDepthFunc(desc.depthStencilState.compareOp));
+            m_State.depthFunc = desc.depthStencilState.compareOp;
+        }
 
         for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
         {
@@ -255,32 +329,38 @@ namespace Physara::RHI
                 target = desc.blendStates[i];
             }
 
-            if (target.blendEnable)
+            if (invalidState || !OpenGLCommandListDetail::BlendStateEqual(m_State.blendStates[i], target))
             {
-                // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0, 以此类推;
-                // 如果某个attachment没有blend state, 就当作blend disabled
-                glEnablei(GL_BLEND, i);
-                glBlendFuncSeparatei(
-                    i,
-                    ToGLBlendFactor(target.srcColor),
-                    ToGLBlendFactor(target.dstColor),
-                    ToGLBlendFactor(target.srcAlpha),
-                    ToGLBlendFactor(target.dstAlpha));
-                glBlendEquationSeparatei(
-                    i,
-                    ToGLBlendOp(target.colorOp),
-                    ToGLBlendOp(target.alphaOp));
-            }
-            else
-            {
-                glDisablei(GL_BLEND, i);
+                if (target.blendEnable)
+                {
+                    // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0。
+                    glEnablei(GL_BLEND, i);
+                    glBlendFuncSeparatei(
+                        i,
+                        ToGLBlendFactor(target.srcColor),
+                        ToGLBlendFactor(target.dstColor),
+                        ToGLBlendFactor(target.srcAlpha),
+                        ToGLBlendFactor(target.dstAlpha));
+                    glBlendEquationSeparatei(
+                        i,
+                        ToGLBlendOp(target.colorOp),
+                        ToGLBlendOp(target.alphaOp));
+                }
+                else
+                {
+                    glDisablei(GL_BLEND, i);
+                }
+                m_State.blendStates[i] = target;
             }
 
-            m_State.blendStates[i] = target;
-            glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            if (invalidState)
+            {
+                glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
         }
 
         m_State.topology = ToGLTopology(desc.topology);
+        m_PipelineStateValid = true;
     }
 
     void OpenGLCommandList::SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset)
@@ -313,12 +393,30 @@ namespace Physara::RHI
             }
         }
 
+        if (binding >= m_VertexBufferBindings.size())
+        {
+            glVertexArrayVertexBuffer(
+                m_State.vao,
+                binding,
+                id,
+                static_cast<GLintptr>(offset),
+                static_cast<GLsizei>(stride));
+            return;
+        }
+
+        VertexBufferBindingState &cached = m_VertexBufferBindings[binding];
+        if (cached.valid && cached.buffer == id && cached.offset == offset && cached.stride == stride)
+        {
+            return;
+        }
+
         glVertexArrayVertexBuffer(
             m_State.vao,
             binding,
             id,
             static_cast<GLintptr>(offset),
             static_cast<GLsizei>(stride));
+        cached = VertexBufferBindingState{id, offset, stride, true};
     }
 
     void OpenGLCommandList::SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset)
@@ -338,9 +436,16 @@ namespace Physara::RHI
             id = glBuffer->GetGLID();
         }
 
-        glVertexArrayElementBuffer(m_State.vao, id);
+        if (!m_IndexBufferBinding.valid || m_IndexBufferBinding.buffer != id)
+        {
+            glVertexArrayElementBuffer(m_State.vao, id);
+            m_IndexBufferBinding.buffer = id;
+            m_IndexBufferBinding.valid = true;
+        }
         m_State.indexOffset = offset;
         m_State.indexType = GL_UNSIGNED_INT;
+        m_IndexBufferBinding.offset = offset;
+        m_IndexBufferBinding.indexType = m_State.indexType;
     }
 
     void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer)
@@ -353,7 +458,14 @@ namespace Physara::RHI
             id = glBuffer->GetGLID();
         }
 
-        glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
+        if (slot >= m_UniformBufferBindings.size() || m_UniformBufferBindings[slot] != id)
+        {
+            glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
+            if (slot < m_UniformBufferBindings.size())
+            {
+                m_UniformBufferBindings[slot] = id;
+            }
+        }
     }
 
     void OpenGLCommandList::SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler)
@@ -374,8 +486,22 @@ namespace Physara::RHI
             samplerID = glSampler->GetGLID();
         }
 
-        glBindTextureUnit(slot, texID);
-        glBindSampler(slot, samplerID);
+        if (slot >= m_TextureBindings.size() || m_TextureBindings[slot] != texID)
+        {
+            glBindTextureUnit(slot, texID);
+            if (slot < m_TextureBindings.size())
+            {
+                m_TextureBindings[slot] = texID;
+            }
+        }
+        if (slot >= m_SamplerBindings.size() || m_SamplerBindings[slot] != samplerID)
+        {
+            glBindSampler(slot, samplerID);
+            if (slot < m_SamplerBindings.size())
+            {
+                m_SamplerBindings[slot] = samplerID;
+            }
+        }
     }
 
     void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer)
@@ -388,8 +514,14 @@ namespace Physara::RHI
             id = glBuffer->GetGLID();
         }
 
-        // glBindBufferBase把buffer暴露给shader的layout(binding=N)
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
+        if (slot >= m_StorageBufferBindings.size() || m_StorageBufferBindings[slot] != id)
+        {
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
+            if (slot < m_StorageBufferBindings.size())
+            {
+                m_StorageBufferBindings[slot] = id;
+            }
+        }
     }
 
     void OpenGLCommandList::SetStorageTexture(
@@ -435,23 +567,47 @@ namespace Physara::RHI
     void OpenGLCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
     {
         // Viewport和depth range是动态状态; OpenGL坐标原点在左下
+        if (m_ViewportState.valid &&
+            m_ViewportState.x == x &&
+            m_ViewportState.y == y &&
+            m_ViewportState.width == width &&
+            m_ViewportState.height == height &&
+            m_ViewportState.minDepth == minDepth &&
+            m_ViewportState.maxDepth == maxDepth)
+        {
+            return;
+        }
+
         glViewport(
             static_cast<GLint>(x),
             static_cast<GLint>(y),
             static_cast<GLsizei>(width),
             static_cast<GLsizei>(height));
         glDepthRangef(minDepth, maxDepth);
+        m_ViewportState = ViewportState{x, y, width, height, minDepth, maxDepth, true};
     }
 
     void OpenGLCommandList::SetScissor(std::int32_t x, std::int32_t y, std::uint32_t width, std::uint32_t height)
     {
         // 当前RHI只有设置scissor, 没有禁用接口; 设置时确保GL_SCISSOR_TEST开启
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(
-            static_cast<GLint>(x),
-            static_cast<GLint>(y),
-            static_cast<GLsizei>(width),
-            static_cast<GLsizei>(height));
+        if (!m_ScissorState.valid || !m_ScissorState.enabled)
+        {
+            glEnable(GL_SCISSOR_TEST);
+        }
+
+        if (!m_ScissorState.valid ||
+            m_ScissorState.x != x ||
+            m_ScissorState.y != y ||
+            m_ScissorState.width != width ||
+            m_ScissorState.height != height)
+        {
+            glScissor(
+                static_cast<GLint>(x),
+                static_cast<GLint>(y),
+                static_cast<GLsizei>(width),
+                static_cast<GLsizei>(height));
+        }
+        m_ScissorState = ScissorState{x, y, width, height, true, true};
     }
 
     void OpenGLCommandList::PushConstants(ShaderStage stage, const void *data, std::uint32_t size, std::uint32_t offset)
@@ -485,6 +641,7 @@ namespace Physara::RHI
             m_PushConstantsBuffer,
             static_cast<GLintptr>(offset),
             static_cast<GLsizeiptr>(size));
+        m_UniformBufferBindings[0] = m_PushConstantsBuffer;
     }
 
     void OpenGLCommandList::BeginRenderPass(
@@ -495,6 +652,9 @@ namespace Physara::RHI
     {
         // OpenGL没有render pass对象. 这里把RHI RenderPassDesc翻译为:
         // 1) 绑定目标FBO; 2) 按loadOp清除attachment; 3)记录desc供EndRenderPass处理storeOp
+        InvalidateBindingCache();
+        InvalidatePipelineState();
+
         GLuint fboID = 0;
         if (framebuffer)
         {
@@ -630,6 +790,7 @@ namespace Physara::RHI
         }
 
         m_CurrentPassDesc = nullptr;
+        InvalidateDynamicStateCache();
     }
 
     void OpenGLCommandList::DrawIndexed(

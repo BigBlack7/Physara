@@ -152,6 +152,10 @@ namespace Physara::Engine
             }
 
             component.Sanitize();
+            if (component.type == LightType::Area)
+            {
+                return;
+            }
 
             LightData light{};
             light.positionRange = glm::vec4(glm::vec3(transform.GetWorldMatrix()[3]), component.rangeMeters);

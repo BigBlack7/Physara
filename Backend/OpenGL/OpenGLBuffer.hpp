@@ -18,8 +18,8 @@ namespace Physara::RHI
         std::uint32_t GetSize() const override;
         BufferUsageFlags GetUsage() const override;
 
-        void *Map() override;                                                                     // dynamic=true -> 返回m_persistentPtr; static -> assert
-        void Unmap() override;                                                                    // Persistent Mapping下为空操作
+        void *Map() override;
+        void Unmap() override;
         void UploadData(const void *data, std::uint32_t size, std::uint32_t offset = 0) override; // glNamedBufferSubData(static buffer的一次性上传)
 
         GLuint GetGLID() const { return m_ID; }
@@ -29,6 +29,6 @@ namespace Physara::RHI
         std::uint32_t m_Size{0};
         BufferUsageFlags m_Usage{0};
         bool m_Dynamic{false};
-        void *m_PersistentPtr{nullptr}; // Persistent Mapping指针, dynamic=true时有效
+        void *m_MappedPtr{nullptr};
     };
 }
