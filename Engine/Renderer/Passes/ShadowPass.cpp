@@ -55,6 +55,21 @@ namespace Physara::Engine
                    light.shadowParams.x > 0.5f;
         }
 
+        bool IsFiniteVec3(const glm::vec3 &value)
+        {
+            return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+        }
+
+        glm::vec3 SafeLightDirection(const glm::vec3 &direction)
+        {
+            const float lengthSq = glm::dot(direction, direction);
+            if (!IsFiniteVec3(direction) || lengthSq <= 0.000001f)
+            {
+                return glm::normalize(glm::vec3(-0.35f, -0.8f, -0.45f));
+            }
+            return direction * (1.f / std::sqrt(lengthSq));
+        }
+
         glm::vec3 PickStableUpVector(const glm::vec3 &direction)
         {
             const glm::vec3 worldUp(0.f, 1.f, 0.f);
@@ -72,50 +87,122 @@ namespace Physara::Engine
             maxBounds = glm::max(maxBounds, center + extent);
         }
 
-        bool BuildWorldCasterBounds(const RenderDrawBuckets &buckets, glm::vec3 &minBounds, glm::vec3 &maxBounds)
+        void ExpandItemWorldBounds(glm::vec3 &minBounds, glm::vec3 &maxBounds, const RenderDrawItem &item)
         {
-            minBounds = glm::vec3(std::numeric_limits<float>::max());
-            maxBounds = glm::vec3(-std::numeric_limits<float>::max());
+            if (item.submission == nullptr)
+            {
+                return;
+            }
+
+            const RenderMeshSubmission &submission = *item.submission;
+            if (submission.hasBounds)
+            {
+                ExpandBounds(minBounds, maxBounds, submission.boundsCenter, submission.boundsRadius);
+            }
+            else
+            {
+                ExpandBounds(minBounds, maxBounds, glm::vec3(submission.model[3]), 1.f);
+            }
+        }
+
+        void ExpandItemLightSpaceBounds(
+            const glm::mat4 &lightView,
+            glm::vec3 &minBounds,
+            glm::vec3 &maxBounds,
+            const RenderDrawItem &item)
+        {
+            if (item.submission == nullptr)
+            {
+                return;
+            }
+
+            const RenderMeshSubmission &submission = *item.submission;
+            const glm::vec3 center = submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
+            const float radius = submission.hasBounds ? std::max(submission.boundsRadius, 0.05f) : 1.f;
+            const glm::vec3 lightSpaceCenter = glm::vec3(lightView * glm::vec4(center, 1.f));
+            ExpandBounds(minBounds, maxBounds, lightSpaceCenter, radius);
+        }
+
+        bool ItemOverlapsLightSpaceXY(
+            const glm::mat4 &lightView,
+            const RenderDrawItem &item,
+            const glm::vec3 &minBounds,
+            const glm::vec3 &maxBounds)
+        {
+            if (item.submission == nullptr)
+            {
+                return false;
+            }
+
+            const RenderMeshSubmission &submission = *item.submission;
+            const glm::vec3 center = submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
+            const float radius = submission.hasBounds ? std::max(submission.boundsRadius, 0.05f) : 1.f;
+            const glm::vec3 lightSpaceCenter = glm::vec3(lightView * glm::vec4(center, 1.f));
+            return lightSpaceCenter.x + radius >= minBounds.x &&
+                   lightSpaceCenter.x - radius <= maxBounds.x &&
+                   lightSpaceCenter.y + radius >= minBounds.y &&
+                   lightSpaceCenter.y - radius <= maxBounds.y;
+        }
+
+        bool BuildBucketWorldBounds(
+            const std::vector<RenderDrawItem> &items,
+            glm::vec3 &minBounds,
+            glm::vec3 &maxBounds)
+        {
             bool hasBounds = false;
-            for (const RenderDrawItem &item : buckets.shadowCasters)
+            for (const RenderDrawItem &item : items)
             {
                 if (item.submission == nullptr)
                 {
                     continue;
                 }
 
-                const RenderMeshSubmission &submission = *item.submission;
-                if (submission.hasBounds)
-                {
-                    ExpandBounds(minBounds, maxBounds, submission.boundsCenter, submission.boundsRadius);
-                }
-                else
-                {
-                    ExpandBounds(minBounds, maxBounds, glm::vec3(submission.model[3]), 1.f);
-                }
+                ExpandItemWorldBounds(minBounds, maxBounds, item);
                 hasBounds = true;
             }
             return hasBounds;
         }
 
-        glm::mat4 BuildSingleMapLightViewProjection(
+        bool BuildVisibleReceiverBounds(
+            const RenderDrawBuckets &buckets,
+            glm::vec3 &minBounds,
+            glm::vec3 &maxBounds)
+        {
+            const bool hasOpaqueBounds = BuildBucketWorldBounds(buckets.opaque, minBounds, maxBounds);
+            const bool hasUnlitBounds = BuildBucketWorldBounds(buckets.unlit, minBounds, maxBounds);
+            const bool hasTransparentBounds = BuildBucketWorldBounds(buckets.transparent, minBounds, maxBounds);
+            return hasOpaqueBounds || hasUnlitBounds || hasTransparentBounds;
+        }
+
+        bool BuildSingleMapLightViewProjection(
             const RenderDrawBuckets &buckets,
             const glm::vec3 &lightDirection,
-            std::uint32_t resolution)
+            std::uint32_t resolution,
+            glm::mat4 &lightViewProjection,
+            std::vector<RenderDrawItem> &visibleShadowCasters)
         {
             glm::vec3 minWorld{};
             glm::vec3 maxWorld{};
-            if (!BuildWorldCasterBounds(buckets, minWorld, maxWorld))
+            minWorld = glm::vec3(std::numeric_limits<float>::max());
+            maxWorld = glm::vec3(-std::numeric_limits<float>::max());
+            bool hasReceiverBounds = BuildVisibleReceiverBounds(buckets, minWorld, maxWorld);
+            if (!hasReceiverBounds)
             {
-                return glm::mat4(1.f);
+                minWorld = glm::vec3(std::numeric_limits<float>::max());
+                maxWorld = glm::vec3(-std::numeric_limits<float>::max());
+                hasReceiverBounds = BuildBucketWorldBounds(buckets.shadowCasters, minWorld, maxWorld);
+            }
+            if (!hasReceiverBounds)
+            {
+                return false;
             }
 
             const glm::vec3 center = (minWorld + maxWorld) * 0.5f;
             const float radius = std::max(glm::length(maxWorld - center), 1.f);
             const glm::mat4 lightView = glm::lookAt(center - lightDirection * radius * 2.5f, center, PickStableUpVector(lightDirection));
 
-            glm::vec3 minLS(std::numeric_limits<float>::max());
-            glm::vec3 maxLS(-std::numeric_limits<float>::max());
+            glm::vec3 minReceiverLS(std::numeric_limits<float>::max());
+            glm::vec3 maxReceiverLS(-std::numeric_limits<float>::max());
             for (float z : {minWorld.z, maxWorld.z})
             {
                 for (float y : {minWorld.y, maxWorld.y})
@@ -123,17 +210,41 @@ namespace Physara::Engine
                     for (float x : {minWorld.x, maxWorld.x})
                     {
                         const glm::vec3 pointLS = glm::vec3(lightView * glm::vec4(x, y, z, 1.f));
-                        minLS = glm::min(minLS, pointLS);
-                        maxLS = glm::max(maxLS, pointLS);
+                        minReceiverLS = glm::min(minReceiverLS, pointLS);
+                        maxReceiverLS = glm::max(maxReceiverLS, pointLS);
                     }
                 }
             }
 
             const float paddingXY = std::max(radius * 0.05f, 0.5f);
-            minLS.x -= paddingXY;
-            minLS.y -= paddingXY;
-            maxLS.x += paddingXY;
-            maxLS.y += paddingXY;
+            minReceiverLS.x -= paddingXY;
+            minReceiverLS.y -= paddingXY;
+            maxReceiverLS.x += paddingXY;
+            maxReceiverLS.y += paddingXY;
+
+            visibleShadowCasters.clear();
+            visibleShadowCasters.reserve(buckets.shadowCasters.size());
+            glm::vec3 minCasterLS = minReceiverLS;
+            glm::vec3 maxCasterLS = maxReceiverLS;
+            for (const RenderDrawItem &item : buckets.shadowCasters)
+            {
+                if (!ItemOverlapsLightSpaceXY(lightView, item, minReceiverLS, maxReceiverLS))
+                {
+                    continue;
+                }
+
+                visibleShadowCasters.push_back(item);
+                ExpandItemLightSpaceBounds(lightView, minCasterLS, maxCasterLS, item);
+            }
+            if (visibleShadowCasters.empty())
+            {
+                return false;
+            }
+
+            glm::vec3 minLS = minReceiverLS;
+            glm::vec3 maxLS = maxReceiverLS;
+            minLS.z = minCasterLS.z;
+            maxLS.z = maxCasterLS.z;
 
             const float minExtent = 1.f;
             if (maxLS.x - minLS.x < minExtent)
@@ -161,7 +272,8 @@ namespace Physara::Engine
             const float nearDistance = std::max(0.01f, -maxLS.z - depthPadding);
             const float farDistance = std::max(nearDistance + 0.01f, -minLS.z + depthPadding);
             const glm::mat4 lightProjection = glm::ortho(minLS.x, maxLS.x, minLS.y, maxLS.y, nearDistance, farDistance);
-            return lightProjection * lightView;
+            lightViewProjection = lightProjection * lightView;
+            return true;
         }
 
         bool CanInstanceTogether(const RenderDrawItem &first, const RenderDrawItem &candidate)
@@ -181,6 +293,7 @@ namespace Physara::Engine
         }
 
         context.frameData->shadow = {};
+        m_ShadowCasterScratch.clear();
         if (m_Settings.algorithm == ShadowAlgorithm::None)
         {
             return;
@@ -229,8 +342,8 @@ namespace Physara::Engine
         m_ShadowMap.reset();
         m_CameraBuffer.reset();
         m_ObjectBuffer.reset();
+        m_ShadowCasterScratch.clear();
         m_LastCameraUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        m_LastObjectUploadSignature = std::numeric_limits<std::uint64_t>::max();
     }
 
     void ShadowPass::SetSettings(const ShadowSettings &settings)
@@ -294,12 +407,11 @@ namespace Physara::Engine
         }
 
         const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
-            ShadowPassDetail::MaxValue<std::size_t>(context.renderProxy->GetBuckets().shadowCasters.size(), 1u) * sizeof(glm::mat4));
+            ShadowPassDetail::MaxValue<std::size_t>(m_ShadowCasterScratch.size(), 1u) * sizeof(glm::mat4));
         if (m_ObjectBuffer == nullptr || m_ObjectBuffer->GetSize() < objectBufferSize)
         {
             m_ObjectBuffer = context.device->CreateBuffer(
                 ShadowPassDetail::DynamicBufferDesc(objectBufferSize, RHI::BufferUsage::Storage));
-            m_LastObjectUploadSignature = std::numeric_limits<std::uint64_t>::max();
         }
     }
 
@@ -331,11 +443,17 @@ namespace Physara::Engine
         }
 
         const LightData &light = frameData.lights[lightIndex];
-        const glm::vec3 lightDirection = glm::normalize(glm::vec3(light.directionType));
-        const glm::mat4 lightViewProjection = ShadowPassDetail::BuildSingleMapLightViewProjection(
+        const glm::vec3 lightDirection = ShadowPassDetail::SafeLightDirection(glm::vec3(light.directionType));
+        glm::mat4 lightViewProjection{1.f};
+        if (!ShadowPassDetail::BuildSingleMapLightViewProjection(
             buckets,
             lightDirection,
-            m_Settings.resolution);
+            m_Settings.resolution,
+            lightViewProjection,
+            m_ShadowCasterScratch))
+        {
+            return false;
+        }
 
         RenderView shadowView = RenderView::FromMatrices(
             glm::mat4(1.f),
@@ -408,8 +526,8 @@ namespace Physara::Engine
         }
 
         m_ObjectUploadScratch.clear();
-        m_ObjectUploadScratch.reserve(context.renderProxy->GetBuckets().shadowCasters.size());
-        for (const RenderDrawItem &item : context.renderProxy->GetBuckets().shadowCasters)
+        m_ObjectUploadScratch.reserve(m_ShadowCasterScratch.size());
+        for (const RenderDrawItem &item : m_ShadowCasterScratch)
         {
             if (item.submission != nullptr)
             {
@@ -419,8 +537,7 @@ namespace Physara::Engine
 
         const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
             ShadowPassDetail::MaxValue<std::size_t>(m_ObjectUploadScratch.size(), 1u) * sizeof(glm::mat4));
-        const std::uint64_t objectSignature = UploadHash::Vector(UploadHash::Offset, m_ObjectUploadScratch);
-        if (!m_ObjectUploadScratch.empty() && objectSignature != m_LastObjectUploadSignature)
+        if (!m_ObjectUploadScratch.empty())
         {
             m_ObjectBuffer->UploadData(m_ObjectUploadScratch.data(), objectBufferSize);
             if (context.stats != nullptr)
@@ -428,13 +545,12 @@ namespace Physara::Engine
                 context.stats->bufferUploadBytes += objectBufferSize;
             }
         }
-        m_LastObjectUploadSignature = objectSignature;
     }
 
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
         std::uint32_t shadowObjectIndex = 0u;
-        const std::vector<RenderDrawItem> &shadowCasters = context.renderProxy->GetBuckets().shadowCasters;
+        const std::vector<RenderDrawItem> &shadowCasters = m_ShadowCasterScratch;
         for (std::size_t i = 0; i < shadowCasters.size();)
         {
             const RenderDrawItem &item = shadowCasters[i];

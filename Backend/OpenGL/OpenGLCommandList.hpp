@@ -118,6 +118,14 @@ namespace Physara::RHI
             bool valid{false};
         };
 
+        struct BufferRangeBindingState
+        {
+            GLuint buffer{0};
+            std::uint32_t offset{0};
+            std::uint32_t size{0};
+            bool valid{false};
+        };
+
         struct ViewportState
         {
             float x{0.f};
@@ -146,8 +154,8 @@ namespace Physara::RHI
         GLuint m_PushConstantsBuffer{0};
         GLuint m_ResolveReadFramebuffer{0};
         GLuint m_ResolveDrawFramebuffer{0};
-        std::array<GLuint, 32> m_UniformBufferBindings{};
-        std::array<GLuint, 32> m_StorageBufferBindings{};
+        std::array<BufferRangeBindingState, 32> m_UniformBufferBindings{};
+        std::array<BufferRangeBindingState, 32> m_StorageBufferBindings{};
         std::array<GLuint, 32> m_TextureBindings{};
         std::array<GLuint, 32> m_SamplerBindings{};
         bool m_PipelineStateValid{false};

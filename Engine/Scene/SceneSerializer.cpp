@@ -336,6 +336,9 @@ namespace Physara::Engine
                     materialJson["reflectance"] = material->reflectance;
                     materialJson["ambientOcclusion"] = material->ambientOcclusion;
                     materialJson["alphaCutoff"] = material->alphaCutoff;
+                    materialJson["metallicTextureInfluence"] = material->metallicTextureInfluence;
+                    materialJson["roughnessTextureInfluence"] = material->roughnessTextureInfluence;
+                    materialJson["ambientOcclusionTextureInfluence"] = material->ambientOcclusionTextureInfluence;
                     materialJson["emissiveColor"] = SceneSerializerDetail::Vec3ToJson(material->emissiveColor);
                     materialJson["emissiveLuminance"] = material->emissiveLuminance;
                     materialJson["normalScale"] = material->normalScale;
@@ -494,6 +497,9 @@ namespace Physara::Engine
                     material.reflectance = m.value("reflectance", material.reflectance);
                     material.ambientOcclusion = m.value("ambientOcclusion", material.ambientOcclusion);
                     material.alphaCutoff = m.value("alphaCutoff", material.alphaCutoff);
+                    material.metallicTextureInfluence = m.value("metallicTextureInfluence", material.metallicTextureInfluence);
+                    material.roughnessTextureInfluence = m.value("roughnessTextureInfluence", material.roughnessTextureInfluence);
+                    material.ambientOcclusionTextureInfluence = m.value("ambientOcclusionTextureInfluence", material.ambientOcclusionTextureInfluence);
                     material.emissiveColor = SceneSerializerDetail::JsonToVec3(m.value("emissiveColor", SceneSerializerDetail::json::array()), material.emissiveColor);
                     material.emissiveLuminance = m.value("emissiveLuminance", material.emissiveLuminance);
                     material.normalScale = m.value("normalScale", material.normalScale);

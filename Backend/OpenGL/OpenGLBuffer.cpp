@@ -1,8 +1,6 @@
 #include "OpenGLBuffer.hpp"
 
 #include <cassert>
-#include <cstddef>
-#include <cstring>
 
 namespace Physara::RHI
 {
@@ -13,8 +11,19 @@ namespace Physara::RHI
         // DSA创建buffer object; 后续所有写入都通过named buffer API, 不依赖GL_ARRAY_BUFFER等绑定点
         glCreateBuffers(1, &m_ID);
 
-        // glNamedBufferStorage创建immutable storage. GL_DYNAMIC_STORAGE_BIT表示允许后续
-        // glNamedBufferSubData。动态buffer暂时走DSA上传，避免无ring/fence的persistent映射造成CPU/GPU串行。
+        m_SegmentStride = m_Size;
+        if (m_Dynamic)
+        {
+            GLint uniformAlignment = 1;
+            GLint storageAlignment = 1;
+            glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniformAlignment);
+            glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &storageAlignment);
+            const std::uint32_t alignment = static_cast<std::uint32_t>(uniformAlignment > storageAlignment ? uniformAlignment : storageAlignment);
+            m_SegmentStride = ((m_Size + alignment - 1u) / alignment) * alignment;
+        }
+        m_StorageSize = m_Dynamic ? m_SegmentStride * kDynamicRingSegments : m_Size;
+
+        // 动态buffer使用多段ring storage。上传从不覆盖当前绑定段，避免CPU/GPU围绕同一地址串行。
         GLbitfield storageFlags = GL_DYNAMIC_STORAGE_BIT;
         if (m_Dynamic)
         {
@@ -22,7 +31,16 @@ namespace Physara::RHI
         }
 
         // 创建并初始化缓冲区对象的不可变数据存储, 分配缓冲区内存空间, 设置访问权限和优化策略
-        glNamedBufferStorage(m_ID, static_cast<GLsizeiptr>(m_Size), desc.initialData, storageFlags);
+        glNamedBufferStorage(
+            m_ID,
+            static_cast<GLsizeiptr>(m_StorageSize),
+            m_Dynamic ? nullptr : desc.initialData,
+            storageFlags);
+        if (m_Dynamic && desc.initialData != nullptr)
+        {
+            glNamedBufferSubData(m_ID, 0, static_cast<GLsizeiptr>(m_Size), desc.initialData);
+            m_HasActiveSegment = true;
+        }
     }
 
     OpenGLBuffer::~OpenGLBuffer()
@@ -33,6 +51,14 @@ namespace Physara::RHI
             {
                 glUnmapNamedBuffer(m_ID);
                 m_MappedPtr = nullptr;
+            }
+            for (GLsync &fence : m_SegmentFences)
+            {
+                if (fence != nullptr)
+                {
+                    glDeleteSync(fence);
+                    fence = nullptr;
+                }
             }
 
             glDeleteBuffers(1, &m_ID);
@@ -55,9 +81,10 @@ namespace Physara::RHI
         // 当前只允许dynamic buffer map, 因为静态buffer没有创建MAP_*权限
         assert(m_Dynamic && "Map() only allowed for dynamic buffers.");
         assert(m_MappedPtr == nullptr && "Buffer is already mapped.");
+        BeginDynamicWrite();
         m_MappedPtr = glMapNamedBufferRange(
             m_ID,
-            0,
+            static_cast<GLintptr>(GetBindOffset()),
             static_cast<GLsizeiptr>(m_Size),
             GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
         assert(m_MappedPtr != nullptr);
@@ -81,7 +108,58 @@ namespace Physara::RHI
         assert((offset + size) <= m_Size);
         assert(m_MappedPtr == nullptr && "UploadData() called while buffer is mapped.");
 
-        // 静态/动态buffer都走DSA sub data更新。真正的高性能路径后续会升级为ring buffer + fence。
-        glNamedBufferSubData(m_ID, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size), data);
+        if (m_Dynamic && offset == 0u)
+        {
+            BeginDynamicWrite();
+        }
+
+        const std::uint32_t writeOffset = GetBindOffset() + offset;
+        glNamedBufferSubData(m_ID, static_cast<GLintptr>(writeOffset), static_cast<GLsizeiptr>(size), data);
+    }
+
+    std::uint32_t OpenGLBuffer::GetBindOffset() const
+    {
+        return m_Dynamic ? m_CurrentSegment * m_SegmentStride : 0u;
+    }
+
+    void OpenGLBuffer::BeginDynamicWrite()
+    {
+        assert(m_Dynamic);
+        if (m_HasActiveSegment)
+        {
+            RetireCurrentSegment();
+            m_CurrentSegment = (m_CurrentSegment + 1u) % kDynamicRingSegments;
+        }
+
+        WaitForSegment(m_CurrentSegment);
+        m_HasActiveSegment = true;
+    }
+
+    void OpenGLBuffer::RetireCurrentSegment()
+    {
+        GLsync &fence = m_SegmentFences[m_CurrentSegment];
+        if (fence != nullptr)
+        {
+            glDeleteSync(fence);
+        }
+        fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    }
+
+    void OpenGLBuffer::WaitForSegment(std::uint32_t segment)
+    {
+        GLsync &fence = m_SegmentFences[segment];
+        if (fence == nullptr)
+        {
+            return;
+        }
+
+        GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+        while (result == GL_TIMEOUT_EXPIRED)
+        {
+            result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1'000'000);
+        }
+
+        glDeleteSync(fence);
+        fence = nullptr;
     }
 }

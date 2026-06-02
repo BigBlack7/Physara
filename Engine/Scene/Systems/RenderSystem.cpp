@@ -37,6 +37,9 @@ namespace Physara::Engine
             component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
+            component.metallicTextureInfluence = material.metallicTextureInfluence;
+            component.roughnessTextureInfluence = material.roughnessTextureInfluence;
+            component.ambientOcclusionTextureInfluence = material.ambientOcclusionTextureInfluence;
             component.emissiveColor = material.emissiveColor;
             component.normalScale = material.normalScale;
             component.flipNormalY = material.flipNormalY;

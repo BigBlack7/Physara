@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <limits>
 #include <unordered_map>
 
 #include <glm/geometric.hpp>
@@ -125,6 +126,9 @@ namespace Physara::Engine
             HashCombine(seed, material.reflectance);
             HashCombine(seed, material.ambientOcclusion);
             HashCombine(seed, material.alphaCutoff);
+            HashCombine(seed, material.metallicTextureInfluence);
+            HashCombine(seed, material.roughnessTextureInfluence);
+            HashCombine(seed, material.ambientOcclusionTextureInfluence);
             HashCombine(seed, material.emissiveColor);
             HashCombine(seed, material.emissiveLuminance);
             HashCombine(seed, material.normalScale);
@@ -135,6 +139,38 @@ namespace Physara::Engine
             HashCombine(seed, material.occlusionTexture);
             HashCombine(seed, material.emissiveTexture);
             return seed;
+        }
+
+        bool TextureSlotEquals(const TextureSlot &lhs, const TextureSlot &rhs)
+        {
+            return lhs.path == rhs.path && lhs.texCoord == rhs.texCoord;
+        }
+
+        bool MaterialEquals(const MaterialComponent &lhs, const MaterialComponent &rhs)
+        {
+            return lhs.materialPath == rhs.materialPath &&
+                   lhs.shadingModel == rhs.shadingModel &&
+                   lhs.alphaMode == rhs.alphaMode &&
+                   lhs.doubleSided == rhs.doubleSided &&
+                   lhs.castShadow == rhs.castShadow &&
+                   lhs.baseColor == rhs.baseColor &&
+                   lhs.metallic == rhs.metallic &&
+                   lhs.roughness == rhs.roughness &&
+                   lhs.reflectance == rhs.reflectance &&
+                   lhs.ambientOcclusion == rhs.ambientOcclusion &&
+                   lhs.alphaCutoff == rhs.alphaCutoff &&
+                   lhs.metallicTextureInfluence == rhs.metallicTextureInfluence &&
+                   lhs.roughnessTextureInfluence == rhs.roughnessTextureInfluence &&
+                   lhs.ambientOcclusionTextureInfluence == rhs.ambientOcclusionTextureInfluence &&
+                   lhs.emissiveColor == rhs.emissiveColor &&
+                   lhs.emissiveLuminance == rhs.emissiveLuminance &&
+                   lhs.normalScale == rhs.normalScale &&
+                   lhs.flipNormalY == rhs.flipNormalY &&
+                   TextureSlotEquals(lhs.baseColorTexture, rhs.baseColorTexture) &&
+                   TextureSlotEquals(lhs.metallicRoughnessTexture, rhs.metallicRoughnessTexture) &&
+                   TextureSlotEquals(lhs.normalTexture, rhs.normalTexture) &&
+                   TextureSlotEquals(lhs.occlusionTexture, rhs.occlusionTexture) &&
+                   TextureSlotEquals(lhs.emissiveTexture, rhs.emissiveTexture);
         }
 
         std::uint64_t BuildMeshKey(const RenderMeshSubmission &submission)
@@ -163,7 +199,7 @@ namespace Physara::Engine
     void RenderProxy::Build(Scene &scene, const RenderView &view, FrameData &frameData, AssetManager *assetManager)
     {
         Reset();
-        LightSystem::Collect(scene, frameData.lights);
+        LightSystem::Collect(scene, frameData.lights, &view);
         frameData.stats.lightCount = static_cast<std::uint32_t>(frameData.lights.size());
         RenderSystem::Collect(scene, m_SubmissionScratch, assetManager);
         CullAndBucket(m_SubmissionScratch, view, frameData);
@@ -265,8 +301,8 @@ namespace Physara::Engine
 
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
         objectIndexBySubmission.reserve(frameData.objects.capacity());
-        std::unordered_map<std::uint64_t, std::uint32_t> materialIndexBySignature{};
-        materialIndexBySignature.reserve(m_SubmissionScratch.size());
+        std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> materialIndicesBySignature{};
+        materialIndicesBySignature.reserve(m_SubmissionScratch.size());
 
         const auto appendBucketObjects = [&](std::vector<RenderDrawItem> &bucket)
         {
@@ -279,16 +315,20 @@ namespace Physara::Engine
 
                 const RenderMeshSubmission &submission = *item.submission;
                 const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(submission.material);
-                std::uint32_t materialIndex = 0u;
-                const auto existingMaterial = materialIndexBySignature.find(materialSignature);
-                if (existingMaterial != materialIndexBySignature.end())
+                std::uint32_t materialIndex = std::numeric_limits<std::uint32_t>::max();
+                auto &candidateIndices = materialIndicesBySignature[materialSignature];
+                for (std::uint32_t candidateIndex : candidateIndices)
                 {
-                    materialIndex = existingMaterial->second;
+                    if (RenderProxyDetail::MaterialEquals(frameData.materials[candidateIndex], submission.material))
+                    {
+                        materialIndex = candidateIndex;
+                        break;
+                    }
                 }
-                else
+                if (materialIndex == std::numeric_limits<std::uint32_t>::max())
                 {
                     materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
-                    materialIndexBySignature.emplace(materialSignature, materialIndex);
+                    candidateIndices.push_back(materialIndex);
                     frameData.materials.push_back(submission.material);
                 }
 

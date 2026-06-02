@@ -12,6 +12,7 @@ struct MaterialData
     vec4 textureFlags;
     vec4 textureCoordSets;
     vec4 materialFlags;
+    vec4 textureInfluences;
 };
 
 struct MaterialInputs
@@ -21,6 +22,9 @@ struct MaterialInputs
     float perceptualRoughness;
     float reflectance;
     float ambientOcclusion;
+    float metallicTextureInfluence;
+    float roughnessTextureInfluence;
+    float ambientOcclusionTextureInfluence;
     vec3 emissiveColor;
     float emissiveLuminance;
     float normalScale;
@@ -69,6 +73,9 @@ MaterialInputs DefaultMaterialInputs()
     material.perceptualRoughness = 0.5;
     material.reflectance = 0.5;
     material.ambientOcclusion = 1.0;
+    material.metallicTextureInfluence = 1.0;
+    material.roughnessTextureInfluence = 1.0;
+    material.ambientOcclusionTextureInfluence = 1.0;
     material.emissiveColor = vec3(0.0);
     material.emissiveLuminance = 0.0;
     material.normalScale = 1.0;
@@ -100,6 +107,9 @@ MaterialInputs UnpackMaterialData(MaterialData data)
     material.perceptualRoughness = data.metallicRoughnessReflectanceAO.y;
     material.reflectance = data.metallicRoughnessReflectanceAO.z;
     material.ambientOcclusion = data.metallicRoughnessReflectanceAO.w;
+    material.metallicTextureInfluence = data.textureInfluences.x;
+    material.roughnessTextureInfluence = data.textureInfluences.y;
+    material.ambientOcclusionTextureInfluence = data.textureInfluences.z;
     material.alphaCutoff = data.alphaNormalFlags.x;
     material.normalScale = data.alphaNormalFlags.y;
     material.hasBaseColorTexture = data.textureFlags.x > 0.5;

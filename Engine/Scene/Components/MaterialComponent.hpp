@@ -92,10 +92,13 @@ namespace Physara::Engine
 
         glm::vec4 baseColor{1.f, 1.f, 1.f, 1.f};
         float metallic{0.f};
-        float roughness{0.5f};
+        float roughness{0.8f};
         float reflectance{0.5f};
         float ambientOcclusion{1.f};
         float alphaCutoff{0.5f};
+        float metallicTextureInfluence{1.f};
+        float roughnessTextureInfluence{1.f};
+        float ambientOcclusionTextureInfluence{1.f};
 
         glm::vec3 emissiveColor{0.f, 0.f, 0.f};
         float emissiveLuminance{0.f}; // cd/m^2 for emissive surfaces.
@@ -120,6 +123,9 @@ namespace Physara::Engine
             reflectance = std::clamp(reflectance, 0.f, 1.f);
             ambientOcclusion = std::clamp(ambientOcclusion, 0.f, 1.f);
             alphaCutoff = std::clamp(alphaCutoff, 0.f, 1.f);
+            metallicTextureInfluence = std::clamp(metallicTextureInfluence, 0.f, 1.f);
+            roughnessTextureInfluence = std::clamp(roughnessTextureInfluence, 0.f, 1.f);
+            ambientOcclusionTextureInfluence = std::clamp(ambientOcclusionTextureInfluence, 0.f, 1.f);
             normalScale = std::max(normalScale, 0.f);
             emissiveLuminance = std::max(emissiveLuminance, 0.f);
             castShadow = shadingModel == ShadingModel::Unlit ? false : castShadow;

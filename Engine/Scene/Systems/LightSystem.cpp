@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <Engine/Renderer/RenderView.hpp>
 #include <Engine/Scene/Components/LightComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
@@ -18,9 +20,32 @@ namespace Physara::Engine
     {
         constexpr std::uint32_t MaxForwardLights = 128;
 
+        struct LightCandidate
+        {
+            LightData data{};
+            float sortScore{0.f};
+            std::uint32_t sequence{0};
+        };
+
+        bool IsFiniteVec3(const glm::vec3 &value)
+        {
+            return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+        }
+
+        glm::vec3 DefaultLightDirection()
+        {
+            return glm::normalize(glm::vec3(-0.35f, -0.8f, -0.45f));
+        }
+
         glm::vec3 GetForwardDirection(const glm::mat4 &world)
         {
-            return glm::normalize(glm::vec3(world * glm::vec4(0.f, 0.f, -1.f, 0.f)));
+            const glm::vec3 forward = glm::vec3(world * glm::vec4(0.f, 0.f, -1.f, 0.f));
+            const float lengthSq = glm::dot(forward, forward);
+            if (!IsFiniteVec3(forward) || lengthSq <= 0.000001f)
+            {
+                return DefaultLightDirection();
+            }
+            return forward * (1.f / std::sqrt(lengthSq));
         }
 
         RenderLightType ToRenderLightType(LightType type)
@@ -128,29 +153,50 @@ namespace Physara::Engine
         {
             LightData light{};
             light.positionRange = glm::vec4(0.f, 0.f, 0.f, 0.f);
-            light.directionType = glm::vec4(glm::normalize(glm::vec3(-0.35f, -0.8f, -0.45f)), static_cast<float>(RenderLightType::Directional));
+            light.directionType = glm::vec4(DefaultLightDirection(), static_cast<float>(RenderLightType::Directional));
             light.colorIntensity = glm::vec4(1.f, 1.f, 1.f, 25000.f);
             light.spotAngles = glm::vec4(0.f);
             light.shadowParams = glm::vec4(0.f);
             return light;
         }
-    }
 
-    void LightSystem::Collect(Scene &scene, std::vector<LightData> &lights)
-    {
-        auto &registry = scene.GetRegistry();
-        auto view = registry.view<LightComponent, TransformComponent>();
-
-        lights.clear();
-        lights.reserve(std::min<std::size_t>(view.size_hint(), LightSystemDetail::MaxForwardLights));
-
-        view.each([&lights](EntityId, LightComponent component, const TransformComponent &transform)
+        float ComputeSortScore(const LightComponent &light, const glm::vec3 &position, const RenderView *view)
         {
-            if (lights.size() >= LightSystemDetail::MaxForwardLights)
+            const float intensity = std::max(GetIntensity(light), 0.f);
+            const float shadowBonus = light.castsShadow ? 10'000.f : 0.f;
+            if (light.type == LightType::Directional)
             {
-                return;
+                return 1'000'000'000.f + shadowBonus + intensity;
             }
 
+            const float range = std::max(light.rangeMeters, 0.001f);
+            const float rangeWeight = range * range;
+            float distanceSq = 1.f;
+            if (view != nullptr)
+            {
+                const glm::vec3 cameraToLight = position - view->position;
+                distanceSq = std::max(glm::dot(cameraToLight, cameraToLight), 1.f);
+            }
+
+            const float typeWeight = light.type == LightType::Spot ? 1.25f : 1.f;
+            return shadowBonus + typeWeight * intensity * rangeWeight / distanceSq;
+        }
+    }
+
+    void LightSystem::Collect(Scene &scene, std::vector<LightData> &lights, const RenderView *view)
+    {
+        auto &registry = scene.GetRegistry();
+        auto lightView = registry.view<LightComponent, TransformComponent>();
+
+        lights.clear();
+        lights.reserve(std::min<std::size_t>(lightView.size_hint(), LightSystemDetail::MaxForwardLights));
+
+        std::vector<LightSystemDetail::LightCandidate> candidates;
+        candidates.reserve(lightView.size_hint());
+
+        std::uint32_t sequence = 0u;
+        lightView.each([&candidates, &sequence, view](EntityId, LightComponent component, const TransformComponent &transform)
+        {
             component.Sanitize();
             if (component.type == LightType::Area)
             {
@@ -158,7 +204,8 @@ namespace Physara::Engine
             }
 
             LightData light{};
-            light.positionRange = glm::vec4(glm::vec3(transform.GetWorldMatrix()[3]), component.rangeMeters);
+            const glm::vec3 position = glm::vec3(transform.GetWorldMatrix()[3]);
+            light.positionRange = glm::vec4(position, component.rangeMeters);
             light.directionType = glm::vec4(
                 LightSystemDetail::GetForwardDirection(transform.GetWorldMatrix()),
                 static_cast<float>(LightSystemDetail::ToRenderLightType(component.type)));
@@ -172,8 +219,27 @@ namespace Physara::Engine
                 component.sourceRadiusMeters,
                 0.f);
 
-            lights.push_back(light);
+            LightSystemDetail::LightCandidate candidate{};
+            candidate.data = light;
+            candidate.sortScore = LightSystemDetail::ComputeSortScore(component, position, view);
+            candidate.sequence = sequence++;
+            candidates.push_back(candidate);
         });
+
+        std::sort(candidates.begin(), candidates.end(), [](const LightSystemDetail::LightCandidate &lhs, const LightSystemDetail::LightCandidate &rhs)
+        {
+            if (lhs.sortScore == rhs.sortScore)
+            {
+                return lhs.sequence < rhs.sequence;
+            }
+            return lhs.sortScore > rhs.sortScore;
+        });
+
+        const std::size_t lightCount = std::min<std::size_t>(candidates.size(), LightSystemDetail::MaxForwardLights);
+        for (std::size_t i = 0; i < lightCount; ++i)
+        {
+            lights.push_back(candidates[i].data);
+        }
 
         if (lights.empty())
         {

@@ -167,6 +167,40 @@ namespace Physara::Editor
             return changed;
         }
 
+        inline bool DrawTextureControlledScalar(
+            const char *name,
+            bool textureBound,
+            float &value,
+            float &textureInfluence,
+            float valueMin,
+            float valueMax)
+        {
+            bool changed = false;
+            ImGui::PushID(name);
+            if (textureBound)
+            {
+                const std::string fallbackLabel = std::string(name) + " Fallback";
+                changed |= ImGui::SliderFloat(fallbackLabel.c_str(), &value, valueMin, valueMax, "%.3f");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Used when texture influence is reduced or the texture slot is cleared.");
+                }
+
+                const std::string influenceLabel = std::string(name) + " Texture Influence";
+                changed |= ImGui::SliderFloat(influenceLabel.c_str(), &textureInfluence, 0.f, 1.f, "%.3f");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("1 uses the texture channel; 0 uses the fallback value.");
+                }
+            }
+            else
+            {
+                changed |= ImGui::SliderFloat(name, &value, valueMin, valueMax, "%.3f");
+            }
+            ImGui::PopID();
+            return changed;
+        }
+
         inline Engine::MaterialComponent ToComponent(const Engine::Material &material)
         {
             Engine::MaterialComponent component{};
@@ -181,6 +215,9 @@ namespace Physara::Editor
             component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
+            component.metallicTextureInfluence = material.metallicTextureInfluence;
+            component.roughnessTextureInfluence = material.roughnessTextureInfluence;
+            component.ambientOcclusionTextureInfluence = material.ambientOcclusionTextureInfluence;
             component.emissiveColor = material.emissiveColor;
             component.normalScale = material.normalScale;
             component.flipNormalY = material.flipNormalY;
@@ -421,10 +458,30 @@ namespace Physara::Editor
         }
         if (material.shadingModel == Engine::ShadingModel::Lit)
         {
-            changed |= ImGui::SliderFloat("Metallic", &material.metallic, 0.f, 1.f);
-            changed |= ImGui::SliderFloat("Roughness", &material.roughness, 0.045f, 1.f);
+            const bool hasMetallicRoughnessTexture = material.metallicRoughnessTexture.IsBound();
+            const bool hasOcclusionTexture = material.occlusionTexture.IsBound();
+            changed |= ComponentDrawerDetail::DrawTextureControlledScalar(
+                "Metallic",
+                hasMetallicRoughnessTexture,
+                material.metallic,
+                material.metallicTextureInfluence,
+                0.f,
+                1.f);
+            changed |= ComponentDrawerDetail::DrawTextureControlledScalar(
+                "Roughness",
+                hasMetallicRoughnessTexture,
+                material.roughness,
+                material.roughnessTextureInfluence,
+                0.045f,
+                1.f);
             changed |= ImGui::SliderFloat("Reflectance", &material.reflectance, 0.f, 1.f);
-            changed |= ImGui::SliderFloat("AO", &material.ambientOcclusion, 0.f, 1.f);
+            changed |= ComponentDrawerDetail::DrawTextureControlledScalar(
+                "AO",
+                hasOcclusionTexture,
+                material.ambientOcclusion,
+                material.ambientOcclusionTextureInfluence,
+                0.f,
+                1.f);
             changed |= ImGui::SliderFloat("Normal Scale", &material.normalScale, 0.f, 4.f);
             changed |= ImGui::Checkbox("Flip Normal Y", &material.flipNormalY);
             if (ImGui::IsItemHovered())
@@ -454,13 +511,24 @@ namespace Physara::Editor
         {
             ImGui::TextDisabled("Texture paths are stored relative to Assets. UV Set selects UV0 or UV1 from the mesh.");
             changed |= ComponentDrawerDetail::DrawTextureSlot("Base Color", material.baseColorTexture, context);
+            const bool hadMetallicRoughnessTexture = material.metallicRoughnessTexture.IsBound();
             changed |= ComponentDrawerDetail::DrawTextureSlot("ARM / Metallic Roughness", material.metallicRoughnessTexture, context);
+            if (!hadMetallicRoughnessTexture && material.metallicRoughnessTexture.IsBound())
+            {
+                material.metallic = 0.f;
+                material.roughness = 0.8f;
+                material.metallicTextureInfluence = 1.f;
+                material.roughnessTextureInfluence = 1.f;
+                changed = true;
+            }
             if (material.metallicRoughnessTexture.IsBound())
             {
                 if (ImGui::SmallButton("Use ARM Red Channel as AO"))
                 {
                     material.occlusionTexture.path = material.metallicRoughnessTexture.path;
                     material.occlusionTexture.texCoord = material.metallicRoughnessTexture.texCoord;
+                    material.ambientOcclusion = 1.f;
+                    material.ambientOcclusionTextureInfluence = 1.f;
                     changed = true;
                 }
                 if (ImGui::IsItemHovered())
@@ -469,7 +537,14 @@ namespace Physara::Editor
                 }
             }
             changed |= ComponentDrawerDetail::DrawTextureSlot("Normal", material.normalTexture, context);
+            const bool hadOcclusionTexture = material.occlusionTexture.IsBound();
             changed |= ComponentDrawerDetail::DrawTextureSlot("Occlusion", material.occlusionTexture, context);
+            if (!hadOcclusionTexture && material.occlusionTexture.IsBound())
+            {
+                material.ambientOcclusion = 1.f;
+                material.ambientOcclusionTextureInfluence = 1.f;
+                changed = true;
+            }
             changed |= ComponentDrawerDetail::DrawTextureSlot("Emissive", material.emissiveTexture, context);
         }
 

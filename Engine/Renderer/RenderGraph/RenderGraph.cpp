@@ -21,17 +21,17 @@ namespace Physara::Engine::RenderGraphDetail
         bool used{false};
     };
 
-    struct CompiledGraph
-    {
-        std::vector<std::uint32_t> order{};
-        std::vector<ResourceLifetime> lifetimes{};
-    };
-
     struct CombinedAccess
     {
         RenderGraphResourceHandle resource{};
         bool read{false};
         bool write{false};
+    };
+
+    struct CompiledGraph
+    {
+        std::vector<std::uint32_t> order{};
+        std::vector<ResourceLifetime> lifetimes{};
     };
 
     struct TrackedState
@@ -210,10 +210,15 @@ namespace Physara::Engine
         std::vector<std::vector<std::uint32_t>> edges(passCount);
         std::vector<std::uint32_t> lastWriter(resourceCount, kInvalidPass);
         std::vector<std::vector<std::uint32_t>> readersSinceWrite(resourceCount);
+        std::vector<std::vector<CombinedAccess>> accesses(passCount);
+        for (std::uint32_t passIndex = 0; passIndex < passCount; ++passIndex)
+        {
+            accesses[passIndex] = CombineAccesses(m_Passes[passIndex]);
+        }
 
         for (std::uint32_t passIndex = 0; passIndex < passCount; ++passIndex)
         {
-            for (const CombinedAccess &access : CombineAccesses(m_Passes[passIndex]))
+            for (const CombinedAccess &access : accesses[passIndex])
             {
                 if (access.resource.index >= resourceCount)
                 {
@@ -262,7 +267,7 @@ namespace Physara::Engine
         for (std::uint32_t passIndex = 0; passIndex < passCount; ++passIndex)
         {
             bool root = m_Passes[passIndex].HasSideEffect();
-            for (const CombinedAccess &access : CombineAccesses(m_Passes[passIndex]))
+            for (const CombinedAccess &access : accesses[passIndex])
             {
                 if (access.write && access.resource.index < resourceCount && m_Resources[access.resource.index].IsOutput())
                 {
@@ -363,8 +368,7 @@ namespace Physara::Engine
 
         for (std::uint32_t orderIndex = 0; orderIndex < compiled.order.size(); ++orderIndex)
         {
-            const PassNode &pass = m_Passes[compiled.order[orderIndex]];
-            for (const CombinedAccess &access : CombineAccesses(pass))
+            for (const CombinedAccess &access : accesses[compiled.order[orderIndex]])
             {
                 if (access.resource.index >= resourceCount)
                 {

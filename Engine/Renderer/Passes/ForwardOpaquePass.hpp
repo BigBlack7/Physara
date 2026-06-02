@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <limits>
 #include <string>
@@ -64,6 +65,7 @@ namespace Physara::Engine
         glm::vec4 textureFlags{0.f, 0.f, 0.f, 0.f};
         glm::vec4 textureCoordSets{0.f, 0.f, 0.f, 0.f};
         glm::vec4 materialFlags{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 textureInfluences{1.f, 1.f, 1.f, 0.f};
     };
 
     static_assert(sizeof(ForwardMaterialGPUData) % 16 == 0);
@@ -81,8 +83,15 @@ namespace Physara::Engine
             bool generatedMipmaps{false};
         };
 
+        struct MaterialTextureBinding
+        {
+            std::array<RHI::RHITexture *, 5> textures{};
+            RHI::RHISampler *sampler{nullptr};
+        };
+
         void EnsureFrameBuffers(const ForwardPassContext &context);
         void EnsureDefaultTextures(const ForwardPassContext &context);
+        void EnsureMaterialTextureBindings(const ForwardPassContext &context);
         void ExecuteBuckets(const ForwardPassContext &context, bool transparent);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         [[nodiscard]] RHI::RHITexture *GetOrCreateTexture(const ForwardPassContext &context, const std::string &texturePath);
@@ -112,12 +121,12 @@ namespace Physara::Engine
         std::unordered_map<std::string, TextureGPUResource> m_TextureCache{};
         std::unordered_set<std::string> m_MissingTextureWarnings{};
         std::vector<ForwardMaterialGPUData> m_MaterialUploadScratch{};
+        std::vector<MaterialTextureBinding> m_MaterialTextureBindings{};
         RHI::RHITexture *m_BoundTextures[5]{};
         RHI::RHISampler *m_BoundSampler{nullptr};
         std::uint64_t m_LastUploadedFrameIndex{std::numeric_limits<std::uint64_t>::max()};
+        std::uint64_t m_TextureBindingFrameIndex{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastCameraUploadSignature{std::numeric_limits<std::uint64_t>::max()};
-        std::uint64_t m_LastObjectUploadSignature{std::numeric_limits<std::uint64_t>::max()};
-        std::uint64_t m_LastLightUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastMaterialUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastRenderSettingsUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         std::uint64_t m_LastShadowUploadSignature{std::numeric_limits<std::uint64_t>::max()};

@@ -50,6 +50,18 @@ namespace Physara::RHI
         {
             // OpenGL没有Vulkan那种显式layout/state transition; 这里把RHI的资源状态语义
             // 翻译成glMemoryBarrier的可见性bit, 保证前序shader/FBO/copy写入对后续读写可见
+            const bool framebufferWriteToShaderRead =
+                (barrier.before == ResourceState::RenderTarget || barrier.before == ResourceState::DepthWrite) &&
+                barrier.after == ResourceState::ShaderResource &&
+                (barrier.srcAccess & (ResourceAccess::ColorAttachmentWrite | ResourceAccess::DepthStencilWrite)) != 0u &&
+                (barrier.dstAccess & ResourceAccess::ShaderRead) != 0u &&
+                (barrier.srcAccess & (ResourceAccess::ShaderWrite | ResourceAccess::TransferWrite)) == 0u &&
+                (barrier.dstAccess & (ResourceAccess::ShaderWrite | ResourceAccess::TransferWrite)) == 0u;
+            if (framebufferWriteToShaderRead)
+            {
+                return 0;
+            }
+
             GLbitfield bits = 0;
 
             auto hasBeforeOrAfter = [&barrier](ResourceState state)
@@ -157,8 +169,14 @@ namespace Physara::RHI
 
     void OpenGLCommandList::InvalidateBindingCache()
     {
-        m_UniformBufferBindings.fill(std::numeric_limits<GLuint>::max());
-        m_StorageBufferBindings.fill(std::numeric_limits<GLuint>::max());
+        for (BufferRangeBindingState &binding : m_UniformBufferBindings)
+        {
+            binding.valid = false;
+        }
+        for (BufferRangeBindingState &binding : m_StorageBufferBindings)
+        {
+            binding.valid = false;
+        }
         m_TextureBindings.fill(std::numeric_limits<GLuint>::max());
         m_SamplerBindings.fill(std::numeric_limits<GLuint>::max());
     }
@@ -452,20 +470,44 @@ namespace Physara::RHI
     {
         // UBO仍然是binding point语义; glBindBufferBase把buffer暴露给shader的layout(binding=N)
         GLuint id = 0;
+        std::uint32_t bindOffset = 0u;
+        std::uint32_t bindSize = 0u;
         if (buffer)
         {
             auto *glBuffer = static_cast<OpenGLBuffer *>(buffer);
             id = glBuffer->GetGLID();
+            bindOffset = glBuffer->GetBindOffset();
+            bindSize = glBuffer->GetBindSize();
         }
 
-        if (slot >= m_UniformBufferBindings.size() || m_UniformBufferBindings[slot] != id)
+        if (slot >= m_UniformBufferBindings.size())
+        {
+            if (id != 0 && bindSize != 0u)
+            {
+                glBindBufferRange(GL_UNIFORM_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+            }
+            else
+            {
+                glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
+            }
+            return;
+        }
+
+        BufferRangeBindingState &cached = m_UniformBufferBindings[slot];
+        if (cached.valid && cached.buffer == id && cached.offset == bindOffset && cached.size == bindSize)
+        {
+            return;
+        }
+
+        if (id != 0 && bindSize != 0u)
+        {
+            glBindBufferRange(GL_UNIFORM_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+        }
+        else
         {
             glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
-            if (slot < m_UniformBufferBindings.size())
-            {
-                m_UniformBufferBindings[slot] = id;
-            }
         }
+        cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
     }
 
     void OpenGLCommandList::SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler)
@@ -508,20 +550,44 @@ namespace Physara::RHI
     {
         // SSBO用于大块结构化数据, 例如object data、light list、tile light indices
         GLuint id = 0;
+        std::uint32_t bindOffset = 0u;
+        std::uint32_t bindSize = 0u;
         if (buffer)
         {
             auto *glBuffer = static_cast<OpenGLBuffer *>(buffer);
             id = glBuffer->GetGLID();
+            bindOffset = glBuffer->GetBindOffset();
+            bindSize = glBuffer->GetBindSize();
         }
 
-        if (slot >= m_StorageBufferBindings.size() || m_StorageBufferBindings[slot] != id)
+        if (slot >= m_StorageBufferBindings.size())
+        {
+            if (id != 0 && bindSize != 0u)
+            {
+                glBindBufferRange(GL_SHADER_STORAGE_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+            }
+            else
+            {
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
+            }
+            return;
+        }
+
+        BufferRangeBindingState &cached = m_StorageBufferBindings[slot];
+        if (cached.valid && cached.buffer == id && cached.offset == bindOffset && cached.size == bindSize)
+        {
+            return;
+        }
+
+        if (id != 0 && bindSize != 0u)
+        {
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+        }
+        else
         {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
-            if (slot < m_StorageBufferBindings.size())
-            {
-                m_StorageBufferBindings[slot] = id;
-            }
         }
+        cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
     }
 
     void OpenGLCommandList::SetStorageTexture(
@@ -641,7 +707,7 @@ namespace Physara::RHI
             m_PushConstantsBuffer,
             static_cast<GLintptr>(offset),
             static_cast<GLsizeiptr>(size));
-        m_UniformBufferBindings[0] = m_PushConstantsBuffer;
+        m_UniformBufferBindings[0] = BufferRangeBindingState{m_PushConstantsBuffer, offset, size, true};
     }
 
     void OpenGLCommandList::BeginRenderPass(
@@ -894,13 +960,21 @@ namespace Physara::RHI
     {
         // 新接口按RHIResourceBarrier映射barrier bits, 后续RenderGraph可直接走这里
         (void)texture;
-        glMemoryBarrier(OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier));
+        const GLbitfield bits = OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier);
+        if (bits != 0)
+        {
+            glMemoryBarrier(bits);
+        }
     }
 
     void OpenGLCommandList::BufferBarrier(RHIBuffer *buffer, const RHIResourceBarrier &barrier)
     {
         (void)buffer;
-        glMemoryBarrier(OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier));
+        const GLbitfield bits = OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier);
+        if (bits != 0)
+        {
+            glMemoryBarrier(bits);
+        }
     }
 
     void OpenGLCommandList::CopyTextureToTexture(RHITexture *src, RHITexture *dst)

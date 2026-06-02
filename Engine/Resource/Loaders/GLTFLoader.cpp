@@ -653,6 +653,19 @@ namespace Physara::Engine
                 TexturePathFromInfo(model, gltfPath, source.emissive_texture, assetManager),
                 static_cast<std::uint32_t>(std::max(source.emissive_texture.tex_coord, 0)));
 
+            if (material.metallicRoughnessTexture.IsBound())
+            {
+                material.metallic = 0.f;
+                material.roughness = 0.8f;
+                material.metallicTextureInfluence = 1.f;
+                material.roughnessTextureInfluence = 1.f;
+            }
+            if (material.occlusionTexture.IsBound())
+            {
+                material.ambientOcclusion = 1.f;
+                material.ambientOcclusionTextureInfluence = 1.f;
+            }
+
             return material;
         }
 
@@ -735,6 +748,9 @@ namespace Physara::Engine
             component.reflectance = material.reflectance;
             component.ambientOcclusion = material.ambientOcclusion;
             component.alphaCutoff = material.alphaCutoff;
+            component.metallicTextureInfluence = material.metallicTextureInfluence;
+            component.roughnessTextureInfluence = material.roughnessTextureInfluence;
+            component.ambientOcclusionTextureInfluence = material.ambientOcclusionTextureInfluence;
             component.emissiveColor = material.emissiveColor;
             component.normalScale = material.normalScale;
             component.flipNormalY = material.flipNormalY;

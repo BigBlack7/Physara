@@ -22,11 +22,14 @@ namespace Physara::Engine
         bool castShadow{true};
 
         glm::vec4 baseColor{1.f};
-        float metallic{1.f};
-        float roughness{1.f};
+        float metallic{0.f};
+        float roughness{0.8f};
         float reflectance{0.5f};
         float ambientOcclusion{1.f};
         float alphaCutoff{0.5f};
+        float metallicTextureInfluence{1.f};
+        float roughnessTextureInfluence{1.f};
+        float ambientOcclusionTextureInfluence{1.f};
         glm::vec3 emissiveColor{0.f};
         float normalScale{1.f};
         bool flipNormalY{true};

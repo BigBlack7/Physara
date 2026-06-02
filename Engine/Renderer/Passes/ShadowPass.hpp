@@ -88,9 +88,9 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_CameraBuffer{};
         std::unique_ptr<RHI::RHIBuffer> m_ObjectBuffer{};
+        std::vector<RenderDrawItem> m_ShadowCasterScratch{};
         std::vector<glm::mat4> m_ObjectUploadScratch{};
         std::uint64_t m_LastCameraUploadSignature{std::numeric_limits<std::uint64_t>::max()};
-        std::uint64_t m_LastObjectUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         ShadowSettings m_Settings{};
     };
 }

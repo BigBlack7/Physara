@@ -103,6 +103,7 @@ namespace Physara::Engine
     private:
         void EnsureResources(const PostProcessPassContext &context);
         void EnsureBloomResources(const PostProcessPassContext &context);
+        void ExecuteExposure(const PostProcessPassContext &context);
         void ExecuteBloom(const PostProcessPassContext &context);
         void ExecuteFullscreenPass(
             const PostProcessPassContext &context,
@@ -114,8 +115,10 @@ namespace Physara::Engine
             RHI::RHITexture *source0,
             RHI::RHITexture *source1);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const PostProcessPassContext &context);
+        [[nodiscard]] RHI::RHIPipelineState *GetExposurePipeline(const PostProcessPassContext &context);
         [[nodiscard]] RHI::RHIPipelineState *GetBloomPipeline(const PostProcessPassContext &context, const char *debugName, const char *fragmentPath);
         [[nodiscard]] RHI::RHITexture *GetBloomTexture() const;
+        [[nodiscard]] RHI::RHITexture *GetExposureTexture() const;
 
     private:
         struct BloomMip
@@ -132,7 +135,10 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHIBuffer> m_SettingsBuffer{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
         std::unique_ptr<RHI::RHITexture> m_BlackTexture{};
+        std::unique_ptr<RHI::RHITexture> m_ExposureTexture{};
+        std::unique_ptr<RHI::RHIFramebuffer> m_ExposureFramebuffer{};
         std::vector<BloomMip> m_BloomMips{};
+        RHI::RHIRenderPassDesc m_ExposureRenderPassDesc{};
         RHI::RHIRenderPassDesc m_BloomRenderPassDesc{};
         std::uint32_t m_BloomWidth{0};
         std::uint32_t m_BloomHeight{0};

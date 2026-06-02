@@ -240,13 +240,13 @@ void main()
     if (inputs.hasMetallicRoughnessTexture)
     {
         vec4 mrSample = texture(uMetallicRoughnessTexture, SelectTexCoord(inputs.metallicRoughnessTexCoord));
-        inputs.perceptualRoughness *= mrSample.g;
-        inputs.metallic *= mrSample.b;
+        inputs.perceptualRoughness = mix(inputs.perceptualRoughness, mrSample.g, Saturate(inputs.roughnessTextureInfluence));
+        inputs.metallic = mix(inputs.metallic, mrSample.b, Saturate(inputs.metallicTextureInfluence));
     }
     if (inputs.hasOcclusionTexture)
     {
         float occlusionSample = texture(uOcclusionTexture, SelectTexCoord(inputs.occlusionTexCoord)).r;
-        inputs.ambientOcclusion *= occlusionSample;
+        inputs.ambientOcclusion = mix(inputs.ambientOcclusion, occlusionSample, Saturate(inputs.ambientOcclusionTextureInfluence));
     }
     if (inputs.hasEmissiveTexture)
     {
