@@ -14,6 +14,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/PipelineStateCache.hpp>
+#include <Engine/Renderer/GPUContracts.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderView.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
@@ -28,14 +29,14 @@ namespace Physara::Engine
 {
     namespace ShadowPassDetail
     {
-        constexpr std::uint32_t CameraBinding = 0u;
-        constexpr std::uint32_t ObjectBinding = 1u;
-        constexpr std::uint32_t InstanceObjectIndexBinding = 4u;
+        constexpr std::uint32_t CameraBinding = Binding(GPUBufferBinding::Camera);
+        constexpr std::uint32_t ObjectBinding = Binding(GPUBufferBinding::Objects);
+        constexpr std::uint32_t InstanceObjectIndexBinding = Binding(GPUBufferBinding::InstanceIndices);
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
 
         bool IsShadowedDirectionalLight(const LightData &light)
         {
-            return static_cast<std::uint32_t>(light.directionType.w) == static_cast<std::uint32_t>(RenderLightType::Directional) &&
+            return static_cast<std::uint32_t>(light.directionType.w) == GPUValue(LightTypeGPU::Directional) &&
                    light.shadowParams.x > 0.5f;
         }
 

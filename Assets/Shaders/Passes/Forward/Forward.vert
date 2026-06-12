@@ -1,17 +1,12 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
-#include "../../Includes/Common.glsl"
+#include "../../Includes/FrameUniforms.glsl"
 
 layout(location = 0)in vec3 inPosition;
 layout(location = 1)in vec3 inNormal;
 layout(location = 2)in vec4 inTangent;
 layout(location = 3)in vec2 inTexCoord0;
 layout(location = 4)in vec2 inTexCoord1;
-
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
-{
-    CameraData uCamera;
-};
 
 layout(std430, binding = PHYSARA_BINDING_OBJECTS)readonly buffer ObjectBuffer
 {
@@ -46,5 +41,5 @@ void main()
     outMaterialIndex = objectData.indicesAndFlags.z;
     outObjectFlags = objectData.indicesAndFlags.w;
     
-    gl_Position = uCamera.viewProjection * worldPosition;
+    gl_Position = uFrame.camera.viewProjection * worldPosition;
 }

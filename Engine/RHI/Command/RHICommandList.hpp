@@ -160,6 +160,7 @@ namespace Physara::RHI
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;
+        virtual void InvalidateExternalState() {}
 
         virtual void ResetStatistics() {}
         [[nodiscard]] virtual RHICommandStatistics GetStatistics() const { return {}; }

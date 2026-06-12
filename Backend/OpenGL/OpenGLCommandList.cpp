@@ -1232,4 +1232,13 @@ namespace Physara::RHI
     {
         glPopDebugGroup();
     }
+
+    void OpenGLCommandList::InvalidateExternalState()
+    {
+        InvalidateBindingCache();
+        InvalidatePipelineState();
+        InvalidateDynamicStateCache();
+        m_CurrentPassDesc = nullptr;
+        m_CurrentPipelineDesc = nullptr;
+    }
 }

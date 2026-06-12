@@ -1,11 +1,6 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
-#include "../../Includes/Common.glsl"
-
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
-{
-    CameraData uCamera;
-};
+#include "../../Includes/FrameUniforms.glsl"
 
 layout(location = 0)out vec3 outDirection;
 
@@ -44,9 +39,9 @@ vec3 DirectionFromSphereUV(vec2 uv)
 void main()
 {
     vec3 localDirection = DirectionFromSphereUV(SphereUVFromVertexID(uint(gl_VertexID)));
-    float radius = max(uCamera.clipPlanes.y * 0.5, 1000.0);
-    mat4 viewWithoutTranslation = mat4(mat3(uCamera.view));
-    vec4 clipPosition = uCamera.projection * viewWithoutTranslation * vec4(localDirection * radius, 1.0);
+    float radius = max(uFrame.camera.clipPlanes.y * 0.5, 1000.0);
+    mat4 viewWithoutTranslation = mat4(mat3(uFrame.camera.view));
+    vec4 clipPosition = uFrame.camera.projection * viewWithoutTranslation * vec4(localDirection * radius, 1.0);
     outDirection = normalize(localDirection);
     gl_Position = clipPosition.xyww;
 }

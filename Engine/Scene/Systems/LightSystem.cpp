@@ -18,8 +18,6 @@ namespace Physara::Engine
 {
     namespace LightSystemDetail
     {
-        constexpr std::uint32_t MaxForwardLights = 128;
-
         struct LightCandidate
         {
             LightData data{};
@@ -48,21 +46,21 @@ namespace Physara::Engine
             return forward * (1.f / std::sqrt(lengthSq));
         }
 
-        RenderLightType ToRenderLightType(LightType type)
+        LightTypeGPU ToLightTypeGPU(LightType type)
         {
             switch (type)
             {
             case LightType::Directional:
-                return RenderLightType::Directional;
+                return LightTypeGPU::Directional;
             case LightType::Point:
-                return RenderLightType::Point;
+                return LightTypeGPU::Point;
             case LightType::Spot:
-                return RenderLightType::Spot;
+                return LightTypeGPU::Spot;
             case LightType::Area:
-                return RenderLightType::Area;
+                return LightTypeGPU::Area;
             }
 
-            return RenderLightType::Directional;
+            return LightTypeGPU::Directional;
         }
 
         float GetIntensity(const LightComponent &light)
@@ -153,7 +151,7 @@ namespace Physara::Engine
         {
             LightData light{};
             light.positionRange = glm::vec4(0.f, 0.f, 0.f, 0.f);
-            light.directionType = glm::vec4(DefaultLightDirection(), static_cast<float>(RenderLightType::Directional));
+            light.directionType = glm::vec4(DefaultLightDirection(), static_cast<float>(GPUValue(LightTypeGPU::Directional)));
             light.colorIntensity = glm::vec4(1.f, 1.f, 1.f, 25000.f);
             light.spotAngles = glm::vec4(0.f);
             light.shadowParams = glm::vec4(0.f);
@@ -189,7 +187,7 @@ namespace Physara::Engine
         auto lightView = registry.view<LightComponent, TransformComponent>();
 
         lights.clear();
-        lights.reserve(std::min<std::size_t>(lightView.size_hint(), LightSystemDetail::MaxForwardLights));
+        lights.reserve(std::min<std::size_t>(lightView.size_hint(), MaxForwardLights));
 
         std::vector<LightSystemDetail::LightCandidate> candidates;
         candidates.reserve(lightView.size_hint());
@@ -208,7 +206,7 @@ namespace Physara::Engine
             light.positionRange = glm::vec4(position, component.rangeMeters);
             light.directionType = glm::vec4(
                 LightSystemDetail::GetForwardDirection(transform.GetWorldMatrix()),
-                static_cast<float>(LightSystemDetail::ToRenderLightType(component.type)));
+                static_cast<float>(GPUValue(LightSystemDetail::ToLightTypeGPU(component.type))));
             light.colorIntensity = glm::vec4(LightSystemDetail::GetLightColor(component), LightSystemDetail::GetIntensity(component));
 
             const glm::vec2 spotScaleOffset = LightSystemDetail::GetSpotScaleOffset(component);
@@ -235,7 +233,7 @@ namespace Physara::Engine
             return lhs.sortScore > rhs.sortScore;
         });
 
-        const std::size_t lightCount = std::min<std::size_t>(candidates.size(), LightSystemDetail::MaxForwardLights);
+        const std::size_t lightCount = std::min<std::size_t>(candidates.size(), MaxForwardLights);
         for (std::size_t i = 0; i < lightCount; ++i)
         {
             lights.push_back(candidates[i].data);

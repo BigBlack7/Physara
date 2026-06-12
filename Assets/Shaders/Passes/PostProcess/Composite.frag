@@ -1,14 +1,9 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
+#include "../../Includes/FrameUniforms.glsl"
 #include "../../Includes/Math.glsl"
 
 layout(location = 0)in vec2 inUV;
-
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform PostProcessFrameBuffer
-{
-    vec4 uViewportSizeEV100;
-    vec4 uClipPlanes;
-};
 
 layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProcessSettingsBuffer
 {
@@ -125,7 +120,7 @@ float ResolveExposure()
 
 vec3 LegacyBloomContribution(vec2 uv)
 {
-    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    vec2 texel = 1.0 / max(uFrame.camera.viewportRect.zw, vec2(1.0));
     float threshold = uBloomParams.x;
     float knee = max(uBloomParams.y, 0.0001);
     float radius = max(uBloomParams.w, 1.0);
@@ -173,7 +168,7 @@ float MappedLuma(vec2 uv)
 
 vec3 ApplyBasicFXAA(vec2 uv, vec3 center)
 {
-    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    vec2 texel = 1.0 / max(uFrame.camera.viewportRect.zw, vec2(1.0));
     vec3 north = ResolveMappedColor(uv + vec2(0.0, texel.y));
     vec3 south = ResolveMappedColor(uv - vec2(0.0, texel.y));
     vec3 east = ResolveMappedColor(uv + vec2(texel.x, 0.0));
@@ -193,7 +188,7 @@ vec3 ApplyBasicFXAA(vec2 uv, vec3 center)
 
 vec3 ApplyQualityFXAA(vec2 uv, vec3 center)
 {
-    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    vec2 texel = 1.0 / max(uFrame.camera.viewportRect.zw, vec2(1.0));
     vec3 rgbNW = ResolveMappedColor(uv + vec2(-1.0, 1.0) * texel);
     vec3 rgbNE = ResolveMappedColor(uv + vec2(1.0, 1.0) * texel);
     vec3 rgbSW = ResolveMappedColor(uv + vec2(-1.0, -1.0) * texel);
@@ -231,7 +226,7 @@ vec3 ApplyQualityFXAA(vec2 uv, vec3 center)
 
 vec3 ApplySMAALite(vec2 uv, vec3 center)
 {
-    vec2 texel = 1.0 / max(uViewportSizeEV100.xy, vec2(1.0));
+    vec2 texel = 1.0 / max(uFrame.camera.viewportRect.zw, vec2(1.0));
     float c = Luminance(center);
     float l = MappedLuma(uv - vec2(texel.x, 0.0));
     float r = MappedLuma(uv + vec2(texel.x, 0.0));
@@ -267,8 +262,8 @@ vec3 ApplySMAALite(vec2 uv, vec3 center)
 
 float LinearizeDepth(float depth)
 {
-    float nearClip = max(uClipPlanes.x, 0.0001);
-    float farClip = max(uClipPlanes.y, nearClip + 0.0001);
+    float nearClip = max(uFrame.camera.clipPlanes.x, 0.0001);
+    float farClip = max(uFrame.camera.clipPlanes.y, nearClip + 0.0001);
     float z = depth * 2.0 - 1.0;
     return (2.0 * nearClip * farClip) / max(farClip + nearClip - z * (farClip - nearClip), PHYSARA_EPSILON);
 }

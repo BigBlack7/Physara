@@ -220,12 +220,15 @@ namespace Physara::Editor
             return;
         }
 
+        const auto frameStart = std::chrono::steady_clock::now();
+        EditorFrameStatistics currentFrameStats{};
+
         m_Backend->BeginFrame();
         ImGui::NewFrame();
         ImGuizmo::BeginFrame();
 
+        const auto uiBuildStart = std::chrono::steady_clock::now();
         HandleGlobalShortcuts();
-        RenderSceneView();
 
         if (m_Context.ui.displayMode == EditorDisplayMode::Docked)
         {
@@ -241,9 +244,22 @@ namespace Physara::Editor
         DrawPanels();
         ProcessCaptureRequests();
         DrawSaveScenePopup();
+        const auto uiBuildEnd = std::chrono::steady_clock::now();
+        currentFrameStats.uiBuildCpuMs = std::chrono::duration<float, std::milli>(uiBuildEnd - uiBuildStart).count();
 
+        const auto sceneRenderStart = std::chrono::steady_clock::now();
+        RenderSceneView();
+        const auto sceneRenderEnd = std::chrono::steady_clock::now();
+        currentFrameStats.sceneRenderCpuMs = std::chrono::duration<float, std::milli>(sceneRenderEnd - sceneRenderStart).count();
+
+        const auto uiRenderStart = std::chrono::steady_clock::now();
         m_Backend->EndFrame();
         m_Backend->RenderDrawData();
+        const auto uiRenderEnd = std::chrono::steady_clock::now();
+        currentFrameStats.uiRenderCpuMs = std::chrono::duration<float, std::milli>(uiRenderEnd - uiRenderStart).count();
+        currentFrameStats.imgui = m_Backend->GetLastRenderStatistics();
+        currentFrameStats.frameCpuMs = std::chrono::duration<float, std::milli>(uiRenderEnd - frameStart).count();
+        m_Context.frameStats = currentFrameStats;
     }
 
     void EditorApp::HandleGlobalShortcuts()
@@ -811,7 +827,6 @@ namespace Physara::Editor
                                                        if (m_Renderer != nullptr)
                                                        {
                                                            m_Renderer->ResizeViewport(width, height);
-                                                           m_Renderer->RenderClear();
                                                            RefreshSceneViewTexture();
                                                        } });
 

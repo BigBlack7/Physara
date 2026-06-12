@@ -25,6 +25,7 @@ namespace Physara::Engine
 {
     class PipelineStateCache;
     class ShaderLibrary;
+    class GPUScene;
     struct Texture;
 
     struct SkyboxPassContext
@@ -37,6 +38,7 @@ namespace Physara::Engine
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
         FrameUploadAllocator *frameUploadAllocator{nullptr};
+        const GPUScene *gpuScene{nullptr};
         FrameStatistics *stats{nullptr};
         std::filesystem::path environmentPath{};
         float exposureCompensation{0.f};

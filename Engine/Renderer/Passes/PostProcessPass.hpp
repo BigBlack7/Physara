@@ -21,6 +21,7 @@ namespace Physara::RHI
 
 namespace Physara::Engine
 {
+    class GPUScene;
     class PipelineStateCache;
     class ShaderLibrary;
 
@@ -90,6 +91,7 @@ namespace Physara::Engine
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
         FrameUploadAllocator *frameUploadAllocator{nullptr};
+        const GPUScene *gpuScene{nullptr};
         FrameStatistics *stats{nullptr};
         RHI::RHITexture *sceneHDR{nullptr};
         RHI::RHITexture *sceneDepth{nullptr};
@@ -104,10 +106,11 @@ namespace Physara::Engine
     private:
         void EnsureResources(const PostProcessPassContext &context);
         void EnsureBloomResources(const PostProcessPassContext &context);
-        void ExecuteExposure(const PostProcessPassContext &context);
-        void ExecuteBloom(const PostProcessPassContext &context);
+        void ExecuteExposure(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
+        void ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
         void ExecuteFullscreenPass(
             const PostProcessPassContext &context,
+            const FrameUploadAllocation &frameUniformAllocation,
             RHI::RHIFramebuffer *framebuffer,
             const RHI::RHIRenderPassDesc &renderPassDesc,
             RHI::RHIPipelineState *pipeline,
@@ -132,7 +135,6 @@ namespace Physara::Engine
             std::unique_ptr<RHI::RHIFramebuffer> upFramebuffer{};
         };
 
-        FrameUploadAllocation m_FrameAllocation{};
         FrameUploadAllocation m_SettingsAllocation{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
         std::unique_ptr<RHI::RHITexture> m_BlackTexture{};

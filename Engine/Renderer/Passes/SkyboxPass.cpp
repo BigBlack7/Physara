@@ -11,6 +11,8 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Core/Log.hpp>
+#include <Engine/Renderer/GPUContracts.hpp>
+#include <Engine/Renderer/GPUScene.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
@@ -24,9 +26,9 @@ namespace Physara::Engine
 {
     namespace SkyboxPassDetail
     {
-        constexpr std::uint32_t CameraBinding = 0u;
-        constexpr std::uint32_t SettingsBinding = 4u;
-        constexpr std::uint32_t SkyboxTextureBinding = 5u;
+        constexpr std::uint32_t FrameUniformsBinding = Binding(GPUBufferBinding::FrameUniforms);
+        constexpr std::uint32_t SettingsBinding = Binding(GPUBufferBinding::SkyboxSettings);
+        constexpr std::uint32_t SkyboxTextureBinding = Binding(GPUTextureBinding::Skybox);
 
         struct SettingsGPUData
         {
@@ -81,7 +83,7 @@ namespace Physara::Engine
     void SkyboxPass::Execute(const SkyboxPassContext &context)
     {
         if (!context.enabled || context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
-            context.frameData == nullptr || context.device == nullptr || context.frameUploadAllocator == nullptr)
+            context.frameData == nullptr || context.device == nullptr || context.frameUploadAllocator == nullptr || context.gpuScene == nullptr)
         {
             return;
         }
@@ -95,8 +97,12 @@ namespace Physara::Engine
         }
 
         const SkyboxPassDetail::SettingsGPUData settingsData{glm::vec4(context.exposureCompensation, 0.f, 0.f, 0.f)};
-        const FrameUploadAllocation cameraAllocation = context.frameUploadAllocator->Upload(*context.device, context.frameData->camera, context.stats);
+        const FrameUploadAllocation &frameUniformAllocation = context.gpuScene->GetFrameUniformBuffer();
         const FrameUploadAllocation settingsAllocation = context.frameUploadAllocator->Upload(*context.device, settingsData, context.stats);
+        if (!frameUniformAllocation.IsValid() || !settingsAllocation.IsValid())
+        {
+            return;
+        }
 
         context.commandList->SetViewport(
             0.f,
@@ -106,7 +112,7 @@ namespace Physara::Engine
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::span<const glm::vec4>{});
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, cameraAllocation.buffer, cameraAllocation.offset, cameraAllocation.size);
+        context.commandList->SetUniformBuffer(SkyboxPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, settingsAllocation.buffer, settingsAllocation.offset, settingsAllocation.size);
         context.commandList->SetTexture(SkyboxPassDetail::SkyboxTextureBinding, m_SkyboxTexture.get(), m_Sampler.get());
         constexpr std::uint32_t skySphereVertexCount = 64u * 32u * 6u;

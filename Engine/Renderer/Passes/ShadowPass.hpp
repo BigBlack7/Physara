@@ -41,6 +41,13 @@ namespace Physara::Engine
         SingleMapPCSS = 5
     };
 
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::None) == GPUValue(ShadowModeGPU::None));
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapHard) == GPUValue(ShadowModeGPU::Hard));
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCF3x3) == GPUValue(ShadowModeGPU::PCF3x3));
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCF5x5) == GPUValue(ShadowModeGPU::PCF5x5));
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPoisson16) == GPUValue(ShadowModeGPU::Poisson16));
+    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCSS) == GPUValue(ShadowModeGPU::PCSS));
+
     struct ShadowSettings
     {
         ShadowAlgorithm algorithm{ShadowAlgorithm::SingleMapPCF3x3};

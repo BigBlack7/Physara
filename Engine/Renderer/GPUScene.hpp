@@ -9,8 +9,6 @@
 #include <Engine/Renderer/FrameUploadAllocator.hpp>
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 
-#include <glm/vec4.hpp>
-
 namespace Physara::RHI
 {
     class RHIDevice;
@@ -19,21 +17,8 @@ namespace Physara::RHI
 namespace Physara::Engine
 {
     class AssetManager;
+    class IBLResources;
     class RenderProxy;
-
-    struct alignas(16) MaterialGPUData
-    {
-        glm::vec4 baseColor{1.f};
-        glm::vec4 emissiveColorLuminance{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 metallicRoughnessReflectanceAO{0.f, 0.5f, 0.5f, 1.f};
-        glm::vec4 alphaNormalFlags{0.5f, 1.f, 0.f, 0.f};
-        glm::vec4 textureFlags{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 textureCoordSets{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 materialFlags{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 textureInfluences{1.f, 1.f, 1.f, 0.f};
-    };
-
-    static_assert(sizeof(MaterialGPUData) % 16 == 0);
 
     class GPUScene final
     {
@@ -49,12 +34,22 @@ namespace Physara::Engine
             const AssetManager *assetManager,
             FrameStatistics *stats);
 
+        void UploadFrameUniforms(
+            RHI::RHIDevice &device,
+            FrameUploadAllocator &allocator,
+            const FrameData &frameData,
+            const IBLResources *iblResources,
+            float environmentExposureCompensation,
+            std::uint32_t debugView,
+            FrameStatistics *stats);
+
         void UploadShadowInstanceObjectIndices(
             RHI::RHIDevice &device,
             FrameUploadAllocator &allocator,
             const std::vector<std::uint32_t> &instanceObjectIndices,
             FrameStatistics *stats);
 
+        [[nodiscard]] const FrameUploadAllocation &GetFrameUniformBuffer() const { return m_FrameUniformAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetObjectBuffer() const { return m_ObjectAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetLightBuffer() const { return m_LightAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetForwardInstanceObjectIndexBuffer() const { return m_ForwardInstanceObjectIndexAllocation; }
@@ -93,6 +88,7 @@ namespace Physara::Engine
             FrameStatistics *stats);
 
     private:
+        FrameUploadAllocation m_FrameUniformAllocation{};
         FrameUploadAllocation m_ObjectAllocation{};
         FrameUploadAllocation m_LightAllocation{};
         FrameUploadAllocation m_ForwardInstanceObjectIndexAllocation{};

@@ -4,11 +4,6 @@
 
 layout(location = 0)in vec2 inUV;
 
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform PostProcessFrameBuffer
-{
-    vec4 uViewportSizeEV100;
-};
-
 layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProcessSettingsBuffer
 {
     vec4 uBloomParams;

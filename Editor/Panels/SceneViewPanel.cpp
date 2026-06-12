@@ -166,15 +166,18 @@ namespace Physara::Editor
         char drawLine[160]{};
         char visibleLine[160]{};
         char cpuLine[160]{};
+        char frameLine[192]{};
+        char uiLine[192]{};
         char passLine[192]{};
         char passDrawLine[192]{};
-        char glLine[192]{};
+        char glLine[256]{};
         char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
         char keysLine[160]{};
 
         const Engine::FrameStatistics &stats = m_Context.sceneView.rendererStats;
+        const EditorFrameStatistics &frameStats = m_Context.frameStats;
         const double uploadMegabytes = static_cast<double>(stats.TotalUploadBytes()) / (1024.0 * 1024.0);
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
@@ -192,6 +195,17 @@ namespace Physara::Editor
         std::snprintf(cpuLine, sizeof(cpuLine), "CPU: build %.2f ms, render %.2f ms",
                       stats.sceneBuildCpuMs,
                       stats.renderGraphCpuMs);
+        std::snprintf(frameLine, sizeof(frameLine), "Frame: %.2f ms  UI build %.2f, Scene %.2f, UI draw %.2f",
+                      frameStats.frameCpuMs,
+                      frameStats.uiBuildCpuMs,
+                      frameStats.sceneRenderCpuMs,
+                      frameStats.uiRenderCpuMs);
+        std::snprintf(uiLine, sizeof(uiLine), "UI: lists/cmds %u/%u, vtx/idx %u/%u, backend %.2f ms",
+                      frameStats.imgui.drawLists,
+                      frameStats.imgui.drawCommands,
+                      frameStats.imgui.vertexCount,
+                      frameStats.imgui.indexCount,
+                      frameStats.imgui.renderCpuMs);
         std::snprintf(passLine, sizeof(passLine), "Pass: Fwd %.2f, Sky %.2f, Trans %.2f, Post %.2f ms",
                       stats.forwardOpaqueCpuMs,
                       stats.skyboxCpuMs,
@@ -203,14 +217,18 @@ namespace Physara::Editor
                       static_cast<unsigned long long>(stats.skyboxDrawCalls),
                       static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
                       static_cast<unsigned long long>(stats.postProcessDrawCalls));
-        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/V/Tex %llu/%llu/%llu, Bar %llu",
+        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/VAO %llu/%llu, VB/IB %llu/%llu, Tex/Samp %llu/%llu, Bar %llu",
                       static_cast<unsigned long long>(stats.backend.renderPasses),
                       static_cast<unsigned long long>(stats.backend.programBinds),
                       static_cast<unsigned long long>(stats.backend.vaoBinds),
+                      static_cast<unsigned long long>(stats.backend.vertexBufferBinds),
+                      static_cast<unsigned long long>(stats.backend.indexBufferBinds),
                       static_cast<unsigned long long>(stats.backend.textureBinds),
+                      static_cast<unsigned long long>(stats.backend.samplerBinds),
                       static_cast<unsigned long long>(stats.backend.barriers));
-        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB  Mesh/Prim/Tex: %u/%u/%u",
+        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB, chunks %llu  Mesh/Prim/Tex: %u/%u/%u",
                       uploadMegabytes,
+                      static_cast<unsigned long long>(stats.bufferUploadChunks),
                       stats.meshUploads,
                       stats.meshPrimitiveUploads,
                       stats.textureUploads);
@@ -232,6 +250,8 @@ namespace Physara::Editor
                                        ImGui::CalcTextSize(drawLine).x,
                                        ImGui::CalcTextSize(visibleLine).x,
                                        ImGui::CalcTextSize(cpuLine).x,
+                                       ImGui::CalcTextSize(frameLine).x,
+                                       ImGui::CalcTextSize(uiLine).x,
                                        ImGui::CalcTextSize(passLine).x,
                                        ImGui::CalcTextSize(passDrawLine).x,
                                        ImGui::CalcTextSize(glLine).x,
@@ -256,7 +276,7 @@ namespace Physara::Editor
         }
 
         const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 13.f : 12.f);
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 15.f : 14.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
             const ImVec2 overlayMin(origin.x + width - SceneViewPanelDetail::OverlayPadding - overlayWidth,
@@ -281,6 +301,12 @@ namespace Physara::Editor
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), cpuLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), frameLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), uiLine);
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), passLine);

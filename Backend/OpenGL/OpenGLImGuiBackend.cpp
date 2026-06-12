@@ -1,7 +1,11 @@
 #include "OpenGLImGuiBackend.hpp"
 
+#include <chrono>
+
 #include <Backend/OpenGL/OpenGLTexture.hpp>
 #include <Engine/Core/Log.hpp>
+#include <Engine/RHI/Command/RHICommandList.hpp>
+#include <Engine/RHI/Core/RHIDevice.hpp>
 
 #include <glad/glad.h>
 #include <imgui/imgui_impl_glfw.h>
@@ -18,7 +22,7 @@ namespace Physara::RHI
     bool OpenGLImGuiBackend::Initialize(RHIDevice *device, void *windowHandle)
     {
         // Editor只依赖IImGuiBackend; 具体imgui_impl_glfw/opengl3适配器封装在Backend内
-        (void)device;
+        m_Device = device;
 
         if (m_Initialized)
         {
@@ -100,6 +104,7 @@ namespace Physara::RHI
 
     void OpenGLImGuiBackend::RenderDrawData()
     {
+        m_LastRenderStatistics.Reset();
         if (!m_Initialized)
         {
             return;
@@ -107,9 +112,43 @@ namespace Physara::RHI
 
         if (ImDrawData *drawData = ImGui::GetDrawData())
         {
+            const auto start = std::chrono::steady_clock::now();
+            m_LastRenderStatistics.drawLists = static_cast<std::uint32_t>(drawData->CmdListsCount);
+            m_LastRenderStatistics.vertexCount = static_cast<std::uint32_t>(drawData->TotalVtxCount);
+            m_LastRenderStatistics.indexCount = static_cast<std::uint32_t>(drawData->TotalIdxCount);
+            for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex)
+            {
+                if (drawData->CmdLists[listIndex] != nullptr)
+                {
+                    m_LastRenderStatistics.drawCommands += static_cast<std::uint32_t>(drawData->CmdLists[listIndex]->CmdBuffer.Size);
+                }
+            }
+
+            const bool debugGroup = GLAD_GL_VERSION_4_3 && glPushDebugGroup != nullptr && glPopDebugGroup != nullptr;
+            if (debugGroup)
+            {
+                glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, "EditorUI");
+            }
+
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             // 将ImGui draw lists翻译为OpenGL draw calls. 此处是唯一接触imgui_impl_opengl3的位置, 其他地方只依赖imgui_impl_glfw和imgui核心接口
             ImGui_ImplOpenGL3_RenderDrawData(drawData);
+
+            if (debugGroup)
+            {
+                glPopDebugGroup();
+            }
+
+            if (m_Device != nullptr)
+            {
+                if (RHICommandList *commandList = m_Device->GetCommandList())
+                {
+                    commandList->InvalidateExternalState();
+                }
+            }
+
+            const auto end = std::chrono::steady_clock::now();
+            m_LastRenderStatistics.renderCpuMs = std::chrono::duration<float, std::milli>(end - start).count();
         }
     }
 
@@ -173,5 +212,7 @@ namespace Physara::RHI
 
         m_Initialized = false;
         m_OwnsContext = false;
+        m_Device = nullptr;
+        m_LastRenderStatistics.Reset();
     }
 }

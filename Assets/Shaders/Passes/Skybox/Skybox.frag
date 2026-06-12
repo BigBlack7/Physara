@@ -4,11 +4,6 @@
 
 layout(location = 0)in vec3 inDirection;
 
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
-{
-    CameraData uCamera;
-};
-
 layout(std140, binding = PHYSARA_BINDING_SKYBOX_SETTINGS)uniform SkyboxSettingsBuffer
 {
     vec4 uSkyboxParams;

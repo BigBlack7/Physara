@@ -25,6 +25,7 @@ namespace Physara::Engine
         instances = 0;
         triangles = 0;
         bufferUploadBytes = 0;
+        bufferUploadChunks = 0;
         meshUploadBytes = 0;
         textureUploadBytes = 0;
         sceneBuildCpuMs = 0.f;

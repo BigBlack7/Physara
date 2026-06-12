@@ -75,6 +75,7 @@ namespace Physara::RHI
 
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;
+        void InvalidateExternalState() override;
         void ResetStatistics() override;
         [[nodiscard]] RHICommandStatistics GetStatistics() const override;
 

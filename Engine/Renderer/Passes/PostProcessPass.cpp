@@ -5,6 +5,8 @@
 
 #include <glm/vec4.hpp>
 
+#include <Engine/Renderer/GPUContracts.hpp>
+#include <Engine/Renderer/GPUScene.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
@@ -18,12 +20,12 @@ namespace Physara::Engine
 {
     namespace PostProcessPassDetail
     {
-        constexpr std::uint32_t CameraBinding = 0u;
-        constexpr std::uint32_t SettingsBinding = 4u;
-        constexpr std::uint32_t SceneColorBinding = 6u;
-        constexpr std::uint32_t SceneDepthBinding = 7u;
-        constexpr std::uint32_t BloomTextureBinding = 11u;
-        constexpr std::uint32_t ExposureTextureBinding = 12u;
+        constexpr std::uint32_t FrameUniformsBinding = Binding(GPUBufferBinding::FrameUniforms);
+        constexpr std::uint32_t SettingsBinding = Binding(GPUBufferBinding::PostProcessSettings);
+        constexpr std::uint32_t SceneColorBinding = Binding(GPUTextureBinding::SceneColor);
+        constexpr std::uint32_t SceneDepthBinding = Binding(GPUTextureBinding::SceneDepth);
+        constexpr std::uint32_t BloomTextureBinding = Binding(GPUTextureBinding::Bloom);
+        constexpr std::uint32_t ExposureTextureBinding = Binding(GPUTextureBinding::Exposure);
         constexpr std::uint32_t MaxBloomMips = 7u;
 
         template <typename T>
@@ -38,12 +40,6 @@ namespace Physara::Engine
             glm::vec4 flags{1.f, 1.f, 2.f, 0.f};
             glm::vec4 exposureParams{0.f, 0.f, 0.f, 0.f};
             glm::vec4 aaParams{0.75f, 0.125f, 0.0312f, 24.f};
-        };
-
-        struct FrameGPUData
-        {
-            glm::vec4 viewportSizeEV100{1.f, 1.f, 0.f, 0.f};
-            glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
         };
 
         SettingsGPUData BuildSettings(const PostProcessSettings &settings)
@@ -72,28 +68,13 @@ namespace Physara::Engine
             return data;
         }
 
-        FrameGPUData BuildFrameData(const FrameData &frameData)
-        {
-            FrameGPUData data{};
-            data.viewportSizeEV100 = glm::vec4(
-                static_cast<float>(frameData.view.viewport.width),
-                static_cast<float>(frameData.view.viewport.height),
-                frameData.view.ev100,
-                0.f);
-            data.clipPlanes = glm::vec4(
-                frameData.view.nearClipMeters,
-                frameData.view.farClipMeters,
-                0.f,
-                0.f);
-            return data;
-        }
     }
 
     void PostProcessPass::Execute(const PostProcessPassContext &context)
     {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
             context.frameData == nullptr || context.sceneHDR == nullptr || context.sceneDepth == nullptr || context.device == nullptr ||
-            context.frameUploadAllocator == nullptr)
+            context.frameUploadAllocator == nullptr || context.gpuScene == nullptr)
         {
             return;
         }
@@ -105,13 +86,16 @@ namespace Physara::Engine
             return;
         }
 
-        const PostProcessPassDetail::FrameGPUData frameData = PostProcessPassDetail::BuildFrameData(*context.frameData);
         const PostProcessPassDetail::SettingsGPUData settingsData = PostProcessPassDetail::BuildSettings(context.settings);
-        m_FrameAllocation = context.frameUploadAllocator->Upload(*context.device, frameData, context.stats);
+        const FrameUploadAllocation &frameUniformAllocation = context.gpuScene->GetFrameUniformBuffer();
         m_SettingsAllocation = context.frameUploadAllocator->Upload(*context.device, settingsData, context.stats);
+        if (!frameUniformAllocation.IsValid() || !m_SettingsAllocation.IsValid())
+        {
+            return;
+        }
 
-        ExecuteExposure(context);
-        ExecuteBloom(context);
+        ExecuteExposure(context, frameUniformAllocation);
+        ExecuteBloom(context, frameUniformAllocation);
 
         context.commandList->SetViewport(
             0.f,
@@ -122,7 +106,7 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, context.sceneDepth, m_LinearClampSampler.get());
@@ -279,7 +263,7 @@ namespace Physara::Engine
         }
     }
 
-    void PostProcessPass::ExecuteExposure(const PostProcessPassContext &context)
+    void PostProcessPass::ExecuteExposure(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation)
     {
         if (context.commandList == nullptr || context.sceneHDR == nullptr || m_ExposureFramebuffer == nullptr || m_ExposureTexture == nullptr)
         {
@@ -297,7 +281,7 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(m_ExposureFramebuffer.get(), m_ExposureRenderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
@@ -312,7 +296,7 @@ namespace Physara::Engine
         context.commandList->TextureBarrier(m_ExposureTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
     }
 
-    void PostProcessPass::ExecuteBloom(const PostProcessPassContext &context)
+    void PostProcessPass::ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation)
     {
         if (!context.settings.bloomEnabled || context.settings.bloomMode == BloomMode::Legacy || context.commandList == nullptr ||
             context.sceneHDR == nullptr || context.device == nullptr || context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
@@ -344,6 +328,7 @@ namespace Physara::Engine
 
         ExecuteFullscreenPass(
             context,
+            frameUniformAllocation,
             m_BloomMips.front().downFramebuffer.get(),
             m_BloomRenderPassDesc,
             prefilterPipeline,
@@ -357,6 +342,7 @@ namespace Physara::Engine
             context.commandList->TextureBarrier(m_BloomMips[i - 1u].downTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
             ExecuteFullscreenPass(
                 context,
+                frameUniformAllocation,
                 m_BloomMips[i].downFramebuffer.get(),
                 m_BloomRenderPassDesc,
                 downPipeline,
@@ -370,6 +356,7 @@ namespace Physara::Engine
         context.commandList->TextureBarrier(m_BloomMips[last].downTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
         ExecuteFullscreenPass(
             context,
+            frameUniformAllocation,
             m_BloomMips[last].upFramebuffer.get(),
             m_BloomRenderPassDesc,
             copyPipeline,
@@ -385,6 +372,7 @@ namespace Physara::Engine
             context.commandList->TextureBarrier(m_BloomMips[i + 1u].upTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
             ExecuteFullscreenPass(
                 context,
+                frameUniformAllocation,
                 m_BloomMips[i].upFramebuffer.get(),
                 m_BloomRenderPassDesc,
                 upPipeline,
@@ -399,6 +387,7 @@ namespace Physara::Engine
 
     void PostProcessPass::ExecuteFullscreenPass(
         const PostProcessPassContext &context,
+        const FrameUploadAllocation &frameUniformAllocation,
         RHI::RHIFramebuffer *framebuffer,
         const RHI::RHIRenderPassDesc &renderPassDesc,
         RHI::RHIPipelineState *pipeline,
@@ -417,7 +406,7 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(framebuffer, renderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, source0, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, source1, m_LinearClampSampler.get());

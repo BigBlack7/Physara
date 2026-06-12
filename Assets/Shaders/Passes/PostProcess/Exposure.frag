@@ -1,14 +1,9 @@
 #version 460 core
 #extension GL_ARB_shading_language_include : require
+#include "../../Includes/FrameUniforms.glsl"
 #include "../../Includes/Math.glsl"
 
 layout(location = 0)in vec2 inUV;
-
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform PostProcessFrameBuffer
-{
-    vec4 uViewportSizeEV100;
-    vec4 uClipPlanes;
-};
 
 layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProcessSettingsBuffer
 {
@@ -30,7 +25,7 @@ vec3 SanitizeHDR(vec3 value)
 
 float ResolveEV100()
 {
-    float ev100 = uViewportSizeEV100.z;
+    float ev100 = GetEV100(uFrame.camera);
     if (uExposureParams.x <= 0.5)
     {
         return ev100;

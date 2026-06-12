@@ -18,15 +18,6 @@ namespace Physara::Engine
         Transparent = 2
     };
 
-    namespace ObjectFlags
-    {
-        constexpr std::uint32_t None = 0u;
-        constexpr std::uint32_t CastShadow = 1u << 0;
-        constexpr std::uint32_t ReceiveShadow = 1u << 1;
-        constexpr std::uint32_t Transparent = 1u << 2;
-        constexpr std::uint32_t Unlit = 1u << 3;
-    }
-
     struct RenderDrawItem
     {
         const RenderMeshSubmission *submission{nullptr};

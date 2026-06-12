@@ -52,6 +52,7 @@ namespace Physara::Engine
         if (stats != nullptr)
         {
             stats->bufferUploadBytes += size;
+            ++stats->bufferUploadChunks;
         }
 
         return FrameUploadAllocation{m_Buffer.get(), alignedOffset, size};

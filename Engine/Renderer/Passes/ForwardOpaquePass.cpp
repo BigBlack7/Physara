@@ -9,6 +9,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/GPUContracts.hpp>
 #include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
@@ -27,22 +28,19 @@ namespace Physara::Engine
 {
     namespace ForwardOpaquePassDetail
     {
-        constexpr std::uint32_t CameraBinding = 0u;
-        constexpr std::uint32_t ObjectBinding = 1u;
-        constexpr std::uint32_t MaterialBinding = 2u;
-        constexpr std::uint32_t LightBinding = 3u;
-        constexpr std::uint32_t InstanceObjectIndexBinding = 4u;
-        constexpr std::uint32_t RenderSettingsBinding = 5u;
-        constexpr std::uint32_t ShadowBinding = 6u;
-        constexpr std::uint32_t IBLBinding = 7u;
-        constexpr std::uint32_t BaseColorTextureBinding = 0u;
-        constexpr std::uint32_t MetallicRoughnessTextureBinding = 1u;
-        constexpr std::uint32_t NormalTextureBinding = 2u;
-        constexpr std::uint32_t OcclusionTextureBinding = 3u;
-        constexpr std::uint32_t EmissiveTextureBinding = 4u;
-        constexpr std::uint32_t ShadowTextureBinding = 8u;
-        constexpr std::uint32_t IBLPrefilteredTextureBinding = 9u;
-        constexpr std::uint32_t IBLBRDFLutBinding = 10u;
+        constexpr std::uint32_t FrameUniformsBinding = Binding(GPUBufferBinding::FrameUniforms);
+        constexpr std::uint32_t ObjectBinding = Binding(GPUBufferBinding::Objects);
+        constexpr std::uint32_t MaterialBinding = Binding(GPUBufferBinding::Materials);
+        constexpr std::uint32_t LightBinding = Binding(GPUBufferBinding::Lights);
+        constexpr std::uint32_t InstanceObjectIndexBinding = Binding(GPUBufferBinding::InstanceIndices);
+        constexpr std::uint32_t BaseColorTextureBinding = Binding(GPUTextureBinding::BaseColor);
+        constexpr std::uint32_t MetallicRoughnessTextureBinding = Binding(GPUTextureBinding::MetallicRoughness);
+        constexpr std::uint32_t NormalTextureBinding = Binding(GPUTextureBinding::Normal);
+        constexpr std::uint32_t OcclusionTextureBinding = Binding(GPUTextureBinding::Occlusion);
+        constexpr std::uint32_t EmissiveTextureBinding = Binding(GPUTextureBinding::Emissive);
+        constexpr std::uint32_t ShadowTextureBinding = Binding(GPUTextureBinding::ShadowMap);
+        constexpr std::uint32_t IBLPrefilteredTextureBinding = Binding(GPUTextureBinding::IBLPrefiltered);
+        constexpr std::uint32_t IBLBRDFLutBinding = Binding(GPUTextureBinding::IBLBRDFLut);
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -50,49 +48,7 @@ namespace Physara::Engine
             return lhs < rhs ? rhs : lhs;
         }
 
-        struct alignas(16) RenderSettingsGPUData
-        {
-            glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
-        };
-        static_assert(sizeof(RenderSettingsGPUData) % 16 == 0);
-
-        struct alignas(16) IBLGPUData
-        {
-            glm::vec4 irradianceSH[9]{};
-            glm::vec4 params{0.f, 0.f, 0.f, 0.f};
-        };
-        static_assert(sizeof(IBLGPUData) % 16 == 0);
-
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
-
-        RenderSettingsGPUData BuildRenderSettings(const ForwardPassContext &context)
-        {
-            RenderSettingsGPUData data{};
-            data.debugParams.x = static_cast<float>(context.debugView);
-            return data;
-        }
-
-        IBLGPUData BuildIBLData(const ForwardPassContext &context)
-        {
-            IBLGPUData data{};
-            if (context.iblResources == nullptr || !context.iblResources->IsReady())
-            {
-                return data;
-            }
-
-            const std::array<glm::vec4, 9> &sh = context.iblResources->GetIrradianceSH();
-            for (std::size_t i = 0; i < sh.size(); ++i)
-            {
-                data.irradianceSH[i] = sh[i];
-            }
-            data.params = glm::vec4(
-                std::exp2(context.environmentExposureCompensation),
-                static_cast<float>(context.iblResources->GetSpecularMipCount() > 0u ? context.iblResources->GetSpecularMipCount() - 1u : 0u),
-                1.f,
-                0.f);
-            return data;
-        }
-
     }
 
     void ForwardOpaquePass::Execute(const ForwardPassContext &context)
@@ -107,17 +63,12 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::Reset()
     {
-        m_CameraAllocation = {};
-        m_RenderSettingsAllocation = {};
-        m_ShadowAllocation = {};
-        m_IBLAllocation = {};
         m_MaterialTextureCache.Reset();
         m_LinearClampMipSampler.reset();
         m_ShadowSampler.reset();
         m_FallbackBlackCubeTexture.reset();
         m_FallbackBRDFLut.reset();
         ResetTextureBindings();
-        m_LastUploadedFrameIndex = std::numeric_limits<std::uint64_t>::max();
         m_LoggedFirstScene = false;
         m_LoggedFirstDraw = false;
     }
@@ -126,21 +77,20 @@ namespace Physara::Engine
     {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
             context.frameData == nullptr || context.renderProxy == nullptr || context.device == nullptr ||
-            context.frameUploadAllocator == nullptr || context.gpuScene == nullptr)
+            context.gpuScene == nullptr)
         {
             return;
         }
 
         EnsureDefaultTextures(context);
-        EnsureFrameBuffers(context);
         m_MaterialTextureCache.Update(*context.device, *context.commandList, context.assetManager, *context.frameData, context.stats);
         RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back, transparent);
         RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None, transparent);
+        const FrameUploadAllocation &frameUniformAllocation = context.gpuScene->GetFrameUniformBuffer();
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &lightAllocation = context.gpuScene->GetLightBuffer();
         const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetForwardInstanceObjectIndexBuffer();
-        if (!m_CameraAllocation.IsValid() || !m_RenderSettingsAllocation.IsValid() || !m_ShadowAllocation.IsValid() ||
-            !m_IBLAllocation.IsValid() || !objectAllocation.IsValid() || !lightAllocation.IsValid() ||
+        if (!frameUniformAllocation.IsValid() || !objectAllocation.IsValid() || !lightAllocation.IsValid() ||
             !instanceObjectIndexAllocation.IsValid() || context.gpuScene->GetMaterialBuffer() == nullptr)
         {
             return;
@@ -173,10 +123,10 @@ namespace Physara::Engine
             }
 
             context.commandList->SetUniformBuffer(
-                ForwardOpaquePassDetail::CameraBinding,
-                m_CameraAllocation.buffer,
-                m_CameraAllocation.offset,
-                m_CameraAllocation.size);
+                ForwardOpaquePassDetail::FrameUniformsBinding,
+                frameUniformAllocation.buffer,
+                frameUniformAllocation.offset,
+                frameUniformAllocation.size);
             context.commandList->SetStorageBuffer(
                 ForwardOpaquePassDetail::ObjectBinding,
                 objectAllocation.buffer,
@@ -193,7 +143,7 @@ namespace Physara::Engine
                 instanceObjectIndexAllocation.buffer,
                 instanceObjectIndexAllocation.offset,
                 instanceObjectIndexAllocation.size);
-            BindFrameState(context);
+            BindFrameTextures(context);
 
             ResetTextureBindings();
             context.commandList->SetPipelineState(singleSidedPipeline);
@@ -221,24 +171,6 @@ namespace Physara::Engine
         }
 
         context.commandList->EndRenderPass();
-    }
-
-    void ForwardOpaquePass::EnsureFrameBuffers(const ForwardPassContext &context)
-    {
-        const FrameData &frameData = *context.frameData;
-
-        if (m_LastUploadedFrameIndex == frameData.frameIndex)
-        {
-            return;
-        }
-
-        const ForwardOpaquePassDetail::RenderSettingsGPUData renderSettings = ForwardOpaquePassDetail::BuildRenderSettings(context);
-        const ForwardOpaquePassDetail::IBLGPUData iblData = ForwardOpaquePassDetail::BuildIBLData(context);
-        m_CameraAllocation = context.frameUploadAllocator->Upload(*context.device, frameData.camera, context.stats);
-        m_RenderSettingsAllocation = context.frameUploadAllocator->Upload(*context.device, renderSettings, context.stats);
-        m_ShadowAllocation = context.frameUploadAllocator->Upload(*context.device, frameData.shadow, context.stats);
-        m_IBLAllocation = context.frameUploadAllocator->Upload(*context.device, iblData, context.stats);
-        m_LastUploadedFrameIndex = frameData.frameIndex;
     }
 
     void ForwardOpaquePass::EnsureDefaultTextures(const ForwardPassContext &context)
@@ -357,23 +289,8 @@ namespace Physara::Engine
         return context.pipelineCache->GetOrCreate(pipelineDesc);
     }
 
-    void ForwardOpaquePass::BindFrameState(const ForwardPassContext &context)
+    void ForwardOpaquePass::BindFrameTextures(const ForwardPassContext &context)
     {
-        context.commandList->SetUniformBuffer(
-            ForwardOpaquePassDetail::RenderSettingsBinding,
-            m_RenderSettingsAllocation.buffer,
-            m_RenderSettingsAllocation.offset,
-            m_RenderSettingsAllocation.size);
-        context.commandList->SetUniformBuffer(
-            ForwardOpaquePassDetail::ShadowBinding,
-            m_ShadowAllocation.buffer,
-            m_ShadowAllocation.offset,
-            m_ShadowAllocation.size);
-        context.commandList->SetUniformBuffer(
-            ForwardOpaquePassDetail::IBLBinding,
-            m_IBLAllocation.buffer,
-            m_IBLAllocation.offset,
-            m_IBLAllocation.size);
         if (context.shadowMap != nullptr)
         {
             context.commandList->SetTexture(ForwardOpaquePassDetail::ShadowTextureBinding, context.shadowMap, m_ShadowSampler.get());

@@ -9,6 +9,20 @@ namespace Physara::RHI
 
     using ImGuiTextureHandle = std::uint64_t;
 
+    struct ImGuiRenderStatistics
+    {
+        std::uint32_t drawLists{0};
+        std::uint32_t drawCommands{0};
+        std::uint32_t vertexCount{0};
+        std::uint32_t indexCount{0};
+        float renderCpuMs{0.f};
+
+        void Reset()
+        {
+            *this = {};
+        }
+    };
+
     class IImGuiBackend
     {
     public:
@@ -21,6 +35,7 @@ namespace Physara::RHI
         virtual ImGuiTextureHandle CreateTextureRGBA(std::uint32_t width, std::uint32_t height, const void *pixels) = 0;
         virtual void DestroyTexture(ImGuiTextureHandle texture) = 0;
         virtual ImGuiTextureHandle GetTextureHandle(RHITexture *texture) = 0;
+        [[nodiscard]] virtual ImGuiRenderStatistics GetLastRenderStatistics() const { return {}; }
         virtual void Shutdown() = 0;
     };
 }

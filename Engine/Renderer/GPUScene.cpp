@@ -1,8 +1,11 @@
 #include "GPUScene.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 
+#include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/AssetManager.hpp>
@@ -101,7 +104,7 @@ namespace Physara::Engine
 
         float ShadingModelToShaderValue(ShadingModel model)
         {
-            return model == ShadingModel::Unlit ? 1.f : 0.f;
+            return static_cast<float>(GPUValue(model == ShadingModel::Unlit ? ShadingModelGPU::Unlit : ShadingModelGPU::Lit));
         }
 
         float AlphaModeToShaderValue(AlphaMode mode)
@@ -109,12 +112,12 @@ namespace Physara::Engine
             switch (mode)
             {
             case AlphaMode::Mask:
-                return 1.f;
+                return static_cast<float>(GPUValue(AlphaModeGPU::Mask));
             case AlphaMode::Blend:
-                return 2.f;
+                return static_cast<float>(GPUValue(AlphaModeGPU::Blend));
             case AlphaMode::Opaque:
             default:
-                return 0.f;
+                return static_cast<float>(GPUValue(AlphaModeGPU::Opaque));
             }
         }
 
@@ -179,10 +182,39 @@ namespace Physara::Engine
                 0.f);
             return material;
         }
+
+        FrameUniforms BuildFrameUniforms(
+            const FrameData &frameData,
+            const IBLResources *iblResources,
+            float environmentExposureCompensation,
+            std::uint32_t debugView)
+        {
+            FrameUniforms uniforms{};
+            uniforms.camera = frameData.camera;
+            uniforms.shadow = frameData.shadow;
+            uniforms.debugParams.x = static_cast<float>(debugView);
+            if (iblResources == nullptr || !iblResources->IsReady())
+            {
+                return uniforms;
+            }
+
+            const std::array<glm::vec4, 9> &sh = iblResources->GetIrradianceSH();
+            for (std::size_t i = 0; i < sh.size(); ++i)
+            {
+                uniforms.ibl.irradianceSH[i] = sh[i];
+            }
+            uniforms.ibl.params = glm::vec4(
+                std::exp2(environmentExposureCompensation),
+                static_cast<float>(iblResources->GetSpecularMipCount() > 0u ? iblResources->GetSpecularMipCount() - 1u : 0u),
+                1.f,
+                0.f);
+            return uniforms;
+        }
     }
 
     void GPUScene::Reset()
     {
+        m_FrameUniformAllocation = {};
         m_ObjectAllocation = {};
         m_LightAllocation = {};
         m_ForwardInstanceObjectIndexAllocation = {};
@@ -225,6 +257,23 @@ namespace Physara::Engine
         m_LightCount = static_cast<std::uint32_t>(frameData.lights.size());
         m_MaterialCount = static_cast<std::uint32_t>(frameData.materials.size());
         m_ForwardInstanceObjectIndexCount = static_cast<std::uint32_t>(renderProxy.GetBatches().instanceObjectIndices.size());
+    }
+
+    void GPUScene::UploadFrameUniforms(
+        RHI::RHIDevice &device,
+        FrameUploadAllocator &allocator,
+        const FrameData &frameData,
+        const IBLResources *iblResources,
+        float environmentExposureCompensation,
+        std::uint32_t debugView,
+        FrameStatistics *stats)
+    {
+        const FrameUniforms uniforms = GPUSceneDetail::BuildFrameUniforms(
+            frameData,
+            iblResources,
+            environmentExposureCompensation,
+            debugView);
+        m_FrameUniformAllocation = allocator.Upload(device, uniforms, stats);
     }
 
     void GPUScene::UploadShadowInstanceObjectIndices(
@@ -343,6 +392,7 @@ namespace Physara::Engine
         if (stats != nullptr)
         {
             stats->bufferUploadBytes += uploadBytes;
+            ++stats->bufferUploadChunks;
         }
         m_LastMaterialUploadSignature = materialSignature;
     }

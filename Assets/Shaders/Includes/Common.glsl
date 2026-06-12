@@ -8,6 +8,7 @@
 
 #define PHYSARA_MAX_LIGHTS 128
 
+#define PHYSARA_BINDING_FRAME_UNIFORMS 0
 #define PHYSARA_BINDING_CAMERA 0
 #define PHYSARA_BINDING_OBJECTS 1
 #define PHYSARA_BINDING_MATERIALS 2
@@ -47,6 +48,8 @@
 
 #define PHYSARA_OBJECT_CAST_SHADOW 1u
 #define PHYSARA_OBJECT_RECEIVE_SHADOW 2u
+#define PHYSARA_OBJECT_TRANSPARENT 4u
+#define PHYSARA_OBJECT_UNLIT 8u
 
 #define PHYSARA_SHADOW_NONE 0u
 #define PHYSARA_SHADOW_HARD 1u
@@ -90,6 +93,20 @@ struct ShadowData
     mat4 lightViewProjection;
     vec4 params;
     vec4 controls;
+};
+
+struct IBLData
+{
+    vec4 irradianceSH[9];
+    vec4 params;
+};
+
+struct FrameUniforms
+{
+    CameraData camera;
+    ShadowData shadow;
+    IBLData ibl;
+    vec4 debugParams;
 };
 
 float GetEV100(CameraData camera)

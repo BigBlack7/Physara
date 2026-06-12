@@ -6,6 +6,7 @@
 
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Renderer/RenderView.hpp>
+#include <Engine/RHI/Core/IImGuiBackend.hpp>
 #include <Engine/Scene/EntityId.hpp>
 
 namespace Physara::Engine
@@ -47,6 +48,20 @@ namespace Physara::Editor
         bool inputCaptured{false};
         Engine::RenderView lastRenderView{};
         Engine::FrameStatistics rendererStats{};
+    };
+
+    struct EditorFrameStatistics
+    {
+        float uiBuildCpuMs{0.f};
+        float sceneRenderCpuMs{0.f};
+        float uiRenderCpuMs{0.f};
+        float frameCpuMs{0.f};
+        RHI::ImGuiRenderStatistics imgui{};
+
+        void Reset()
+        {
+            *this = {};
+        }
     };
 
     struct PanelVisibilityState
@@ -134,6 +149,7 @@ namespace Physara::Editor
         std::filesystem::path currentScenePath{};
 
         SceneViewState sceneView{};
+        EditorFrameStatistics frameStats{};
         EditorUIState ui{};
         EditorSettings settings{};
     };

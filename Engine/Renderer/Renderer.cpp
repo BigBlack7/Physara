@@ -459,6 +459,25 @@ namespace Physara::Engine
                             });
         }
 
+        m_RenderGraph.AddPass("FrameUniformsUpload")
+            .SetSideEffect()
+            .SetExecute([this](RenderGraphContext &)
+                        {
+                            if (m_Device == nullptr)
+                            {
+                                return;
+                            }
+
+                            m_GPUScene.UploadFrameUniforms(
+                                *m_Device,
+                                m_FrameUploadAllocator,
+                                m_FrameData,
+                                m_IBLResources.IsReady() ? &m_IBLResources : nullptr,
+                                m_SkyboxExposureCompensation,
+                                static_cast<std::uint32_t>(m_PostProcessSettings.debugView),
+                                &m_FrameData.stats);
+                        });
+
         if (drawSkybox)
         {
             m_RenderGraph.AddPass("Skybox")
@@ -475,6 +494,7 @@ namespace Physara::Engine
                                 passContext.pipelineCache = &m_PipelineStateCache;
                                 passContext.frameData = &m_FrameData;
                                 passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+                                passContext.gpuScene = &m_GPUScene;
                                 passContext.stats = &m_FrameData.stats;
                                 passContext.environmentPath = m_EnvironmentMapPath;
                                 passContext.exposureCompensation = m_SkyboxExposureCompensation;
@@ -512,7 +532,6 @@ namespace Physara::Engine
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
-                            passContext.frameUploadAllocator = &m_FrameUploadAllocator;
                             passContext.gpuScene = &m_GPUScene;
                             passContext.stats = &m_FrameData.stats;
                             passContext.renderProxy = &m_RenderProxy;
@@ -568,6 +587,7 @@ namespace Physara::Engine
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
                             passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+                            passContext.gpuScene = &m_GPUScene;
                             passContext.stats = &m_FrameData.stats;
                             passContext.sceneHDR = m_SceneHDRColor.get();
                             passContext.sceneDepth = m_SceneDepth.get();
@@ -588,7 +608,6 @@ namespace Physara::Engine
         passContext.shaderLibrary = &m_ShaderLibrary;
         passContext.pipelineCache = &m_PipelineStateCache;
         passContext.frameData = &m_FrameData;
-        passContext.frameUploadAllocator = &m_FrameUploadAllocator;
         passContext.gpuScene = &m_GPUScene;
         passContext.stats = &m_FrameData.stats;
         passContext.renderProxy = &m_RenderProxy;

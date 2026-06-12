@@ -11,11 +11,6 @@ layout(location = 4)in vec2 inTexCoord1;
 layout(location = 5)flat in uint inMaterialIndex;
 layout(location = 6)flat in uint inObjectFlags;
 
-layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
-{
-    CameraData uCamera;
-};
-
 layout(std430, binding = PHYSARA_BINDING_MATERIALS)readonly buffer MaterialBuffer
 {
     MaterialData uMaterials[];
@@ -28,16 +23,6 @@ layout(std430, binding = PHYSARA_BINDING_LIGHTS)readonly buffer LightBuffer
     uint uLightPadding1;
     uint uLightPadding2;
     LightData uLights[];
-};
-
-layout(std140, binding = PHYSARA_BINDING_RENDER_SETTINGS)uniform RenderSettingsBuffer
-{
-    vec4 uDebugParams;
-};
-
-layout(std140, binding = PHYSARA_BINDING_SHADOW)uniform ShadowBuffer
-{
-    ShadowData uShadow;
 };
 
 layout(binding = PHYSARA_BINDING_BASE_COLOR_TEXTURE)uniform sampler2D uBaseColorTexture;
@@ -184,12 +169,12 @@ float SampleShadowPCSS(vec2 uv, float receiverDepth, float texel, float filterRa
 
 float SampleShadow(vec3 worldPosition, vec3 normal, LightData light, uint lightIndex)
 {
-    if (uShadow.params.x < 0.5 || uint(uShadow.params.z + 0.5) != lightIndex || (inObjectFlags & PHYSARA_OBJECT_RECEIVE_SHADOW) == 0u)
+    if (uFrame.shadow.params.x < 0.5 || uint(uFrame.shadow.params.z + 0.5) != lightIndex || (inObjectFlags & PHYSARA_OBJECT_RECEIVE_SHADOW) == 0u)
     {
         return 1.0;
     }
 
-    vec4 lightClip = uShadow.lightViewProjection * vec4(worldPosition, 1.0);
+    vec4 lightClip = uFrame.shadow.lightViewProjection * vec4(worldPosition, 1.0);
     vec3 projected = lightClip.xyz / max(lightClip.w, PHYSARA_EPSILON);
     vec3 shadowCoord = projected * 0.5 + 0.5;
     if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
@@ -201,12 +186,12 @@ float SampleShadow(vec3 worldPosition, vec3 normal, LightData light, uint lightI
 
     vec3 lightToSurface = SafeNormalize(light.directionType.xyz);
     float NoL = Saturate(dot(normal, -lightToSurface));
-    float receiverBiasScale = max(uShadow.controls.x, 0.0);
+    float receiverBiasScale = max(uFrame.shadow.controls.x, 0.0);
     float bias = max(light.shadowParams.y * receiverBiasScale * (1.0 - NoL), light.shadowParams.y * receiverBiasScale * 0.25);
-    uint algorithm = uint(uShadow.controls.y + 0.5);
-    float filterRadiusTexels = max(uShadow.controls.z, 0.25);
-    float lightSizeTexels = max(uShadow.controls.w, 0.25);
-    float texel = max(uShadow.params.w, 1.0 / max(uShadow.params.y, 1.0));
+    uint algorithm = uint(uFrame.shadow.controls.y + 0.5);
+    float filterRadiusTexels = max(uFrame.shadow.controls.z, 0.25);
+    float lightSizeTexels = max(uFrame.shadow.controls.w, 0.25);
+    float texel = max(uFrame.shadow.params.w, 1.0 / max(uFrame.shadow.params.y, 1.0));
     float receiverDepth = clamp(shadowCoord.z - bias, 0.0, 1.0);
 
     if (algorithm == PHYSARA_SHADOW_HARD)
@@ -274,10 +259,10 @@ void main()
         geometricNormal = -geometricNormal;
     }
     context.normal = ResolveWorldNormal(inputs, geometricNormal, inWorldTangent, SelectTexCoord(inputs.normalTexCoord));
-    context.view = normalize(GetCameraPosition(uCamera) - inWorldPosition);
+    context.view = normalize(GetCameraPosition(uFrame.camera) - inWorldPosition);
     material.energyCompensation = ComputeIBLEnergyCompensation(material, context.normal, context.view);
 
-    uint debugView = uint(uDebugParams.x + 0.5);
+    uint debugView = uint(uFrame.debugParams.x + 0.5);
     if (debugView == 1u)
     {
         outColor = vec4(context.normal * 0.5 + 0.5, material.baseColor.a);

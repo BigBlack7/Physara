@@ -4,69 +4,13 @@
 #include <array>
 #include <vector>
 
-#include <glm/mat4x4.hpp>
-#include <glm/vec4.hpp>
-
+#include <Engine/Renderer/GPUContracts.hpp>
 #include <Engine/Renderer/RenderView.hpp>
 #include <Engine/RHI/RHIDefinitions.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
 
 namespace Physara::Engine
 {
-    enum class RenderLightType : std::uint32_t
-    {
-        Directional = 0,
-        Point = 1,
-        Spot = 2,
-        Area = 3
-    };
-
-    struct alignas(16) CameraData
-    {
-        glm::mat4 view{1.f};
-        glm::mat4 projection{1.f};
-        glm::mat4 viewProjection{1.f};
-        glm::mat4 inverseView{1.f};
-        glm::mat4 inverseProjection{1.f};
-        glm::mat4 inverseViewProjection{1.f};
-
-        glm::vec4 cameraPositionEV100{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 viewportRect{0.f, 0.f, 1.f, 1.f};
-        glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
-    };
-
-    struct alignas(16) ObjectData
-    {
-        glm::mat4 model{1.f};
-        glm::mat4 inverseTransposeModel{1.f};
-        glm::vec4 boundsCenterRadius{0.f, 0.f, 0.f, 0.f};
-        std::uint32_t objectId{0};
-        std::uint32_t meshIndex{0};
-        std::uint32_t materialIndex{0};
-        std::uint32_t flags{0};
-    };
-
-    struct alignas(16) LightData
-    {
-        glm::vec4 positionRange{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 directionType{0.f, -1.f, 0.f, 0.f};
-        glm::vec4 colorIntensity{1.f, 1.f, 1.f, 0.f};
-        glm::vec4 spotAngles{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 shadowParams{0.f, 0.f, 0.f, 0.f};
-    };
-
-    struct alignas(16) ShadowData
-    {
-        glm::mat4 lightViewProjection{1.f};
-        glm::vec4 params{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 controls{1.f, 0.f, 0.f, 0.f};
-    };
-
-    static_assert(sizeof(CameraData) % 16 == 0);
-    static_assert(sizeof(ObjectData) % 16 == 0);
-    static_assert(sizeof(LightData) % 16 == 0);
-    static_assert(sizeof(ShadowData) % 16 == 0);
-
     struct FrameStatistics
     {
         std::uint32_t visibleSubmissions{0};
@@ -90,6 +34,7 @@ namespace Physara::Engine
         std::uint64_t instances{0};
         std::uint64_t triangles{0};
         std::uint64_t bufferUploadBytes{0};
+        std::uint64_t bufferUploadChunks{0};
         std::uint64_t meshUploadBytes{0};
         std::uint64_t textureUploadBytes{0};
         float sceneBuildCpuMs{0.f};
