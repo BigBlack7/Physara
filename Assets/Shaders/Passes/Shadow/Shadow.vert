@@ -11,11 +11,18 @@ layout(std140, binding = PHYSARA_BINDING_CAMERA)uniform CameraBuffer
 
 layout(std430, binding = PHYSARA_BINDING_OBJECTS)readonly buffer ObjectBuffer
 {
-    mat4 uObjectModels[];
+    ObjectData uObjects[];
+};
+
+layout(std430, binding = PHYSARA_BINDING_INSTANCE_INDICES)readonly buffer InstanceIndexBuffer
+{
+    uint uInstanceObjectIndices[];
 };
 
 void main()
 {
-    mat4 model = uObjectModels[gl_BaseInstance + gl_InstanceID];
+    uint instanceIndex = uint(gl_BaseInstance) + uint(gl_InstanceID);
+    uint objectIndex = uInstanceObjectIndices[instanceIndex];
+    mat4 model = uObjects[objectIndex].model;
     gl_Position = uCamera.viewProjection * model * vec4(inPosition, 1.0);
 }

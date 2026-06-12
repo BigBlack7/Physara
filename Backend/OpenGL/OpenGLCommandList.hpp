@@ -21,8 +21,10 @@ namespace Physara::RHI
         void SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset = 0) override;
         void SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset = 0) override;
         void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
+        void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) override;
         void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) override;
         void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
+        void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) override;
         void SetStorageTexture(
             std::uint32_t slot,
             RHITexture *texture,
@@ -73,6 +75,8 @@ namespace Physara::RHI
 
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;
+        void ResetStatistics() override;
+        [[nodiscard]] RHICommandStatistics GetStatistics() const override;
 
     private:
         static constexpr std::uint32_t kMaxColorAttachments = 4;
@@ -163,10 +167,18 @@ namespace Physara::RHI
         IndexBufferBindingState m_IndexBufferBinding{};
         ViewportState m_ViewportState{};
         ScissorState m_ScissorState{};
+        RHICommandStatistics m_Statistics{};
 
         void InvalidateBindingCache();
         void InvalidatePipelineState();
         void InvalidateVertexInputCache();
         void InvalidateDynamicStateCache();
+        void BindBufferRange(
+            GLenum target,
+            bool storageBuffer,
+            std::uint32_t slot,
+            RHIBuffer *buffer,
+            std::uint32_t offset,
+            std::uint32_t size);
     };
 }

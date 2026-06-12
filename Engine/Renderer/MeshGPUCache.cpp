@@ -1,6 +1,7 @@
 #include "MeshGPUCache.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <Engine/Core/Log.hpp>
@@ -33,12 +34,27 @@ namespace Physara::Engine
         const RenderDrawItem &item,
         FrameStatistics *stats)
     {
+        MeshGPUResource *resource = GetOrCreateMeshResource(device, assetManager, item, stats);
+        if (resource == nullptr || item.submission == nullptr || item.submission->primitiveIndex >= resource->primitives.size())
+        {
+            return nullptr;
+        }
+
+        return &resource->primitives[item.submission->primitiveIndex];
+    }
+
+    MeshGPUResource *MeshGPUCache::GetOrCreateMeshResource(
+        RHI::RHIDevice *device,
+        AssetManager *assetManager,
+        const RenderDrawItem &item,
+        FrameStatistics *stats)
+    {
         if (assetManager == nullptr || device == nullptr || item.submission == nullptr)
         {
             return nullptr;
         }
 
-        const auto cached = m_MeshCache.find(item.primitiveKey);
+        const auto cached = m_MeshCache.find(item.meshKey);
         if (cached != m_MeshCache.end())
         {
             return &cached->second;
@@ -48,52 +64,108 @@ namespace Physara::Engine
         const std::shared_ptr<Mesh> mesh = assetManager->GetByPath<Mesh>(meshResourcePath);
         if (mesh == nullptr || item.submission->primitiveIndex >= mesh->primitives.size())
         {
-            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
+            if (m_MissingMeshWarnings.insert(item.meshKey).second)
             {
                 PHYSARA_CORE_WARN("Mesh GPU cache skipped '{}': resource not found or primitive index out of range. normalized='{}'.",
-                                  BuildMeshPrimitiveDebugName(item),
+                                  meshResourcePath,
                                   assetManager->NormalizePath(meshResourcePath));
             }
             return nullptr;
         }
 
-        const MeshPrimitive &primitive = mesh->primitives[item.submission->primitiveIndex];
-        if (!primitive.HasGeometry())
+        std::size_t totalVertexCount = 0;
+        std::size_t totalIndexCount = 0;
+        for (const MeshPrimitive &primitive : mesh->primitives)
         {
-            if (m_MissingMeshWarnings.insert(item.primitiveKey).second)
+            if (!primitive.HasGeometry())
             {
-                PHYSARA_CORE_WARN("Mesh GPU cache skipped '{}': primitive has no decoded geometry.",
-                                  BuildMeshPrimitiveDebugName(item));
+                continue;
+            }
+            totalVertexCount += primitive.vertices.size();
+            totalIndexCount += primitive.indices.size();
+        }
+
+        if (totalVertexCount == 0 || totalIndexCount == 0)
+        {
+            if (m_MissingMeshWarnings.insert(item.meshKey).second)
+            {
+                PHYSARA_CORE_WARN("Mesh GPU cache skipped '{}': mesh has no decoded geometry.", meshResourcePath);
             }
             return nullptr;
         }
 
-        MeshGPUPrimitive gpuPrimitive{};
-        gpuPrimitive.vertexBuffer = device->CreateBuffer(
-            MeshGPUCacheDetail::StaticBufferDesc(primitive.vertices, RHI::BufferUsage::Vertex));
-        gpuPrimitive.indexBuffer = device->CreateBuffer(
-            MeshGPUCacheDetail::StaticBufferDesc(primitive.indices, RHI::BufferUsage::Index));
-        gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-
-        if (gpuPrimitive.vertexBuffer == nullptr || gpuPrimitive.indexBuffer == nullptr)
+        if (totalVertexCount > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
         {
-            PHYSARA_CORE_ERROR("Mesh GPU cache failed to upload '{}'.", BuildMeshPrimitiveDebugName(item));
+            PHYSARA_CORE_ERROR("Mesh GPU cache skipped '{}': vertex count exceeds base vertex range.", meshResourcePath);
             return nullptr;
+        }
+        if (totalIndexCount > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+        {
+            PHYSARA_CORE_ERROR("Mesh GPU cache skipped '{}': index count exceeds RHI draw range.", meshResourcePath);
+            return nullptr;
+        }
+
+        std::vector<MeshVertex> vertices;
+        std::vector<std::uint32_t> indices;
+        vertices.reserve(totalVertexCount);
+        indices.reserve(totalIndexCount);
+
+        MeshGPUResource gpuResource{};
+        gpuResource.primitives.resize(mesh->primitives.size());
+
+        for (std::size_t primitiveIndex = 0; primitiveIndex < mesh->primitives.size(); ++primitiveIndex)
+        {
+            const MeshPrimitive &primitive = mesh->primitives[primitiveIndex];
+            if (!primitive.HasGeometry())
+            {
+                continue;
+            }
+
+            MeshGPUPrimitive &gpuPrimitive = gpuResource.primitives[primitiveIndex];
+            gpuPrimitive.firstIndex = static_cast<std::uint32_t>(indices.size());
+            gpuPrimitive.vertexOffset = static_cast<std::int32_t>(vertices.size());
+            gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
+
+            vertices.insert(vertices.end(), primitive.vertices.begin(), primitive.vertices.end());
+            indices.insert(indices.end(), primitive.indices.begin(), primitive.indices.end());
+        }
+
+        gpuResource.vertexBuffer = device->CreateBuffer(
+            MeshGPUCacheDetail::StaticBufferDesc(vertices, RHI::BufferUsage::Vertex));
+        gpuResource.indexBuffer = device->CreateBuffer(
+            MeshGPUCacheDetail::StaticBufferDesc(indices, RHI::BufferUsage::Index));
+
+        if (gpuResource.vertexBuffer == nullptr || gpuResource.indexBuffer == nullptr)
+        {
+            PHYSARA_CORE_ERROR("Mesh GPU cache failed to upload '{}'.", meshResourcePath);
+            return nullptr;
+        }
+
+        for (MeshGPUPrimitive &primitive : gpuResource.primitives)
+        {
+            if (primitive.indexCount == 0)
+            {
+                continue;
+            }
+            primitive.vertexBuffer = gpuResource.vertexBuffer.get();
+            primitive.indexBuffer = gpuResource.indexBuffer.get();
         }
 
         if (stats != nullptr)
         {
-            const std::uint64_t vertexBytes = static_cast<std::uint64_t>(primitive.vertices.size() * sizeof(MeshVertex));
-            const std::uint64_t indexBytes = static_cast<std::uint64_t>(primitive.indices.size() * sizeof(std::uint32_t));
+            const std::uint64_t vertexBytes = static_cast<std::uint64_t>(vertices.size() * sizeof(MeshVertex));
+            const std::uint64_t indexBytes = static_cast<std::uint64_t>(indices.size() * sizeof(std::uint32_t));
             ++stats->meshUploads;
+            stats->meshPrimitiveUploads += static_cast<std::uint32_t>(mesh->primitives.size());
             stats->meshUploadBytes += vertexBytes + indexBytes;
         }
 
-        PHYSARA_CORE_INFO("Mesh GPU cache uploaded '{}': vertices={}, indices={}.",
-                          BuildMeshPrimitiveDebugName(item),
-                          primitive.vertices.size(),
-                          primitive.indices.size());
-        auto [inserted, _] = m_MeshCache.emplace(item.primitiveKey, std::move(gpuPrimitive));
+        PHYSARA_CORE_INFO("Mesh GPU cache uploaded '{}': primitives={}, vertices={}, indices={}.",
+                          meshResourcePath,
+                          mesh->primitives.size(),
+                          vertices.size(),
+                          indices.size());
+        auto [inserted, _] = m_MeshCache.emplace(item.meshKey, std::move(gpuResource));
         return &inserted->second;
     }
 

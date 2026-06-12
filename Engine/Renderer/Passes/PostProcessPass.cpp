@@ -6,11 +6,9 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/PipelineStateCache.hpp>
-#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
-#include <Engine/RHI/Descriptors/RHIBufferDesc.hpp>
 #include <Engine/RHI/Descriptors/RHISamplerDesc.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
@@ -47,15 +45,6 @@ namespace Physara::Engine
             glm::vec4 viewportSizeEV100{1.f, 1.f, 0.f, 0.f};
             glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
         };
-
-        RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
-        {
-            RHI::RHIBufferDesc desc{};
-            desc.size = MaxValue(size, 16u);
-            desc.usage = usage;
-            desc.dynamic = true;
-            return desc;
-        }
 
         SettingsGPUData BuildSettings(const PostProcessSettings &settings)
         {
@@ -103,7 +92,8 @@ namespace Physara::Engine
     void PostProcessPass::Execute(const PostProcessPassContext &context)
     {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
-            context.frameData == nullptr || context.sceneHDR == nullptr || context.sceneDepth == nullptr || context.device == nullptr)
+            context.frameData == nullptr || context.sceneHDR == nullptr || context.sceneDepth == nullptr || context.device == nullptr ||
+            context.frameUploadAllocator == nullptr)
         {
             return;
         }
@@ -117,27 +107,8 @@ namespace Physara::Engine
 
         const PostProcessPassDetail::FrameGPUData frameData = PostProcessPassDetail::BuildFrameData(*context.frameData);
         const PostProcessPassDetail::SettingsGPUData settingsData = PostProcessPassDetail::BuildSettings(context.settings);
-        const std::uint64_t frameSignature = UploadHash::Value(UploadHash::Offset, frameData);
-        if (frameSignature != m_LastFrameUploadSignature)
-        {
-            m_FrameBuffer->UploadData(&frameData, sizeof(frameData));
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += sizeof(frameData);
-            }
-            m_LastFrameUploadSignature = frameSignature;
-        }
-
-        const std::uint64_t settingsSignature = UploadHash::Value(UploadHash::Offset, settingsData);
-        if (settingsSignature != m_LastSettingsUploadSignature)
-        {
-            m_SettingsBuffer->UploadData(&settingsData, sizeof(settingsData));
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += sizeof(settingsData);
-            }
-            m_LastSettingsUploadSignature = settingsSignature;
-        }
+        m_FrameAllocation = context.frameUploadAllocator->Upload(*context.device, frameData, context.stats);
+        m_SettingsAllocation = context.frameUploadAllocator->Upload(*context.device, settingsData, context.stats);
 
         ExecuteExposure(context);
         ExecuteBloom(context);
@@ -151,8 +122,8 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameBuffer.get());
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsBuffer.get());
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, context.sceneDepth, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::BloomTextureBinding, GetBloomTexture(), m_LinearClampSampler.get());
@@ -161,6 +132,7 @@ namespace Physara::Engine
         if (context.stats != nullptr)
         {
             ++context.stats->drawCalls;
+            ++context.stats->postProcessDrawCalls;
             ++context.stats->instances;
             ++context.stats->triangles;
         }
@@ -169,20 +141,6 @@ namespace Physara::Engine
 
     void PostProcessPass::EnsureResources(const PostProcessPassContext &context)
     {
-        if (m_FrameBuffer == nullptr)
-        {
-            m_FrameBuffer = context.device->CreateBuffer(
-                PostProcessPassDetail::DynamicBufferDesc(sizeof(PostProcessPassDetail::FrameGPUData), RHI::BufferUsage::Uniform));
-            m_LastFrameUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        }
-
-        if (m_SettingsBuffer == nullptr)
-        {
-            m_SettingsBuffer = context.device->CreateBuffer(
-                PostProcessPassDetail::DynamicBufferDesc(sizeof(PostProcessPassDetail::SettingsGPUData), RHI::BufferUsage::Uniform));
-            m_LastSettingsUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        }
-
         if (m_LinearClampSampler == nullptr)
         {
             RHI::RHISamplerDesc desc{};
@@ -339,13 +297,14 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(m_ExposureFramebuffer.get(), m_ExposureRenderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameBuffer.get());
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsBuffer.get());
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
             ++context.stats->drawCalls;
+            ++context.stats->postProcessDrawCalls;
             ++context.stats->instances;
             ++context.stats->triangles;
         }
@@ -458,8 +417,8 @@ namespace Physara::Engine
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(framebuffer, renderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameBuffer.get());
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsBuffer.get());
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::CameraBinding, m_FrameAllocation.buffer, m_FrameAllocation.offset, m_FrameAllocation.size);
+        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, source0, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, source1, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::ExposureTextureBinding, GetExposureTexture(), m_LinearClampSampler.get());
@@ -467,6 +426,7 @@ namespace Physara::Engine
         if (context.stats != nullptr)
         {
             ++context.stats->drawCalls;
+            ++context.stats->postProcessDrawCalls;
             ++context.stats->instances;
             ++context.stats->triangles;
         }

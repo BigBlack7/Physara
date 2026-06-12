@@ -88,9 +88,12 @@ namespace Physara::Engine
     {
         m_RenderGraph.Reset();
         m_RenderGraph.ReleasePooledResources();
+        m_FrameUploadAllocator.Release();
+        m_GPUScene.Release();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
         m_ShadowPass.Reset();
+        m_ForwardOpaquePass.Reset();
         m_IBLResources.Reset();
         m_MeshGPUCache.Reset();
         m_SceneDepthMSAA.reset();
@@ -124,6 +127,8 @@ namespace Physara::Engine
     void Renderer::BeginFrame(const RenderView &view, float deltaTimeSeconds)
     {
         ResizeViewport(view.viewport.width, view.viewport.height);
+        m_FrameUploadAllocator.Reset();
+        m_GPUScene.Reset();
         m_FrameData.Reset(view, ++m_FrameIndex, deltaTimeSeconds);
     }
 
@@ -163,9 +168,11 @@ namespace Physara::Engine
         }
 
         const auto renderStart = std::chrono::steady_clock::now();
+        commandList->ResetStatistics();
         BuildRenderGraph();
         m_RenderGraph.Execute(*commandList, m_Device);
         m_Device->SubmitCommandList();
+        m_FrameData.stats.backend = commandList->GetStatistics();
         m_FrameData.stats.renderGraphCpuMs = RendererDetail::ElapsedMilliseconds(renderStart);
     }
 
@@ -410,6 +417,24 @@ namespace Physara::Engine
             (void)m_IBLResources.Ensure(m_Device, m_EnvironmentMapPath);
         }
 
+        m_RenderGraph.AddPass("GPUSceneUpload")
+            .SetSideEffect()
+            .SetExecute([this](RenderGraphContext &)
+                        {
+                            if (m_Device == nullptr)
+                            {
+                                return;
+                            }
+
+                            m_GPUScene.UploadFrame(
+                                *m_Device,
+                                m_FrameUploadAllocator,
+                                m_FrameData,
+                                m_RenderProxy,
+                                m_AssetManager,
+                                &m_FrameData.stats);
+                        });
+
         if (m_ShadowSettings.algorithm != ShadowAlgorithm::None)
         {
             m_RenderGraph.AddPass("Shadow")
@@ -422,6 +447,8 @@ namespace Physara::Engine
                                 passContext.shaderLibrary = &m_ShaderLibrary;
                                 passContext.pipelineCache = &m_PipelineStateCache;
                                 passContext.frameData = &m_FrameData;
+                                passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+                                passContext.gpuScene = &m_GPUScene;
                                 passContext.stats = &m_FrameData.stats;
                                 passContext.renderProxy = &m_RenderProxy;
                                 passContext.meshCache = &m_MeshGPUCache;
@@ -447,6 +474,7 @@ namespace Physara::Engine
                                 passContext.shaderLibrary = &m_ShaderLibrary;
                                 passContext.pipelineCache = &m_PipelineStateCache;
                                 passContext.frameData = &m_FrameData;
+                                passContext.frameUploadAllocator = &m_FrameUploadAllocator;
                                 passContext.stats = &m_FrameData.stats;
                                 passContext.environmentPath = m_EnvironmentMapPath;
                                 passContext.exposureCompensation = m_SkyboxExposureCompensation;
@@ -484,6 +512,8 @@ namespace Physara::Engine
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
+                            passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+                            passContext.gpuScene = &m_GPUScene;
                             passContext.stats = &m_FrameData.stats;
                             passContext.renderProxy = &m_RenderProxy;
                             passContext.meshCache = &m_MeshGPUCache;
@@ -537,6 +567,7 @@ namespace Physara::Engine
                             passContext.shaderLibrary = &m_ShaderLibrary;
                             passContext.pipelineCache = &m_PipelineStateCache;
                             passContext.frameData = &m_FrameData;
+                            passContext.frameUploadAllocator = &m_FrameUploadAllocator;
                             passContext.stats = &m_FrameData.stats;
                             passContext.sceneHDR = m_SceneHDRColor.get();
                             passContext.sceneDepth = m_SceneDepth.get();
@@ -557,6 +588,8 @@ namespace Physara::Engine
         passContext.shaderLibrary = &m_ShaderLibrary;
         passContext.pipelineCache = &m_PipelineStateCache;
         passContext.frameData = &m_FrameData;
+        passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+        passContext.gpuScene = &m_GPUScene;
         passContext.stats = &m_FrameData.stats;
         passContext.renderProxy = &m_RenderProxy;
         passContext.meshCache = &m_MeshGPUCache;

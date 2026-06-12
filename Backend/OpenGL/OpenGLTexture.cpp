@@ -43,7 +43,7 @@ namespace Physara::RHI
 
         // DSA创建texture object, 不需要 glBindTexture
         glCreateTextures(m_Target, 1, &m_ID);
-        const auto fmt = ToGLTextureFormat(m_Desc.format);
+        const auto fmt = ToGLTextureFormat(m_Desc.format, m_Desc.colorSpace);
 
         if (m_Target == GL_TEXTURE_2D_MULTISAMPLE)
         {

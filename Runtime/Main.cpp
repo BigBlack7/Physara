@@ -75,13 +75,18 @@ int main()
         PHYSARA_CORE_INFO("VSync {}", vsyncEnabled ? "enabled" : "disabled");
 
         imguiBackend = Physara::RHI::CreateRuntimeImGuiBackend(graphicsBackend);
+        PHYSARA_CORE_INFO("Initializing ImGui backend...");
         if (!imguiBackend->Initialize(device.get(), nativeWindow))
         {
             throw std::runtime_error("Failed to initialize graphics ImGui backend.");
         }
+        PHYSARA_CORE_INFO("ImGui backend initialized.");
 
+        PHYSARA_CORE_INFO("Creating editor app host...");
         editorApp = std::make_unique<Physara::Editor::EditorAppHost>();
+        PHYSARA_CORE_INFO("Initializing editor app...");
         editorApp->Init(device.get(), imguiBackend.get(), input.get());
+        PHYSARA_CORE_INFO("Editor app initialized.");
 
         while (!window->IsCloseRequested())
         {

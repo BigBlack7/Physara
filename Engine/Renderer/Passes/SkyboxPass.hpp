@@ -6,8 +6,8 @@
 #include <memory>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/FrameUploadAllocator.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
-#include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 
@@ -36,6 +36,7 @@ namespace Physara::Engine
         ShaderLibrary *shaderLibrary{nullptr};
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
+        FrameUploadAllocator *frameUploadAllocator{nullptr};
         FrameStatistics *stats{nullptr};
         std::filesystem::path environmentPath{};
         float exposureCompensation{0.f};
@@ -55,13 +56,9 @@ namespace Physara::Engine
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const SkyboxPassContext &context);
 
     private:
-        std::unique_ptr<RHI::RHIBuffer> m_CameraBuffer{};
-        std::unique_ptr<RHI::RHIBuffer> m_SettingsBuffer{};
         std::unique_ptr<RHI::RHISampler> m_Sampler{};
         std::unique_ptr<RHI::RHITexture> m_SkyboxTexture{};
         std::filesystem::path m_LoadedEnvironmentPath{};
-        std::uint64_t m_LastCameraUploadSignature{std::numeric_limits<std::uint64_t>::max()};
-        std::uint64_t m_LastSettingsUploadSignature{std::numeric_limits<std::uint64_t>::max()};
         bool m_LoggedPlaceholder{false};
     };
 }

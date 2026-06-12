@@ -6,8 +6,8 @@
 #include <vector>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/FrameUploadAllocator.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
-#include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 
 namespace Physara::RHI
@@ -89,6 +89,7 @@ namespace Physara::Engine
         ShaderLibrary *shaderLibrary{nullptr};
         PipelineStateCache *pipelineCache{nullptr};
         const FrameData *frameData{nullptr};
+        FrameUploadAllocator *frameUploadAllocator{nullptr};
         FrameStatistics *stats{nullptr};
         RHI::RHITexture *sceneHDR{nullptr};
         RHI::RHITexture *sceneDepth{nullptr};
@@ -131,8 +132,8 @@ namespace Physara::Engine
             std::unique_ptr<RHI::RHIFramebuffer> upFramebuffer{};
         };
 
-        std::unique_ptr<RHI::RHIBuffer> m_FrameBuffer{};
-        std::unique_ptr<RHI::RHIBuffer> m_SettingsBuffer{};
+        FrameUploadAllocation m_FrameAllocation{};
+        FrameUploadAllocation m_SettingsAllocation{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
         std::unique_ptr<RHI::RHITexture> m_BlackTexture{};
         std::unique_ptr<RHI::RHITexture> m_ExposureTexture{};
@@ -142,7 +143,5 @@ namespace Physara::Engine
         RHI::RHIRenderPassDesc m_BloomRenderPassDesc{};
         std::uint32_t m_BloomWidth{0};
         std::uint32_t m_BloomHeight{0};
-        std::uint64_t m_LastFrameUploadSignature{std::numeric_limits<std::uint64_t>::max()};
-        std::uint64_t m_LastSettingsUploadSignature{std::numeric_limits<std::uint64_t>::max()};
     };
 }

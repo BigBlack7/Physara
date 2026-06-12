@@ -5,6 +5,7 @@
 
 #include <glad/glad.h>
 
+#include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 #include <Engine/RHI/RHIDefinitions.hpp>
 
 namespace Physara::RHI
@@ -63,6 +64,12 @@ namespace Physara::RHI
 
         assert(false && "Invalid TextureFormat");
         return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE};
+    }
+
+    [[nodiscard]] constexpr GLTextureFormat ToGLTextureFormat(TextureFormat format, TextureColorSpace colorSpace)
+    {
+        (void)colorSpace;
+        return ToGLTextureFormat(format);
     }
 
     [[nodiscard]] constexpr GLenum ToGLFilter(FilterMode mode)

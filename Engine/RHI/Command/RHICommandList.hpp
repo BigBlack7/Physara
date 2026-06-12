@@ -38,8 +38,10 @@ namespace Physara::RHI
         virtual void SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset = 0) = 0;
         virtual void SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset = 0) = 0;
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
+        virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) = 0;
         virtual void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) = 0;
         virtual void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
+        virtual void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) = 0;
         virtual void SetStorageTexture(
             std::uint32_t slot,
             RHITexture *texture,
@@ -158,6 +160,9 @@ namespace Physara::RHI
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;
+
+        virtual void ResetStatistics() {}
+        [[nodiscard]] virtual RHICommandStatistics GetStatistics() const { return {}; }
 
     private:
         static ShaderStage FirstStage(ShaderStageFlags stages)

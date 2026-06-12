@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 
@@ -21,9 +22,18 @@ namespace Physara::Engine
 
     struct MeshGPUPrimitive
     {
+        RHI::RHIBuffer *vertexBuffer{};
+        RHI::RHIBuffer *indexBuffer{};
+        std::uint32_t indexCount{0};
+        std::uint32_t firstIndex{0};
+        std::int32_t vertexOffset{0};
+    };
+
+    struct MeshGPUResource
+    {
         std::unique_ptr<RHI::RHIBuffer> vertexBuffer{};
         std::unique_ptr<RHI::RHIBuffer> indexBuffer{};
-        std::uint32_t indexCount{0};
+        std::vector<MeshGPUPrimitive> primitives{};
     };
 
     class MeshGPUCache final
@@ -41,7 +51,14 @@ namespace Physara::Engine
         [[nodiscard]] static std::string BuildMeshPrimitiveDebugName(const RenderDrawItem &item);
 
     private:
-        std::unordered_map<std::uint64_t, MeshGPUPrimitive> m_MeshCache{};
+        [[nodiscard]] MeshGPUResource *GetOrCreateMeshResource(
+            RHI::RHIDevice *device,
+            AssetManager *assetManager,
+            const RenderDrawItem &item,
+            FrameStatistics *stats);
+
+    private:
+        std::unordered_map<std::uint64_t, MeshGPUResource> m_MeshCache{};
         std::unordered_set<std::uint64_t> m_MissingMeshWarnings{};
     };
 }

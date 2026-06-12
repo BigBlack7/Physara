@@ -56,6 +56,7 @@ namespace Physara::Engine::RenderGraphDetail
                lhs.arrayLayers == rhs.arrayLayers &&
                lhs.samples == rhs.samples &&
                lhs.format == rhs.format &&
+               lhs.colorSpace == rhs.colorSpace &&
                lhs.dimension == rhs.dimension &&
                lhs.usage == rhs.usage;
     }

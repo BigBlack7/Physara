@@ -16,12 +16,10 @@
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderView.hpp>
-#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
-#include <Engine/RHI/Descriptors/RHIBufferDesc.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
 #include <Engine/RHI/Pipeline/RHIPipelineState.hpp>
@@ -32,22 +30,8 @@ namespace Physara::Engine
     {
         constexpr std::uint32_t CameraBinding = 0u;
         constexpr std::uint32_t ObjectBinding = 1u;
+        constexpr std::uint32_t InstanceObjectIndexBinding = 4u;
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
-
-        template <typename T>
-        constexpr T MaxValue(T lhs, T rhs)
-        {
-            return lhs < rhs ? rhs : lhs;
-        }
-
-        RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
-        {
-            RHI::RHIBufferDesc desc{};
-            desc.size = MaxValue(size, 16u);
-            desc.usage = usage;
-            desc.dynamic = true;
-            return desc;
-        }
 
         bool IsShadowedDirectionalLight(const LightData &light)
         {
@@ -276,18 +260,13 @@ namespace Physara::Engine
             return true;
         }
 
-        bool CanInstanceTogether(const RenderDrawItem &first, const RenderDrawItem &candidate)
-        {
-            return first.submission != nullptr &&
-                   candidate.submission != nullptr &&
-                   first.primitiveKey == candidate.primitiveKey;
-        }
     }
 
     void ShadowPass::Execute(const ShadowPassContext &context)
     {
         if (context.commandList == nullptr || context.device == nullptr || context.frameData == nullptr ||
-            context.renderProxy == nullptr || context.meshCache == nullptr)
+            context.frameUploadAllocator == nullptr || context.gpuScene == nullptr || context.renderProxy == nullptr ||
+            context.meshCache == nullptr)
         {
             return;
         }
@@ -314,13 +293,35 @@ namespace Physara::Engine
             return;
         }
 
+        BuildShadowBatches(context);
         UploadFrameBuffers(context, shadowCamera);
+        const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
+        const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetShadowInstanceObjectIndexBuffer();
+        if (!m_CameraAllocation.IsValid() || !objectAllocation.IsValid() || !instanceObjectIndexAllocation.IsValid())
+        {
+            context.frameData->shadow = {};
+            return;
+        }
+
         context.commandList->SetViewport(0.f, 0.f, static_cast<float>(m_Settings.resolution), static_cast<float>(m_Settings.resolution));
         context.commandList->SetScissor(0, 0, m_Settings.resolution, m_Settings.resolution);
         context.commandList->BeginRenderPass(m_Framebuffer.get(), m_RenderPassDesc, std::span<const glm::vec4>{}, 1.f);
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(ShadowPassDetail::CameraBinding, m_CameraBuffer.get());
-        context.commandList->SetStorageBuffer(ShadowPassDetail::ObjectBinding, m_ObjectBuffer.get());
+        context.commandList->SetUniformBuffer(
+            ShadowPassDetail::CameraBinding,
+            m_CameraAllocation.buffer,
+            m_CameraAllocation.offset,
+            m_CameraAllocation.size);
+        context.commandList->SetStorageBuffer(
+            ShadowPassDetail::ObjectBinding,
+            objectAllocation.buffer,
+            objectAllocation.offset,
+            objectAllocation.size);
+        context.commandList->SetStorageBuffer(
+            ShadowPassDetail::InstanceObjectIndexBinding,
+            instanceObjectIndexAllocation.buffer,
+            instanceObjectIndexAllocation.offset,
+            instanceObjectIndexAllocation.size);
         DrawShadowCasters(context);
         context.commandList->EndRenderPass();
 
@@ -340,10 +341,10 @@ namespace Physara::Engine
     {
         m_Framebuffer.reset();
         m_ShadowMap.reset();
-        m_CameraBuffer.reset();
-        m_ObjectBuffer.reset();
+        m_CameraAllocation = {};
         m_ShadowCasterScratch.clear();
-        m_LastCameraUploadSignature = std::numeric_limits<std::uint64_t>::max();
+        m_ShadowBatchScratch.clear();
+        m_ShadowInstanceObjectIndexScratch.clear();
     }
 
     void ShadowPass::SetSettings(const ShadowSettings &settings)
@@ -399,20 +400,6 @@ namespace Physara::Engine
             m_Framebuffer = context.device->CreateFramebuffer(framebufferDesc);
         }
 
-        if (m_CameraBuffer == nullptr)
-        {
-            m_CameraBuffer = context.device->CreateBuffer(
-                ShadowPassDetail::DynamicBufferDesc(sizeof(CameraData), RHI::BufferUsage::Uniform));
-            m_LastCameraUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        }
-
-        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
-            ShadowPassDetail::MaxValue<std::size_t>(m_ShadowCasterScratch.size(), 1u) * sizeof(glm::mat4));
-        if (m_ObjectBuffer == nullptr || m_ObjectBuffer->GetSize() < objectBufferSize)
-        {
-            m_ObjectBuffer = context.device->CreateBuffer(
-                ShadowPassDetail::DynamicBufferDesc(objectBufferSize, RHI::BufferUsage::Storage));
-        }
     }
 
     bool ShadowPass::BuildShadowData(
@@ -512,82 +499,87 @@ namespace Physara::Engine
         return context.pipelineCache->GetOrCreate(pipelineDesc);
     }
 
+    void ShadowPass::BuildShadowBatches(const ShadowPassContext &context)
+    {
+        m_ShadowBatchScratch.clear();
+        m_ShadowBatchScratch.reserve(m_ShadowCasterScratch.size());
+        m_ShadowInstanceObjectIndexScratch.clear();
+        m_ShadowInstanceObjectIndexScratch.reserve(m_ShadowCasterScratch.size());
+
+        const std::uint32_t objectCount = context.frameData != nullptr
+                                              ? static_cast<std::uint32_t>(context.frameData->objects.size())
+                                              : 0u;
+        for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(m_ShadowCasterScratch.size()); ++i)
+        {
+            const RenderDrawItem &item = m_ShadowCasterScratch[i];
+            if (item.submission == nullptr || item.objectIndex >= objectCount)
+            {
+                continue;
+            }
+
+            if (!m_ShadowBatchScratch.empty() &&
+                item.primitiveKey == m_ShadowBatchScratch.back().primitiveKey)
+            {
+                ++m_ShadowBatchScratch.back().itemCount;
+                m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
+                continue;
+            }
+
+            ShadowDrawBatch batch{};
+            batch.submission = item.submission;
+            batch.firstItem = i;
+            batch.itemCount = 1u;
+            batch.firstObjectIndex = item.objectIndex;
+            batch.firstInstanceIndex = static_cast<std::uint32_t>(m_ShadowInstanceObjectIndexScratch.size());
+            batch.meshKey = item.meshKey;
+            batch.primitiveKey = item.primitiveKey;
+            m_ShadowBatchScratch.push_back(batch);
+            m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
+        }
+
+        if (context.stats != nullptr)
+        {
+            context.stats->shadowBatches = static_cast<std::uint32_t>(m_ShadowBatchScratch.size());
+            context.stats->drawBatches += context.stats->shadowBatches;
+        }
+    }
+
     void ShadowPass::UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera)
     {
-        const std::uint64_t cameraSignature = UploadHash::Value(UploadHash::Offset, shadowCamera);
-        if (cameraSignature != m_LastCameraUploadSignature)
-        {
-            m_CameraBuffer->UploadData(&shadowCamera, sizeof(CameraData));
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += sizeof(CameraData);
-            }
-            m_LastCameraUploadSignature = cameraSignature;
-        }
-
-        m_ObjectUploadScratch.clear();
-        m_ObjectUploadScratch.reserve(m_ShadowCasterScratch.size());
-        for (const RenderDrawItem &item : m_ShadowCasterScratch)
-        {
-            if (item.submission != nullptr)
-            {
-                m_ObjectUploadScratch.push_back(item.submission->model);
-            }
-        }
-
-        const std::uint32_t objectBufferSize = static_cast<std::uint32_t>(
-            ShadowPassDetail::MaxValue<std::size_t>(m_ObjectUploadScratch.size(), 1u) * sizeof(glm::mat4));
-        if (!m_ObjectUploadScratch.empty())
-        {
-            m_ObjectBuffer->UploadData(m_ObjectUploadScratch.data(), objectBufferSize);
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += objectBufferSize;
-            }
-        }
+        m_CameraAllocation = context.frameUploadAllocator->Upload(*context.device, shadowCamera, context.stats);
+        context.gpuScene->UploadShadowInstanceObjectIndices(
+            *context.device,
+            *context.frameUploadAllocator,
+            m_ShadowInstanceObjectIndexScratch,
+            context.stats);
     }
 
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
-        std::uint32_t shadowObjectIndex = 0u;
-        const std::vector<RenderDrawItem> &shadowCasters = m_ShadowCasterScratch;
-        for (std::size_t i = 0; i < shadowCasters.size();)
+        for (const ShadowDrawBatch &batch : m_ShadowBatchScratch)
         {
-            const RenderDrawItem &item = shadowCasters[i];
-            if (item.submission == nullptr)
-            {
-                ++i;
-                continue;
-            }
+            RenderDrawItem item{};
+            item.submission = batch.submission;
+            item.objectIndex = batch.firstObjectIndex;
+            item.meshKey = batch.meshKey;
+            item.primitiveKey = batch.primitiveKey;
 
-            const std::uint32_t drawObjectIndex = shadowObjectIndex;
             MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats);
             if (primitive == nullptr || primitive->indexCount == 0)
             {
-                ++i;
-                ++shadowObjectIndex;
                 continue;
             }
 
-            std::uint32_t instanceCount = 1u;
-            while (i + instanceCount < shadowCasters.size() &&
-                   ShadowPassDetail::CanInstanceTogether(item, shadowCasters[i + instanceCount]))
-            {
-                ++instanceCount;
-            }
-
-            context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer.get());
-            context.commandList->SetIndexBuffer(primitive->indexBuffer.get());
-            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, 0u, 0, drawObjectIndex);
+            context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer);
+            context.commandList->SetIndexBuffer(primitive->indexBuffer);
+            context.commandList->DrawIndexed(primitive->indexCount, batch.itemCount, primitive->firstIndex, primitive->vertexOffset, batch.firstInstanceIndex);
             if (context.stats != nullptr)
             {
                 ++context.stats->drawCalls;
-                context.stats->instances += instanceCount;
-                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * instanceCount;
+                ++context.stats->shadowDrawCalls;
+                context.stats->instances += batch.itemCount;
+                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * batch.itemCount;
             }
-
-            i += instanceCount;
-            shadowObjectIndex += instanceCount;
         }
     }
 }

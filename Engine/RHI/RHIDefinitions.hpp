@@ -9,6 +9,33 @@ namespace Physara::RHI
     using ShaderStageFlags = std::uint32_t;
     using ResourceAccessFlags = std::uint32_t;
 
+    struct RHICommandStatistics
+    {
+        std::uint64_t renderPasses{0};
+        std::uint64_t clears{0};
+        std::uint64_t drawCalls{0};
+        std::uint64_t indirectDrawCalls{0};
+        std::uint64_t dispatchCalls{0};
+        std::uint64_t programBinds{0};
+        std::uint64_t vaoBinds{0};
+        std::uint64_t framebufferBinds{0};
+        std::uint64_t vertexBufferBinds{0};
+        std::uint64_t indexBufferBinds{0};
+        std::uint64_t uniformBufferBinds{0};
+        std::uint64_t storageBufferBinds{0};
+        std::uint64_t textureBinds{0};
+        std::uint64_t samplerBinds{0};
+        std::uint64_t barriers{0};
+        std::uint64_t resolves{0};
+        std::uint64_t mipmapGenerates{0};
+        std::uint64_t readbacks{0};
+
+        void Reset()
+        {
+            *this = {};
+        }
+    };
+
     namespace TextureUsage
     {
         constexpr TextureUsageFlags None = 0u;

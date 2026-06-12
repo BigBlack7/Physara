@@ -8,6 +8,8 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/FrameUploadAllocator.hpp>
+#include <Engine/Renderer/GPUScene.hpp>
 #include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
@@ -96,6 +98,8 @@ namespace Physara::Engine
         ShaderLibrary m_ShaderLibrary{};
         PipelineStateCache m_PipelineStateCache{};
         MeshGPUCache m_MeshGPUCache{};
+        FrameUploadAllocator m_FrameUploadAllocator{};
+        GPUScene m_GPUScene{};
         ShadowPass m_ShadowPass{};
         ForwardOpaquePass m_ForwardOpaquePass{};
         SkyboxPass m_SkyboxPass{};

@@ -196,6 +196,14 @@ namespace Physara::Engine
         shadowCasters.clear();
     }
 
+    void RenderDrawBatchBuckets::Clear()
+    {
+        opaque.clear();
+        unlit.clear();
+        transparent.clear();
+        instanceObjectIndices.clear();
+    }
+
     void RenderProxy::Build(Scene &scene, const RenderView &view, FrameData &frameData, AssetManager *assetManager)
     {
         Reset();
@@ -205,6 +213,7 @@ namespace Physara::Engine
         CullAndBucket(m_SubmissionScratch, view, frameData);
         SortBuckets();
         RepackObjectsForSortedBuckets(frameData);
+        BuildBatches(frameData);
         frameData.stats.visibleSubmissions = m_VisibleSubmissionCount;
         frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.size());
         frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.size());
@@ -214,6 +223,7 @@ namespace Physara::Engine
     void RenderProxy::Reset()
     {
         m_Buckets.Clear();
+        m_Batches.Clear();
         m_SubmissionScratch.clear();
         m_VisibleSubmissionCount = 0;
     }
@@ -296,7 +306,8 @@ namespace Physara::Engine
     {
         frameData.objects.clear();
         frameData.materials.clear();
-        frameData.objects.reserve(m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
+        frameData.objects.reserve(
+            m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size() + m_Buckets.shadowCasters.size());
         frameData.materials.reserve(m_SubmissionScratch.size());
 
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
@@ -304,63 +315,123 @@ namespace Physara::Engine
         std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> materialIndicesBySignature{};
         materialIndicesBySignature.reserve(m_SubmissionScratch.size());
 
+        const auto resolveMaterialIndex = [&frameData, &materialIndicesBySignature](const MaterialComponent &material)
+        {
+            const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(material);
+            std::uint32_t materialIndex = std::numeric_limits<std::uint32_t>::max();
+            auto &candidateIndices = materialIndicesBySignature[materialSignature];
+            for (std::uint32_t candidateIndex : candidateIndices)
+            {
+                if (RenderProxyDetail::MaterialEquals(frameData.materials[candidateIndex], material))
+                {
+                    materialIndex = candidateIndex;
+                    break;
+                }
+            }
+            if (materialIndex == std::numeric_limits<std::uint32_t>::max())
+            {
+                materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
+                candidateIndices.push_back(materialIndex);
+            frameData.materials.push_back(material);
+            }
+            return materialIndex;
+        };
+
+        const auto appendObject = [&frameData, &objectIndexBySubmission, &resolveMaterialIndex](RenderDrawItem &item)
+        {
+            if (item.submission == nullptr)
+            {
+                return;
+            }
+
+            const auto foundObjectIndex = objectIndexBySubmission.find(item.submission);
+            if (foundObjectIndex != objectIndexBySubmission.end())
+            {
+                item.objectIndex = foundObjectIndex->second;
+                return;
+            }
+
+            const RenderMeshSubmission &submission = *item.submission;
+            const std::uint32_t materialIndex = resolveMaterialIndex(submission.material);
+            ObjectData object = BuildObjectData(submission, GetBucket(submission));
+            object.materialIndex = materialIndex;
+            const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
+            objectIndexBySubmission.emplace(&submission, objectIndex);
+            item.objectIndex = objectIndex;
+            frameData.objects.push_back(object);
+        };
+
         const auto appendBucketObjects = [&](std::vector<RenderDrawItem> &bucket)
         {
             for (RenderDrawItem &item : bucket)
             {
-                if (item.submission == nullptr)
-                {
-                    continue;
-                }
-
-                const RenderMeshSubmission &submission = *item.submission;
-                const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(submission.material);
-                std::uint32_t materialIndex = std::numeric_limits<std::uint32_t>::max();
-                auto &candidateIndices = materialIndicesBySignature[materialSignature];
-                for (std::uint32_t candidateIndex : candidateIndices)
-                {
-                    if (RenderProxyDetail::MaterialEquals(frameData.materials[candidateIndex], submission.material))
-                    {
-                        materialIndex = candidateIndex;
-                        break;
-                    }
-                }
-                if (materialIndex == std::numeric_limits<std::uint32_t>::max())
-                {
-                    materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
-                    candidateIndices.push_back(materialIndex);
-                    frameData.materials.push_back(submission.material);
-                }
-
-                ObjectData object = BuildObjectData(submission, GetBucket(submission));
-                object.materialIndex = materialIndex;
-                const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
-                objectIndexBySubmission.emplace(&submission, objectIndex);
-                item.objectIndex = objectIndex;
-                frameData.objects.push_back(object);
+                appendObject(item);
             }
         };
 
         appendBucketObjects(m_Buckets.opaque);
         appendBucketObjects(m_Buckets.unlit);
         appendBucketObjects(m_Buckets.transparent);
+        appendBucketObjects(m_Buckets.shadowCasters);
+    }
 
-        const auto bindObjectIndices = [&objectIndexBySubmission](std::vector<RenderDrawItem> &bucket)
+    void RenderProxy::BuildBatches(FrameData &frameData)
+    {
+        m_Batches.Clear();
+
+        const auto canAppend = [](const RenderDrawBatch &batch, const RenderDrawItem &item)
         {
-            for (RenderDrawItem &item : bucket)
+            return item.submission != nullptr &&
+                   item.sortKey == batch.sortKey &&
+                   item.primitiveKey == batch.primitiveKey &&
+                   item.doubleSided == batch.doubleSided;
+        };
+
+        m_Batches.instanceObjectIndices.reserve(
+            m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
+
+        const auto buildBucketBatches = [this, &canAppend](const std::vector<RenderDrawItem> &items, std::vector<RenderDrawBatch> &batches)
+        {
+            batches.clear();
+            batches.reserve(items.size());
+            for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(items.size()); ++i)
             {
-                const auto found = objectIndexBySubmission.find(item.submission);
-                if (found != objectIndexBySubmission.end())
+                const RenderDrawItem &item = items[i];
+                if (item.submission == nullptr)
                 {
-                    item.objectIndex = found->second;
+                    continue;
                 }
+
+                if (!batches.empty() && canAppend(batches.back(), item))
+                {
+                    ++batches.back().itemCount;
+                    m_Batches.instanceObjectIndices.push_back(item.objectIndex);
+                    continue;
+                }
+
+                RenderDrawBatch batch{};
+                batch.submission = item.submission;
+                batch.firstItem = i;
+                batch.itemCount = 1u;
+                batch.firstObjectIndex = item.objectIndex;
+                batch.firstInstanceIndex = static_cast<std::uint32_t>(m_Batches.instanceObjectIndices.size());
+                batch.sortKey = item.sortKey;
+                batch.meshKey = item.meshKey;
+                batch.primitiveKey = item.primitiveKey;
+                batch.doubleSided = item.doubleSided;
+                batches.push_back(batch);
+                m_Batches.instanceObjectIndices.push_back(item.objectIndex);
             }
         };
 
-        bindObjectIndices(m_Buckets.opaque);
-        bindObjectIndices(m_Buckets.unlit);
-        bindObjectIndices(m_Buckets.transparent);
-        bindObjectIndices(m_Buckets.shadowCasters);
+        buildBucketBatches(m_Buckets.opaque, m_Batches.opaque);
+        buildBucketBatches(m_Buckets.unlit, m_Batches.unlit);
+        buildBucketBatches(m_Buckets.transparent, m_Batches.transparent);
+
+        frameData.stats.forwardOpaqueBatches =
+            static_cast<std::uint32_t>(m_Batches.opaque.size() + m_Batches.unlit.size());
+        frameData.stats.forwardTransparentBatches = static_cast<std::uint32_t>(m_Batches.transparent.size());
+        frameData.stats.drawBatches = frameData.stats.forwardOpaqueBatches + frameData.stats.forwardTransparentBatches;
     }
 
     std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission)

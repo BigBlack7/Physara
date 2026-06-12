@@ -223,6 +223,16 @@ namespace Physara::RHI
         }
     }
 
+    void OpenGLCommandList::ResetStatistics()
+    {
+        m_Statistics.Reset();
+    }
+
+    RHICommandStatistics OpenGLCommandList::GetStatistics() const
+    {
+        return m_Statistics;
+    }
+
     void OpenGLCommandList::SetPipelineState(RHIPipelineState *pso)
     {
         // PipelineState在OpenGL下拆成program + VAO + 固定函数状态
@@ -239,6 +249,7 @@ namespace Physara::RHI
         if (invalidState || m_State.program != program)
         {
             glUseProgram(program);
+            ++m_Statistics.programBinds;
             m_State.program = program;
         }
 
@@ -248,6 +259,7 @@ namespace Physara::RHI
             if (invalidState || m_State.vao != vao)
             {
                 glBindVertexArray(vao);
+                ++m_Statistics.vaoBinds;
                 m_State.vao = vao;
                 InvalidateVertexInputCache();
             }
@@ -419,6 +431,7 @@ namespace Physara::RHI
                 id,
                 static_cast<GLintptr>(offset),
                 static_cast<GLsizei>(stride));
+            ++m_Statistics.vertexBufferBinds;
             return;
         }
 
@@ -434,6 +447,7 @@ namespace Physara::RHI
             id,
             static_cast<GLintptr>(offset),
             static_cast<GLsizei>(stride));
+        ++m_Statistics.vertexBufferBinds;
         cached = VertexBufferBindingState{id, offset, stride, true};
     }
 
@@ -457,6 +471,7 @@ namespace Physara::RHI
         if (!m_IndexBufferBinding.valid || m_IndexBufferBinding.buffer != id)
         {
             glVertexArrayElementBuffer(m_State.vao, id);
+            ++m_Statistics.indexBufferBinds;
             m_IndexBufferBinding.buffer = id;
             m_IndexBufferBinding.valid = true;
         }
@@ -468,46 +483,20 @@ namespace Physara::RHI
 
     void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer)
     {
-        // UBO仍然是binding point语义; glBindBufferBase把buffer暴露给shader的layout(binding=N)
-        GLuint id = 0;
-        std::uint32_t bindOffset = 0u;
-        std::uint32_t bindSize = 0u;
-        if (buffer)
-        {
-            auto *glBuffer = static_cast<OpenGLBuffer *>(buffer);
-            id = glBuffer->GetGLID();
-            bindOffset = glBuffer->GetBindOffset();
-            bindSize = glBuffer->GetBindSize();
-        }
+        const std::uint32_t size = buffer != nullptr ? buffer->GetSize() : 0u;
+        SetUniformBuffer(slot, buffer, 0u, size);
+    }
 
-        if (slot >= m_UniformBufferBindings.size())
-        {
-            if (id != 0 && bindSize != 0u)
-            {
-                glBindBufferRange(GL_UNIFORM_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
-            }
-            else
-            {
-                glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
-            }
-            return;
-        }
+    void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size)
+    {
+        // UBO仍然是binding point语义; range overload为后续frame upload allocator提供子分配绑定入口.
+        BindBufferRange(GL_UNIFORM_BUFFER, false, slot, buffer, offset, size);
+    }
 
-        BufferRangeBindingState &cached = m_UniformBufferBindings[slot];
-        if (cached.valid && cached.buffer == id && cached.offset == bindOffset && cached.size == bindSize)
-        {
-            return;
-        }
-
-        if (id != 0 && bindSize != 0u)
-        {
-            glBindBufferRange(GL_UNIFORM_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
-        }
-        else
-        {
-            glBindBufferBase(GL_UNIFORM_BUFFER, slot, id);
-        }
-        cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
+    void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer)
+    {
+        const std::uint32_t size = buffer != nullptr ? buffer->GetSize() : 0u;
+        SetStorageBuffer(slot, buffer, 0u, size);
     }
 
     void OpenGLCommandList::SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler)
@@ -531,6 +520,7 @@ namespace Physara::RHI
         if (slot >= m_TextureBindings.size() || m_TextureBindings[slot] != texID)
         {
             glBindTextureUnit(slot, texID);
+            ++m_Statistics.textureBinds;
             if (slot < m_TextureBindings.size())
             {
                 m_TextureBindings[slot] = texID;
@@ -539,6 +529,7 @@ namespace Physara::RHI
         if (slot >= m_SamplerBindings.size() || m_SamplerBindings[slot] != samplerID)
         {
             glBindSampler(slot, samplerID);
+            ++m_Statistics.samplerBinds;
             if (slot < m_SamplerBindings.size())
             {
                 m_SamplerBindings[slot] = samplerID;
@@ -546,34 +537,58 @@ namespace Physara::RHI
         }
     }
 
-    void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer)
+    void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size)
     {
         // SSBO用于大块结构化数据, 例如object data、light list、tile light indices
+        BindBufferRange(GL_SHADER_STORAGE_BUFFER, true, slot, buffer, offset, size);
+    }
+
+    void OpenGLCommandList::BindBufferRange(
+        GLenum target,
+        bool storageBuffer,
+        std::uint32_t slot,
+        RHIBuffer *buffer,
+        std::uint32_t offset,
+        std::uint32_t size)
+    {
+        auto &bindings = storageBuffer ? m_StorageBufferBindings : m_UniformBufferBindings;
+        std::uint64_t &bindCounter = storageBuffer ? m_Statistics.storageBufferBinds : m_Statistics.uniformBufferBinds;
         GLuint id = 0;
         std::uint32_t bindOffset = 0u;
         std::uint32_t bindSize = 0u;
         if (buffer)
         {
             auto *glBuffer = static_cast<OpenGLBuffer *>(buffer);
+            if (size == 0u || offset > glBuffer->GetSize() || size > glBuffer->GetSize() - offset)
+            {
+                PHYSARA_CORE_ERROR("Set buffer range out of bounds: slot={}, offset={}, size={}, bufferSize={}.",
+                                   slot,
+                                   offset,
+                                   size,
+                                   glBuffer->GetSize());
+                return;
+            }
+
             id = glBuffer->GetGLID();
-            bindOffset = glBuffer->GetBindOffset();
-            bindSize = glBuffer->GetBindSize();
+            bindOffset = glBuffer->GetBindOffset() + offset;
+            bindSize = size;
         }
 
-        if (slot >= m_StorageBufferBindings.size())
+        if (slot >= bindings.size())
         {
             if (id != 0 && bindSize != 0u)
             {
-                glBindBufferRange(GL_SHADER_STORAGE_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+                glBindBufferRange(target, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
             }
             else
             {
-                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
+                glBindBufferBase(target, slot, id);
             }
+            ++bindCounter;
             return;
         }
 
-        BufferRangeBindingState &cached = m_StorageBufferBindings[slot];
+        BufferRangeBindingState &cached = bindings[slot];
         if (cached.valid && cached.buffer == id && cached.offset == bindOffset && cached.size == bindSize)
         {
             return;
@@ -581,12 +596,13 @@ namespace Physara::RHI
 
         if (id != 0 && bindSize != 0u)
         {
-            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
+            glBindBufferRange(target, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
         }
         else
         {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, id);
+            glBindBufferBase(target, slot, id);
         }
+        ++bindCounter;
         cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
     }
 
@@ -628,6 +644,7 @@ namespace Physara::RHI
             layer,
             glAccess,
             internalFormat);
+        ++m_Statistics.textureBinds;
     }
 
     void OpenGLCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
@@ -707,6 +724,7 @@ namespace Physara::RHI
             m_PushConstantsBuffer,
             static_cast<GLintptr>(offset),
             static_cast<GLsizeiptr>(size));
+        ++m_Statistics.uniformBufferBinds;
         m_UniformBufferBindings[0] = BufferRangeBindingState{m_PushConstantsBuffer, offset, size, true};
     }
 
@@ -721,6 +739,11 @@ namespace Physara::RHI
         InvalidateBindingCache();
         InvalidatePipelineState();
 
+        // ImGui and other external OpenGL code can leave scissor enabled. glClear/glClearBuffer
+        // are affected by GL_SCISSOR_TEST, so reset it before every RHI render pass.
+        glDisable(GL_SCISSOR_TEST);
+        m_ScissorState = ScissorState{0, 0, 0u, 0u, false, true};
+
         GLuint fboID = 0;
         if (framebuffer)
         {
@@ -729,6 +752,8 @@ namespace Physara::RHI
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, fboID);
+        ++m_Statistics.framebufferBinds;
+        ++m_Statistics.renderPasses;
         m_State.framebuffer = fboID;
 
         m_CurrentPassDesc = &desc;
@@ -786,6 +811,7 @@ namespace Physara::RHI
                 // 直接glClear清默认帧缓冲, 只支持清第0个color attachment
                 glClearBufferfv(GL_COLOR, static_cast<GLint>(i), &color.x);
             }
+            ++m_Statistics.clears;
         }
 
         if (desc.hasDepth && desc.depthAttachment.loadOp == LoadOp::Clear)
@@ -800,6 +826,7 @@ namespace Physara::RHI
                 {
                     glClearBufferfi(GL_DEPTH_STENCIL, 0, clearDepth, 0);
                 }
+                ++m_Statistics.clears;
             }
             else
             {
@@ -811,6 +838,7 @@ namespace Physara::RHI
                 {
                     glClearBufferfv(GL_DEPTH, 0, &clearDepth);
                 }
+                ++m_Statistics.clears;
             }
         }
     }
@@ -882,6 +910,7 @@ namespace Physara::RHI
             static_cast<GLsizei>(instanceCount),
             vertexOffset,
             firstInstance);
+        ++m_Statistics.drawCalls;
     }
 
     void OpenGLCommandList::Draw(
@@ -897,12 +926,14 @@ namespace Physara::RHI
             static_cast<GLsizei>(vertexCount),
             static_cast<GLsizei>(instanceCount),
             firstInstance);
+        ++m_Statistics.drawCalls;
     }
 
     void OpenGLCommandList::Dispatch(std::uint32_t groupX, std::uint32_t groupY, std::uint32_t groupZ)
     {
         // Compute dispatch只提交workgroup数量; 资源可见性由后续BufferBarrier/TextureBarrier控制
         glDispatchCompute(groupX, groupY, groupZ);
+        ++m_Statistics.dispatchCalls;
     }
 
     void OpenGLCommandList::DrawIndexedIndirect(RHIBuffer *indirectBuffer, std::uint32_t drawCount, std::uint32_t stride)
@@ -929,6 +960,7 @@ namespace Physara::RHI
             static_cast<GLsizei>(drawCount),
             static_cast<GLsizei>(stride));
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+        ++m_Statistics.indirectDrawCalls;
     }
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage)
@@ -942,6 +974,7 @@ namespace Physara::RHI
             GL_TEXTURE_FETCH_BARRIER_BIT |
             GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
             GL_TEXTURE_UPDATE_BARRIER_BIT);
+        ++m_Statistics.barriers;
     }
 
     void OpenGLCommandList::BufferBarrier(RHIBuffer *buffer, ShaderStage srcStage, ShaderStage dstStage)
@@ -954,6 +987,7 @@ namespace Physara::RHI
         glMemoryBarrier(
             GL_SHADER_STORAGE_BARRIER_BIT |
             GL_BUFFER_UPDATE_BARRIER_BIT);
+        ++m_Statistics.barriers;
     }
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, const RHIResourceBarrier &barrier)
@@ -964,6 +998,7 @@ namespace Physara::RHI
         if (bits != 0)
         {
             glMemoryBarrier(bits);
+            ++m_Statistics.barriers;
         }
     }
 
@@ -974,6 +1009,7 @@ namespace Physara::RHI
         if (bits != 0)
         {
             glMemoryBarrier(bits);
+            ++m_Statistics.barriers;
         }
     }
 
@@ -1058,6 +1094,7 @@ namespace Physara::RHI
             static_cast<GLint>(std::min(glSrc->GetHeight(), glDst->GetHeight())),
             mask,
             GL_NEAREST);
+        ++m_Statistics.resolves;
         glNamedFramebufferTexture(m_ResolveReadFramebuffer, attachment, 0, 0);
         glNamedFramebufferTexture(m_ResolveDrawFramebuffer, attachment, 0, 0);
     }
@@ -1106,6 +1143,7 @@ namespace Physara::RHI
         }
 
         glGenerateTextureMipmap(glTex->GetGLID());
+        ++m_Statistics.mipmapGenerates;
     }
 
     std::vector<std::uint8_t> OpenGLCommandList::ReadTextureToCPU(RHITexture *texture, const RHITextureReadbackDesc &desc)
@@ -1178,6 +1216,7 @@ namespace Physara::RHI
             fmt.type,
             static_cast<GLsizei>(pixels.size()),
             pixels.data());
+        ++m_Statistics.readbacks;
 
         glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);// 恢复之前的pack alignment状态
         return pixels;

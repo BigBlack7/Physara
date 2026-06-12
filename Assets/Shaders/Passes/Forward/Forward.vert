@@ -18,6 +18,11 @@ layout(std430, binding = PHYSARA_BINDING_OBJECTS)readonly buffer ObjectBuffer
     ObjectData uObjects[];
 };
 
+layout(std430, binding = PHYSARA_BINDING_INSTANCE_INDICES)readonly buffer InstanceIndexBuffer
+{
+    uint uInstanceObjectIndices[];
+};
+
 layout(location = 0)out vec3 outWorldPosition;
 layout(location = 1)out vec3 outWorldNormal;
 layout(location = 2)out vec4 outWorldTangent;
@@ -28,7 +33,9 @@ layout(location = 6)flat out uint outObjectFlags;
 
 void main()
 {
-    ObjectData objectData = uObjects[gl_BaseInstance + gl_InstanceID];
+    uint instanceIndex = uint(gl_BaseInstance) + uint(gl_InstanceID);
+    uint objectIndex = uInstanceObjectIndices[instanceIndex];
+    ObjectData objectData = uObjects[objectIndex];
     vec4 worldPosition = objectData.model * vec4(inPosition, 1.0);
     
     outWorldPosition = worldPosition.xyz;

@@ -179,11 +179,16 @@ namespace Physara::Editor
         m_Context.currentScenePath.clear();
         m_Context.settings.capture.outputDirectory = m_Context.assetsRootPath / "Gallery";
         std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", "Untitled");
+        PHYSARA_INFO("Registering builtin primitives...");
         Engine::RegisterBuiltinPrimitives(m_AssetManager);
 
+        PHYSARA_INFO("Applying editor theme...");
         EditorTheme::Apply();
+        PHYSARA_INFO("Creating default scene...");
         CreateDefaultScene();
+        PHYSARA_INFO("Initializing editor icons...");
         InitializeIcons();
+        PHYSARA_INFO("Connecting scene view camera input...");
         ConnectSceneViewCameraInput();
     }
 
@@ -723,7 +728,7 @@ namespace Physara::Editor
         glm::vec3 maxBounds(0.f);
 
         view.each([&hasBounds, &minBounds, &maxBounds](Engine::EntityId, const Engine::MeshComponent &mesh, const Engine::TransformComponent &transform)
-        {
+                  {
             if (!mesh.visible || !mesh.localBounds.valid)
             {
                 return;
@@ -755,8 +760,7 @@ namespace Physara::Editor
                 {
                     EditorAppDetail::ExpandBounds(minBounds, maxBounds, worldCorner);
                 }
-            }
-        });
+            } });
 
         if (!hasBounds)
         {

@@ -10,8 +10,18 @@ namespace Physara::Engine
         transparentItems = 0;
         lightCount = 0;
         meshUploads = 0;
+        meshPrimitiveUploads = 0;
         textureUploads = 0;
+        drawBatches = 0;
+        shadowBatches = 0;
+        forwardOpaqueBatches = 0;
+        forwardTransparentBatches = 0;
         drawCalls = 0;
+        shadowDrawCalls = 0;
+        forwardOpaqueDrawCalls = 0;
+        skyboxDrawCalls = 0;
+        forwardTransparentDrawCalls = 0;
+        postProcessDrawCalls = 0;
         instances = 0;
         triangles = 0;
         bufferUploadBytes = 0;
@@ -24,6 +34,7 @@ namespace Physara::Engine
         skyboxCpuMs = 0.f;
         forwardTransparentCpuMs = 0.f;
         postProcessCpuMs = 0.f;
+        backend.Reset();
     }
 
     std::uint64_t FrameStatistics::TotalUploadBytes() const

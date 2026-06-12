@@ -8,6 +8,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/RenderView.hpp>
+#include <Engine/RHI/RHIDefinitions.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
 
 namespace Physara::Engine
@@ -74,8 +75,18 @@ namespace Physara::Engine
         std::uint32_t transparentItems{0};
         std::uint32_t lightCount{0};
         std::uint32_t meshUploads{0};
+        std::uint32_t meshPrimitiveUploads{0};
         std::uint32_t textureUploads{0};
+        std::uint32_t drawBatches{0};
+        std::uint32_t shadowBatches{0};
+        std::uint32_t forwardOpaqueBatches{0};
+        std::uint32_t forwardTransparentBatches{0};
         std::uint64_t drawCalls{0};
+        std::uint64_t shadowDrawCalls{0};
+        std::uint64_t forwardOpaqueDrawCalls{0};
+        std::uint64_t skyboxDrawCalls{0};
+        std::uint64_t forwardTransparentDrawCalls{0};
+        std::uint64_t postProcessDrawCalls{0};
         std::uint64_t instances{0};
         std::uint64_t triangles{0};
         std::uint64_t bufferUploadBytes{0};
@@ -88,6 +99,7 @@ namespace Physara::Engine
         float skyboxCpuMs{0.f};
         float forwardTransparentCpuMs{0.f};
         float postProcessCpuMs{0.f};
+        RHI::RHICommandStatistics backend{};
 
         void Reset();
         [[nodiscard]] std::uint64_t TotalUploadBytes() const;

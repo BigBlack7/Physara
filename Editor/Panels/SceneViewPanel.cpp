@@ -167,6 +167,8 @@ namespace Physara::Editor
         char visibleLine[160]{};
         char cpuLine[160]{};
         char passLine[192]{};
+        char passDrawLine[192]{};
+        char glLine[192]{};
         char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
@@ -176,8 +178,9 @@ namespace Physara::Editor
         const double uploadMegabytes = static_cast<double>(stats.TotalUploadBytes()) / (1024.0 * 1024.0);
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
-        std::snprintf(drawLine, sizeof(drawLine), "Draws: %llu, Instances: %llu, Tris: %llu",
+        std::snprintf(drawLine, sizeof(drawLine), "Draws/Batches: %llu/%u, Instances: %llu, Tris: %llu",
                       static_cast<unsigned long long>(stats.drawCalls),
+                      stats.drawBatches,
                       static_cast<unsigned long long>(stats.instances),
                       static_cast<unsigned long long>(stats.triangles));
         std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u",
@@ -194,9 +197,22 @@ namespace Physara::Editor
                       stats.skyboxCpuMs,
                       stats.forwardTransparentCpuMs,
                       stats.postProcessCpuMs);
-        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB  Mesh/Tex: %u/%u",
+        std::snprintf(passDrawLine, sizeof(passDrawLine), "Pass Draws: Sh/Fwd/Sky/Tr/Post %llu/%llu/%llu/%llu/%llu",
+                      static_cast<unsigned long long>(stats.shadowDrawCalls),
+                      static_cast<unsigned long long>(stats.forwardOpaqueDrawCalls),
+                      static_cast<unsigned long long>(stats.skyboxDrawCalls),
+                      static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
+                      static_cast<unsigned long long>(stats.postProcessDrawCalls));
+        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/V/Tex %llu/%llu/%llu, Bar %llu",
+                      static_cast<unsigned long long>(stats.backend.renderPasses),
+                      static_cast<unsigned long long>(stats.backend.programBinds),
+                      static_cast<unsigned long long>(stats.backend.vaoBinds),
+                      static_cast<unsigned long long>(stats.backend.textureBinds),
+                      static_cast<unsigned long long>(stats.backend.barriers));
+        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB  Mesh/Prim/Tex: %u/%u/%u",
                       uploadMegabytes,
                       stats.meshUploads,
+                      stats.meshPrimitiveUploads,
                       stats.textureUploads);
         const char *cameraMode = "Orbit";
         if (m_Context.sceneView.playFlyMode)
@@ -217,6 +233,8 @@ namespace Physara::Editor
                                        ImGui::CalcTextSize(visibleLine).x,
                                        ImGui::CalcTextSize(cpuLine).x,
                                        ImGui::CalcTextSize(passLine).x,
+                                       ImGui::CalcTextSize(passDrawLine).x,
+                                       ImGui::CalcTextSize(glLine).x,
                                        ImGui::CalcTextSize(uploadLine).x,
                                        ImGui::CalcTextSize(cameraLine).x,
                                        ImGui::CalcTextSize(hoveredLine).x,
@@ -238,7 +256,7 @@ namespace Physara::Editor
         }
 
         const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 11.f : 10.f);
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 13.f : 12.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
             const ImVec2 overlayMin(origin.x + width - SceneViewPanelDetail::OverlayPadding - overlayWidth,
@@ -266,6 +284,12 @@ namespace Physara::Editor
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), passLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), passDrawLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), glLine);
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), uploadLine);

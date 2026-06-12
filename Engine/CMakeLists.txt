@@ -9,8 +9,14 @@ target_sources(Engine PRIVATE
     Core/Time.hpp
     Renderer/FrameData.cpp
     Renderer/FrameData.hpp
+    Renderer/FrameUploadAllocator.cpp
+    Renderer/FrameUploadAllocator.hpp
+    Renderer/GPUScene.cpp
+    Renderer/GPUScene.hpp
     Renderer/IBLResources.cpp
     Renderer/IBLResources.hpp
+    Renderer/MaterialTextureCache.cpp
+    Renderer/MaterialTextureCache.hpp
     Renderer/MeshGPUCache.cpp
     Renderer/MeshGPUCache.hpp
     Renderer/Passes/ForwardOpaquePass.cpp

@@ -12,12 +12,10 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
-#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/Loaders/TextureLoader.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
-#include <Engine/RHI/Descriptors/RHIBufferDesc.hpp>
 #include <Engine/RHI/Descriptors/RHISamplerDesc.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 #include <Engine/RHI/Pipeline/RHIPipelineState.hpp>
@@ -34,21 +32,6 @@ namespace Physara::Engine
         {
             glm::vec4 params{0.f};
         };
-
-        template <typename T>
-        constexpr T MaxValue(T lhs, T rhs)
-        {
-            return lhs < rhs ? rhs : lhs;
-        }
-
-        RHI::RHIBufferDesc DynamicBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
-        {
-            RHI::RHIBufferDesc desc{};
-            desc.size = MaxValue(size, 16u);
-            desc.usage = usage;
-            desc.dynamic = true;
-            return desc;
-        }
 
         Texture BuildPlaceholderPanorama(std::uint32_t width, std::uint32_t height)
         {
@@ -98,7 +81,7 @@ namespace Physara::Engine
     void SkyboxPass::Execute(const SkyboxPassContext &context)
     {
         if (!context.enabled || context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
-            context.frameData == nullptr || context.device == nullptr)
+            context.frameData == nullptr || context.device == nullptr || context.frameUploadAllocator == nullptr)
         {
             return;
         }
@@ -111,28 +94,9 @@ namespace Physara::Engine
             return;
         }
 
-        const std::uint64_t cameraSignature = UploadHash::Value(UploadHash::Offset, context.frameData->camera);
-        if (cameraSignature != m_LastCameraUploadSignature)
-        {
-            m_CameraBuffer->UploadData(&context.frameData->camera, sizeof(CameraData));
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += sizeof(CameraData);
-            }
-            m_LastCameraUploadSignature = cameraSignature;
-        }
-
         const SkyboxPassDetail::SettingsGPUData settingsData{glm::vec4(context.exposureCompensation, 0.f, 0.f, 0.f)};
-        const std::uint64_t settingsSignature = UploadHash::Value(UploadHash::Offset, settingsData);
-        if (settingsSignature != m_LastSettingsUploadSignature)
-        {
-            m_SettingsBuffer->UploadData(&settingsData, sizeof(settingsData));
-            if (context.stats != nullptr)
-            {
-                context.stats->bufferUploadBytes += sizeof(settingsData);
-            }
-            m_LastSettingsUploadSignature = settingsSignature;
-        }
+        const FrameUploadAllocation cameraAllocation = context.frameUploadAllocator->Upload(*context.device, context.frameData->camera, context.stats);
+        const FrameUploadAllocation settingsAllocation = context.frameUploadAllocator->Upload(*context.device, settingsData, context.stats);
 
         context.commandList->SetViewport(
             0.f,
@@ -142,14 +106,15 @@ namespace Physara::Engine
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::span<const glm::vec4>{});
         context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, m_CameraBuffer.get());
-        context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, m_SettingsBuffer.get());
+        context.commandList->SetUniformBuffer(SkyboxPassDetail::CameraBinding, cameraAllocation.buffer, cameraAllocation.offset, cameraAllocation.size);
+        context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, settingsAllocation.buffer, settingsAllocation.offset, settingsAllocation.size);
         context.commandList->SetTexture(SkyboxPassDetail::SkyboxTextureBinding, m_SkyboxTexture.get(), m_Sampler.get());
         constexpr std::uint32_t skySphereVertexCount = 64u * 32u * 6u;
         context.commandList->Draw(skySphereVertexCount, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
             ++context.stats->drawCalls;
+            ++context.stats->skyboxDrawCalls;
             ++context.stats->instances;
             context.stats->triangles += skySphereVertexCount / 3u;
         }
@@ -164,20 +129,6 @@ namespace Physara::Engine
 
     void SkyboxPass::EnsureResources(const SkyboxPassContext &context)
     {
-        if (m_CameraBuffer == nullptr)
-        {
-            m_CameraBuffer = context.device->CreateBuffer(
-                SkyboxPassDetail::DynamicBufferDesc(sizeof(CameraData), RHI::BufferUsage::Uniform));
-            m_LastCameraUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        }
-
-        if (m_SettingsBuffer == nullptr)
-        {
-            m_SettingsBuffer = context.device->CreateBuffer(
-                SkyboxPassDetail::DynamicBufferDesc(sizeof(SkyboxPassDetail::SettingsGPUData), RHI::BufferUsage::Uniform));
-            m_LastSettingsUploadSignature = std::numeric_limits<std::uint64_t>::max();
-        }
-
         if (m_Sampler == nullptr)
         {
             RHI::RHISamplerDesc desc{};
