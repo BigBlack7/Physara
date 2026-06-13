@@ -170,7 +170,7 @@ namespace Physara::Editor
         char uiLine[192]{};
         char passLine[192]{};
         char passDrawLine[192]{};
-        char glLine[288]{};
+        char glLine[320]{};
         char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
@@ -219,8 +219,11 @@ namespace Physara::Editor
                       static_cast<unsigned long long>(stats.skyboxDrawCalls),
                       static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
                       static_cast<unsigned long long>(stats.postProcessDrawCalls));
-        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, Bar %llu",
+        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, Draw/MDI/Cmd %llu/%llu/%llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, IBuf %llu, Bar %llu",
                       static_cast<unsigned long long>(stats.backend.renderPasses),
+                      static_cast<unsigned long long>(stats.backend.drawCalls),
+                      static_cast<unsigned long long>(stats.backend.indirectDrawCalls),
+                      static_cast<unsigned long long>(stats.backend.indirectDrawCommands),
                       static_cast<unsigned long long>(stats.backend.programBinds),
                       static_cast<unsigned long long>(stats.backend.vaoBinds),
                       static_cast<unsigned long long>(stats.backend.renderPrimitiveBinds),
@@ -229,6 +232,7 @@ namespace Physara::Editor
                       static_cast<unsigned long long>(stats.backend.resourceSetBinds),
                       static_cast<unsigned long long>(stats.backend.textureBinds),
                       static_cast<unsigned long long>(stats.backend.samplerBinds),
+                      static_cast<unsigned long long>(stats.backend.indirectBufferBinds),
                       static_cast<unsigned long long>(stats.backend.barriers));
         std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB, chunks %llu  Mesh/Prim/Tex: %u/%u/%u",
                       uploadMegabytes,

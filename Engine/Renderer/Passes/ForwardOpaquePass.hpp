@@ -11,6 +11,8 @@
 #include <Engine/Renderer/MaterialTextureCache.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
+#include <Engine/RHI/Descriptors/RHIIndirectDrawCommand.hpp>
+#include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 #include <Engine/RHI/RHIDefinitions.hpp>
@@ -65,11 +67,20 @@ namespace Physara::Engine
         void Reset();
 
     private:
+        struct IndirectRun
+        {
+            std::uint32_t commandIndex{0};
+            std::uint32_t commandCount{0};
+            std::uint32_t indirectCommandOffset{0};
+            std::uint32_t primitiveScratchOffset{0};
+            RHI::RHIBuffer *indirectBuffer{nullptr};
+        };
+
         void EnsureDefaultTextures(const ForwardPassContext &context);
         void ExecuteBuckets(const ForwardPassContext &context, bool transparent);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         void BindFrameTextures(const ForwardPassContext &context);
-        void BindMaterial(const ForwardPassContext &context, const RenderCommand &command);
+        [[nodiscard]] bool BindMaterial(const ForwardPassContext &context, const RenderCommand &command);
         void DrawCommandGroup(
             const ForwardPassContext &context,
             RHI::RHIPipelineState *pipeline,
@@ -77,6 +88,15 @@ namespace Physara::Engine
             std::span<const RenderCommand> secondaryCommands,
             bool transparent);
         void DrawCommands(const ForwardPassContext &context, std::span<const RenderCommand> commands, bool transparent);
+        void BuildIndirectRuns(const ForwardPassContext &context, std::span<const RenderCommand> commands);
+        [[nodiscard]] RHI::RHIBuffer *UploadIndirectCommands(const ForwardPassContext &context);
+        void SubmitDirectCommand(const ForwardPassContext &context, const RenderCommand &command, bool transparent);
+        void SubmitIndirectRun(
+            const ForwardPassContext &context,
+            std::span<const RenderCommand> commands,
+            const IndirectRun &run,
+            bool transparent);
+        void RecordSubmittedCommand(const ForwardPassContext &context, const MeshGPUPrimitive &primitive, std::uint32_t instanceCount, bool transparent);
         void ResetTextureBindings();
 
     private:
@@ -85,7 +105,12 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHISampler> m_ShadowSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBRDFLut{};
+        std::vector<std::unique_ptr<RHI::RHIBuffer>> m_IndirectCommandBuffers{};
+        std::vector<RHI::RHIDrawIndexedIndirectCommand> m_IndirectCommandScratch{};
+        std::vector<MeshGPUPrimitive *> m_IndirectPrimitiveScratch{};
+        std::vector<IndirectRun> m_IndirectRuns{};
         MaterialInstanceId m_BoundMaterialInstanceId{InvalidMaterialInstanceId};
+        std::uint32_t m_IndirectBufferCursor{0};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

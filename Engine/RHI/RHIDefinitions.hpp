@@ -15,6 +15,7 @@ namespace Physara::RHI
         std::uint64_t clears{0};
         std::uint64_t drawCalls{0};
         std::uint64_t indirectDrawCalls{0};
+        std::uint64_t indirectDrawCommands{0};
         std::uint64_t dispatchCalls{0};
         std::uint64_t programBinds{0};
         std::uint64_t vaoBinds{0};
@@ -24,6 +25,7 @@ namespace Physara::RHI
         std::uint64_t indexBufferBinds{0};
         std::uint64_t uniformBufferBinds{0};
         std::uint64_t storageBufferBinds{0};
+        std::uint64_t indirectBufferBinds{0};
         std::uint64_t resourceSetBinds{0};
         std::uint64_t textureBinds{0};
         std::uint64_t samplerBinds{0};
@@ -54,6 +56,7 @@ namespace Physara::RHI
         constexpr BufferUsageFlags Index = 1u << 1;   // 索引缓冲
         constexpr BufferUsageFlags Uniform = 1u << 2; // 常量/Uniform缓冲
         constexpr BufferUsageFlags Storage = 1u << 3; // 存储缓冲
+        constexpr BufferUsageFlags Indirect = 1u << 4; // 间接绘制命令缓冲
     }
 
     enum class VertexFormat : std::uint8_t
@@ -133,6 +136,7 @@ namespace Physara::RHI
         Common,
         VertexBuffer,
         IndexBuffer,
+        IndirectArgument,
         ConstantBuffer,
         ShaderResource,
         UnorderedAccess,

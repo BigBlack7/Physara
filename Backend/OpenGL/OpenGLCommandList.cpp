@@ -99,6 +99,13 @@ namespace Physara::RHI
                 bits |= GL_ELEMENT_ARRAY_BARRIER_BIT;
             }
 
+            if ((barrier.dstAccess & ResourceAccess::IndirectCommandRead) != 0u ||
+                hasBeforeOrAfter(ResourceState::IndirectArgument))
+            {
+                // compute/SSBO/image写入间接绘制命令后, 后续MDI读取需要command barrier可见性
+                bits |= GL_COMMAND_BARRIER_BIT;
+            }
+
             if ((barrier.dstAccess & ResourceAccess::UniformRead) != 0u ||
                 hasBeforeOrAfter(ResourceState::ConstantBuffer))
             {
@@ -179,6 +186,7 @@ namespace Physara::RHI
         }
         m_TextureBindings.fill(std::numeric_limits<GLuint>::max());
         m_SamplerBindings.fill(std::numeric_limits<GLuint>::max());
+        m_IndirectBufferBinding.valid = false;
     }
 
     void OpenGLCommandList::InvalidatePipelineState()
@@ -1045,7 +1053,11 @@ namespace Physara::RHI
         ++m_Statistics.dispatchCalls;
     }
 
-    void OpenGLCommandList::DrawIndexedIndirect(RHIBuffer *indirectBuffer, std::uint32_t drawCount, std::uint32_t stride)
+    void OpenGLCommandList::DrawIndexedIndirect(
+        RHIBuffer *indirectBuffer,
+        std::uint32_t drawCount,
+        std::uint32_t stride,
+        std::uint32_t offset)
     {
         // MDI: GPU/CPU准备一组DrawElementsIndirectCommand,
         // glMultiDrawElementsIndirect一次提交多draw, 减少CPU driver overhead
@@ -1055,21 +1067,34 @@ namespace Physara::RHI
             PHYSARA_CORE_ERROR("DrawIndexedIndirect called with null buffer.");
             return;
         }
+        if (drawCount == 0)
+        {
+            return;
+        }
 
         if (m_State.indexOffset != 0)
         {
             PHYSARA_CORE_WARN("DrawIndexedIndirect ignores indexOffset for now.");
         }
 
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, glBuffer->GetGLID());
+        const GLuint bufferId = glBuffer->GetGLID();
+        if (!m_IndirectBufferBinding.valid || m_IndirectBufferBinding.buffer != bufferId)
+        {
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, bufferId);
+            ++m_Statistics.indirectBufferBinds;
+            m_IndirectBufferBinding = IndirectBufferBindingState{bufferId, true};
+        }
+
+        const std::uintptr_t indirectOffset =
+            static_cast<std::uintptr_t>(glBuffer->GetBindOffset()) + static_cast<std::uintptr_t>(offset);
         glMultiDrawElementsIndirect(
             m_State.topology,
             m_State.indexType,
-            nullptr,
+            reinterpret_cast<const void *>(indirectOffset),
             static_cast<GLsizei>(drawCount),
             static_cast<GLsizei>(stride));
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
         ++m_Statistics.indirectDrawCalls;
+        m_Statistics.indirectDrawCommands += drawCount;
     }
 
     void OpenGLCommandList::TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage)

@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/RHI/RHIDefinitions.hpp>
+#include <Engine/RHI/Descriptors/RHIIndirectDrawCommand.hpp>
 #include <Engine/RHI/Descriptors/RHIRenderPrimitive.hpp>
 #include <Engine/RHI/Descriptors/RHIResourceSet.hpp>
 
@@ -140,7 +141,8 @@ namespace Physara::RHI
         virtual void DrawIndexedIndirect(
             RHIBuffer *indirectBuffer,
             std::uint32_t drawCount,
-            std::uint32_t stride = sizeof(std::uint32_t) * 5) = 0;
+            std::uint32_t stride = sizeof(RHIDrawIndexedIndirectCommand),
+            std::uint32_t offset = 0) = 0;
 
         // 顺序绘制(支持实例起始偏移)
         virtual void Draw(

@@ -19,6 +19,7 @@
 #include <Engine/Resource/Types/Mesh.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
 #include <Engine/RHI/Core/RHIDevice.hpp>
+#include <Engine/RHI/Descriptors/RHIBufferDesc.hpp>
 #include <Engine/RHI/Descriptors/RHISamplerDesc.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
 #include <Engine/RHI/Pipeline/RHIPipelineState.hpp>
@@ -45,6 +46,15 @@ namespace Physara::Engine
         }
 
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
+        constexpr std::uint32_t MinIndirectRunCommandCount = 2u;
+
+        static bool CanMergeIndirectRun(const RenderCommand &lhs, const RenderCommand &rhs)
+        {
+            return lhs.materialInstanceId == rhs.materialInstanceId &&
+                   lhs.meshKey == rhs.meshKey &&
+                   lhs.bucket == rhs.bucket &&
+                   lhs.doubleSided == rhs.doubleSided;
+        }
     }
 
     void ForwardOpaquePass::Execute(const ForwardPassContext &context)
@@ -64,6 +74,11 @@ namespace Physara::Engine
         m_ShadowSampler.reset();
         m_FallbackBlackCubeTexture.reset();
         m_FallbackBRDFLut.reset();
+        m_IndirectCommandBuffers.clear();
+        m_IndirectCommandScratch.clear();
+        m_IndirectPrimitiveScratch.clear();
+        m_IndirectRuns.clear();
+        m_IndirectBufferCursor = 0;
         ResetTextureBindings();
         m_LoggedFirstScene = false;
         m_LoggedFirstDraw = false;
@@ -79,6 +94,7 @@ namespace Physara::Engine
         }
 
         EnsureDefaultTextures(context);
+        m_IndirectBufferCursor = 0;
         m_MaterialTextureCache.Update(*context.device, *context.commandList, context.assetManager, *context.frameData, context.stats);
         RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back, transparent);
         RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None, transparent);
@@ -320,27 +336,28 @@ namespace Physara::Engine
         }
     }
 
-    void ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderCommand &command)
+    bool ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderCommand &command)
     {
         if (context.frameData == nullptr || command.firstObjectIndex >= context.frameData->objects.size())
         {
-            return;
+            return false;
         }
 
         const std::uint32_t materialIndex = context.frameData->objects[command.firstObjectIndex].materialIndex;
         const MaterialResourceSet *resourceSet = m_MaterialTextureCache.GetResourceSet(materialIndex);
         if (resourceSet == nullptr)
         {
-            return;
+            return false;
         }
 
         if (m_BoundMaterialInstanceId == resourceSet->materialInstanceId)
         {
-            return;
+            return true;
         }
 
         context.commandList->SetResourceSet(ForwardOpaquePassDetail::PerMaterialResourceSet, resourceSet->AsRHIResourceSet());
         m_BoundMaterialInstanceId = resourceSet->materialInstanceId;
+        return true;
     }
 
     void ForwardOpaquePass::DrawCommandGroup(
@@ -362,44 +379,259 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::DrawCommands(const ForwardPassContext &context, std::span<const RenderCommand> commands, bool transparent)
     {
-        for (const RenderCommand &command : commands)
+        if (commands.empty())
         {
-            MeshGPUPrimitive *primitive = context.meshCache != nullptr
-                                              ? context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats)
-                                              : nullptr;
-            if (primitive == nullptr || primitive->indexCount == 0)
+            return;
+        }
+
+        BuildIndirectRuns(context, commands);
+        std::uint32_t runIndex = 0;
+        for (std::uint32_t commandIndex = 0; commandIndex < static_cast<std::uint32_t>(commands.size());)
+        {
+            if (runIndex < m_IndirectRuns.size() && m_IndirectRuns[runIndex].commandIndex == commandIndex)
             {
+                const IndirectRun &run = m_IndirectRuns[runIndex++];
+                SubmitIndirectRun(context, commands, run, transparent);
+                commandIndex += run.commandCount;
                 continue;
             }
 
-            const std::uint32_t instanceCount = command.instanceCount;
-            BindMaterial(context, command);
-            context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
-            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, primitive->firstIndex, primitive->vertexOffset, command.firstInstanceIndex);
-            if (context.stats != nullptr)
-            {
-                ++context.stats->drawCalls;
-                if (transparent)
-                {
-                    ++context.stats->forwardTransparentDrawCalls;
-                }
-                else
-                {
-                    ++context.stats->forwardOpaqueDrawCalls;
-                }
-                context.stats->instances += instanceCount;
-                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * instanceCount;
-            }
-            if (!m_LoggedFirstDraw)
-            {
-                PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}, instances={}.",
-                                  MeshGPUCache::BuildMeshPrimitiveDebugName(command),
-                                  primitive->indexCount,
-                                  command.firstObjectIndex,
-                                  instanceCount);
-                m_LoggedFirstDraw = true;
-            }
+            SubmitDirectCommand(context, commands[commandIndex], transparent);
+            ++commandIndex;
         }
+    }
+
+    void ForwardOpaquePass::BuildIndirectRuns(const ForwardPassContext &context, std::span<const RenderCommand> commands)
+    {
+        m_IndirectRuns.clear();
+        m_IndirectCommandScratch.clear();
+        m_IndirectPrimitiveScratch.clear();
+
+        if (commands.size() < ForwardOpaquePassDetail::MinIndirectRunCommandCount || context.meshCache == nullptr ||
+            context.device == nullptr)
+        {
+            return;
+        }
+
+        for (const RenderCommand &command : commands)
+        {
+            [[maybe_unused]] MeshGPUPrimitive *primitive =
+                context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats);
+        }
+
+        for (std::uint32_t commandIndex = 0; commandIndex < static_cast<std::uint32_t>(commands.size());)
+        {
+            const RenderCommand &firstCommand = commands[commandIndex];
+            std::uint32_t runCommandCount = 1u;
+            while (commandIndex + runCommandCount < static_cast<std::uint32_t>(commands.size()) &&
+                   ForwardOpaquePassDetail::CanMergeIndirectRun(firstCommand, commands[commandIndex + runCommandCount]))
+            {
+                ++runCommandCount;
+            }
+
+            if (runCommandCount < ForwardOpaquePassDetail::MinIndirectRunCommandCount)
+            {
+                commandIndex += runCommandCount;
+                continue;
+            }
+
+            const std::uint32_t indirectCommandOffset =
+                static_cast<std::uint32_t>(m_IndirectCommandScratch.size() * sizeof(RHI::RHIDrawIndexedIndirectCommand));
+            const std::uint32_t primitiveScratchOffset = static_cast<std::uint32_t>(m_IndirectPrimitiveScratch.size());
+            bool validRun = true;
+            for (std::uint32_t i = 0; i < runCommandCount; ++i)
+            {
+                const RenderCommand &command = commands[commandIndex + i];
+                MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats);
+                if (primitive == nullptr || primitive->indexCount == 0)
+                {
+                    validRun = false;
+                    break;
+                }
+
+                RHI::RHIDrawIndexedIndirectCommand indirectCommand{};
+                indirectCommand.indexCount = primitive->indexCount;
+                indirectCommand.instanceCount = command.instanceCount;
+                indirectCommand.firstIndex = primitive->firstIndex;
+                indirectCommand.vertexOffset = primitive->vertexOffset;
+                indirectCommand.firstInstance = command.firstInstanceIndex;
+                m_IndirectCommandScratch.push_back(indirectCommand);
+                m_IndirectPrimitiveScratch.push_back(primitive);
+            }
+
+            if (!validRun)
+            {
+                const std::uint32_t commandScratchSize =
+                    indirectCommandOffset / static_cast<std::uint32_t>(sizeof(RHI::RHIDrawIndexedIndirectCommand));
+                m_IndirectCommandScratch.resize(commandScratchSize);
+                m_IndirectPrimitiveScratch.resize(primitiveScratchOffset);
+                commandIndex += runCommandCount;
+                continue;
+            }
+
+            m_IndirectRuns.push_back(IndirectRun{commandIndex, runCommandCount, indirectCommandOffset, primitiveScratchOffset, nullptr});
+            commandIndex += runCommandCount;
+        }
+
+        RHI::RHIBuffer *indirectBuffer = UploadIndirectCommands(context);
+        if (indirectBuffer == nullptr)
+        {
+            m_IndirectRuns.clear();
+            m_IndirectCommandScratch.clear();
+            return;
+        }
+
+        for (IndirectRun &run : m_IndirectRuns)
+        {
+            run.indirectBuffer = indirectBuffer;
+        }
+    }
+
+    RHI::RHIBuffer *ForwardOpaquePass::UploadIndirectCommands(const ForwardPassContext &context)
+    {
+        if (context.device == nullptr || m_IndirectCommandScratch.empty())
+        {
+            return nullptr;
+        }
+
+        if (m_IndirectBufferCursor >= m_IndirectCommandBuffers.size())
+        {
+            m_IndirectCommandBuffers.push_back(nullptr);
+        }
+
+        const std::uint32_t requiredBytes =
+            static_cast<std::uint32_t>(m_IndirectCommandScratch.size() * sizeof(RHI::RHIDrawIndexedIndirectCommand));
+        std::unique_ptr<RHI::RHIBuffer> &buffer = m_IndirectCommandBuffers[m_IndirectBufferCursor++];
+        if (buffer == nullptr || buffer->GetSize() < requiredBytes)
+        {
+            std::uint32_t commandCapacity = 32u;
+            const std::uint32_t requiredCommands = static_cast<std::uint32_t>(m_IndirectCommandScratch.size());
+            while (commandCapacity < requiredCommands)
+            {
+                commandCapacity *= 2u;
+            }
+
+            RHI::RHIBufferDesc desc{};
+            desc.size = commandCapacity * static_cast<std::uint32_t>(sizeof(RHI::RHIDrawIndexedIndirectCommand));
+            desc.usage = RHI::BufferUsage::Indirect;
+            desc.dynamic = true;
+            buffer = context.device->CreateBuffer(desc);
+        }
+
+        if (buffer == nullptr)
+        {
+            return nullptr;
+        }
+
+        buffer->UploadData(m_IndirectCommandScratch.data(), requiredBytes);
+        if (context.stats != nullptr)
+        {
+            context.stats->bufferUploadBytes += requiredBytes;
+            ++context.stats->bufferUploadChunks;
+        }
+        return buffer.get();
+    }
+
+    void ForwardOpaquePass::SubmitDirectCommand(const ForwardPassContext &context, const RenderCommand &command, bool transparent)
+    {
+        MeshGPUPrimitive *primitive = context.meshCache != nullptr
+                                          ? context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats)
+                                          : nullptr;
+        if (primitive == nullptr || primitive->indexCount == 0 || !BindMaterial(context, command))
+        {
+            return;
+        }
+
+        context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
+        context.commandList->DrawIndexed(primitive->indexCount, command.instanceCount, primitive->firstIndex, primitive->vertexOffset, command.firstInstanceIndex);
+        RecordSubmittedCommand(context, *primitive, command.instanceCount, transparent);
+        if (!m_LoggedFirstDraw)
+        {
+            PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}, instances={}.",
+                              MeshGPUCache::BuildMeshPrimitiveDebugName(command),
+                              primitive->indexCount,
+                              command.firstObjectIndex,
+                              command.instanceCount);
+            m_LoggedFirstDraw = true;
+        }
+    }
+
+    void ForwardOpaquePass::SubmitIndirectRun(
+        const ForwardPassContext &context,
+        std::span<const RenderCommand> commands,
+        const IndirectRun &run,
+        bool transparent)
+    {
+        if (run.indirectBuffer == nullptr || run.commandIndex >= commands.size() ||
+            run.primitiveScratchOffset + run.commandCount > m_IndirectPrimitiveScratch.size())
+        {
+            return;
+        }
+
+        MeshGPUPrimitive *firstPrimitive = m_IndirectPrimitiveScratch[run.primitiveScratchOffset];
+        if (firstPrimitive == nullptr)
+        {
+            return;
+        }
+
+        const RenderCommand &firstCommand = commands[run.commandIndex];
+        if (!BindMaterial(context, firstCommand))
+        {
+            return;
+        }
+
+        context.commandList->SetRenderPrimitive(firstPrimitive->AsRHIRenderPrimitive());
+        context.commandList->DrawIndexedIndirect(
+            run.indirectBuffer,
+            run.commandCount,
+            static_cast<std::uint32_t>(sizeof(RHI::RHIDrawIndexedIndirectCommand)),
+            run.indirectCommandOffset);
+
+        std::uint64_t submittedInstances = 0;
+        for (std::uint32_t i = 0; i < run.commandCount; ++i)
+        {
+            const RenderCommand &command = commands[run.commandIndex + i];
+            MeshGPUPrimitive *primitive = m_IndirectPrimitiveScratch[run.primitiveScratchOffset + i];
+            if (primitive == nullptr)
+            {
+                continue;
+            }
+            submittedInstances += command.instanceCount;
+            RecordSubmittedCommand(context, *primitive, command.instanceCount, transparent);
+        }
+        if (!m_LoggedFirstDraw)
+        {
+            PHYSARA_CORE_INFO("Forward MDI submitted '{}': indices={}, commands={}, instances={}.",
+                              MeshGPUCache::BuildMeshPrimitiveDebugName(firstCommand),
+                              firstPrimitive->indexCount,
+                              run.commandCount,
+                              submittedInstances);
+            m_LoggedFirstDraw = true;
+        }
+    }
+
+    void ForwardOpaquePass::RecordSubmittedCommand(
+        const ForwardPassContext &context,
+        const MeshGPUPrimitive &primitive,
+        std::uint32_t instanceCount,
+        bool transparent)
+    {
+        if (context.stats == nullptr)
+        {
+            return;
+        }
+
+        ++context.stats->drawCalls;
+        if (transparent)
+        {
+            ++context.stats->forwardTransparentDrawCalls;
+        }
+        else
+        {
+            ++context.stats->forwardOpaqueDrawCalls;
+        }
+        context.stats->instances += instanceCount;
+        context.stats->triangles += static_cast<std::uint64_t>(primitive.indexCount / 3u) * instanceCount;
     }
 
     void ForwardOpaquePass::ResetTextureBindings()

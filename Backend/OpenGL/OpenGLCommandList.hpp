@@ -62,7 +62,11 @@ namespace Physara::RHI
 
         void Dispatch(std::uint32_t groupX, std::uint32_t groupY, std::uint32_t groupZ) override;
 
-        void DrawIndexedIndirect(RHIBuffer *indirectBuffer, std::uint32_t drawCount, std::uint32_t stride) override;
+        void DrawIndexedIndirect(
+            RHIBuffer *indirectBuffer,
+            std::uint32_t drawCount,
+            std::uint32_t stride = sizeof(RHIDrawIndexedIndirectCommand),
+            std::uint32_t offset = 0) override;
 
         void TextureBarrier(RHITexture *texture, ShaderStage srcStage, ShaderStage dstStage) override;
         void BufferBarrier(RHIBuffer *buffer, ShaderStage srcStage, ShaderStage dstStage) override;
@@ -139,6 +143,12 @@ namespace Physara::RHI
             bool valid{false};
         };
 
+        struct IndirectBufferBindingState
+        {
+            GLuint buffer{0};
+            bool valid{false};
+        };
+
         struct ViewportState
         {
             float x{0.f};
@@ -175,6 +185,7 @@ namespace Physara::RHI
         std::array<VertexBufferBindingState, kMaxVertexBindings> m_VertexBufferBindings{};
         IndexBufferBindingState m_IndexBufferBinding{};
         RenderPrimitiveBindingState m_RenderPrimitiveBinding{};
+        IndirectBufferBindingState m_IndirectBufferBinding{};
         ViewportState m_ViewportState{};
         ScissorState m_ScissorState{};
         RHICommandStatistics m_Statistics{};
