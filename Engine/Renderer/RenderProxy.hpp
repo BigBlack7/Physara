@@ -54,35 +54,36 @@ namespace Physara::Engine
         void Clear();
     };
 
-    struct RenderDrawBatch
+    struct RenderCommand
     {
         const RenderMeshSubmission *submission{nullptr};
-        std::uint32_t firstItem{0};
-        std::uint32_t itemCount{0};
+        std::uint32_t sourceItemIndex{0};
+        std::uint32_t instanceCount{0};
         std::uint32_t firstObjectIndex{0};
         std::uint32_t firstInstanceIndex{0};
         std::uint64_t sortKey{0};
         std::uint64_t meshKey{0};
         std::uint64_t primitiveKey{0};
         MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
+        RenderBucket bucket{RenderBucket::Opaque};
         bool doubleSided{false};
     };
 
-    struct RenderCullBatchBuckets
+    struct RenderCullCommandBuckets
     {
-        std::vector<RenderDrawBatch> singleSided{};
-        std::vector<RenderDrawBatch> doubleSided{};
+        std::vector<RenderCommand> singleSided{};
+        std::vector<RenderCommand> doubleSided{};
 
         void Clear();
         [[nodiscard]] bool Empty() const;
         [[nodiscard]] std::size_t Size() const;
     };
 
-    struct RenderDrawBatchBuckets
+    struct RenderCommandBuckets
     {
-        RenderCullBatchBuckets opaque{};
-        RenderCullBatchBuckets unlit{};
-        RenderCullBatchBuckets transparent{};
+        RenderCullCommandBuckets opaque{};
+        RenderCullCommandBuckets unlit{};
+        RenderCullCommandBuckets transparent{};
         std::vector<std::uint32_t> instanceObjectIndices{};
 
         void Clear();
@@ -95,20 +96,20 @@ namespace Physara::Engine
         void Reset();
 
         [[nodiscard]] const RenderDrawBuckets &GetBuckets() const { return m_Buckets; }
-        [[nodiscard]] const RenderDrawBatchBuckets &GetBatches() const { return m_Batches; }
+        [[nodiscard]] const RenderCommandBuckets &GetCommands() const { return m_Commands; }
 
     private:
         void CullAndBucket(const std::vector<RenderMeshSubmission> &submissions, const RenderView &view, FrameData &frameData);
         void SortBuckets();
         void RepackObjectsForSortedBuckets(FrameData &frameData);
-        void BuildBatches(FrameData &frameData);
+        void BuildCommands(FrameData &frameData);
         [[nodiscard]] static std::uint64_t BuildSortKey(const RenderMeshSubmission &submission, MaterialInstanceId materialInstanceId);
         [[nodiscard]] static ObjectData BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket);
         [[nodiscard]] static RenderBucket GetBucket(const RenderMeshSubmission &submission);
 
     private:
         RenderDrawBuckets m_Buckets{};
-        RenderDrawBatchBuckets m_Batches{};
+        RenderCommandBuckets m_Commands{};
         MaterialInstanceRegistry m_MaterialRegistry{};
         std::vector<RenderMeshSubmission> m_SubmissionScratch{};
         std::uint32_t m_VisibleSubmissionCount{0};

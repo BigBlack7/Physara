@@ -142,42 +142,42 @@ namespace Physara::Engine
             BindFrameTextures(context);
 
             ResetTextureBindings();
-            const RenderDrawBatchBuckets &batches = context.renderProxy->GetBatches();
+            const RenderCommandBuckets &commands = context.renderProxy->GetCommands();
             if (transparent)
             {
-                DrawBatchGroup(
+                DrawCommandGroup(
                     context,
                     singleSidedPipeline,
-                    batches.transparent.singleSided,
-                    std::span<const RenderDrawBatch>{},
+                    commands.transparent.singleSided,
+                    std::span<const RenderCommand>{},
                     true);
             }
             else
             {
-                DrawBatchGroup(
+                DrawCommandGroup(
                     context,
                     singleSidedPipeline,
-                    batches.opaque.singleSided,
-                    batches.unlit.singleSided,
+                    commands.opaque.singleSided,
+                    commands.unlit.singleSided,
                     false);
             }
 
             if (transparent)
             {
-                DrawBatchGroup(
+                DrawCommandGroup(
                     context,
                     doubleSidedPipeline,
-                    batches.transparent.doubleSided,
-                    std::span<const RenderDrawBatch>{},
+                    commands.transparent.doubleSided,
+                    std::span<const RenderCommand>{},
                     true);
             }
             else
             {
-                DrawBatchGroup(
+                DrawCommandGroup(
                     context,
                     doubleSidedPipeline,
-                    batches.opaque.doubleSided,
-                    batches.unlit.doubleSided,
+                    commands.opaque.doubleSided,
+                    commands.unlit.doubleSided,
                     false);
             }
         }
@@ -320,14 +320,14 @@ namespace Physara::Engine
         }
     }
 
-    void ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderDrawBatch &batch)
+    void ForwardOpaquePass::BindMaterial(const ForwardPassContext &context, const RenderCommand &command)
     {
-        if (context.frameData == nullptr || batch.firstObjectIndex >= context.frameData->objects.size())
+        if (context.frameData == nullptr || command.firstObjectIndex >= context.frameData->objects.size())
         {
             return;
         }
 
-        const std::uint32_t materialIndex = context.frameData->objects[batch.firstObjectIndex].materialIndex;
+        const std::uint32_t materialIndex = context.frameData->objects[command.firstObjectIndex].materialIndex;
         const MaterialResourceSet *resourceSet = m_MaterialTextureCache.GetResourceSet(materialIndex);
         if (resourceSet == nullptr)
         {
@@ -343,48 +343,39 @@ namespace Physara::Engine
         m_BoundMaterialInstanceId = resourceSet->materialInstanceId;
     }
 
-    void ForwardOpaquePass::DrawBatchGroup(
+    void ForwardOpaquePass::DrawCommandGroup(
         const ForwardPassContext &context,
         RHI::RHIPipelineState *pipeline,
-        std::span<const RenderDrawBatch> primaryBatches,
-        std::span<const RenderDrawBatch> secondaryBatches,
+        std::span<const RenderCommand> primaryCommands,
+        std::span<const RenderCommand> secondaryCommands,
         bool transparent)
     {
-        if (pipeline == nullptr || (primaryBatches.empty() && secondaryBatches.empty()))
+        if (pipeline == nullptr || (primaryCommands.empty() && secondaryCommands.empty()))
         {
             return;
         }
 
         context.commandList->SetPipelineState(pipeline);
-        DrawBatches(context, primaryBatches, transparent);
-        DrawBatches(context, secondaryBatches, transparent);
+        DrawCommands(context, primaryCommands, transparent);
+        DrawCommands(context, secondaryCommands, transparent);
     }
 
-    void ForwardOpaquePass::DrawBatches(const ForwardPassContext &context, std::span<const RenderDrawBatch> batches, bool transparent)
+    void ForwardOpaquePass::DrawCommands(const ForwardPassContext &context, std::span<const RenderCommand> commands, bool transparent)
     {
-        for (const RenderDrawBatch &batch : batches)
+        for (const RenderCommand &command : commands)
         {
-            RenderDrawItem item{};
-            item.submission = batch.submission;
-            item.objectIndex = batch.firstObjectIndex;
-            item.sortKey = batch.sortKey;
-            item.meshKey = batch.meshKey;
-            item.primitiveKey = batch.primitiveKey;
-            item.materialInstanceId = batch.materialInstanceId;
-            item.doubleSided = batch.doubleSided;
-
             MeshGPUPrimitive *primitive = context.meshCache != nullptr
-                                              ? context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats)
+                                              ? context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats)
                                               : nullptr;
             if (primitive == nullptr || primitive->indexCount == 0)
             {
                 continue;
             }
 
-            const std::uint32_t instanceCount = batch.itemCount;
-            BindMaterial(context, batch);
+            const std::uint32_t instanceCount = command.instanceCount;
+            BindMaterial(context, command);
             context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
-            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, primitive->firstIndex, primitive->vertexOffset, batch.firstInstanceIndex);
+            context.commandList->DrawIndexed(primitive->indexCount, instanceCount, primitive->firstIndex, primitive->vertexOffset, command.firstInstanceIndex);
             if (context.stats != nullptr)
             {
                 ++context.stats->drawCalls;
@@ -402,9 +393,9 @@ namespace Physara::Engine
             if (!m_LoggedFirstDraw)
             {
                 PHYSARA_CORE_INFO("Forward draw submitted '{}': indices={}, objectIndex={}, instances={}.",
-                                  MeshGPUCache::BuildMeshPrimitiveDebugName(item),
+                                  MeshGPUCache::BuildMeshPrimitiveDebugName(command),
                                   primitive->indexCount,
-                                  batch.firstObjectIndex,
+                                  command.firstObjectIndex,
                                   instanceCount);
                 m_LoggedFirstDraw = true;
             }

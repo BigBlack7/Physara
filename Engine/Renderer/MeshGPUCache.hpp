@@ -21,7 +21,9 @@ namespace Physara::Engine
 {
     class AssetManager;
     struct FrameStatistics;
+    struct RenderCommand;
     struct RenderDrawItem;
+    struct RenderMeshSubmission;
 
     struct MeshGPUPrimitive
     {
@@ -56,17 +58,25 @@ namespace Physara::Engine
             AssetManager *assetManager,
             const RenderDrawItem &item,
             FrameStatistics *stats);
+        [[nodiscard]] MeshGPUPrimitive *GetOrCreate(
+            RHI::RHIDevice *device,
+            AssetManager *assetManager,
+            const RenderCommand &command,
+            FrameStatistics *stats);
 
         void Reset();
 
         [[nodiscard]] static std::string BuildMeshResourcePath(const RenderDrawItem &item);
+        [[nodiscard]] static std::string BuildMeshResourcePath(const RenderCommand &command);
         [[nodiscard]] static std::string BuildMeshPrimitiveDebugName(const RenderDrawItem &item);
+        [[nodiscard]] static std::string BuildMeshPrimitiveDebugName(const RenderCommand &command);
 
     private:
         [[nodiscard]] MeshGPUResource *GetOrCreateMeshResource(
             RHI::RHIDevice *device,
             AssetManager *assetManager,
-            const RenderDrawItem &item,
+            const RenderMeshSubmission *submission,
+            std::uint64_t meshKey,
             FrameStatistics *stats);
 
     private:

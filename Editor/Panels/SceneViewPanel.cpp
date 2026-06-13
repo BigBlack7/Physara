@@ -181,7 +181,7 @@ namespace Physara::Editor
         const double uploadMegabytes = static_cast<double>(stats.TotalUploadBytes()) / (1024.0 * 1024.0);
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
-        std::snprintf(drawLine, sizeof(drawLine), "Draws/Batches: %llu/%u, Instances: %llu, Tris: %llu",
+        std::snprintf(drawLine, sizeof(drawLine), "Draws/Cmds: %llu/%u, Instances: %llu, Tris: %llu",
                       static_cast<unsigned long long>(stats.drawCalls),
                       stats.drawBatches,
                       static_cast<unsigned long long>(stats.instances),

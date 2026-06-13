@@ -304,7 +304,7 @@ namespace Physara::Engine
             return;
         }
 
-        BuildShadowBatches(context);
+        BuildShadowCommands(context);
         UploadFrameBuffers(context, shadowCamera);
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetShadowInstanceObjectIndexBuffer();
@@ -354,7 +354,7 @@ namespace Physara::Engine
         m_ShadowMap.reset();
         m_CameraAllocation = {};
         m_ShadowCasterScratch.clear();
-        m_ShadowBatchScratch.clear();
+        m_ShadowCommandScratch.clear();
         m_ShadowInstanceObjectIndexScratch.clear();
     }
 
@@ -510,10 +510,10 @@ namespace Physara::Engine
         return context.pipelineCache->GetOrCreate(pipelineDesc);
     }
 
-    void ShadowPass::BuildShadowBatches(const ShadowPassContext &context)
+    void ShadowPass::BuildShadowCommands(const ShadowPassContext &context)
     {
-        m_ShadowBatchScratch.clear();
-        m_ShadowBatchScratch.reserve(m_ShadowCasterScratch.size());
+        m_ShadowCommandScratch.clear();
+        m_ShadowCommandScratch.reserve(m_ShadowCasterScratch.size());
         m_ShadowInstanceObjectIndexScratch.clear();
         m_ShadowInstanceObjectIndexScratch.reserve(m_ShadowCasterScratch.size());
 
@@ -528,29 +528,33 @@ namespace Physara::Engine
                 continue;
             }
 
-            if (!m_ShadowBatchScratch.empty() &&
-                item.primitiveKey == m_ShadowBatchScratch.back().primitiveKey)
+            if (!m_ShadowCommandScratch.empty() &&
+                item.primitiveKey == m_ShadowCommandScratch.back().primitiveKey)
             {
-                ++m_ShadowBatchScratch.back().itemCount;
+                ++m_ShadowCommandScratch.back().instanceCount;
                 m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
                 continue;
             }
 
-            ShadowDrawBatch batch{};
-            batch.submission = item.submission;
-            batch.firstItem = i;
-            batch.itemCount = 1u;
-            batch.firstObjectIndex = item.objectIndex;
-            batch.firstInstanceIndex = static_cast<std::uint32_t>(m_ShadowInstanceObjectIndexScratch.size());
-            batch.meshKey = item.meshKey;
-            batch.primitiveKey = item.primitiveKey;
-            m_ShadowBatchScratch.push_back(batch);
+            RenderCommand command{};
+            command.submission = item.submission;
+            command.sourceItemIndex = i;
+            command.instanceCount = 1u;
+            command.firstObjectIndex = item.objectIndex;
+            command.firstInstanceIndex = static_cast<std::uint32_t>(m_ShadowInstanceObjectIndexScratch.size());
+            command.sortKey = item.sortKey;
+            command.meshKey = item.meshKey;
+            command.primitiveKey = item.primitiveKey;
+            command.materialInstanceId = item.materialInstanceId;
+            command.bucket = RenderBucket::Opaque;
+            command.doubleSided = item.doubleSided;
+            m_ShadowCommandScratch.push_back(command);
             m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
         }
 
         if (context.stats != nullptr)
         {
-            context.stats->shadowBatches = static_cast<std::uint32_t>(m_ShadowBatchScratch.size());
+            context.stats->shadowBatches = static_cast<std::uint32_t>(m_ShadowCommandScratch.size());
             context.stats->drawBatches += context.stats->shadowBatches;
         }
     }
@@ -567,28 +571,22 @@ namespace Physara::Engine
 
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
-        for (const ShadowDrawBatch &batch : m_ShadowBatchScratch)
+        for (const RenderCommand &command : m_ShadowCommandScratch)
         {
-            RenderDrawItem item{};
-            item.submission = batch.submission;
-            item.objectIndex = batch.firstObjectIndex;
-            item.meshKey = batch.meshKey;
-            item.primitiveKey = batch.primitiveKey;
-
-            MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, item, context.stats);
+            MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats);
             if (primitive == nullptr || primitive->indexCount == 0)
             {
                 continue;
             }
 
             context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
-            context.commandList->DrawIndexed(primitive->indexCount, batch.itemCount, primitive->firstIndex, primitive->vertexOffset, batch.firstInstanceIndex);
+            context.commandList->DrawIndexed(primitive->indexCount, command.instanceCount, primitive->firstIndex, primitive->vertexOffset, command.firstInstanceIndex);
             if (context.stats != nullptr)
             {
                 ++context.stats->drawCalls;
                 ++context.stats->shadowDrawCalls;
-                context.stats->instances += batch.itemCount;
-                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * batch.itemCount;
+                context.stats->instances += command.instanceCount;
+                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * command.instanceCount;
             }
         }
     }

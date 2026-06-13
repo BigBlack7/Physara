@@ -29,7 +29,6 @@ namespace Physara::Engine
     class PipelineStateCache;
     class RenderProxy;
     class ShaderLibrary;
-    struct RenderMeshSubmission;
 
     enum class ShadowAlgorithm : std::uint32_t
     {
@@ -91,28 +90,17 @@ namespace Physara::Engine
             CameraData &shadowCamera,
             std::uint32_t &lightIndex);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ShadowPassContext &context);
-        void BuildShadowBatches(const ShadowPassContext &context);
+        void BuildShadowCommands(const ShadowPassContext &context);
         void UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera);
         void DrawShadowCasters(const ShadowPassContext &context);
 
     private:
-        struct ShadowDrawBatch
-        {
-            const RenderMeshSubmission *submission{nullptr};
-            std::uint32_t firstItem{0};
-            std::uint32_t itemCount{0};
-            std::uint32_t firstObjectIndex{0};
-            std::uint32_t firstInstanceIndex{0};
-            std::uint64_t meshKey{0};
-            std::uint64_t primitiveKey{0};
-        };
-
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_ShadowMap{};
         std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
         FrameUploadAllocation m_CameraAllocation{};
         std::vector<RenderDrawItem> m_ShadowCasterScratch{};
-        std::vector<ShadowDrawBatch> m_ShadowBatchScratch{};
+        std::vector<RenderCommand> m_ShadowCommandScratch{};
         std::vector<std::uint32_t> m_ShadowInstanceObjectIndexScratch{};
         ShadowSettings m_Settings{};
     };

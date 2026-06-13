@@ -69,14 +69,14 @@ namespace Physara::Engine
         void ExecuteBuckets(const ForwardPassContext &context, bool transparent);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         void BindFrameTextures(const ForwardPassContext &context);
-        void BindMaterial(const ForwardPassContext &context, const RenderDrawBatch &batch);
-        void DrawBatchGroup(
+        void BindMaterial(const ForwardPassContext &context, const RenderCommand &command);
+        void DrawCommandGroup(
             const ForwardPassContext &context,
             RHI::RHIPipelineState *pipeline,
-            std::span<const RenderDrawBatch> primaryBatches,
-            std::span<const RenderDrawBatch> secondaryBatches,
+            std::span<const RenderCommand> primaryCommands,
+            std::span<const RenderCommand> secondaryCommands,
             bool transparent);
-        void DrawBatches(const ForwardPassContext &context, std::span<const RenderDrawBatch> batches, bool transparent);
+        void DrawCommands(const ForwardPassContext &context, std::span<const RenderCommand> commands, bool transparent);
         void ResetTextureBindings();
 
     private:

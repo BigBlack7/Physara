@@ -16,6 +16,26 @@ namespace Physara::Engine
 {
     namespace MeshGPUCacheDetail
     {
+        std::string BuildMeshResourcePath(const RenderMeshSubmission *submission)
+        {
+            if (submission == nullptr)
+            {
+                return {};
+            }
+
+            return submission->meshPath + "#mesh/" + std::to_string(submission->meshIndex);
+        }
+
+        std::string BuildMeshPrimitiveDebugName(const RenderMeshSubmission *submission)
+        {
+            if (submission == nullptr)
+            {
+                return {};
+            }
+
+            return BuildMeshResourcePath(submission) + "#primitive/" + std::to_string(submission->primitiveIndex);
+        }
+
         std::uint64_t BuildRenderPrimitiveId(std::uint64_t meshKey, std::size_t primitiveIndex)
         {
             std::uint64_t seed = meshKey;
@@ -42,7 +62,7 @@ namespace Physara::Engine
         const RenderDrawItem &item,
         FrameStatistics *stats)
     {
-        MeshGPUResource *resource = GetOrCreateMeshResource(device, assetManager, item, stats);
+        MeshGPUResource *resource = GetOrCreateMeshResource(device, assetManager, item.submission, item.meshKey, stats);
         if (resource == nullptr || item.submission == nullptr || item.submission->primitiveIndex >= resource->primitives.size())
         {
             return nullptr;
@@ -51,28 +71,44 @@ namespace Physara::Engine
         return &resource->primitives[item.submission->primitiveIndex];
     }
 
-    MeshGPUResource *MeshGPUCache::GetOrCreateMeshResource(
+    MeshGPUPrimitive *MeshGPUCache::GetOrCreate(
         RHI::RHIDevice *device,
         AssetManager *assetManager,
-        const RenderDrawItem &item,
+        const RenderCommand &command,
         FrameStatistics *stats)
     {
-        if (assetManager == nullptr || device == nullptr || item.submission == nullptr)
+        MeshGPUResource *resource = GetOrCreateMeshResource(device, assetManager, command.submission, command.meshKey, stats);
+        if (resource == nullptr || command.submission == nullptr || command.submission->primitiveIndex >= resource->primitives.size())
         {
             return nullptr;
         }
 
-        const auto cached = m_MeshCache.find(item.meshKey);
+        return &resource->primitives[command.submission->primitiveIndex];
+    }
+
+    MeshGPUResource *MeshGPUCache::GetOrCreateMeshResource(
+        RHI::RHIDevice *device,
+        AssetManager *assetManager,
+        const RenderMeshSubmission *submission,
+        std::uint64_t meshKey,
+        FrameStatistics *stats)
+    {
+        if (assetManager == nullptr || device == nullptr || submission == nullptr)
+        {
+            return nullptr;
+        }
+
+        const auto cached = m_MeshCache.find(meshKey);
         if (cached != m_MeshCache.end())
         {
             return &cached->second;
         }
 
-        const std::string meshResourcePath = BuildMeshResourcePath(item);
+        const std::string meshResourcePath = MeshGPUCacheDetail::BuildMeshResourcePath(submission);
         const std::shared_ptr<Mesh> mesh = assetManager->GetByPath<Mesh>(meshResourcePath);
-        if (mesh == nullptr || item.submission->primitiveIndex >= mesh->primitives.size())
+        if (mesh == nullptr || submission->primitiveIndex >= mesh->primitives.size())
         {
-            if (m_MissingMeshWarnings.insert(item.meshKey).second)
+            if (m_MissingMeshWarnings.insert(meshKey).second)
             {
                 PHYSARA_CORE_WARN("Mesh GPU cache skipped '{}': resource not found or primitive index out of range. normalized='{}'.",
                                   meshResourcePath,
@@ -95,7 +131,7 @@ namespace Physara::Engine
 
         if (totalVertexCount == 0 || totalIndexCount == 0)
         {
-            if (m_MissingMeshWarnings.insert(item.meshKey).second)
+            if (m_MissingMeshWarnings.insert(meshKey).second)
             {
                 PHYSARA_CORE_WARN("Mesh GPU cache skipped '{}': mesh has no decoded geometry.", meshResourcePath);
             }
@@ -133,7 +169,7 @@ namespace Physara::Engine
             gpuPrimitive.firstIndex = static_cast<std::uint32_t>(indices.size());
             gpuPrimitive.vertexOffset = static_cast<std::int32_t>(vertices.size());
             gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-            gpuPrimitive.renderPrimitiveId = MeshGPUCacheDetail::BuildRenderPrimitiveId(item.meshKey, primitiveIndex);
+            gpuPrimitive.renderPrimitiveId = MeshGPUCacheDetail::BuildRenderPrimitiveId(meshKey, primitiveIndex);
 
             vertices.insert(vertices.end(), primitive.vertices.begin(), primitive.vertices.end());
             indices.insert(indices.end(), primitive.indices.begin(), primitive.indices.end());
@@ -174,7 +210,7 @@ namespace Physara::Engine
                           mesh->primitives.size(),
                           vertices.size(),
                           indices.size());
-        auto [inserted, _] = m_MeshCache.emplace(item.meshKey, std::move(gpuResource));
+        auto [inserted, _] = m_MeshCache.emplace(meshKey, std::move(gpuResource));
         return &inserted->second;
     }
 
@@ -186,21 +222,21 @@ namespace Physara::Engine
 
     std::string MeshGPUCache::BuildMeshResourcePath(const RenderDrawItem &item)
     {
-        if (item.submission == nullptr)
-        {
-            return {};
-        }
+        return MeshGPUCacheDetail::BuildMeshResourcePath(item.submission);
+    }
 
-        return item.submission->meshPath + "#mesh/" + std::to_string(item.submission->meshIndex);
+    std::string MeshGPUCache::BuildMeshResourcePath(const RenderCommand &command)
+    {
+        return MeshGPUCacheDetail::BuildMeshResourcePath(command.submission);
     }
 
     std::string MeshGPUCache::BuildMeshPrimitiveDebugName(const RenderDrawItem &item)
     {
-        if (item.submission == nullptr)
-        {
-            return {};
-        }
+        return MeshGPUCacheDetail::BuildMeshPrimitiveDebugName(item.submission);
+    }
 
-        return BuildMeshResourcePath(item) + "#primitive/" + std::to_string(item.submission->primitiveIndex);
+    std::string MeshGPUCache::BuildMeshPrimitiveDebugName(const RenderCommand &command)
+    {
+        return MeshGPUCacheDetail::BuildMeshPrimitiveDebugName(command.submission);
     }
 }

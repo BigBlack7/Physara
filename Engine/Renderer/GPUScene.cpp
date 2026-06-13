@@ -250,13 +250,13 @@ namespace Physara::Engine
         m_ForwardInstanceObjectIndexAllocation = UploadInstanceObjectIndices(
             device,
             allocator,
-            renderProxy.GetBatches().instanceObjectIndices,
+            renderProxy.GetCommands().instanceObjectIndices,
             stats);
 
         m_ObjectCount = static_cast<std::uint32_t>(frameData.objects.size());
         m_LightCount = static_cast<std::uint32_t>(frameData.lights.size());
         m_MaterialCount = static_cast<std::uint32_t>(frameData.materials.size());
-        m_ForwardInstanceObjectIndexCount = static_cast<std::uint32_t>(renderProxy.GetBatches().instanceObjectIndices.size());
+        m_ForwardInstanceObjectIndexCount = static_cast<std::uint32_t>(renderProxy.GetCommands().instanceObjectIndices.size());
     }
 
     void GPUScene::UploadFrameUniforms(

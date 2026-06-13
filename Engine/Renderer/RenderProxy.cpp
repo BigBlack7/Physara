@@ -150,23 +150,23 @@ namespace Physara::Engine
         shadowCasters.clear();
     }
 
-    void RenderCullBatchBuckets::Clear()
+    void RenderCullCommandBuckets::Clear()
     {
         singleSided.clear();
         doubleSided.clear();
     }
 
-    bool RenderCullBatchBuckets::Empty() const
+    bool RenderCullCommandBuckets::Empty() const
     {
         return singleSided.empty() && doubleSided.empty();
     }
 
-    std::size_t RenderCullBatchBuckets::Size() const
+    std::size_t RenderCullCommandBuckets::Size() const
     {
         return singleSided.size() + doubleSided.size();
     }
 
-    void RenderDrawBatchBuckets::Clear()
+    void RenderCommandBuckets::Clear()
     {
         opaque.Clear();
         unlit.Clear();
@@ -183,7 +183,7 @@ namespace Physara::Engine
         CullAndBucket(m_SubmissionScratch, view, frameData);
         SortBuckets();
         RepackObjectsForSortedBuckets(frameData);
-        BuildBatches(frameData);
+        BuildCommands(frameData);
         frameData.stats.visibleSubmissions = m_VisibleSubmissionCount;
         frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.Size());
         frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.Size());
@@ -194,7 +194,7 @@ namespace Physara::Engine
     void RenderProxy::Reset()
     {
         m_Buckets.Clear();
-        m_Batches.Clear();
+        m_Commands.Clear();
         m_SubmissionScratch.clear();
         m_VisibleSubmissionCount = 0;
     }
@@ -364,26 +364,26 @@ namespace Physara::Engine
         appendBucketObjects(m_Buckets.shadowCasters);
     }
 
-    void RenderProxy::BuildBatches(FrameData &frameData)
+    void RenderProxy::BuildCommands(FrameData &frameData)
     {
-        m_Batches.Clear();
+        m_Commands.Clear();
 
-        const auto canAppend = [](const RenderDrawBatch &batch, const RenderDrawItem &item)
+        const auto canAppend = [](const RenderCommand &command, const RenderDrawItem &item)
         {
             return item.submission != nullptr &&
-                   item.sortKey == batch.sortKey &&
-                   item.primitiveKey == batch.primitiveKey &&
-                   item.materialInstanceId == batch.materialInstanceId &&
-                   item.doubleSided == batch.doubleSided;
+                   item.sortKey == command.sortKey &&
+                   item.primitiveKey == command.primitiveKey &&
+                   item.materialInstanceId == command.materialInstanceId &&
+                   item.doubleSided == command.doubleSided;
         };
 
-        m_Batches.instanceObjectIndices.reserve(
+        m_Commands.instanceObjectIndices.reserve(
             m_Buckets.opaque.Size() + m_Buckets.unlit.Size() + m_Buckets.transparent.Size());
 
-        const auto buildBucketBatches = [this, &canAppend](const std::vector<RenderDrawItem> &items, std::vector<RenderDrawBatch> &batches)
+        const auto buildBucketCommands = [this, &canAppend](const std::vector<RenderDrawItem> &items, std::vector<RenderCommand> &commands, RenderBucket bucket)
         {
-            batches.clear();
-            batches.reserve(items.size());
+            commands.clear();
+            commands.reserve(items.size());
             for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(items.size()); ++i)
             {
                 const RenderDrawItem &item = items[i];
@@ -392,39 +392,40 @@ namespace Physara::Engine
                     continue;
                 }
 
-                if (!batches.empty() && canAppend(batches.back(), item))
+                if (!commands.empty() && canAppend(commands.back(), item))
                 {
-                    ++batches.back().itemCount;
-                    m_Batches.instanceObjectIndices.push_back(item.objectIndex);
+                    ++commands.back().instanceCount;
+                    m_Commands.instanceObjectIndices.push_back(item.objectIndex);
                     continue;
                 }
 
-                RenderDrawBatch batch{};
-                batch.submission = item.submission;
-                batch.firstItem = i;
-                batch.itemCount = 1u;
-                batch.firstObjectIndex = item.objectIndex;
-                batch.firstInstanceIndex = static_cast<std::uint32_t>(m_Batches.instanceObjectIndices.size());
-                batch.sortKey = item.sortKey;
-                batch.meshKey = item.meshKey;
-                batch.primitiveKey = item.primitiveKey;
-                batch.materialInstanceId = item.materialInstanceId;
-                batch.doubleSided = item.doubleSided;
-                batches.push_back(batch);
-                m_Batches.instanceObjectIndices.push_back(item.objectIndex);
+                RenderCommand command{};
+                command.submission = item.submission;
+                command.sourceItemIndex = i;
+                command.instanceCount = 1u;
+                command.firstObjectIndex = item.objectIndex;
+                command.firstInstanceIndex = static_cast<std::uint32_t>(m_Commands.instanceObjectIndices.size());
+                command.sortKey = item.sortKey;
+                command.meshKey = item.meshKey;
+                command.primitiveKey = item.primitiveKey;
+                command.materialInstanceId = item.materialInstanceId;
+                command.bucket = bucket;
+                command.doubleSided = item.doubleSided;
+                commands.push_back(command);
+                m_Commands.instanceObjectIndices.push_back(item.objectIndex);
             }
         };
 
-        buildBucketBatches(m_Buckets.opaque.singleSided, m_Batches.opaque.singleSided);
-        buildBucketBatches(m_Buckets.opaque.doubleSided, m_Batches.opaque.doubleSided);
-        buildBucketBatches(m_Buckets.unlit.singleSided, m_Batches.unlit.singleSided);
-        buildBucketBatches(m_Buckets.unlit.doubleSided, m_Batches.unlit.doubleSided);
-        buildBucketBatches(m_Buckets.transparent.singleSided, m_Batches.transparent.singleSided);
-        buildBucketBatches(m_Buckets.transparent.doubleSided, m_Batches.transparent.doubleSided);
+        buildBucketCommands(m_Buckets.opaque.singleSided, m_Commands.opaque.singleSided, RenderBucket::Opaque);
+        buildBucketCommands(m_Buckets.opaque.doubleSided, m_Commands.opaque.doubleSided, RenderBucket::Opaque);
+        buildBucketCommands(m_Buckets.unlit.singleSided, m_Commands.unlit.singleSided, RenderBucket::Unlit);
+        buildBucketCommands(m_Buckets.unlit.doubleSided, m_Commands.unlit.doubleSided, RenderBucket::Unlit);
+        buildBucketCommands(m_Buckets.transparent.singleSided, m_Commands.transparent.singleSided, RenderBucket::Transparent);
+        buildBucketCommands(m_Buckets.transparent.doubleSided, m_Commands.transparent.doubleSided, RenderBucket::Transparent);
 
         frameData.stats.forwardOpaqueBatches =
-            static_cast<std::uint32_t>(m_Batches.opaque.Size() + m_Batches.unlit.Size());
-        frameData.stats.forwardTransparentBatches = static_cast<std::uint32_t>(m_Batches.transparent.Size());
+            static_cast<std::uint32_t>(m_Commands.opaque.Size() + m_Commands.unlit.Size());
+        frameData.stats.forwardTransparentBatches = static_cast<std::uint32_t>(m_Commands.transparent.Size());
         frameData.stats.drawBatches = frameData.stats.forwardOpaqueBatches + frameData.stats.forwardTransparentBatches;
     }
 
