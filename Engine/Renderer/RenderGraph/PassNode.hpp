@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <Engine/Renderer/RenderGraph/ResourceNode.hpp>
+#include <Engine/RHI/RHIDefinitions.hpp>
 
 namespace Physara::RHI
 {
@@ -26,6 +27,9 @@ namespace Physara::Engine
     {
         RenderGraphResourceHandle resource{};
         RenderGraphResourceUsage usage{RenderGraphResourceUsage::Read};
+        RHI::ResourceState state{RHI::ResourceState::ShaderResource};
+        RHI::ShaderStageFlags stages{RHI::ShaderStageBit::Fragment};
+        RHI::ResourceAccessFlags access{RHI::ResourceAccess::ShaderRead};
     };
 
     struct RenderGraphContext
@@ -47,6 +51,12 @@ namespace Physara::Engine
 
         void AddRead(RenderGraphResourceHandle resource);
         void AddWrite(RenderGraphResourceHandle resource);
+        void AddAccess(
+            RenderGraphResourceHandle resource,
+            RenderGraphResourceUsage usage,
+            RHI::ResourceState state,
+            RHI::ShaderStageFlags stages,
+            RHI::ResourceAccessFlags access);
         void SetSideEffect(bool sideEffect);
         void SetExecuteCallback(ExecuteCallback callback);
         void Execute(RenderGraphContext &context) const;
@@ -65,12 +75,32 @@ namespace Physara::Engine
 
     inline void PassNode::AddRead(RenderGraphResourceHandle resource)
     {
-        m_ResourceAccesses.push_back({resource, RenderGraphResourceUsage::Read});
+        AddAccess(
+            resource,
+            RenderGraphResourceUsage::Read,
+            RHI::ResourceState::ShaderResource,
+            RHI::ShaderStageBit::Fragment,
+            RHI::ResourceAccess::ShaderRead);
     }
 
     inline void PassNode::AddWrite(RenderGraphResourceHandle resource)
     {
-        m_ResourceAccesses.push_back({resource, RenderGraphResourceUsage::Write});
+        AddAccess(
+            resource,
+            RenderGraphResourceUsage::Write,
+            RHI::ResourceState::RenderTarget,
+            RHI::ShaderStageBit::Fragment,
+            RHI::ResourceAccess::ColorAttachmentWrite);
+    }
+
+    inline void PassNode::AddAccess(
+        RenderGraphResourceHandle resource,
+        RenderGraphResourceUsage usage,
+        RHI::ResourceState state,
+        RHI::ShaderStageFlags stages,
+        RHI::ResourceAccessFlags access)
+    {
+        m_ResourceAccesses.push_back({resource, usage, state, stages, access});
     }
 
     inline void PassNode::SetSideEffect(bool sideEffect)

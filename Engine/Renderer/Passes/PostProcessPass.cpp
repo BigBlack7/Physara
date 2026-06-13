@@ -42,6 +42,33 @@ namespace Physara::Engine
             glm::vec4 aaParams{0.75f, 0.125f, 0.0312f, 24.f};
         };
 
+        class ScopedDebugLabel final
+        {
+        public:
+            ScopedDebugLabel(RHI::RHICommandList *commandList, const char *label)
+                : m_CommandList(commandList)
+            {
+                if (m_CommandList != nullptr)
+                {
+                    m_CommandList->BeginDebugLabel(label);
+                }
+            }
+
+            ~ScopedDebugLabel()
+            {
+                if (m_CommandList != nullptr)
+                {
+                    m_CommandList->EndDebugLabel();
+                }
+            }
+
+            ScopedDebugLabel(const ScopedDebugLabel &) = delete;
+            ScopedDebugLabel &operator=(const ScopedDebugLabel &) = delete;
+
+        private:
+            RHI::RHICommandList *m_CommandList{nullptr};
+        };
+
         SettingsGPUData BuildSettings(const PostProcessSettings &settings)
         {
             SettingsGPUData data{};
@@ -97,6 +124,7 @@ namespace Physara::Engine
         ExecuteExposure(context, frameUniformAllocation);
         ExecuteBloom(context, frameUniformAllocation);
 
+        PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessComposite");
         context.commandList->SetViewport(
             0.f,
             0.f,
@@ -269,6 +297,7 @@ namespace Physara::Engine
         {
             return;
         }
+        PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessExposure");
 
         RHI::RHIPipelineState *pipeline = GetExposurePipeline(context);
         if (pipeline == nullptr)
@@ -293,7 +322,7 @@ namespace Physara::Engine
             ++context.stats->triangles;
         }
         context.commandList->EndRenderPass();
-        context.commandList->TextureBarrier(m_ExposureTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
+        context.commandList->TextureBarrier(m_ExposureTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
     }
 
     void PostProcessPass::ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation)
@@ -326,20 +355,24 @@ namespace Physara::Engine
             return;
         }
 
-        ExecuteFullscreenPass(
-            context,
-            frameUniformAllocation,
-            m_BloomMips.front().downFramebuffer.get(),
-            m_BloomRenderPassDesc,
-            prefilterPipeline,
-            m_BloomMips.front().width,
-            m_BloomMips.front().height,
-            context.sceneHDR,
-            m_BlackTexture.get());
+        {
+            PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomPrefilter");
+            ExecuteFullscreenPass(
+                context,
+                frameUniformAllocation,
+                m_BloomMips.front().downFramebuffer.get(),
+                m_BloomRenderPassDesc,
+                prefilterPipeline,
+                m_BloomMips.front().width,
+                m_BloomMips.front().height,
+                context.sceneHDR,
+                m_BlackTexture.get());
+        }
 
         for (std::size_t i = 1u; i < m_BloomMips.size(); ++i)
         {
-            context.commandList->TextureBarrier(m_BloomMips[i - 1u].downTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
+            context.commandList->TextureBarrier(m_BloomMips[i - 1u].downTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
+            PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomDownsample");
             ExecuteFullscreenPass(
                 context,
                 frameUniformAllocation,
@@ -353,23 +386,27 @@ namespace Physara::Engine
         }
 
         const std::size_t last = m_BloomMips.size() - 1u;
-        context.commandList->TextureBarrier(m_BloomMips[last].downTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
-        ExecuteFullscreenPass(
-            context,
-            frameUniformAllocation,
-            m_BloomMips[last].upFramebuffer.get(),
-            m_BloomRenderPassDesc,
-            copyPipeline,
-            m_BloomMips[last].width,
-            m_BloomMips[last].height,
-            m_BloomMips[last].downTexture.get(),
-            m_BlackTexture.get());
+        context.commandList->TextureBarrier(m_BloomMips[last].downTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
+        {
+            PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomCopy");
+            ExecuteFullscreenPass(
+                context,
+                frameUniformAllocation,
+                m_BloomMips[last].upFramebuffer.get(),
+                m_BloomRenderPassDesc,
+                copyPipeline,
+                m_BloomMips[last].width,
+                m_BloomMips[last].height,
+                m_BloomMips[last].downTexture.get(),
+                m_BlackTexture.get());
+        }
 
         for (std::size_t reverseIndex = last; reverseIndex > 0u; --reverseIndex)
         {
             const std::size_t i = reverseIndex - 1u;
-            context.commandList->TextureBarrier(m_BloomMips[i].downTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
-            context.commandList->TextureBarrier(m_BloomMips[i + 1u].upTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
+            context.commandList->TextureBarrier(m_BloomMips[i].downTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
+            context.commandList->TextureBarrier(m_BloomMips[i + 1u].upTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
+            PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomUpsample");
             ExecuteFullscreenPass(
                 context,
                 frameUniformAllocation,
@@ -382,7 +419,7 @@ namespace Physara::Engine
                 m_BloomMips[i + 1u].upTexture.get());
         }
 
-        context.commandList->TextureBarrier(m_BloomMips.front().upTexture.get(), RHI::ShaderStage::Fragment, RHI::ShaderStage::Fragment);
+        context.commandList->TextureBarrier(m_BloomMips.front().upTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
     }
 
     void PostProcessPass::ExecuteFullscreenPass(

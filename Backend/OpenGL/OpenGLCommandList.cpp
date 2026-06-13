@@ -194,6 +194,12 @@ namespace Physara::RHI
         m_PipelineStateValid = false;
         m_State.program = 0;
         m_State.vao = 0;
+        for (ColorMaskState &state : m_ColorMaskStates)
+        {
+            state.valid = false;
+        }
+        m_DepthMaskState.valid = false;
+        m_StencilMaskState.valid = false;
         InvalidateVertexInputCache();
     }
 
@@ -211,6 +217,130 @@ namespace Physara::RHI
     {
         m_ViewportState.valid = false;
         m_ScissorState.valid = false;
+    }
+
+    void OpenGLCommandList::InvalidateRenderPassStateCache()
+    {
+        m_FramebufferBinding.valid = false;
+        m_DefaultDrawBuffers.valid = false;
+    }
+
+    void OpenGLCommandList::BindFramebuffer(GLuint framebuffer)
+    {
+        if (m_FramebufferBinding.valid && m_FramebufferBinding.framebuffer == framebuffer)
+        {
+            return;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        ++m_Statistics.framebufferBinds;
+        m_FramebufferBinding = FramebufferBindingState{framebuffer, true};
+    }
+
+    void OpenGLCommandList::ConfigureDefaultDrawBuffers(std::uint32_t colorCount)
+    {
+        if (colorCount == 0u)
+        {
+            m_DefaultDrawBuffers.count = 0u;
+            m_DefaultDrawBuffers.valid = true;
+            return;
+        }
+
+        colorCount = std::min(colorCount, kMaxColorAttachments);
+        std::array<GLenum, kMaxColorAttachments> drawBuffers{};
+        for (std::uint32_t i = 0; i < colorCount; ++i)
+        {
+            drawBuffers[i] = GL_BACK;
+        }
+
+        bool dirty = !m_DefaultDrawBuffers.valid || m_DefaultDrawBuffers.count != colorCount;
+        for (std::uint32_t i = 0; i < colorCount && !dirty; ++i)
+        {
+            dirty = m_DefaultDrawBuffers.buffers[i] != drawBuffers[i];
+        }
+        if (!dirty)
+        {
+            return;
+        }
+
+        glDrawBuffers(static_cast<GLsizei>(colorCount), colorCount > 0u ? drawBuffers.data() : nullptr);
+        m_DefaultDrawBuffers.buffers = drawBuffers;
+        m_DefaultDrawBuffers.count = colorCount;
+        m_DefaultDrawBuffers.valid = true;
+    }
+
+    void OpenGLCommandList::SetColorMask(std::uint32_t attachment, bool red, bool green, bool blue, bool alpha)
+    {
+        if (attachment >= m_ColorMaskStates.size())
+        {
+            glColorMaski(
+                attachment,
+                red ? GL_TRUE : GL_FALSE,
+                green ? GL_TRUE : GL_FALSE,
+                blue ? GL_TRUE : GL_FALSE,
+                alpha ? GL_TRUE : GL_FALSE);
+            return;
+        }
+
+        ColorMaskState &state = m_ColorMaskStates[attachment];
+        if (state.valid &&
+            state.red == red &&
+            state.green == green &&
+            state.blue == blue &&
+            state.alpha == alpha)
+        {
+            return;
+        }
+
+        glColorMaski(
+            attachment,
+            red ? GL_TRUE : GL_FALSE,
+            green ? GL_TRUE : GL_FALSE,
+            blue ? GL_TRUE : GL_FALSE,
+            alpha ? GL_TRUE : GL_FALSE);
+        state = ColorMaskState{red, green, blue, alpha, true};
+    }
+
+    void OpenGLCommandList::SetDepthMaskState(bool enabled)
+    {
+        if (m_DepthMaskState.valid && m_DepthMaskState.enabled == enabled)
+        {
+            return;
+        }
+
+        glDepthMask(enabled ? GL_TRUE : GL_FALSE);
+        m_DepthMaskState = DepthMaskState{enabled, true};
+        m_State.depthWrite = enabled;
+    }
+
+    void OpenGLCommandList::SetStencilMaskState(GLuint mask)
+    {
+        if (m_StencilMaskState.valid && m_StencilMaskState.mask == mask)
+        {
+            return;
+        }
+
+        glStencilMask(mask);
+        m_StencilMaskState = StencilMaskState{mask, true};
+    }
+
+    void OpenGLCommandList::SetScissorEnabled(bool enabled)
+    {
+        if (m_ScissorState.valid && m_ScissorState.enabled == enabled)
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            glEnable(GL_SCISSOR_TEST);
+        }
+        else
+        {
+            glDisable(GL_SCISSOR_TEST);
+        }
+        m_ScissorState.enabled = enabled;
+        m_ScissorState.valid = true;
     }
 
     OpenGLCommandList::~OpenGLCommandList()
@@ -350,8 +480,7 @@ namespace Physara::RHI
 
         if (invalidState || m_State.depthWrite != desc.depthStencilState.depthWrite)
         {
-            glDepthMask(desc.depthStencilState.depthWrite ? GL_TRUE : GL_FALSE);
-            m_State.depthWrite = desc.depthStencilState.depthWrite;
+            SetDepthMaskState(desc.depthStencilState.depthWrite);
         }
 
         if (invalidState || m_State.depthFunc != desc.depthStencilState.compareOp)
@@ -394,7 +523,7 @@ namespace Physara::RHI
 
             if (invalidState)
             {
-                glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                SetColorMask(i, true, true, true, true);
             }
         }
 
@@ -790,16 +919,15 @@ namespace Physara::RHI
     void OpenGLCommandList::SetScissor(std::int32_t x, std::int32_t y, std::uint32_t width, std::uint32_t height)
     {
         // 当前RHI只有设置scissor, 没有禁用接口; 设置时确保GL_SCISSOR_TEST开启
-        if (!m_ScissorState.valid || !m_ScissorState.enabled)
-        {
-            glEnable(GL_SCISSOR_TEST);
-        }
-
-        if (!m_ScissorState.valid ||
+        const bool rectDirty =
+            !m_ScissorState.valid ||
             m_ScissorState.x != x ||
             m_ScissorState.y != y ||
             m_ScissorState.width != width ||
-            m_ScissorState.height != height)
+            m_ScissorState.height != height;
+        SetScissorEnabled(true);
+
+        if (rectDirty)
         {
             glScissor(
                 static_cast<GLint>(x),
@@ -853,14 +981,6 @@ namespace Physara::RHI
     {
         // OpenGL没有render pass对象. 这里把RHI RenderPassDesc翻译为:
         // 1) 绑定目标FBO; 2) 按loadOp清除attachment; 3)记录desc供EndRenderPass处理storeOp
-        InvalidateBindingCache();
-        InvalidatePipelineState();
-
-        // ImGui and other external OpenGL code can leave scissor enabled. glClear/glClearBuffer
-        // are affected by GL_SCISSOR_TEST, so reset it before every RHI render pass.
-        glDisable(GL_SCISSOR_TEST);
-        m_ScissorState = ScissorState{0, 0, 0u, 0u, false, true};
-
         GLuint fboID = 0;
         if (framebuffer)
         {
@@ -868,43 +988,34 @@ namespace Physara::RHI
             fboID = glFbo->GetID();
         }
 
-        glBindFramebuffer(GL_FRAMEBUFFER, fboID);
-        ++m_Statistics.framebufferBinds;
+        BindFramebuffer(fboID);
         ++m_Statistics.renderPasses;
-        m_State.framebuffer = fboID;
 
         m_CurrentPassDesc = &desc;
 
         const std::uint32_t colorCount = static_cast<std::uint32_t>(desc.colorAttachments.size());
         for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
         {
-            glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            SetColorMask(i, true, true, true, true);
         }
-        glDepthMask(GL_TRUE);
-        glStencilMask(0xffffffffu);
+        SetDepthMaskState(true);
+        SetStencilMaskState(0xffffffffu);
 
-        if (colorCount > 0u)
+        if (fboID == 0)
         {
-            std::array<GLenum, kMaxColorAttachments> drawBuffers{};
-            for (std::uint32_t i = 0; i < colorCount; ++i)
-            {
-                drawBuffers[i] = fboID != 0 ? ToGLAttachmentPoint(i) : GL_BACK;
-            }
-
-            if (fboID != 0)
-            {
-                glNamedFramebufferDrawBuffers(fboID, static_cast<GLsizei>(colorCount), drawBuffers.data());
-            }
-            else
-            {
-                glDrawBuffers(static_cast<GLsizei>(colorCount), drawBuffers.data());
-            }
+            ConfigureDefaultDrawBuffers(colorCount);
         }
-        else if (fboID != 0)
+
+        bool needsClear = desc.hasDepth && desc.depthAttachment.loadOp == LoadOp::Clear;
+        for (std::uint32_t i = 0; i < colorCount && !needsClear; ++i)
         {
-            glNamedFramebufferDrawBuffers(fboID, 0, nullptr);
+            needsClear = desc.colorAttachments[i].loadOp == LoadOp::Clear;
         }
-
+        const ScissorState drawScissorState = m_ScissorState;
+        if (needsClear)
+        {
+            SetScissorEnabled(false);
+        }
         for (std::uint32_t i = 0; i < colorCount; ++i)
         {
             if (desc.colorAttachments[i].loadOp != LoadOp::Clear)
@@ -958,6 +1069,14 @@ namespace Physara::RHI
                 ++m_Statistics.clears;
             }
         }
+        if (needsClear && drawScissorState.valid && drawScissorState.enabled)
+        {
+            SetScissor(
+                drawScissorState.x,
+                drawScissorState.y,
+                drawScissorState.width,
+                drawScissorState.height);
+        }
     }
 
     void OpenGLCommandList::EndRenderPass()
@@ -969,7 +1088,7 @@ namespace Physara::RHI
             return;
         }
 
-        if (m_State.framebuffer != 0)
+        if (m_FramebufferBinding.valid && m_FramebufferBinding.framebuffer != 0)
         {
             std::vector<GLenum> attachments;
 
@@ -994,14 +1113,13 @@ namespace Physara::RHI
             {
                 // DSA路径invalidate framebuffer, 不依赖当前GL_FRAMEBUFFER绑定点; 也可以直接glInvalidateFramebuffer, 但需要再次指定target
                 glInvalidateNamedFramebufferData(
-                    m_State.framebuffer,
+                    m_FramebufferBinding.framebuffer,
                     static_cast<GLsizei>(attachments.size()),
                     attachments.data());
             }
         }
 
         m_CurrentPassDesc = nullptr;
-        InvalidateDynamicStateCache();
     }
 
     void OpenGLCommandList::DrawIndexed(
@@ -1372,6 +1490,7 @@ namespace Physara::RHI
         InvalidateBindingCache();
         InvalidatePipelineState();
         InvalidateDynamicStateCache();
+        InvalidateRenderPassStateCache();
         m_CurrentPassDesc = nullptr;
         m_CurrentPipelineDesc = nullptr;
     }

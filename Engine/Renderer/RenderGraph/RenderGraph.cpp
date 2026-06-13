@@ -26,6 +26,9 @@ namespace Physara::Engine::RenderGraphDetail
         RenderGraphResourceHandle resource{};
         bool read{false};
         bool write{false};
+        RHI::ResourceState state{RHI::ResourceState::ShaderResource};
+        RHI::ShaderStageFlags stages{RHI::ShaderStageBit::Fragment};
+        RHI::ResourceAccessFlags access{RHI::ResourceAccess::ShaderRead};
     };
 
     struct CompiledGraph
@@ -41,11 +44,6 @@ namespace Physara::Engine::RenderGraphDetail
         RHI::ResourceAccessFlags access{RHI::ResourceAccess::None};
         bool initialized{false};
     };
-
-    [[nodiscard]] bool IsDepthFormat(RHI::TextureFormat format)
-    {
-        return format == RHI::TextureFormat::Depth24Stencil8 || format == RHI::TextureFormat::Depth32F;
-    }
 
     [[nodiscard]] bool TextureDescMatches(const RHI::RHITextureDesc &lhs, const RHI::RHITextureDesc &rhs)
     {
@@ -81,7 +79,15 @@ namespace Physara::Engine::RenderGraphDetail
 
             if (it == combined.end())
             {
-                it = combined.insert(combined.end(), CombinedAccess{access.resource});
+                it = combined.insert(
+                    combined.end(),
+                    CombinedAccess{
+                        access.resource,
+                        false,
+                        false,
+                        access.state,
+                        access.stages,
+                        access.access});
             }
 
             if (access.usage == RenderGraphResourceUsage::Read)
@@ -91,7 +97,10 @@ namespace Physara::Engine::RenderGraphDetail
             else
             {
                 it->write = true;
+                it->state = access.state;
             }
+            it->stages |= access.stages;
+            it->access |= access.access;
         }
         return combined;
     }
@@ -111,28 +120,16 @@ namespace Physara::Engine::RenderGraphDetail
     }
 
     [[nodiscard]] RHI::RHIResourceBarrier MakeBarrier(
-        const ResourceNode &resource,
-        bool write,
+        const CombinedAccess &access,
         const TrackedState &before)
     {
-        const bool depth = IsDepthFormat(resource.GetTextureDesc().format);
-
         RHI::RHIResourceBarrier barrier{};
         barrier.before = before.initialized ? before.state : RHI::ResourceState::Common;
         barrier.srcStages = before.stages;
         barrier.srcAccess = before.access;
-        barrier.dstStages = RHI::ShaderStageBit::Fragment;
-
-        if (write)
-        {
-            barrier.after = depth ? RHI::ResourceState::DepthWrite : RHI::ResourceState::RenderTarget;
-            barrier.dstAccess = depth ? RHI::ResourceAccess::DepthStencilWrite : RHI::ResourceAccess::ColorAttachmentWrite;
-        }
-        else
-        {
-            barrier.after = RHI::ResourceState::ShaderResource;
-            barrier.dstAccess = RHI::ResourceAccess::ShaderRead;
-        }
+        barrier.after = access.state;
+        barrier.dstStages = access.stages;
+        barrier.dstAccess = access.access;
 
         return barrier;
     }
@@ -429,10 +426,9 @@ namespace Physara::Engine
                     continue;
                 }
 
-                const bool write = access.write;
                 TrackedState &state = states[access.resource.index];
-                const RHI::RHIResourceBarrier barrier = MakeBarrier(resource, write, state);
-                if (NeedsBarrier(state, barrier, write))
+                const RHI::RHIResourceBarrier barrier = MakeBarrier(access, state);
+                if (NeedsBarrier(state, barrier, access.write))
                 {
                     commandList.TextureBarrier(texture, barrier);
                 }

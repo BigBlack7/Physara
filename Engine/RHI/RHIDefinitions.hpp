@@ -52,10 +52,10 @@ namespace Physara::RHI
     namespace BufferUsage
     {
         constexpr BufferUsageFlags None = 0u;
-        constexpr BufferUsageFlags Vertex = 1u << 0;  // 顶点缓冲
-        constexpr BufferUsageFlags Index = 1u << 1;   // 索引缓冲
-        constexpr BufferUsageFlags Uniform = 1u << 2; // 常量/Uniform缓冲
-        constexpr BufferUsageFlags Storage = 1u << 3; // 存储缓冲
+        constexpr BufferUsageFlags Vertex = 1u << 0;   // 顶点缓冲
+        constexpr BufferUsageFlags Index = 1u << 1;    // 索引缓冲
+        constexpr BufferUsageFlags Uniform = 1u << 2;  // 常量/Uniform缓冲
+        constexpr BufferUsageFlags Storage = 1u << 3;  // 存储缓冲
         constexpr BufferUsageFlags Indirect = 1u << 4; // 间接绘制命令缓冲
     }
 
@@ -272,4 +272,31 @@ namespace Physara::RHI
         ResourceAccessFlags srcAccess = ResourceAccess::None;
         ResourceAccessFlags dstAccess = ResourceAccess::None;
     };
+
+    namespace ResourceBarrier
+    {
+        [[nodiscard]] inline RHIResourceBarrier ColorAttachmentWriteToFragmentRead()
+        {
+            RHIResourceBarrier barrier{};
+            barrier.before = ResourceState::RenderTarget;
+            barrier.after = ResourceState::ShaderResource;
+            barrier.srcStages = ShaderStageBit::Fragment;
+            barrier.dstStages = ShaderStageBit::Fragment;
+            barrier.srcAccess = ResourceAccess::ColorAttachmentWrite;
+            barrier.dstAccess = ResourceAccess::ShaderRead;
+            return barrier;
+        }
+
+        [[nodiscard]] inline RHIResourceBarrier DepthStencilWriteToFragmentRead()
+        {
+            RHIResourceBarrier barrier{};
+            barrier.before = ResourceState::DepthWrite;
+            barrier.after = ResourceState::ShaderResource;
+            barrier.srcStages = ShaderStageBit::Fragment;
+            barrier.dstStages = ShaderStageBit::Fragment;
+            barrier.srcAccess = ResourceAccess::DepthStencilWrite;
+            barrier.dstAccess = ResourceAccess::ShaderRead;
+            return barrier;
+        }
+    }
 }

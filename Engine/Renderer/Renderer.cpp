@@ -481,8 +481,8 @@ namespace Physara::Engine
         if (drawSkybox)
         {
             m_RenderGraph.AddPass("Skybox")
-                .Write(renderHDR)
-                .Write(renderDepth)
+                .WriteAttachment(renderHDR)
+                .WriteAttachment(renderDepth)
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 SkyboxPassContext passContext{};
@@ -506,22 +506,15 @@ namespace Physara::Engine
         }
 
         m_RenderGraph.AddPass("ForwardOpaque")
-            .Read(renderHDR)
-            .Read(renderDepth)
-            .Write(renderHDR)
-            .Write(renderDepth)
+            .WriteAttachment(renderHDR)
+            .WriteAttachment(renderDepth)
             .SetExecute([this](RenderGraphContext &context)
                         {
                             if (m_ShadowPass.GetShadowMap() != nullptr && m_FrameData.shadow.params.x > 0.5f)
                             {
-                                RHI::RHIResourceBarrier shadowBarrier{};
-                                shadowBarrier.before = RHI::ResourceState::DepthWrite;
-                                shadowBarrier.after = RHI::ResourceState::ShaderResource;
-                                shadowBarrier.srcStages = RHI::ShaderStageBit::Fragment;
-                                shadowBarrier.dstStages = RHI::ShaderStageBit::Fragment;
-                                shadowBarrier.srcAccess = RHI::ResourceAccess::DepthStencilWrite;
-                                shadowBarrier.dstAccess = RHI::ResourceAccess::ShaderRead;
-                                context.commandList.TextureBarrier(m_ShadowPass.GetShadowMap(), shadowBarrier);
+                                context.commandList.TextureBarrier(
+                                    m_ShadowPass.GetShadowMap(),
+                                    RHI::ResourceBarrier::DepthStencilWriteToFragmentRead());
                             }
 
                             ForwardPassContext passContext{};
@@ -550,8 +543,7 @@ namespace Physara::Engine
         if (!m_RenderProxy.GetBuckets().transparent.Empty())
         {
             m_RenderGraph.AddPass("ForwardTransparent")
-                .Read(renderHDR)
-                .Write(renderHDR)
+                .WriteAttachment(renderHDR)
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 ExecuteTransparentForwardPass(context);
@@ -561,10 +553,10 @@ namespace Physara::Engine
         if (msaaEnabled)
         {
             m_RenderGraph.AddPass("MSAAResolve")
-                .Read(renderHDR)
-                .Read(renderDepth)
-                .Write(sceneHDR)
-                .Write(sceneDepth)
+                .ReadTransfer(renderHDR)
+                .ReadTransfer(renderDepth)
+                .WriteTransfer(sceneHDR)
+                .WriteTransfer(sceneDepth)
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 context.commandList.ResolveTexture(m_SceneHDRColorMSAA.get(), m_SceneHDRColor.get());
@@ -573,9 +565,9 @@ namespace Physara::Engine
         }
 
         m_RenderGraph.AddPass("PostProcess")
-            .Read(sceneHDR)
-            .Read(sceneDepth)
-            .Write(sceneColor)
+            .ReadTexture(sceneHDR)
+            .ReadTexture(sceneDepth)
+            .WriteAttachment(sceneColor)
             .SetExecute([this](RenderGraphContext &context)
                         {
                             PostProcessPassContext passContext{};

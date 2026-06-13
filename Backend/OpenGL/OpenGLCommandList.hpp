@@ -94,7 +94,6 @@ namespace Physara::RHI
         {
             GLuint program = 0;
             GLuint vao = 0;
-            GLuint framebuffer = 0;
 
             CullMode cullMode = CullMode::Back;
             PolygonMode polygonMode = PolygonMode::Fill;
@@ -111,6 +110,40 @@ namespace Physara::RHI
 
             std::uint32_t indexOffset = 0;
             GLenum indexType = GL_UNSIGNED_INT;
+        };
+
+        struct FramebufferBindingState
+        {
+            GLuint framebuffer{0};
+            bool valid{false};
+        };
+
+        struct ColorMaskState
+        {
+            bool red{true};
+            bool green{true};
+            bool blue{true};
+            bool alpha{true};
+            bool valid{false};
+        };
+
+        struct DepthMaskState
+        {
+            bool enabled{true};
+            bool valid{false};
+        };
+
+        struct StencilMaskState
+        {
+            GLuint mask{0xffffffffu};
+            bool valid{false};
+        };
+
+        struct DefaultDrawBuffersState
+        {
+            std::array<GLenum, kMaxColorAttachments> buffers{};
+            std::uint32_t count{0};
+            bool valid{false};
         };
 
         struct VertexBufferBindingState
@@ -177,6 +210,11 @@ namespace Physara::RHI
         GLuint m_PushConstantsBuffer{0};
         GLuint m_ResolveReadFramebuffer{0};
         GLuint m_ResolveDrawFramebuffer{0};
+        FramebufferBindingState m_FramebufferBinding{};
+        DefaultDrawBuffersState m_DefaultDrawBuffers{};
+        std::array<ColorMaskState, kMaxColorAttachments> m_ColorMaskStates{};
+        DepthMaskState m_DepthMaskState{};
+        StencilMaskState m_StencilMaskState{};
         std::array<BufferRangeBindingState, 32> m_UniformBufferBindings{};
         std::array<BufferRangeBindingState, 32> m_StorageBufferBindings{};
         std::array<GLuint, 32> m_TextureBindings{};
@@ -194,6 +232,13 @@ namespace Physara::RHI
         void InvalidatePipelineState();
         void InvalidateVertexInputCache();
         void InvalidateDynamicStateCache();
+        void InvalidateRenderPassStateCache();
+        void BindFramebuffer(GLuint framebuffer);
+        void ConfigureDefaultDrawBuffers(std::uint32_t colorCount);
+        void SetColorMask(std::uint32_t attachment, bool red, bool green, bool blue, bool alpha);
+        void SetDepthMaskState(bool enabled);
+        void SetStencilMaskState(GLuint mask);
+        void SetScissorEnabled(bool enabled);
         void BindBufferRange(
             GLenum target,
             bool storageBuffer,
