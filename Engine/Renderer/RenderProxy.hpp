@@ -5,6 +5,8 @@
 #include <vector>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/MaterialInstance.hpp>
+#include <Engine/Renderer/MaterialInstanceRegistry.hpp>
 #include <Engine/Scene/Systems/RenderSystem.hpp>
 
 namespace Physara::Engine
@@ -27,6 +29,7 @@ namespace Physara::Engine
         float cameraDistanceSq{0.f};
         std::uint64_t meshKey{0};
         std::uint64_t primitiveKey{0};
+        MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
         bool doubleSided{false};
     };
 
@@ -61,6 +64,7 @@ namespace Physara::Engine
         std::uint64_t sortKey{0};
         std::uint64_t meshKey{0};
         std::uint64_t primitiveKey{0};
+        MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
         bool doubleSided{false};
     };
 
@@ -98,13 +102,14 @@ namespace Physara::Engine
         void SortBuckets();
         void RepackObjectsForSortedBuckets(FrameData &frameData);
         void BuildBatches(FrameData &frameData);
-        [[nodiscard]] static std::uint64_t BuildSortKey(const RenderMeshSubmission &submission);
+        [[nodiscard]] static std::uint64_t BuildSortKey(const RenderMeshSubmission &submission, MaterialInstanceId materialInstanceId);
         [[nodiscard]] static ObjectData BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket);
         [[nodiscard]] static RenderBucket GetBucket(const RenderMeshSubmission &submission);
 
     private:
         RenderDrawBuckets m_Buckets{};
         RenderDrawBatchBuckets m_Batches{};
+        MaterialInstanceRegistry m_MaterialRegistry{};
         std::vector<RenderMeshSubmission> m_SubmissionScratch{};
         std::uint32_t m_VisibleSubmissionCount{0};
     };

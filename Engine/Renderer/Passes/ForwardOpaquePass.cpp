@@ -332,28 +332,28 @@ namespace Physara::Engine
         }
 
         const std::uint32_t materialIndex = context.frameData->objects[batch.firstObjectIndex].materialIndex;
-        if (m_BoundMaterialIndex == materialIndex)
+        const MaterialResourceSet *resourceSet = m_MaterialTextureCache.GetResourceSet(materialIndex);
+        if (resourceSet == nullptr)
         {
             return;
         }
 
-        const MaterialTextureBinding *materialBinding = m_MaterialTextureCache.GetBinding(materialIndex);
-        if (materialBinding == nullptr)
+        if (m_BoundMaterialInstanceId == resourceSet->materialInstanceId)
         {
             return;
         }
 
-        const std::uint32_t bindings[5]{
+        const std::uint32_t bindings[MaterialTextureSlotCount]{
             ForwardOpaquePassDetail::BaseColorTextureBinding,
             ForwardOpaquePassDetail::MetallicRoughnessTextureBinding,
             ForwardOpaquePassDetail::NormalTextureBinding,
             ForwardOpaquePassDetail::OcclusionTextureBinding,
             ForwardOpaquePassDetail::EmissiveTextureBinding};
 
-        RHI::RHISampler *sampler = materialBinding->sampler;
-        for (std::size_t i = 0; i < 5u; ++i)
+        RHI::RHISampler *sampler = resourceSet->sampler;
+        for (std::size_t i = 0; i < MaterialTextureSlotCount; ++i)
         {
-            RHI::RHITexture *texture = materialBinding->textures[i];
+            RHI::RHITexture *texture = resourceSet->textures[i];
             if (m_BoundTextures[i] == texture && m_BoundSampler == sampler)
             {
                 continue;
@@ -363,7 +363,7 @@ namespace Physara::Engine
             m_BoundTextures[i] = texture;
         }
         m_BoundSampler = sampler;
-        m_BoundMaterialIndex = materialIndex;
+        m_BoundMaterialInstanceId = resourceSet->materialInstanceId;
     }
 
     void ForwardOpaquePass::DrawBatchGroup(
@@ -393,6 +393,7 @@ namespace Physara::Engine
             item.sortKey = batch.sortKey;
             item.meshKey = batch.meshKey;
             item.primitiveKey = batch.primitiveKey;
+            item.materialInstanceId = batch.materialInstanceId;
             item.doubleSided = batch.doubleSided;
 
             MeshGPUPrimitive *primitive = context.meshCache != nullptr
@@ -441,7 +442,7 @@ namespace Physara::Engine
             texture = nullptr;
         }
         m_BoundSampler = nullptr;
-        m_BoundMaterialIndex = std::numeric_limits<std::uint32_t>::max();
+        m_BoundMaterialInstanceId = InvalidMaterialInstanceId;
     }
 
 }

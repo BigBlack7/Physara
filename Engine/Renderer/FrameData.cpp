@@ -9,6 +9,8 @@ namespace Physara::Engine
         unlitItems = 0;
         transparentItems = 0;
         lightCount = 0;
+        materialInstances = 0;
+        materialResourceSets = 0;
         meshUploads = 0;
         meshPrimitiveUploads = 0;
         textureUploads = 0;
@@ -69,6 +71,7 @@ namespace Physara::Engine
         shadow = {};
         objects.clear();
         materials.clear();
+        materialInstanceIds.clear();
         lights.clear();
         stats.Reset();
         frameIndex = newFrameIndex;

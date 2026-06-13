@@ -1,13 +1,16 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include <Engine/Renderer/MaterialInstance.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
@@ -23,11 +26,16 @@ namespace Physara::Engine
     class AssetManager;
     struct FrameData;
     struct FrameStatistics;
+    struct MaterialComponent;
 
-    struct MaterialTextureBinding
+    inline constexpr std::size_t MaterialTextureSlotCount = 5u;
+
+    struct MaterialResourceSet
     {
-        std::array<RHI::RHITexture *, 5> textures{};
+        MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
+        std::array<RHI::RHITexture *, MaterialTextureSlotCount> textures{};
         RHI::RHISampler *sampler{nullptr};
+        bool complete{false};
     };
 
     class MaterialTextureCache final
@@ -42,7 +50,7 @@ namespace Physara::Engine
             const FrameData &frameData,
             FrameStatistics *stats);
 
-        [[nodiscard]] const MaterialTextureBinding *GetBinding(std::uint32_t materialIndex) const;
+        [[nodiscard]] const MaterialResourceSet *GetResourceSet(std::uint32_t materialIndex) const;
 
     private:
         struct TextureGPUResource
@@ -59,6 +67,20 @@ namespace Physara::Engine
             const std::string &texturePath,
             RHI::TextureColorSpace colorSpace,
             FrameStatistics *stats);
+        [[nodiscard]] const MaterialResourceSet *GetOrCreateResourceSet(
+            RHI::RHIDevice &device,
+            RHI::RHICommandList &commandList,
+            AssetManager *assetManager,
+            MaterialInstanceId materialInstanceId,
+            const MaterialComponent &material,
+            FrameStatistics *stats);
+        [[nodiscard]] MaterialResourceSet BuildResourceSet(
+            RHI::RHIDevice &device,
+            RHI::RHICommandList &commandList,
+            AssetManager *assetManager,
+            MaterialInstanceId materialInstanceId,
+            const MaterialComponent &material,
+            FrameStatistics *stats);
 
     private:
         std::unique_ptr<RHI::RHISampler> m_LinearRepeatSampler{};
@@ -66,7 +88,8 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHITexture> m_FallbackNormalTexture{};
         std::unordered_map<std::string, TextureGPUResource> m_TextureCache{};
         std::unordered_set<std::string> m_MissingTextureWarnings{};
-        std::vector<MaterialTextureBinding> m_Bindings{};
-        std::uint64_t m_TextureBindingFrameIndex{0};
+        std::unordered_map<MaterialInstanceId, MaterialResourceSet> m_ResourceSets{};
+        std::vector<const MaterialResourceSet *> m_FrameResourceSets{};
+        std::uint64_t m_ResourceSetFrameIndex{std::numeric_limits<std::uint64_t>::max()};
     };
 }

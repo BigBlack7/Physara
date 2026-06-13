@@ -1,6 +1,7 @@
 #include "MaterialTextureCache.hpp"
 
 #include <algorithm>
+#include <limits>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/FrameData.hpp>
@@ -61,8 +62,9 @@ namespace Physara::Engine
         m_FallbackNormalTexture.reset();
         m_TextureCache.clear();
         m_MissingTextureWarnings.clear();
-        m_Bindings.clear();
-        m_TextureBindingFrameIndex = 0u;
+        m_ResourceSets.clear();
+        m_FrameResourceSets.clear();
+        m_ResourceSetFrameIndex = std::numeric_limits<std::uint64_t>::max();
     }
 
     void MaterialTextureCache::Update(
@@ -72,7 +74,7 @@ namespace Physara::Engine
         const FrameData &frameData,
         FrameStatistics *stats)
     {
-        if (m_TextureBindingFrameIndex == frameData.frameIndex)
+        if (m_ResourceSetFrameIndex == frameData.frameIndex)
         {
             return;
         }
@@ -80,75 +82,147 @@ namespace Physara::Engine
         EnsureDefaults(device);
         if (frameData.materials.empty())
         {
-            m_Bindings.clear();
-            m_TextureBindingFrameIndex = frameData.frameIndex;
+            m_FrameResourceSets.clear();
+            m_ResourceSetFrameIndex = frameData.frameIndex;
+            if (stats != nullptr)
+            {
+                stats->materialResourceSets = static_cast<std::uint32_t>(m_ResourceSets.size());
+            }
             return;
         }
 
-        if (m_Bindings.size() != frameData.materials.size())
+        if (m_FrameResourceSets.size() != frameData.materials.size())
         {
-            m_Bindings.resize(frameData.materials.size());
+            m_FrameResourceSets.resize(frameData.materials.size());
         }
         for (std::size_t i = 0; i < frameData.materials.size(); ++i)
         {
             const MaterialComponent &material = frameData.materials[i];
-            RHI::RHITexture *baseColor = GetOrCreateTexture(
+            const MaterialInstanceId materialInstanceId = i < frameData.materialInstanceIds.size()
+                                                              ? frameData.materialInstanceIds[i]
+                                                              : InvalidMaterialInstanceId;
+            m_FrameResourceSets[i] = GetOrCreateResourceSet(
                 device,
                 commandList,
                 assetManager,
-                material.baseColorTexture.path,
-                RHI::TextureColorSpace::SRGB,
+                materialInstanceId,
+                material,
                 stats);
-            RHI::RHITexture *metallicRoughness = GetOrCreateTexture(
-                device,
-                commandList,
-                assetManager,
-                material.metallicRoughnessTexture.path,
-                RHI::TextureColorSpace::Linear,
-                stats);
-            RHI::RHITexture *normal = GetOrCreateTexture(
-                device,
-                commandList,
-                assetManager,
-                material.normalTexture.path,
-                RHI::TextureColorSpace::Linear,
-                stats);
-            RHI::RHITexture *occlusion = GetOrCreateTexture(
-                device,
-                commandList,
-                assetManager,
-                material.occlusionTexture.path,
-                RHI::TextureColorSpace::Linear,
-                stats);
-            RHI::RHITexture *emissive = GetOrCreateTexture(
-                device,
-                commandList,
-                assetManager,
-                material.emissiveTexture.path,
-                RHI::TextureColorSpace::SRGB,
-                stats);
-
-            MaterialTextureBinding binding{};
-            binding.textures = {
-                baseColor != nullptr ? baseColor : m_FallbackWhiteTexture.get(),
-                metallicRoughness != nullptr ? metallicRoughness : m_FallbackWhiteTexture.get(),
-                normal != nullptr ? normal : m_FallbackNormalTexture.get(),
-                occlusion != nullptr ? occlusion : m_FallbackWhiteTexture.get(),
-                emissive != nullptr ? emissive : m_FallbackWhiteTexture.get()};
-            binding.sampler = m_LinearRepeatSampler.get();
-            m_Bindings[i] = binding;
         }
-        m_TextureBindingFrameIndex = frameData.frameIndex;
+        if (stats != nullptr)
+        {
+            stats->materialResourceSets = static_cast<std::uint32_t>(m_ResourceSets.size());
+        }
+        m_ResourceSetFrameIndex = frameData.frameIndex;
     }
 
-    const MaterialTextureBinding *MaterialTextureCache::GetBinding(std::uint32_t materialIndex) const
+    const MaterialResourceSet *MaterialTextureCache::GetResourceSet(std::uint32_t materialIndex) const
     {
-        if (materialIndex >= m_Bindings.size())
+        if (materialIndex >= m_FrameResourceSets.size())
         {
             return nullptr;
         }
 
-        return &m_Bindings[materialIndex];
+        return m_FrameResourceSets[materialIndex];
+    }
+
+    const MaterialResourceSet *MaterialTextureCache::GetOrCreateResourceSet(
+        RHI::RHIDevice &device,
+        RHI::RHICommandList &commandList,
+        AssetManager *assetManager,
+        MaterialInstanceId materialInstanceId,
+        const MaterialComponent &material,
+        FrameStatistics *stats)
+    {
+        if (materialInstanceId == InvalidMaterialInstanceId)
+        {
+            return nullptr;
+        }
+
+        auto found = m_ResourceSets.find(materialInstanceId);
+        if (found != m_ResourceSets.end() && found->second.complete)
+        {
+            return &found->second;
+        }
+
+        MaterialResourceSet resourceSet = BuildResourceSet(
+            device,
+            commandList,
+            assetManager,
+            materialInstanceId,
+            material,
+            stats);
+        if (found == m_ResourceSets.end())
+        {
+            auto [inserted, _] = m_ResourceSets.emplace(materialInstanceId, resourceSet);
+            return &inserted->second;
+        }
+
+        found->second = resourceSet;
+        return &found->second;
+    }
+
+    MaterialResourceSet MaterialTextureCache::BuildResourceSet(
+        RHI::RHIDevice &device,
+        RHI::RHICommandList &commandList,
+        AssetManager *assetManager,
+        MaterialInstanceId materialInstanceId,
+        const MaterialComponent &material,
+        FrameStatistics *stats)
+    {
+        MaterialResourceSet resourceSet{};
+        resourceSet.materialInstanceId = materialInstanceId;
+        resourceSet.sampler = m_LinearRepeatSampler.get();
+        resourceSet.complete = true;
+
+        RHI::RHITexture *baseColor = GetOrCreateTexture(
+            device,
+            commandList,
+            assetManager,
+            material.baseColorTexture.path,
+            RHI::TextureColorSpace::SRGB,
+            stats);
+        RHI::RHITexture *metallicRoughness = GetOrCreateTexture(
+            device,
+            commandList,
+            assetManager,
+            material.metallicRoughnessTexture.path,
+            RHI::TextureColorSpace::Linear,
+            stats);
+        RHI::RHITexture *normal = GetOrCreateTexture(
+            device,
+            commandList,
+            assetManager,
+            material.normalTexture.path,
+            RHI::TextureColorSpace::Linear,
+            stats);
+        RHI::RHITexture *occlusion = GetOrCreateTexture(
+            device,
+            commandList,
+            assetManager,
+            material.occlusionTexture.path,
+            RHI::TextureColorSpace::Linear,
+            stats);
+        RHI::RHITexture *emissive = GetOrCreateTexture(
+            device,
+            commandList,
+            assetManager,
+            material.emissiveTexture.path,
+            RHI::TextureColorSpace::SRGB,
+            stats);
+
+        resourceSet.complete = (!material.baseColorTexture.IsBound() || baseColor != nullptr) &&
+                               (!material.metallicRoughnessTexture.IsBound() || metallicRoughness != nullptr) &&
+                               (!material.normalTexture.IsBound() || normal != nullptr) &&
+                               (!material.occlusionTexture.IsBound() || occlusion != nullptr) &&
+                               (!material.emissiveTexture.IsBound() || emissive != nullptr);
+        resourceSet.textures = {
+            baseColor != nullptr ? baseColor : m_FallbackWhiteTexture.get(),
+            metallicRoughness != nullptr ? metallicRoughness : m_FallbackWhiteTexture.get(),
+            normal != nullptr ? normal : m_FallbackNormalTexture.get(),
+            occlusion != nullptr ? occlusion : m_FallbackWhiteTexture.get(),
+            emissive != nullptr ? emissive : m_FallbackWhiteTexture.get()};
+        return resourceSet;
     }
 
     void MaterialTextureCache::EnsureDefaults(RHI::RHIDevice &device)

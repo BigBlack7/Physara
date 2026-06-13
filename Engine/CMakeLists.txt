@@ -16,6 +16,9 @@ target_sources(Engine PRIVATE
     Renderer/GPUScene.hpp
     Renderer/IBLResources.cpp
     Renderer/IBLResources.hpp
+    Renderer/MaterialInstance.hpp
+    Renderer/MaterialInstanceRegistry.cpp
+    Renderer/MaterialInstanceRegistry.hpp
     Renderer/MaterialTextureCache.cpp
     Renderer/MaterialTextureCache.hpp
     Renderer/MeshGPUCache.cpp

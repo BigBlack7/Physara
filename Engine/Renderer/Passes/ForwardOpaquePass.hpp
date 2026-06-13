@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <Engine/Renderer/GPUScene.hpp>
+#include <Engine/Renderer/MaterialInstance.hpp>
 #include <Engine/Renderer/MaterialTextureCache.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
@@ -84,9 +85,9 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHISampler> m_ShadowSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBRDFLut{};
-        RHI::RHITexture *m_BoundTextures[5]{};
+        RHI::RHITexture *m_BoundTextures[MaterialTextureSlotCount]{};
         RHI::RHISampler *m_BoundSampler{nullptr};
-        std::uint32_t m_BoundMaterialIndex{std::numeric_limits<std::uint32_t>::max()};
+        MaterialInstanceId m_BoundMaterialInstanceId{InvalidMaterialInstanceId};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

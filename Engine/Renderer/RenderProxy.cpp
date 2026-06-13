@@ -92,87 +92,6 @@ namespace Physara::Engine
             HashCombine(seed, static_cast<std::uint64_t>(std::hash<float>{}(value)));
         }
 
-        void HashCombine(std::uint64_t &seed, const glm::vec3 &value)
-        {
-            HashCombine(seed, value.x);
-            HashCombine(seed, value.y);
-            HashCombine(seed, value.z);
-        }
-
-        void HashCombine(std::uint64_t &seed, const glm::vec4 &value)
-        {
-            HashCombine(seed, value.x);
-            HashCombine(seed, value.y);
-            HashCombine(seed, value.z);
-            HashCombine(seed, value.w);
-        }
-
-        void HashCombine(std::uint64_t &seed, const TextureSlot &slot)
-        {
-            HashCombine(seed, slot.path);
-            HashCombine(seed, static_cast<std::uint64_t>(slot.texCoord));
-        }
-
-        std::uint64_t HashMaterialSignature(const MaterialComponent &material)
-        {
-            std::uint64_t seed = HashString(material.materialPath);
-            HashCombine(seed, static_cast<std::uint64_t>(material.shadingModel));
-            HashCombine(seed, static_cast<std::uint64_t>(material.alphaMode));
-            HashCombine(seed, material.doubleSided ? 1ull : 0ull);
-            HashCombine(seed, material.castShadow ? 1ull : 0ull);
-            HashCombine(seed, material.baseColor);
-            HashCombine(seed, material.metallic);
-            HashCombine(seed, material.roughness);
-            HashCombine(seed, material.reflectance);
-            HashCombine(seed, material.ambientOcclusion);
-            HashCombine(seed, material.alphaCutoff);
-            HashCombine(seed, material.metallicTextureInfluence);
-            HashCombine(seed, material.roughnessTextureInfluence);
-            HashCombine(seed, material.ambientOcclusionTextureInfluence);
-            HashCombine(seed, material.emissiveColor);
-            HashCombine(seed, material.emissiveLuminance);
-            HashCombine(seed, material.normalScale);
-            HashCombine(seed, material.flipNormalY ? 1ull : 0ull);
-            HashCombine(seed, material.baseColorTexture);
-            HashCombine(seed, material.metallicRoughnessTexture);
-            HashCombine(seed, material.normalTexture);
-            HashCombine(seed, material.occlusionTexture);
-            HashCombine(seed, material.emissiveTexture);
-            return seed;
-        }
-
-        bool TextureSlotEquals(const TextureSlot &lhs, const TextureSlot &rhs)
-        {
-            return lhs.path == rhs.path && lhs.texCoord == rhs.texCoord;
-        }
-
-        bool MaterialEquals(const MaterialComponent &lhs, const MaterialComponent &rhs)
-        {
-            return lhs.materialPath == rhs.materialPath &&
-                   lhs.shadingModel == rhs.shadingModel &&
-                   lhs.alphaMode == rhs.alphaMode &&
-                   lhs.doubleSided == rhs.doubleSided &&
-                   lhs.castShadow == rhs.castShadow &&
-                   lhs.baseColor == rhs.baseColor &&
-                   lhs.metallic == rhs.metallic &&
-                   lhs.roughness == rhs.roughness &&
-                   lhs.reflectance == rhs.reflectance &&
-                   lhs.ambientOcclusion == rhs.ambientOcclusion &&
-                   lhs.alphaCutoff == rhs.alphaCutoff &&
-                   lhs.metallicTextureInfluence == rhs.metallicTextureInfluence &&
-                   lhs.roughnessTextureInfluence == rhs.roughnessTextureInfluence &&
-                   lhs.ambientOcclusionTextureInfluence == rhs.ambientOcclusionTextureInfluence &&
-                   lhs.emissiveColor == rhs.emissiveColor &&
-                   lhs.emissiveLuminance == rhs.emissiveLuminance &&
-                   lhs.normalScale == rhs.normalScale &&
-                   lhs.flipNormalY == rhs.flipNormalY &&
-                   TextureSlotEquals(lhs.baseColorTexture, rhs.baseColorTexture) &&
-                   TextureSlotEquals(lhs.metallicRoughnessTexture, rhs.metallicRoughnessTexture) &&
-                   TextureSlotEquals(lhs.normalTexture, rhs.normalTexture) &&
-                   TextureSlotEquals(lhs.occlusionTexture, rhs.occlusionTexture) &&
-                   TextureSlotEquals(lhs.emissiveTexture, rhs.emissiveTexture);
-        }
-
         std::uint64_t BuildMeshKey(const RenderMeshSubmission &submission)
         {
             std::uint64_t seed = HashString(submission.meshPath);
@@ -269,6 +188,7 @@ namespace Physara::Engine
         frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.Size());
         frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.Size());
         frameData.stats.transparentItems = static_cast<std::uint32_t>(m_Buckets.transparent.Size());
+        frameData.stats.materialInstances = static_cast<std::uint32_t>(frameData.materialInstanceIds.size());
     }
 
     void RenderProxy::Reset()
@@ -285,14 +205,17 @@ namespace Physara::Engine
 
         for (const RenderMeshSubmission &submission : submissions)
         {
+            MaterialInstanceId materialInstanceId = InvalidMaterialInstanceId;
             if (submission.material.castShadow &&
                 (submission.material.alphaMode == AlphaMode::Opaque || submission.material.alphaMode == AlphaMode::Mask))
             {
+                materialInstanceId = m_MaterialRegistry.Resolve(submission.material);
                 RenderDrawItem item{};
                 item.submission = &submission;
-                item.sortKey = BuildSortKey(submission);
+                item.sortKey = BuildSortKey(submission, materialInstanceId);
                 item.meshKey = RenderProxyDetail::BuildMeshKey(submission);
                 item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(submission);
+                item.materialInstanceId = materialInstanceId;
                 item.doubleSided = submission.material.doubleSided;
                 m_Buckets.shadowCasters.push_back(item);
             }
@@ -307,15 +230,20 @@ namespace Physara::Engine
             const RenderBucket bucket = GetBucket(submission);
 
             const RenderMeshSubmission &visibleSubmission = submission;
+            if (materialInstanceId == InvalidMaterialInstanceId)
+            {
+                materialInstanceId = m_MaterialRegistry.Resolve(visibleSubmission.material);
+            }
 
             RenderDrawItem item{};
             item.submission = &visibleSubmission;
             item.objectIndex = m_VisibleSubmissionCount++;
-            item.sortKey = BuildSortKey(visibleSubmission);
+            item.sortKey = BuildSortKey(visibleSubmission, materialInstanceId);
             const glm::vec3 cameraToObject = visibleSubmission.boundsCenter - view.position;
             item.cameraDistanceSq = glm::dot(cameraToObject, cameraToObject);
             item.meshKey = RenderProxyDetail::BuildMeshKey(visibleSubmission);
             item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(visibleSubmission);
+            item.materialInstanceId = materialInstanceId;
             item.doubleSided = visibleSubmission.material.doubleSided;
 
             if (bucket == RenderBucket::Transparent)
@@ -359,34 +287,35 @@ namespace Physara::Engine
     {
         frameData.objects.clear();
         frameData.materials.clear();
+        frameData.materialInstanceIds.clear();
         frameData.objects.reserve(
             m_Buckets.opaque.Size() + m_Buckets.unlit.Size() + m_Buckets.transparent.Size() + m_Buckets.shadowCasters.size());
         frameData.materials.reserve(m_SubmissionScratch.size());
+        frameData.materialInstanceIds.reserve(m_SubmissionScratch.size());
 
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
         objectIndexBySubmission.reserve(frameData.objects.capacity());
-        std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> materialIndicesBySignature{};
-        materialIndicesBySignature.reserve(m_SubmissionScratch.size());
+        std::unordered_map<MaterialInstanceId, std::uint32_t> materialIndexByInstance{};
+        materialIndexByInstance.reserve(m_SubmissionScratch.size());
 
-        const auto resolveMaterialIndex = [&frameData, &materialIndicesBySignature](const MaterialComponent &material)
+        const auto resolveMaterialIndex = [this, &frameData, &materialIndexByInstance](MaterialInstanceId materialInstanceId)
         {
-            const std::uint64_t materialSignature = RenderProxyDetail::HashMaterialSignature(material);
-            std::uint32_t materialIndex = std::numeric_limits<std::uint32_t>::max();
-            auto &candidateIndices = materialIndicesBySignature[materialSignature];
-            for (std::uint32_t candidateIndex : candidateIndices)
+            const auto found = materialIndexByInstance.find(materialInstanceId);
+            if (found != materialIndexByInstance.end())
             {
-                if (RenderProxyDetail::MaterialEquals(frameData.materials[candidateIndex], material))
-                {
-                    materialIndex = candidateIndex;
-                    break;
-                }
+                return found->second;
             }
-            if (materialIndex == std::numeric_limits<std::uint32_t>::max())
+
+            const MaterialComponent *material = m_MaterialRegistry.Get(materialInstanceId);
+            if (material == nullptr)
             {
-                materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
-                candidateIndices.push_back(materialIndex);
-            frameData.materials.push_back(material);
+                return std::numeric_limits<std::uint32_t>::max();
             }
+
+            const std::uint32_t materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
+            materialIndexByInstance.emplace(materialInstanceId, materialIndex);
+            frameData.materialInstanceIds.push_back(materialInstanceId);
+            frameData.materials.push_back(*material);
             return materialIndex;
         };
 
@@ -405,7 +334,11 @@ namespace Physara::Engine
             }
 
             const RenderMeshSubmission &submission = *item.submission;
-            const std::uint32_t materialIndex = resolveMaterialIndex(submission.material);
+            const std::uint32_t materialIndex = resolveMaterialIndex(item.materialInstanceId);
+            if (materialIndex == std::numeric_limits<std::uint32_t>::max())
+            {
+                return;
+            }
             ObjectData object = BuildObjectData(submission, GetBucket(submission));
             object.materialIndex = materialIndex;
             const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
@@ -440,6 +373,7 @@ namespace Physara::Engine
             return item.submission != nullptr &&
                    item.sortKey == batch.sortKey &&
                    item.primitiveKey == batch.primitiveKey &&
+                   item.materialInstanceId == batch.materialInstanceId &&
                    item.doubleSided == batch.doubleSided;
         };
 
@@ -474,6 +408,7 @@ namespace Physara::Engine
                 batch.sortKey = item.sortKey;
                 batch.meshKey = item.meshKey;
                 batch.primitiveKey = item.primitiveKey;
+                batch.materialInstanceId = item.materialInstanceId;
                 batch.doubleSided = item.doubleSided;
                 batches.push_back(batch);
                 m_Batches.instanceObjectIndices.push_back(item.objectIndex);
@@ -493,12 +428,12 @@ namespace Physara::Engine
         frameData.stats.drawBatches = frameData.stats.forwardOpaqueBatches + frameData.stats.forwardTransparentBatches;
     }
 
-    std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission)
+    std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission, MaterialInstanceId materialInstanceId)
     {
-        const std::uint64_t materialHash = RenderProxyDetail::HashMaterialSignature(submission.material) & 0xffffffffull;
+        const std::uint64_t materialKey = static_cast<std::uint64_t>(materialInstanceId) & 0xffffffffull;
         const std::uint64_t meshHash = RenderProxyDetail::BuildMeshKey(submission) & 0xffffull;
         const std::uint64_t primitive = static_cast<std::uint64_t>(submission.primitiveIndex & 0xffffu);
-        return (materialHash << 32u) | (meshHash << 16u) | primitive;
+        return (materialKey << 32u) | (meshHash << 16u) | primitive;
     }
 
     ObjectData RenderProxy::BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket)

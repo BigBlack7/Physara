@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <Engine/Renderer/GPUContracts.hpp>
+#include <Engine/Renderer/MaterialInstance.hpp>
 #include <Engine/Renderer/RenderView.hpp>
 #include <Engine/RHI/RHIDefinitions.hpp>
 #include <Engine/Scene/Components/MaterialComponent.hpp>
@@ -18,6 +19,8 @@ namespace Physara::Engine
         std::uint32_t unlitItems{0};
         std::uint32_t transparentItems{0};
         std::uint32_t lightCount{0};
+        std::uint32_t materialInstances{0};
+        std::uint32_t materialResourceSets{0};
         std::uint32_t meshUploads{0};
         std::uint32_t meshPrimitiveUploads{0};
         std::uint32_t textureUploads{0};
@@ -57,6 +60,7 @@ namespace Physara::Engine
         ShadowData shadow{};
         std::vector<ObjectData> objects{};
         std::vector<MaterialComponent> materials{};
+        std::vector<MaterialInstanceId> materialInstanceIds{};
         std::vector<LightData> lights{};
         FrameStatistics stats{};
         std::uint64_t frameIndex{0};

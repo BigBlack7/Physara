@@ -186,12 +186,14 @@ namespace Physara::Editor
                       stats.drawBatches,
                       static_cast<unsigned long long>(stats.instances),
                       static_cast<unsigned long long>(stats.triangles));
-        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u",
+        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u  Mat/Sets: %u/%u",
                       stats.visibleSubmissions,
                       stats.opaqueItems,
                       stats.unlitItems,
                       stats.transparentItems,
-                      stats.lightCount);
+                      stats.lightCount,
+                      stats.materialInstances,
+                      stats.materialResourceSets);
         std::snprintf(cpuLine, sizeof(cpuLine), "CPU: build %.2f ms, render %.2f ms",
                       stats.sceneBuildCpuMs,
                       stats.renderGraphCpuMs);
