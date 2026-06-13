@@ -333,6 +333,7 @@ namespace Physara::Engine
             instanceObjectIndexAllocation.buffer,
             instanceObjectIndexAllocation.offset,
             instanceObjectIndexAllocation.size);
+        m_CommandExecutor.BeginFrame();
         DrawShadowCasters(context);
         context.commandList->EndRenderPass();
 
@@ -356,6 +357,7 @@ namespace Physara::Engine
         m_ShadowCasterScratch.clear();
         m_ShadowCommandScratch.clear();
         m_ShadowInstanceObjectIndexScratch.clear();
+        m_CommandExecutor.Reset();
     }
 
     void ShadowPass::SetSettings(const ShadowSettings &settings)
@@ -410,7 +412,6 @@ namespace Physara::Engine
             framebufferDesc.renderPassDesc = &m_RenderPassDesc;
             m_Framebuffer = context.device->CreateFramebuffer(framebufferDesc);
         }
-
     }
 
     bool ShadowPass::BuildShadowData(
@@ -571,23 +572,42 @@ namespace Physara::Engine
 
     void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
     {
-        for (const RenderCommand &command : m_ShadowCommandScratch)
-        {
-            MeshGPUPrimitive *primitive = context.meshCache->GetOrCreate(context.device, context.assetManager, command, context.stats);
-            if (primitive == nullptr || primitive->indexCount == 0)
-            {
-                continue;
-            }
+        CommandSubmitContext submitContext{&context};
+        RenderCommandExecutorContext executorContext{};
+        executorContext.device = context.device;
+        executorContext.commandList = context.commandList;
+        executorContext.meshCache = context.meshCache;
+        executorContext.assetManager = context.assetManager;
+        executorContext.stats = context.stats;
+        RenderCommandSubmitCallbacks callbacks{};
+        callbacks.userData = &submitContext;
+        callbacks.canMergeIndirectRun = &ShadowPass::CanMergeShadowIndirectRun;
+        callbacks.recordCommand = &ShadowPass::RecordSubmittedCommand;
+        m_CommandExecutor.Submit(executorContext, m_ShadowCommandScratch, callbacks);
+    }
 
-            context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
-            context.commandList->DrawIndexed(primitive->indexCount, command.instanceCount, primitive->firstIndex, primitive->vertexOffset, command.firstInstanceIndex);
-            if (context.stats != nullptr)
-            {
-                ++context.stats->drawCalls;
-                ++context.stats->shadowDrawCalls;
-                context.stats->instances += command.instanceCount;
-                context.stats->triangles += static_cast<std::uint64_t>(primitive->indexCount / 3u) * command.instanceCount;
-            }
+    bool ShadowPass::CanMergeShadowIndirectRun(const RenderCommand &lhs, const RenderCommand &rhs)
+    {
+        return lhs.meshKey == rhs.meshKey;
+    }
+
+    void ShadowPass::RecordSubmittedCommand(
+        void *userData,
+        const RenderCommand &command,
+        const MeshGPUPrimitive &primitive,
+        RenderCommandSubmitMode mode)
+    {
+        (void)mode;
+        auto *submitContext = static_cast<CommandSubmitContext *>(userData);
+        if (submitContext == nullptr || submitContext->passContext == nullptr || submitContext->passContext->stats == nullptr)
+        {
+            return;
         }
+
+        FrameStatistics &stats = *submitContext->passContext->stats;
+        ++stats.drawCalls;
+        ++stats.shadowDrawCalls;
+        stats.instances += command.instanceCount;
+        stats.triangles += static_cast<std::uint64_t>(primitive.indexCount / 3u) * command.instanceCount;
     }
 }

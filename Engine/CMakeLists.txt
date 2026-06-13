@@ -39,6 +39,8 @@ target_sources(Engine PRIVATE
     Renderer/Renderer.hpp
     Renderer/RendererCapture.cpp
     Renderer/RendererCapture.hpp
+    Renderer/RenderCommandExecutor.cpp
+    Renderer/RenderCommandExecutor.hpp
     Renderer/RenderGraph/PassNode.hpp
     Renderer/RenderGraph/RenderGraph.cpp
     Renderer/RenderGraph/RenderGraph.hpp

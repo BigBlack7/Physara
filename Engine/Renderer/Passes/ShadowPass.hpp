@@ -11,6 +11,7 @@
 #include <Engine/Renderer/FrameUploadAllocator.hpp>
 #include <Engine/Renderer/GPUScene.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
+#include <Engine/Renderer/RenderCommandExecutor.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
@@ -84,6 +85,11 @@ namespace Physara::Engine
         [[nodiscard]] const ShadowSettings &GetSettings() const { return m_Settings; }
 
     private:
+        struct CommandSubmitContext
+        {
+            const ShadowPassContext *passContext{nullptr};
+        };
+
         void EnsureResources(const ShadowPassContext &context);
         [[nodiscard]] bool BuildShadowData(
             const ShadowPassContext &context,
@@ -93,6 +99,12 @@ namespace Physara::Engine
         void BuildShadowCommands(const ShadowPassContext &context);
         void UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera);
         void DrawShadowCasters(const ShadowPassContext &context);
+        static bool CanMergeShadowIndirectRun(const RenderCommand &lhs, const RenderCommand &rhs);
+        static void RecordSubmittedCommand(
+            void *userData,
+            const RenderCommand &command,
+            const MeshGPUPrimitive &primitive,
+            RenderCommandSubmitMode mode);
 
     private:
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
@@ -102,6 +114,7 @@ namespace Physara::Engine
         std::vector<RenderDrawItem> m_ShadowCasterScratch{};
         std::vector<RenderCommand> m_ShadowCommandScratch{};
         std::vector<std::uint32_t> m_ShadowInstanceObjectIndexScratch{};
+        RenderCommandExecutor m_CommandExecutor{};
         ShadowSettings m_Settings{};
     };
 }
