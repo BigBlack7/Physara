@@ -547,7 +547,7 @@ namespace Physara::Engine
                             m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
                         });
 
-        if (!m_RenderProxy.GetBuckets().transparent.empty())
+        if (!m_RenderProxy.GetBuckets().transparent.Empty())
         {
             m_RenderGraph.AddPass("ForwardTransparent")
                 .Read(renderHDR)

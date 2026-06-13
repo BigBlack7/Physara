@@ -3,6 +3,7 @@
 #include <array>
 #include <memory>
 #include <limits>
+#include <span>
 #include <vector>
 
 #include <Engine/Renderer/GPUScene.hpp>
@@ -68,7 +69,13 @@ namespace Physara::Engine
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         void BindFrameTextures(const ForwardPassContext &context);
         void BindMaterial(const ForwardPassContext &context, const RenderDrawBatch &batch);
-        void DrawBatches(const ForwardPassContext &context, const std::vector<RenderDrawBatch> &batches, bool drawDoubleSided, bool transparent);
+        void DrawBatchGroup(
+            const ForwardPassContext &context,
+            RHI::RHIPipelineState *pipeline,
+            std::span<const RenderDrawBatch> primaryBatches,
+            std::span<const RenderDrawBatch> secondaryBatches,
+            bool transparent);
+        void DrawBatches(const ForwardPassContext &context, std::span<const RenderDrawBatch> batches, bool transparent);
         void ResetTextureBindings();
 
     private:

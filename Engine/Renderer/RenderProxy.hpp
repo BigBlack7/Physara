@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -29,11 +30,22 @@ namespace Physara::Engine
         bool doubleSided{false};
     };
 
+    struct RenderCullDrawBuckets
+    {
+        std::vector<RenderDrawItem> singleSided{};
+        std::vector<RenderDrawItem> doubleSided{};
+
+        void Clear();
+        void Push(RenderDrawItem item);
+        [[nodiscard]] bool Empty() const;
+        [[nodiscard]] std::size_t Size() const;
+    };
+
     struct RenderDrawBuckets
     {
-        std::vector<RenderDrawItem> opaque{};
-        std::vector<RenderDrawItem> unlit{};
-        std::vector<RenderDrawItem> transparent{};
+        RenderCullDrawBuckets opaque{};
+        RenderCullDrawBuckets unlit{};
+        RenderCullDrawBuckets transparent{};
         std::vector<RenderDrawItem> shadowCasters{};
 
         void Clear();
@@ -52,11 +64,21 @@ namespace Physara::Engine
         bool doubleSided{false};
     };
 
+    struct RenderCullBatchBuckets
+    {
+        std::vector<RenderDrawBatch> singleSided{};
+        std::vector<RenderDrawBatch> doubleSided{};
+
+        void Clear();
+        [[nodiscard]] bool Empty() const;
+        [[nodiscard]] std::size_t Size() const;
+    };
+
     struct RenderDrawBatchBuckets
     {
-        std::vector<RenderDrawBatch> opaque{};
-        std::vector<RenderDrawBatch> unlit{};
-        std::vector<RenderDrawBatch> transparent{};
+        RenderCullBatchBuckets opaque{};
+        RenderCullBatchBuckets unlit{};
+        RenderCullBatchBuckets transparent{};
         std::vector<std::uint32_t> instanceObjectIndices{};
 
         void Clear();

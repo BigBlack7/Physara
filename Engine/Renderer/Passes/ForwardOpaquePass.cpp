@@ -116,9 +116,9 @@ namespace Physara::Engine
                 PHYSARA_CORE_INFO("Forward pass scene data: objects={}, lights={}, opaque={}, unlit={}, transparent={}.",
                                   context.frameData->objects.size(),
                                   context.frameData->lights.size(),
-                                  buckets.opaque.size(),
-                                  buckets.unlit.size(),
-                                  buckets.transparent.size());
+                                  buckets.opaque.Size(),
+                                  buckets.unlit.Size(),
+                                  buckets.transparent.Size());
                 m_LoggedFirstScene = true;
             }
 
@@ -146,27 +146,43 @@ namespace Physara::Engine
             BindFrameTextures(context);
 
             ResetTextureBindings();
-            context.commandList->SetPipelineState(singleSidedPipeline);
             const RenderDrawBatchBuckets &batches = context.renderProxy->GetBatches();
             if (transparent)
             {
-                DrawBatches(context, batches.transparent, false, true);
+                DrawBatchGroup(
+                    context,
+                    singleSidedPipeline,
+                    batches.transparent.singleSided,
+                    std::span<const RenderDrawBatch>{},
+                    true);
             }
             else
             {
-                DrawBatches(context, batches.opaque, false, false);
-                DrawBatches(context, batches.unlit, false, false);
+                DrawBatchGroup(
+                    context,
+                    singleSidedPipeline,
+                    batches.opaque.singleSided,
+                    batches.unlit.singleSided,
+                    false);
             }
 
-            context.commandList->SetPipelineState(doubleSidedPipeline);
             if (transparent)
             {
-                DrawBatches(context, batches.transparent, true, true);
+                DrawBatchGroup(
+                    context,
+                    doubleSidedPipeline,
+                    batches.transparent.doubleSided,
+                    std::span<const RenderDrawBatch>{},
+                    true);
             }
             else
             {
-                DrawBatches(context, batches.opaque, true, false);
-                DrawBatches(context, batches.unlit, true, false);
+                DrawBatchGroup(
+                    context,
+                    doubleSidedPipeline,
+                    batches.opaque.doubleSided,
+                    batches.unlit.doubleSided,
+                    false);
             }
         }
 
@@ -350,15 +366,27 @@ namespace Physara::Engine
         m_BoundMaterialIndex = materialIndex;
     }
 
-    void ForwardOpaquePass::DrawBatches(const ForwardPassContext &context, const std::vector<RenderDrawBatch> &batches, bool drawDoubleSided, bool transparent)
+    void ForwardOpaquePass::DrawBatchGroup(
+        const ForwardPassContext &context,
+        RHI::RHIPipelineState *pipeline,
+        std::span<const RenderDrawBatch> primaryBatches,
+        std::span<const RenderDrawBatch> secondaryBatches,
+        bool transparent)
+    {
+        if (pipeline == nullptr || (primaryBatches.empty() && secondaryBatches.empty()))
+        {
+            return;
+        }
+
+        context.commandList->SetPipelineState(pipeline);
+        DrawBatches(context, primaryBatches, transparent);
+        DrawBatches(context, secondaryBatches, transparent);
+    }
+
+    void ForwardOpaquePass::DrawBatches(const ForwardPassContext &context, std::span<const RenderDrawBatch> batches, bool transparent)
     {
         for (const RenderDrawBatch &batch : batches)
         {
-            if (batch.doubleSided != drawDoubleSided)
-            {
-                continue;
-            }
-
             RenderDrawItem item{};
             item.submission = batch.submission;
             item.objectIndex = batch.firstObjectIndex;

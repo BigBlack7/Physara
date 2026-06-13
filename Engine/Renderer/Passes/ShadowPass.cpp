@@ -148,6 +148,16 @@ namespace Physara::Engine
             return hasBounds;
         }
 
+        bool BuildBucketWorldBounds(
+            const RenderCullDrawBuckets &buckets,
+            glm::vec3 &minBounds,
+            glm::vec3 &maxBounds)
+        {
+            const bool hasSingleSidedBounds = BuildBucketWorldBounds(buckets.singleSided, minBounds, maxBounds);
+            const bool hasDoubleSidedBounds = BuildBucketWorldBounds(buckets.doubleSided, minBounds, maxBounds);
+            return hasSingleSidedBounds || hasDoubleSidedBounds;
+        }
+
         bool BuildVisibleReceiverBounds(
             const RenderDrawBuckets &buckets,
             glm::vec3 &minBounds,

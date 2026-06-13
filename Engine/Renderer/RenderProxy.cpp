@@ -186,21 +186,72 @@ namespace Physara::Engine
             HashCombine(seed, static_cast<std::uint64_t>(submission.primitiveIndex));
             return seed;
         }
+
+        template <typename Compare>
+        void SortCullBuckets(RenderCullDrawBuckets &buckets, Compare compare)
+        {
+            std::sort(buckets.singleSided.begin(), buckets.singleSided.end(), compare);
+            std::sort(buckets.doubleSided.begin(), buckets.doubleSided.end(), compare);
+        }
+    }
+
+    void RenderCullDrawBuckets::Clear()
+    {
+        singleSided.clear();
+        doubleSided.clear();
+    }
+
+    void RenderCullDrawBuckets::Push(RenderDrawItem item)
+    {
+        if (item.doubleSided)
+        {
+            doubleSided.push_back(item);
+        }
+        else
+        {
+            singleSided.push_back(item);
+        }
+    }
+
+    bool RenderCullDrawBuckets::Empty() const
+    {
+        return singleSided.empty() && doubleSided.empty();
+    }
+
+    std::size_t RenderCullDrawBuckets::Size() const
+    {
+        return singleSided.size() + doubleSided.size();
     }
 
     void RenderDrawBuckets::Clear()
     {
-        opaque.clear();
-        unlit.clear();
-        transparent.clear();
+        opaque.Clear();
+        unlit.Clear();
+        transparent.Clear();
         shadowCasters.clear();
+    }
+
+    void RenderCullBatchBuckets::Clear()
+    {
+        singleSided.clear();
+        doubleSided.clear();
+    }
+
+    bool RenderCullBatchBuckets::Empty() const
+    {
+        return singleSided.empty() && doubleSided.empty();
+    }
+
+    std::size_t RenderCullBatchBuckets::Size() const
+    {
+        return singleSided.size() + doubleSided.size();
     }
 
     void RenderDrawBatchBuckets::Clear()
     {
-        opaque.clear();
-        unlit.clear();
-        transparent.clear();
+        opaque.Clear();
+        unlit.Clear();
+        transparent.Clear();
         instanceObjectIndices.clear();
     }
 
@@ -215,9 +266,9 @@ namespace Physara::Engine
         RepackObjectsForSortedBuckets(frameData);
         BuildBatches(frameData);
         frameData.stats.visibleSubmissions = m_VisibleSubmissionCount;
-        frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.size());
-        frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.size());
-        frameData.stats.transparentItems = static_cast<std::uint32_t>(m_Buckets.transparent.size());
+        frameData.stats.opaqueItems = static_cast<std::uint32_t>(m_Buckets.opaque.Size());
+        frameData.stats.unlitItems = static_cast<std::uint32_t>(m_Buckets.unlit.Size());
+        frameData.stats.transparentItems = static_cast<std::uint32_t>(m_Buckets.transparent.Size());
     }
 
     void RenderProxy::Reset()
@@ -269,15 +320,15 @@ namespace Physara::Engine
 
             if (bucket == RenderBucket::Transparent)
             {
-                m_Buckets.transparent.push_back(item);
+                m_Buckets.transparent.Push(item);
             }
             else if (bucket == RenderBucket::Unlit)
             {
-                m_Buckets.unlit.push_back(item);
+                m_Buckets.unlit.Push(item);
             }
             else
             {
-                m_Buckets.opaque.push_back(item);
+                m_Buckets.opaque.Push(item);
             }
         }
     }
@@ -293,13 +344,15 @@ namespace Physara::Engine
             return lhs.sortKey < rhs.sortKey;
         };
 
-        std::sort(m_Buckets.opaque.begin(), m_Buckets.opaque.end(), bySortKey);
-        std::sort(m_Buckets.unlit.begin(), m_Buckets.unlit.end(), bySortKey);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, bySortKey);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, bySortKey);
         std::sort(m_Buckets.shadowCasters.begin(), m_Buckets.shadowCasters.end(), bySortKey);
-        std::sort(m_Buckets.transparent.begin(), m_Buckets.transparent.end(), [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
-                  {
-                      return lhs.cameraDistanceSq > rhs.cameraDistanceSq;
-                  });
+        RenderProxyDetail::SortCullBuckets(
+            m_Buckets.transparent,
+            [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
+            {
+                return lhs.cameraDistanceSq > rhs.cameraDistanceSq;
+            });
     }
 
     void RenderProxy::RepackObjectsForSortedBuckets(FrameData &frameData)
@@ -307,7 +360,7 @@ namespace Physara::Engine
         frameData.objects.clear();
         frameData.materials.clear();
         frameData.objects.reserve(
-            m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size() + m_Buckets.shadowCasters.size());
+            m_Buckets.opaque.Size() + m_Buckets.unlit.Size() + m_Buckets.transparent.Size() + m_Buckets.shadowCasters.size());
         frameData.materials.reserve(m_SubmissionScratch.size());
 
         std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
@@ -361,17 +414,20 @@ namespace Physara::Engine
             frameData.objects.push_back(object);
         };
 
-        const auto appendBucketObjects = [&](std::vector<RenderDrawItem> &bucket)
+        const auto appendBucketObjects = [&](std::vector<RenderDrawItem> &items)
         {
-            for (RenderDrawItem &item : bucket)
+            for (RenderDrawItem &item : items)
             {
                 appendObject(item);
             }
         };
 
-        appendBucketObjects(m_Buckets.opaque);
-        appendBucketObjects(m_Buckets.unlit);
-        appendBucketObjects(m_Buckets.transparent);
+        appendBucketObjects(m_Buckets.opaque.singleSided);
+        appendBucketObjects(m_Buckets.opaque.doubleSided);
+        appendBucketObjects(m_Buckets.unlit.singleSided);
+        appendBucketObjects(m_Buckets.unlit.doubleSided);
+        appendBucketObjects(m_Buckets.transparent.singleSided);
+        appendBucketObjects(m_Buckets.transparent.doubleSided);
         appendBucketObjects(m_Buckets.shadowCasters);
     }
 
@@ -388,7 +444,7 @@ namespace Physara::Engine
         };
 
         m_Batches.instanceObjectIndices.reserve(
-            m_Buckets.opaque.size() + m_Buckets.unlit.size() + m_Buckets.transparent.size());
+            m_Buckets.opaque.Size() + m_Buckets.unlit.Size() + m_Buckets.transparent.Size());
 
         const auto buildBucketBatches = [this, &canAppend](const std::vector<RenderDrawItem> &items, std::vector<RenderDrawBatch> &batches)
         {
@@ -424,13 +480,16 @@ namespace Physara::Engine
             }
         };
 
-        buildBucketBatches(m_Buckets.opaque, m_Batches.opaque);
-        buildBucketBatches(m_Buckets.unlit, m_Batches.unlit);
-        buildBucketBatches(m_Buckets.transparent, m_Batches.transparent);
+        buildBucketBatches(m_Buckets.opaque.singleSided, m_Batches.opaque.singleSided);
+        buildBucketBatches(m_Buckets.opaque.doubleSided, m_Batches.opaque.doubleSided);
+        buildBucketBatches(m_Buckets.unlit.singleSided, m_Batches.unlit.singleSided);
+        buildBucketBatches(m_Buckets.unlit.doubleSided, m_Batches.unlit.doubleSided);
+        buildBucketBatches(m_Buckets.transparent.singleSided, m_Batches.transparent.singleSided);
+        buildBucketBatches(m_Buckets.transparent.doubleSided, m_Batches.transparent.doubleSided);
 
         frameData.stats.forwardOpaqueBatches =
-            static_cast<std::uint32_t>(m_Batches.opaque.size() + m_Batches.unlit.size());
-        frameData.stats.forwardTransparentBatches = static_cast<std::uint32_t>(m_Batches.transparent.size());
+            static_cast<std::uint32_t>(m_Batches.opaque.Size() + m_Batches.unlit.Size());
+        frameData.stats.forwardTransparentBatches = static_cast<std::uint32_t>(m_Batches.transparent.Size());
         frameData.stats.drawBatches = frameData.stats.forwardOpaqueBatches + frameData.stats.forwardTransparentBatches;
     }
 
