@@ -18,6 +18,7 @@ namespace Physara::RHI
         std::uint64_t dispatchCalls{0};
         std::uint64_t programBinds{0};
         std::uint64_t vaoBinds{0};
+        std::uint64_t renderPrimitiveBinds{0};
         std::uint64_t framebufferBinds{0};
         std::uint64_t vertexBufferBinds{0};
         std::uint64_t indexBufferBinds{0};

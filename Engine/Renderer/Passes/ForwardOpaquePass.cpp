@@ -383,8 +383,7 @@ namespace Physara::Engine
 
             const std::uint32_t instanceCount = batch.itemCount;
             BindMaterial(context, batch);
-            context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer);
-            context.commandList->SetIndexBuffer(primitive->indexBuffer);
+            context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
             context.commandList->DrawIndexed(primitive->indexCount, instanceCount, primitive->firstIndex, primitive->vertexOffset, batch.firstInstanceIndex);
             if (context.stats != nullptr)
             {

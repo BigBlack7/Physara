@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/RHI/RHIDefinitions.hpp>
+#include <Engine/RHI/Descriptors/RHIRenderPrimitive.hpp>
 #include <Engine/RHI/Descriptors/RHIResourceSet.hpp>
 
 namespace Physara::RHI
@@ -38,6 +39,14 @@ namespace Physara::RHI
         virtual void SetPipelineState(RHIPipelineState *pso) = 0;
         virtual void SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset = 0) = 0;
         virtual void SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset = 0) = 0;
+        virtual void SetRenderPrimitive(const RHIRenderPrimitive &primitive)
+        {
+            for (const RHIVertexBufferBinding &binding : primitive.vertexBuffers)
+            {
+                SetVertexBuffer(binding.slot, binding.buffer, binding.offset);
+            }
+            SetIndexBuffer(primitive.indexBuffer.buffer, primitive.indexBuffer.offset);
+        }
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) = 0;
         virtual void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) = 0;

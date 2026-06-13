@@ -16,6 +16,14 @@ namespace Physara::Engine
 {
     namespace MeshGPUCacheDetail
     {
+        std::uint64_t BuildRenderPrimitiveId(std::uint64_t meshKey, std::size_t primitiveIndex)
+        {
+            std::uint64_t seed = meshKey;
+            const std::uint64_t value = static_cast<std::uint64_t>(primitiveIndex);
+            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+            return seed != 0 ? seed : 1ull;
+        }
+
         template <typename T>
         RHI::RHIBufferDesc StaticBufferDesc(const std::vector<T> &data, RHI::BufferUsageFlags usage)
         {
@@ -125,6 +133,7 @@ namespace Physara::Engine
             gpuPrimitive.firstIndex = static_cast<std::uint32_t>(indices.size());
             gpuPrimitive.vertexOffset = static_cast<std::int32_t>(vertices.size());
             gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
+            gpuPrimitive.renderPrimitiveId = MeshGPUCacheDetail::BuildRenderPrimitiveId(item.meshKey, primitiveIndex);
 
             vertices.insert(vertices.end(), primitive.vertices.begin(), primitive.vertices.end());
             indices.insert(indices.end(), primitive.indices.begin(), primitive.indices.end());
@@ -147,8 +156,8 @@ namespace Physara::Engine
             {
                 continue;
             }
-            primitive.vertexBuffer = gpuResource.vertexBuffer.get();
-            primitive.indexBuffer = gpuResource.indexBuffer.get();
+            primitive.vertexBindings[0] = RHI::RHIVertexBufferBinding{0u, gpuResource.vertexBuffer.get(), 0u};
+            primitive.indexBinding = RHI::RHIIndexBufferBinding{gpuResource.indexBuffer.get(), 0u};
         }
 
         if (stats != nullptr)

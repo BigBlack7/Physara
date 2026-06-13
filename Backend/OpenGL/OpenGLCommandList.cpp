@@ -196,6 +196,7 @@ namespace Physara::RHI
             binding.valid = false;
         }
         m_IndexBufferBinding.valid = false;
+        m_RenderPrimitiveBinding.valid = false;
     }
 
     void OpenGLCommandList::InvalidateDynamicStateCache()
@@ -402,6 +403,7 @@ namespace Physara::RHI
             PHYSARA_CORE_ERROR("SetVertexBuffer called without a bound VAO.");
             return;
         }
+        m_RenderPrimitiveBinding.valid = false;
 
         GLuint id = 0;
         if (buffer)
@@ -460,6 +462,7 @@ namespace Physara::RHI
             PHYSARA_CORE_ERROR("SetIndexBuffer called without a bound VAO.");
             return;
         }
+        m_RenderPrimitiveBinding.valid = false;
 
         GLuint id = 0;
         if (buffer)
@@ -479,6 +482,23 @@ namespace Physara::RHI
         m_State.indexType = GL_UNSIGNED_INT;
         m_IndexBufferBinding.offset = offset;
         m_IndexBufferBinding.indexType = m_State.indexType;
+    }
+
+    void OpenGLCommandList::SetRenderPrimitive(const RHIRenderPrimitive &primitive)
+    {
+        if (primitive.stableId != 0 && m_RenderPrimitiveBinding.valid &&
+            m_RenderPrimitiveBinding.stableId == primitive.stableId)
+        {
+            return;
+        }
+
+        ++m_Statistics.renderPrimitiveBinds;
+        for (const RHIVertexBufferBinding &binding : primitive.vertexBuffers)
+        {
+            SetVertexBuffer(binding.slot, binding.buffer, binding.offset);
+        }
+        SetIndexBuffer(primitive.indexBuffer.buffer, primitive.indexBuffer.offset);
+        m_RenderPrimitiveBinding = RenderPrimitiveBindingState{primitive.stableId, primitive.stableId != 0};
     }
 
     void OpenGLCommandList::SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer)

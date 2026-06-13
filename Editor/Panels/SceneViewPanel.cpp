@@ -170,7 +170,7 @@ namespace Physara::Editor
         char uiLine[192]{};
         char passLine[192]{};
         char passDrawLine[192]{};
-        char glLine[256]{};
+        char glLine[288]{};
         char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
@@ -219,10 +219,11 @@ namespace Physara::Editor
                       static_cast<unsigned long long>(stats.skyboxDrawCalls),
                       static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
                       static_cast<unsigned long long>(stats.postProcessDrawCalls));
-        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/VAO %llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, Bar %llu",
+        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, Bar %llu",
                       static_cast<unsigned long long>(stats.backend.renderPasses),
                       static_cast<unsigned long long>(stats.backend.programBinds),
                       static_cast<unsigned long long>(stats.backend.vaoBinds),
+                      static_cast<unsigned long long>(stats.backend.renderPrimitiveBinds),
                       static_cast<unsigned long long>(stats.backend.vertexBufferBinds),
                       static_cast<unsigned long long>(stats.backend.indexBufferBinds),
                       static_cast<unsigned long long>(stats.backend.resourceSetBinds),

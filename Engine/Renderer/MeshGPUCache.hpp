@@ -1,12 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include <Engine/RHI/Descriptors/RHIRenderPrimitive.hpp>
 #include <Engine/RHI/Resource/RHIBuffer.hpp>
 
 namespace Physara::RHI
@@ -22,11 +25,20 @@ namespace Physara::Engine
 
     struct MeshGPUPrimitive
     {
-        RHI::RHIBuffer *vertexBuffer{};
-        RHI::RHIBuffer *indexBuffer{};
+        std::array<RHI::RHIVertexBufferBinding, 1> vertexBindings{};
+        RHI::RHIIndexBufferBinding indexBinding{};
         std::uint32_t indexCount{0};
         std::uint32_t firstIndex{0};
         std::int32_t vertexOffset{0};
+        std::uint64_t renderPrimitiveId{0};
+
+        [[nodiscard]] RHI::RHIRenderPrimitive AsRHIRenderPrimitive() const
+        {
+            return RHI::RHIRenderPrimitive{
+                renderPrimitiveId,
+                std::span<const RHI::RHIVertexBufferBinding>{vertexBindings.data(), vertexBindings.size()},
+                indexBinding};
+        }
     };
 
     struct MeshGPUResource

@@ -581,8 +581,7 @@ namespace Physara::Engine
                 continue;
             }
 
-            context.commandList->SetVertexBuffer(0u, primitive->vertexBuffer);
-            context.commandList->SetIndexBuffer(primitive->indexBuffer);
+            context.commandList->SetRenderPrimitive(primitive->AsRHIRenderPrimitive());
             context.commandList->DrawIndexed(primitive->indexCount, batch.itemCount, primitive->firstIndex, primitive->vertexOffset, batch.firstInstanceIndex);
             if (context.stats != nullptr)
             {

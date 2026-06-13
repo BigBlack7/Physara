@@ -20,6 +20,7 @@ namespace Physara::RHI
         void SetPipelineState(RHIPipelineState *pso) override;
         void SetVertexBuffer(std::uint32_t binding, RHIBuffer *buffer, std::uint32_t offset = 0) override;
         void SetIndexBuffer(RHIBuffer *buffer, std::uint32_t offset = 0) override;
+        void SetRenderPrimitive(const RHIRenderPrimitive &primitive) override;
         void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
         void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) override;
         void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) override;
@@ -124,6 +125,12 @@ namespace Physara::RHI
             bool valid{false};
         };
 
+        struct RenderPrimitiveBindingState
+        {
+            std::uint64_t stableId{0};
+            bool valid{false};
+        };
+
         struct BufferRangeBindingState
         {
             GLuint buffer{0};
@@ -167,6 +174,7 @@ namespace Physara::RHI
         bool m_PipelineStateValid{false};
         std::array<VertexBufferBindingState, kMaxVertexBindings> m_VertexBufferBindings{};
         IndexBufferBindingState m_IndexBufferBinding{};
+        RenderPrimitiveBindingState m_RenderPrimitiveBinding{};
         ViewportState m_ViewportState{};
         ScissorState m_ScissorState{};
         RHICommandStatistics m_Statistics{};
