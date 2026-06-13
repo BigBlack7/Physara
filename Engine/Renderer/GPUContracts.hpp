@@ -41,6 +41,13 @@ namespace Physara::Engine
         Exposure = 12
     };
 
+    enum class GPUResourceSetIndex : std::uint32_t
+    {
+        PerView = 0,
+        PerRenderable = 1,
+        PerMaterial = 2
+    };
+
     enum class LightTypeGPU : std::uint32_t
     {
         Directional = 0,
@@ -89,6 +96,11 @@ namespace Physara::Engine
     [[nodiscard]] constexpr std::uint32_t Binding(GPUTextureBinding binding)
     {
         return static_cast<std::uint32_t>(binding);
+    }
+
+    [[nodiscard]] constexpr std::uint32_t Binding(GPUResourceSetIndex setIndex)
+    {
+        return static_cast<std::uint32_t>(setIndex);
     }
 
     template <typename T>

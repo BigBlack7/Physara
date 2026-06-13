@@ -25,6 +25,7 @@ namespace Physara::RHI
         void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) override;
         void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) override;
         void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) override;
+        void SetResourceSet(std::uint32_t setIndex, const RHIResourceSet &resourceSet) override;
         void SetStorageTexture(
             std::uint32_t slot,
             RHITexture *texture,
@@ -181,5 +182,6 @@ namespace Physara::RHI
             RHIBuffer *buffer,
             std::uint32_t offset,
             std::uint32_t size);
+        void BindTextureRange(std::span<const RHITextureBinding> bindings);
     };
 }

@@ -74,6 +74,7 @@ target_sources(Engine PRIVATE
     RHI/Core/IImGuiBackend.hpp
     RHI/Core/RHIDevice.hpp
     RHI/Descriptors/RHIBufferDesc.hpp
+    RHI/Descriptors/RHIResourceSet.hpp
     RHI/Descriptors/RHISamplerDesc.hpp
     RHI/Descriptors/RHITextureDesc.hpp
     RHI/Pipeline/RHIFramebuffer.hpp

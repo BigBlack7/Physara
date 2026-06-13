@@ -33,14 +33,10 @@ namespace Physara::Engine
         constexpr std::uint32_t MaterialBinding = Binding(GPUBufferBinding::Materials);
         constexpr std::uint32_t LightBinding = Binding(GPUBufferBinding::Lights);
         constexpr std::uint32_t InstanceObjectIndexBinding = Binding(GPUBufferBinding::InstanceIndices);
-        constexpr std::uint32_t BaseColorTextureBinding = Binding(GPUTextureBinding::BaseColor);
-        constexpr std::uint32_t MetallicRoughnessTextureBinding = Binding(GPUTextureBinding::MetallicRoughness);
-        constexpr std::uint32_t NormalTextureBinding = Binding(GPUTextureBinding::Normal);
-        constexpr std::uint32_t OcclusionTextureBinding = Binding(GPUTextureBinding::Occlusion);
-        constexpr std::uint32_t EmissiveTextureBinding = Binding(GPUTextureBinding::Emissive);
         constexpr std::uint32_t ShadowTextureBinding = Binding(GPUTextureBinding::ShadowMap);
         constexpr std::uint32_t IBLPrefilteredTextureBinding = Binding(GPUTextureBinding::IBLPrefiltered);
         constexpr std::uint32_t IBLBRDFLutBinding = Binding(GPUTextureBinding::IBLBRDFLut);
+        constexpr std::uint32_t PerMaterialResourceSet = Binding(GPUResourceSetIndex::PerMaterial);
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -343,26 +339,7 @@ namespace Physara::Engine
             return;
         }
 
-        const std::uint32_t bindings[MaterialTextureSlotCount]{
-            ForwardOpaquePassDetail::BaseColorTextureBinding,
-            ForwardOpaquePassDetail::MetallicRoughnessTextureBinding,
-            ForwardOpaquePassDetail::NormalTextureBinding,
-            ForwardOpaquePassDetail::OcclusionTextureBinding,
-            ForwardOpaquePassDetail::EmissiveTextureBinding};
-
-        RHI::RHISampler *sampler = resourceSet->sampler;
-        for (std::size_t i = 0; i < MaterialTextureSlotCount; ++i)
-        {
-            RHI::RHITexture *texture = resourceSet->textures[i];
-            if (m_BoundTextures[i] == texture && m_BoundSampler == sampler)
-            {
-                continue;
-            }
-
-            context.commandList->SetTexture(bindings[i], texture, sampler);
-            m_BoundTextures[i] = texture;
-        }
-        m_BoundSampler = sampler;
+        context.commandList->SetResourceSet(ForwardOpaquePassDetail::PerMaterialResourceSet, resourceSet->AsRHIResourceSet());
         m_BoundMaterialInstanceId = resourceSet->materialInstanceId;
     }
 
@@ -437,11 +414,6 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::ResetTextureBindings()
     {
-        for (RHI::RHITexture *&texture : m_BoundTextures)
-        {
-            texture = nullptr;
-        }
-        m_BoundSampler = nullptr;
         m_BoundMaterialInstanceId = InvalidMaterialInstanceId;
     }
 

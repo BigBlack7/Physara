@@ -7,6 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/RHI/RHIDefinitions.hpp>
+#include <Engine/RHI/Descriptors/RHIResourceSet.hpp>
 
 namespace Physara::RHI
 {
@@ -40,6 +41,14 @@ namespace Physara::RHI
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
         virtual void SetUniformBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) = 0;
         virtual void SetTexture(std::uint32_t slot, RHITexture *texture, RHISampler *sampler) = 0;
+        virtual void SetResourceSet(std::uint32_t setIndex, const RHIResourceSet &resourceSet)
+        {
+            (void)setIndex;
+            for (const RHITextureBinding &binding : resourceSet.textures)
+            {
+                SetTexture(binding.slot, binding.texture, binding.sampler);
+            }
+        }
         virtual void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer) = 0;
         virtual void SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size) = 0;
         virtual void SetStorageTexture(

@@ -5,12 +5,15 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include <Engine/Renderer/GPUContracts.hpp>
 #include <Engine/Renderer/MaterialInstance.hpp>
+#include <Engine/RHI/Descriptors/RHIResourceSet.hpp>
 #include <Engine/RHI/Resource/RHISampler.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 #include <Engine/RHI/Descriptors/RHITextureDesc.hpp>
@@ -33,9 +36,14 @@ namespace Physara::Engine
     struct MaterialResourceSet
     {
         MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
-        std::array<RHI::RHITexture *, MaterialTextureSlotCount> textures{};
+        std::array<RHI::RHITextureBinding, MaterialTextureSlotCount> textureBindings{};
         RHI::RHISampler *sampler{nullptr};
         bool complete{false};
+
+        [[nodiscard]] RHI::RHIResourceSet AsRHIResourceSet() const
+        {
+            return RHI::RHIResourceSet{std::span<const RHI::RHITextureBinding>{textureBindings.data(), textureBindings.size()}};
+        }
     };
 
     class MaterialTextureCache final

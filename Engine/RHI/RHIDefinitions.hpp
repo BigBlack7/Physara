@@ -23,6 +23,7 @@ namespace Physara::RHI
         std::uint64_t indexBufferBinds{0};
         std::uint64_t uniformBufferBinds{0};
         std::uint64_t storageBufferBinds{0};
+        std::uint64_t resourceSetBinds{0};
         std::uint64_t textureBinds{0};
         std::uint64_t samplerBinds{0};
         std::uint64_t barriers{0};

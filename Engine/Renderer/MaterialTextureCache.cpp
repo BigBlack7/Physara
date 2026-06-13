@@ -216,12 +216,27 @@ namespace Physara::Engine
                                (!material.normalTexture.IsBound() || normal != nullptr) &&
                                (!material.occlusionTexture.IsBound() || occlusion != nullptr) &&
                                (!material.emissiveTexture.IsBound() || emissive != nullptr);
-        resourceSet.textures = {
-            baseColor != nullptr ? baseColor : m_FallbackWhiteTexture.get(),
-            metallicRoughness != nullptr ? metallicRoughness : m_FallbackWhiteTexture.get(),
-            normal != nullptr ? normal : m_FallbackNormalTexture.get(),
-            occlusion != nullptr ? occlusion : m_FallbackWhiteTexture.get(),
-            emissive != nullptr ? emissive : m_FallbackWhiteTexture.get()};
+        resourceSet.textureBindings = {
+            RHI::RHITextureBinding{
+                Binding(GPUTextureBinding::BaseColor),
+                baseColor != nullptr ? baseColor : m_FallbackWhiteTexture.get(),
+                resourceSet.sampler},
+            RHI::RHITextureBinding{
+                Binding(GPUTextureBinding::MetallicRoughness),
+                metallicRoughness != nullptr ? metallicRoughness : m_FallbackWhiteTexture.get(),
+                resourceSet.sampler},
+            RHI::RHITextureBinding{
+                Binding(GPUTextureBinding::Normal),
+                normal != nullptr ? normal : m_FallbackNormalTexture.get(),
+                resourceSet.sampler},
+            RHI::RHITextureBinding{
+                Binding(GPUTextureBinding::Occlusion),
+                occlusion != nullptr ? occlusion : m_FallbackWhiteTexture.get(),
+                resourceSet.sampler},
+            RHI::RHITextureBinding{
+                Binding(GPUTextureBinding::Emissive),
+                emissive != nullptr ? emissive : m_FallbackWhiteTexture.get(),
+                resourceSet.sampler}};
         return resourceSet;
     }
 

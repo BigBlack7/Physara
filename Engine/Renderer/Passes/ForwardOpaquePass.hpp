@@ -85,8 +85,6 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHISampler> m_ShadowSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBRDFLut{};
-        RHI::RHITexture *m_BoundTextures[MaterialTextureSlotCount]{};
-        RHI::RHISampler *m_BoundSampler{nullptr};
         MaterialInstanceId m_BoundMaterialInstanceId{InvalidMaterialInstanceId};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
