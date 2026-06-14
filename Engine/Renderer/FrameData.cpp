@@ -72,6 +72,7 @@ namespace Physara::Engine
         objects.clear();
         materials.clear();
         materialInstanceIds.clear();
+        materialSignatures.clear();
         lights.clear();
         stats.Reset();
         frameIndex = newFrameIndex;

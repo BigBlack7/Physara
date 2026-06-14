@@ -8,6 +8,11 @@ namespace Physara::Engine
 {
     void TransformSystem::Update(Scene &scene)
     {
+        if (!HasDirtyTransforms(scene))
+        {
+            return;
+        }
+
         auto &registry = scene.GetRegistry();
         // 取出所有拥有RelationshipComponent组件的entity实体集合视图
         auto view = registry.view<RelationshipComponent>();
@@ -20,6 +25,21 @@ namespace Physara::Engine
                 UpdateRecursive(scene, entity, glm::mat4(1.f), false);
             }
         }
+    }
+
+    bool TransformSystem::HasDirtyTransforms(Scene &scene)
+    {
+        auto &registry = scene.GetRegistry();
+        auto view = registry.view<TransformComponent>();
+        for (EntityId entity : view)
+        {
+            const auto &transform = view.get<TransformComponent>(entity);
+            if (transform.localDirty || transform.worldDirty)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     void TransformSystem::UpdateRecursive(Scene &scene, EntityId entity, const glm::mat4 &parentWorldMatrix, bool parentDirty)

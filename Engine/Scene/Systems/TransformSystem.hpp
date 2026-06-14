@@ -14,6 +14,7 @@ namespace Physara::Engine
         static void Update(Scene &scene);
 
     private:
+        [[nodiscard]] static bool HasDirtyTransforms(Scene &scene);
         static void UpdateRecursive(Scene &scene, EntityId entity, const glm::mat4 &parentWorldMatrix, bool parentDirty);
     };
 }

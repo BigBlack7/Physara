@@ -489,6 +489,7 @@ namespace Physara::Engine
                                 m_SkyboxExposureCompensation,
                                 static_cast<std::uint32_t>(m_PostProcessSettings.debugView),
                                 &m_FrameData.stats);
+                            m_FrameUploadAllocator.Flush(&m_FrameData.stats);
                         });
 
         if (drawSkybox)

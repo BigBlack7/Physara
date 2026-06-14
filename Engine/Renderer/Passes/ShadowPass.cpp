@@ -306,6 +306,7 @@ namespace Physara::Engine
 
         BuildShadowCommands(context);
         UploadFrameBuffers(context, shadowCamera);
+        context.frameUploadAllocator->Flush(context.stats);
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetShadowInstanceObjectIndexBuffer();
         if (!m_CameraAllocation.IsValid() || !objectAllocation.IsValid() || !instanceObjectIndexAllocation.IsValid())

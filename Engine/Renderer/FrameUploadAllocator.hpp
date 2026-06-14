@@ -35,6 +35,7 @@ namespace Physara::Engine
             const void *data,
             std::uint32_t size,
             FrameStatistics *stats = nullptr);
+        void Flush(FrameStatistics *stats = nullptr);
 
         template <typename T>
         [[nodiscard]] FrameUploadAllocation Upload(RHI::RHIDevice &device, const T &value, FrameStatistics *stats = nullptr)
@@ -43,7 +44,8 @@ namespace Physara::Engine
         }
 
     private:
-        void AllocateActiveBuffer(RHI::RHIDevice &device, std::uint32_t requiredBytes);
+        void AllocateActiveBuffer(RHI::RHIDevice &device, std::uint32_t requiredBytes, FrameStatistics *stats);
+        void MarkDirtyRange(std::uint32_t offset, std::uint32_t size);
         [[nodiscard]] static std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment);
 
     private:
@@ -52,7 +54,11 @@ namespace Physara::Engine
 
         std::unique_ptr<RHI::RHIBuffer> m_Buffer{};
         std::vector<std::unique_ptr<RHI::RHIBuffer>> m_RetiredFrameBuffers{};
+        std::vector<std::uint8_t> m_Staging{};
         std::uint32_t m_Capacity{0};
         std::uint32_t m_Offset{0};
+        std::uint32_t m_DirtyStart{0};
+        std::uint32_t m_DirtyEnd{0};
+        bool m_HasDirtyRange{false};
     };
 }

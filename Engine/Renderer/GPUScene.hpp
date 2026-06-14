@@ -83,7 +83,7 @@ namespace Physara::Engine
 
         void UploadMaterialTable(
             RHI::RHIDevice &device,
-            const std::vector<MaterialComponent> &materials,
+            const FrameData &frameData,
             const AssetManager *assetManager,
             FrameStatistics *stats);
 

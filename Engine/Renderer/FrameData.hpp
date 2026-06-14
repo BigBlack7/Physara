@@ -61,6 +61,7 @@ namespace Physara::Engine
         std::vector<ObjectData> objects{};
         std::vector<MaterialComponent> materials{};
         std::vector<MaterialInstanceId> materialInstanceIds{};
+        std::vector<std::uint64_t> materialSignatures{};
         std::vector<LightData> lights{};
         FrameStatistics stats{};
         std::uint64_t frameIndex{0};

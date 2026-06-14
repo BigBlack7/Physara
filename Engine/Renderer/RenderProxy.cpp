@@ -292,10 +292,12 @@ namespace Physara::Engine
         frameData.objects.clear();
         frameData.materials.clear();
         frameData.materialInstanceIds.clear();
+        frameData.materialSignatures.clear();
         frameData.objects.reserve(
             m_Buckets.opaque.Size() + m_Buckets.unlit.Size() + m_Buckets.transparent.Size() + m_Buckets.shadowCasters.size());
         frameData.materials.reserve(m_SubmissionScratch.size());
         frameData.materialInstanceIds.reserve(m_SubmissionScratch.size());
+        frameData.materialSignatures.reserve(m_SubmissionScratch.size());
 
         constexpr std::uint32_t InvalidIndex = std::numeric_limits<std::uint32_t>::max();
         m_ObjectIndexBySubmissionScratch.assign(m_SubmissionScratch.size(), InvalidIndex);
@@ -328,6 +330,7 @@ namespace Physara::Engine
             const std::uint32_t materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
             cachedMaterialIndex = materialIndex;
             frameData.materialInstanceIds.push_back(materialInstanceId);
+            frameData.materialSignatures.push_back(m_MaterialRegistry.GetSignature(materialInstanceId));
             frameData.materials.push_back(*material);
             return materialIndex;
         };

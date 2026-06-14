@@ -103,6 +103,7 @@ namespace Physara::Engine
         {
             return;
         }
+        context.frameUploadAllocator->Flush(context.stats);
 
         context.commandList->SetViewport(
             0.f,

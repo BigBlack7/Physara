@@ -120,6 +120,7 @@ namespace Physara::Engine
         {
             return;
         }
+        context.frameUploadAllocator->Flush(context.stats);
 
         ExecuteExposure(context, frameUniformAllocation);
         ExecuteBloom(context, frameUniformAllocation);

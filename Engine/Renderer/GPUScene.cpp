@@ -42,54 +42,31 @@ namespace Physara::Engine
             return desc;
         }
 
-        std::uint64_t HashTextureSlot(std::uint64_t hash, const TextureSlot &slot)
+        bool GetBaseColorTransparentPixels(const MaterialComponent &material, const AssetManager *assetManager)
         {
-            hash = UploadHash::String(hash, slot.path);
-            return UploadHash::Value(hash, slot.texCoord);
-        }
-
-        std::uint64_t HashMaterialComponent(std::uint64_t hash, const MaterialComponent &material, const AssetManager *assetManager)
-        {
-            hash = UploadHash::String(hash, material.materialPath);
-            hash = UploadHash::Value(hash, material.shadingModel);
-            hash = UploadHash::Value(hash, material.alphaMode);
-            hash = UploadHash::Value(hash, material.doubleSided);
-            hash = UploadHash::Value(hash, material.castShadow);
-            hash = UploadHash::Value(hash, material.baseColor);
-            hash = UploadHash::Value(hash, material.metallic);
-            hash = UploadHash::Value(hash, material.roughness);
-            hash = UploadHash::Value(hash, material.reflectance);
-            hash = UploadHash::Value(hash, material.ambientOcclusion);
-            hash = UploadHash::Value(hash, material.alphaCutoff);
-            hash = UploadHash::Value(hash, material.metallicTextureInfluence);
-            hash = UploadHash::Value(hash, material.roughnessTextureInfluence);
-            hash = UploadHash::Value(hash, material.ambientOcclusionTextureInfluence);
-            hash = UploadHash::Value(hash, material.emissiveColor);
-            hash = UploadHash::Value(hash, material.emissiveLuminance);
-            hash = UploadHash::Value(hash, material.normalScale);
-            hash = UploadHash::Value(hash, material.flipNormalY);
-            hash = HashTextureSlot(hash, material.baseColorTexture);
-            hash = HashTextureSlot(hash, material.metallicRoughnessTexture);
-            hash = HashTextureSlot(hash, material.normalTexture);
-            hash = HashTextureSlot(hash, material.occlusionTexture);
-            hash = HashTextureSlot(hash, material.emissiveTexture);
-
-            bool baseColorHasTransparentPixels = false;
-            if (assetManager != nullptr && material.baseColorTexture.IsBound())
+            if (assetManager == nullptr || !material.baseColorTexture.IsBound())
             {
-                const std::shared_ptr<Texture> texture = assetManager->GetByPath<Texture>(material.baseColorTexture.path);
-                baseColorHasTransparentPixels = texture != nullptr && texture->hasTransparentPixels;
+                return false;
             }
-            return UploadHash::Value(hash, baseColorHasTransparentPixels);
+
+            const std::shared_ptr<Texture> texture = assetManager->GetByPath<Texture>(material.baseColorTexture.path);
+            return texture != nullptr && texture->hasTransparentPixels;
         }
 
-        std::uint64_t HashMaterialTable(const std::vector<MaterialComponent> &materials, const AssetManager *assetManager)
+        std::uint64_t HashMaterialTable(const FrameData &frameData, const AssetManager *assetManager)
         {
             std::uint64_t hash = UploadHash::Offset;
-            hash = UploadHash::Value(hash, materials.size());
-            for (const MaterialComponent &material : materials)
+            hash = UploadHash::Value(hash, frameData.materials.size());
+            for (std::size_t i = 0; i < frameData.materials.size(); ++i)
             {
-                hash = HashMaterialComponent(hash, material, assetManager);
+                const MaterialInstanceId materialId =
+                    i < frameData.materialInstanceIds.size() ? frameData.materialInstanceIds[i] : InvalidMaterialInstanceId;
+                const std::uint64_t materialSignature =
+                    i < frameData.materialSignatures.size() ? frameData.materialSignatures[i] : 0u;
+                const bool baseColorHasTransparentPixels = GetBaseColorTransparentPixels(frameData.materials[i], assetManager);
+                hash = UploadHash::Value(hash, materialId);
+                hash = UploadHash::Value(hash, materialSignature);
+                hash = UploadHash::Value(hash, baseColorHasTransparentPixels);
             }
             return hash;
         }
@@ -246,7 +223,7 @@ namespace Physara::Engine
         Reset();
         m_ObjectAllocation = UploadObjectTable(device, allocator, frameData.objects, stats);
         m_LightAllocation = UploadLightTable(device, allocator, frameData.lights, stats);
-        UploadMaterialTable(device, frameData.materials, assetManager, stats);
+        UploadMaterialTable(device, frameData, assetManager, stats);
         m_ForwardInstanceObjectIndexAllocation = UploadInstanceObjectIndices(
             device,
             allocator,
@@ -356,10 +333,11 @@ namespace Physara::Engine
 
     void GPUScene::UploadMaterialTable(
         RHI::RHIDevice &device,
-        const std::vector<MaterialComponent> &materials,
+        const FrameData &frameData,
         const AssetManager *assetManager,
         FrameStatistics *stats)
     {
+        const std::vector<MaterialComponent> &materials = frameData.materials;
         const std::uint32_t materialBufferSize = static_cast<std::uint32_t>(
             GPUSceneDetail::MaxValue<std::size_t>(materials.size(), 1u) * sizeof(MaterialGPUData));
         if (m_MaterialBuffer == nullptr || m_MaterialBuffer->GetSize() < materialBufferSize)
@@ -373,7 +351,7 @@ namespace Physara::Engine
             return;
         }
 
-        const std::uint64_t materialSignature = GPUSceneDetail::HashMaterialTable(materials, assetManager);
+        const std::uint64_t materialSignature = GPUSceneDetail::HashMaterialTable(frameData, assetManager);
         if (materialSignature == m_LastMaterialUploadSignature)
         {
             return;
