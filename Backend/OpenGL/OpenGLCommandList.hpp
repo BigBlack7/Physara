@@ -246,6 +246,6 @@ namespace Physara::RHI
             RHIBuffer *buffer,
             std::uint32_t offset,
             std::uint32_t size);
-        void BindTextureRange(std::span<const RHITextureBinding> bindings);
+        [[nodiscard]] bool BindTextureRange(std::span<const RHITextureBinding> bindings);
     };
 }

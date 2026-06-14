@@ -44,22 +44,17 @@ int main()
         Physara::Platform::FileSystem::Init(ASSETS_PATH);
 
         constexpr auto graphicsBackend = Physara::RHI::GraphicsBackend::OpenGL;
-
         window = Physara::RHI::CreateRuntimeWindow(graphicsBackend);
         if (!window->Create("Physara", 1960, 1080))
         {
             throw std::runtime_error("Failed to create window.");
         }
 
-        window->SetResizeCallback([](int width, int height)
-                                  { PHYSARA_CORE_INFO("Window resized: {} x {}", width, height); });
-
         void *nativeWindow = window->GetNativeHandle();
         if (nativeWindow == nullptr)
         {
             throw std::runtime_error("Window native handle is null.");
         }
-
         PHYSARA_CORE_INFO("Window created: {} x {}", window->GetWidth(), window->GetHeight());
 
         input = Physara::RHI::CreateRuntimeInput(graphicsBackend, nativeWindow);

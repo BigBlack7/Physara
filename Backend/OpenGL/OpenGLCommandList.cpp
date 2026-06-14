@@ -702,8 +702,10 @@ namespace Physara::RHI
             return;
         }
 
-        ++m_Statistics.resourceSetBinds;
-        BindTextureRange(resourceSet.textures);
+        if (BindTextureRange(resourceSet.textures))
+        {
+            ++m_Statistics.resourceSetBinds;
+        }
     }
 
     void OpenGLCommandList::SetStorageBuffer(std::uint32_t slot, RHIBuffer *buffer, std::uint32_t offset, std::uint32_t size)
@@ -775,17 +777,19 @@ namespace Physara::RHI
         cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
     }
 
-    void OpenGLCommandList::BindTextureRange(std::span<const RHITextureBinding> bindings)
+    bool OpenGLCommandList::BindTextureRange(std::span<const RHITextureBinding> bindings)
     {
+        bool submitted = false;
         std::uint32_t begin = 0;
         while (begin < bindings.size())
         {
             const std::uint32_t firstSlot = bindings[begin].slot;
             std::array<GLuint, 32> textureIds{};
             std::array<GLuint, 32> samplerIds{};
+            std::array<std::uint32_t, 32> slots{};
+            std::array<bool, 32> textureDirtySlots{};
+            std::array<bool, 32> samplerDirtySlots{};
             std::uint32_t count = 0;
-            bool textureDirty = false;
-            bool samplerDirty = false;
 
             for (std::uint32_t i = begin; i < bindings.size(); ++i)
             {
@@ -810,46 +814,79 @@ namespace Physara::RHI
 
                 textureIds[count] = textureId;
                 samplerIds[count] = samplerId;
+                slots[count] = binding.slot;
                 const std::uint32_t slot = binding.slot;
                 if (slot >= m_TextureBindings.size() || m_TextureBindings[slot] != textureId)
                 {
-                    textureDirty = true;
+                    textureDirtySlots[count] = true;
                 }
                 if (slot >= m_SamplerBindings.size() || m_SamplerBindings[slot] != samplerId)
                 {
-                    samplerDirty = true;
+                    samplerDirtySlots[count] = true;
                 }
                 ++count;
             }
 
-            if (textureDirty)
+            for (std::uint32_t i = 0; i < count;)
             {
-                glBindTextures(firstSlot, static_cast<GLsizei>(count), textureIds.data());
-                m_Statistics.textureBinds += count;
-                for (std::uint32_t i = 0; i < count; ++i)
+                if (!textureDirtySlots[i])
                 {
-                    const std::uint32_t slot = firstSlot + i;
+                    ++i;
+                    continue;
+                }
+
+                const std::uint32_t dirtyOffset = i;
+                std::uint32_t dirtyCount = 1u;
+                while (dirtyOffset + dirtyCount < count && textureDirtySlots[dirtyOffset + dirtyCount])
+                {
+                    ++dirtyCount;
+                }
+
+                glBindTextures(slots[dirtyOffset], static_cast<GLsizei>(dirtyCount), textureIds.data() + dirtyOffset);
+                m_Statistics.textureBinds += dirtyCount;
+                submitted = true;
+                for (std::uint32_t j = 0; j < dirtyCount; ++j)
+                {
+                    const std::uint32_t slot = slots[dirtyOffset + j];
                     if (slot < m_TextureBindings.size())
                     {
-                        m_TextureBindings[slot] = textureIds[i];
+                        m_TextureBindings[slot] = textureIds[dirtyOffset + j];
                     }
                 }
+                i = dirtyOffset + dirtyCount;
             }
-            if (samplerDirty)
+
+            for (std::uint32_t i = 0; i < count;)
             {
-                glBindSamplers(firstSlot, static_cast<GLsizei>(count), samplerIds.data());
-                m_Statistics.samplerBinds += count;
-                for (std::uint32_t i = 0; i < count; ++i)
+                if (!samplerDirtySlots[i])
                 {
-                    const std::uint32_t slot = firstSlot + i;
+                    ++i;
+                    continue;
+                }
+
+                const std::uint32_t dirtyOffset = i;
+                std::uint32_t dirtyCount = 1u;
+                while (dirtyOffset + dirtyCount < count && samplerDirtySlots[dirtyOffset + dirtyCount])
+                {
+                    ++dirtyCount;
+                }
+
+                glBindSamplers(slots[dirtyOffset], static_cast<GLsizei>(dirtyCount), samplerIds.data() + dirtyOffset);
+                m_Statistics.samplerBinds += dirtyCount;
+                submitted = true;
+                for (std::uint32_t j = 0; j < dirtyCount; ++j)
+                {
+                    const std::uint32_t slot = slots[dirtyOffset + j];
                     if (slot < m_SamplerBindings.size())
                     {
-                        m_SamplerBindings[slot] = samplerIds[i];
+                        m_SamplerBindings[slot] = samplerIds[dirtyOffset + j];
                     }
                 }
+                i = dirtyOffset + dirtyCount;
             }
             begin += count;
         }
+        return submitted;
     }
 
     void OpenGLCommandList::SetStorageTexture(

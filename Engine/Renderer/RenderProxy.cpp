@@ -263,23 +263,60 @@ namespace Physara::Engine
 
     void RenderProxy::SortBuckets()
     {
-        const auto bySortKey = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
+        const auto byMaterialMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
         {
-            if (lhs.sortKey == rhs.sortKey)
+            if (lhs.materialInstanceId != rhs.materialInstanceId)
             {
-                return lhs.objectIndex < rhs.objectIndex;
+                return lhs.materialInstanceId < rhs.materialInstanceId;
             }
-            return lhs.sortKey < rhs.sortKey;
+            if (lhs.meshKey != rhs.meshKey)
+            {
+                return lhs.meshKey < rhs.meshKey;
+            }
+            if (lhs.primitiveKey != rhs.primitiveKey)
+            {
+                return lhs.primitiveKey < rhs.primitiveKey;
+            }
+            return lhs.objectIndex < rhs.objectIndex;
         };
 
-        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, bySortKey);
-        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, bySortKey);
-        std::sort(m_Buckets.shadowCasters.begin(), m_Buckets.shadowCasters.end(), bySortKey);
+        const auto byShadowMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
+        {
+            if (lhs.meshKey != rhs.meshKey)
+            {
+                return lhs.meshKey < rhs.meshKey;
+            }
+            if (lhs.primitiveKey != rhs.primitiveKey)
+            {
+                return lhs.primitiveKey < rhs.primitiveKey;
+            }
+            if (lhs.materialInstanceId != rhs.materialInstanceId)
+            {
+                return lhs.materialInstanceId < rhs.materialInstanceId;
+            }
+            return std::less<const RenderMeshSubmission *>{}(lhs.submission, rhs.submission);
+        };
+
+        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, byMaterialMeshPrimitive);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, byMaterialMeshPrimitive);
+        std::sort(m_Buckets.shadowCasters.begin(), m_Buckets.shadowCasters.end(), byShadowMeshPrimitive);
         RenderProxyDetail::SortCullBuckets(
             m_Buckets.transparent,
             [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
             {
-                return lhs.cameraDistanceSq > rhs.cameraDistanceSq;
+                if (lhs.cameraDistanceSq != rhs.cameraDistanceSq)
+                {
+                    return lhs.cameraDistanceSq > rhs.cameraDistanceSq;
+                }
+                if (lhs.materialInstanceId != rhs.materialInstanceId)
+                {
+                    return lhs.materialInstanceId < rhs.materialInstanceId;
+                }
+                if (lhs.meshKey != rhs.meshKey)
+                {
+                    return lhs.meshKey < rhs.meshKey;
+                }
+                return lhs.primitiveKey < rhs.primitiveKey;
             });
     }
 
