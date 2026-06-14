@@ -410,6 +410,16 @@ namespace Physara::Engine
         const bool msaaEnabled = m_MSAASamples > 1u && m_SceneHDRColorMSAA != nullptr && m_SceneDepthMSAA != nullptr;
         RenderGraphResourceHandle renderHDR = msaaEnabled ? m_RenderGraph.ImportTexture("SceneHDRMSAA", *m_SceneHDRColorMSAA) : sceneHDR;
         RenderGraphResourceHandle renderDepth = msaaEnabled ? m_RenderGraph.ImportTexture("SceneDepthMSAA", *m_SceneDepthMSAA) : sceneDepth;
+        RenderGraphResourceHandle shadowMap{};
+        const bool shadowEnabled = m_ShadowSettings.algorithm != ShadowAlgorithm::None;
+        if (shadowEnabled)
+        {
+            m_ShadowPass.PrepareResources(*m_Device);
+            if (RHI::RHITexture *shadowTexture = m_ShadowPass.GetShadowMap())
+            {
+                shadowMap = m_RenderGraph.ImportTexture("ShadowMap", *shadowTexture);
+            }
+        }
         m_RenderGraph.MarkOutput(sceneColor);
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
         if (!m_EnvironmentMapPath.empty())
@@ -435,28 +445,31 @@ namespace Physara::Engine
                                 &m_FrameData.stats);
                         });
 
-        if (m_ShadowSettings.algorithm != ShadowAlgorithm::None)
+        if (shadowEnabled)
         {
-            m_RenderGraph.AddPass("Shadow")
-                .SetSideEffect()
-                .SetExecute([this](RenderGraphContext &context)
-                            {
-                                ShadowPassContext passContext{};
-                                passContext.device = m_Device;
-                                passContext.commandList = &context.commandList;
-                                passContext.shaderLibrary = &m_ShaderLibrary;
-                                passContext.pipelineCache = &m_PipelineStateCache;
-                                passContext.frameData = &m_FrameData;
-                                passContext.frameUploadAllocator = &m_FrameUploadAllocator;
-                                passContext.gpuScene = &m_GPUScene;
-                                passContext.stats = &m_FrameData.stats;
-                                passContext.renderProxy = &m_RenderProxy;
-                                passContext.meshCache = &m_MeshGPUCache;
-                                passContext.assetManager = m_AssetManager;
-                                const auto passStart = std::chrono::steady_clock::now();
-                                m_ShadowPass.Execute(passContext);
-                                m_FrameData.stats.shadowCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
-                            });
+            RGBuilder shadowPass = m_RenderGraph.AddPass("Shadow").SetSideEffect();
+            if (shadowMap.IsValid())
+            {
+                shadowPass.WriteAttachment(shadowMap);
+            }
+            shadowPass.SetExecute([this](RenderGraphContext &context)
+                                  {
+                                      ShadowPassContext passContext{};
+                                      passContext.device = m_Device;
+                                      passContext.commandList = &context.commandList;
+                                      passContext.shaderLibrary = &m_ShaderLibrary;
+                                      passContext.pipelineCache = &m_PipelineStateCache;
+                                      passContext.frameData = &m_FrameData;
+                                      passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+                                      passContext.gpuScene = &m_GPUScene;
+                                      passContext.stats = &m_FrameData.stats;
+                                      passContext.renderProxy = &m_RenderProxy;
+                                      passContext.meshCache = &m_MeshGPUCache;
+                                      passContext.assetManager = m_AssetManager;
+                                      const auto passStart = std::chrono::steady_clock::now();
+                                      m_ShadowPass.Execute(passContext);
+                                      m_FrameData.stats.shadowCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                                  });
         }
 
         m_RenderGraph.AddPass("FrameUniformsUpload")
@@ -505,49 +518,50 @@ namespace Physara::Engine
                             });
         }
 
-        m_RenderGraph.AddPass("ForwardOpaque")
+        RGBuilder forwardOpaque = m_RenderGraph.AddPass("ForwardOpaque")
             .WriteAttachment(renderHDR)
-            .WriteAttachment(renderDepth)
-            .SetExecute([this](RenderGraphContext &context)
-                        {
-                            if (m_ShadowPass.GetShadowMap() != nullptr && m_FrameData.shadow.params.x > 0.5f)
-                            {
-                                context.commandList.TextureBarrier(
-                                    m_ShadowPass.GetShadowMap(),
-                                    RHI::ResourceBarrier::DepthStencilWriteToFragmentRead());
-                            }
-
-                            ForwardPassContext passContext{};
-                            passContext.device = m_Device;
-                            passContext.commandList = &context.commandList;
-                            passContext.framebuffer = m_Framebuffer.get();
-                            passContext.renderPassDesc = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() ? &m_SkyboxRenderPassDesc : &m_RenderPassDesc;
-                            passContext.shaderLibrary = &m_ShaderLibrary;
-                            passContext.pipelineCache = &m_PipelineStateCache;
-                            passContext.frameData = &m_FrameData;
-                            passContext.gpuScene = &m_GPUScene;
-                            passContext.stats = &m_FrameData.stats;
-                            passContext.renderProxy = &m_RenderProxy;
-                            passContext.meshCache = &m_MeshGPUCache;
-                            passContext.assetManager = m_AssetManager;
-                            passContext.shadowMap = m_ShadowPass.GetShadowMap();
-                            passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
-                            passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
-                            passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
-                            passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
-                            const auto passStart = std::chrono::steady_clock::now();
-                            m_ForwardOpaquePass.Execute(passContext);
-                            m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
-                        });
+            .WriteAttachment(renderDepth);
+        if (shadowMap.IsValid())
+        {
+            forwardOpaque.ReadTexture(shadowMap);
+        }
+        forwardOpaque.SetExecute([this](RenderGraphContext &context)
+                                 {
+                                     ForwardPassContext passContext{};
+                                     passContext.device = m_Device;
+                                     passContext.commandList = &context.commandList;
+                                     passContext.framebuffer = m_Framebuffer.get();
+                                     passContext.renderPassDesc = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() ? &m_SkyboxRenderPassDesc : &m_RenderPassDesc;
+                                     passContext.shaderLibrary = &m_ShaderLibrary;
+                                     passContext.pipelineCache = &m_PipelineStateCache;
+                                     passContext.frameData = &m_FrameData;
+                                     passContext.gpuScene = &m_GPUScene;
+                                     passContext.stats = &m_FrameData.stats;
+                                     passContext.renderProxy = &m_RenderProxy;
+                                     passContext.meshCache = &m_MeshGPUCache;
+                                     passContext.assetManager = m_AssetManager;
+                                     passContext.shadowMap = m_ShadowPass.GetShadowMap();
+                                     passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+                                     passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
+                                     passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
+                                     passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
+                                     const auto passStart = std::chrono::steady_clock::now();
+                                     m_ForwardOpaquePass.Execute(passContext);
+                                     m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                                 });
 
         if (!m_RenderProxy.GetBuckets().transparent.Empty())
         {
-            m_RenderGraph.AddPass("ForwardTransparent")
-                .WriteAttachment(renderHDR)
-                .SetExecute([this](RenderGraphContext &context)
-                            {
-                                ExecuteTransparentForwardPass(context);
-                            });
+            RGBuilder forwardTransparent = m_RenderGraph.AddPass("ForwardTransparent")
+                .WriteAttachment(renderHDR);
+            if (shadowMap.IsValid())
+            {
+                forwardTransparent.ReadTexture(shadowMap);
+            }
+            forwardTransparent.SetExecute([this](RenderGraphContext &context)
+                                          {
+                                              ExecuteTransparentForwardPass(context);
+                                          });
         }
 
         if (msaaEnabled)

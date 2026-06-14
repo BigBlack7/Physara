@@ -4,7 +4,6 @@
 #include <array>
 #include <functional>
 #include <limits>
-#include <unordered_map>
 
 #include <glm/geometric.hpp>
 #include <glm/vec4.hpp>
@@ -69,41 +68,6 @@ namespace Physara::Engine
         std::uint32_t EntityToObjectId(EntityId entity)
         {
             return static_cast<std::uint32_t>(entity);
-        }
-
-        std::uint64_t HashString(std::string_view value)
-        {
-            return static_cast<std::uint64_t>(std::hash<std::string_view>{}(value));
-        }
-
-        void HashCombine(std::uint64_t &seed, std::string_view value)
-        {
-            const std::uint64_t hash = HashString(value);
-            seed ^= hash + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
-        }
-
-        void HashCombine(std::uint64_t &seed, std::uint64_t value)
-        {
-            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
-        }
-
-        void HashCombine(std::uint64_t &seed, float value)
-        {
-            HashCombine(seed, static_cast<std::uint64_t>(std::hash<float>{}(value)));
-        }
-
-        std::uint64_t BuildMeshKey(const RenderMeshSubmission &submission)
-        {
-            std::uint64_t seed = HashString(submission.meshPath);
-            HashCombine(seed, static_cast<std::uint64_t>(submission.meshIndex));
-            return seed;
-        }
-
-        std::uint64_t BuildPrimitiveKey(const RenderMeshSubmission &submission)
-        {
-            std::uint64_t seed = BuildMeshKey(submission);
-            HashCombine(seed, static_cast<std::uint64_t>(submission.primitiveIndex));
-            return seed;
         }
 
         template <typename Compare>
@@ -179,7 +143,7 @@ namespace Physara::Engine
         Reset();
         LightSystem::Collect(scene, frameData.lights, &view);
         frameData.stats.lightCount = static_cast<std::uint32_t>(frameData.lights.size());
-        RenderSystem::Collect(scene, m_SubmissionScratch, assetManager);
+        RenderSystem::Collect(scene, m_SubmissionScratch, assetManager, &m_CollectScratch);
         CullAndBucket(m_SubmissionScratch, view, frameData);
         SortBuckets();
         RepackObjectsForSortedBuckets(frameData);
@@ -203,8 +167,9 @@ namespace Physara::Engine
     {
         const auto frustumPlanes = RenderProxyDetail::BuildFrustumPlanes(view.viewProjection);
 
-        for (const RenderMeshSubmission &submission : submissions)
+        for (std::uint32_t submissionIndex = 0; submissionIndex < static_cast<std::uint32_t>(submissions.size()); ++submissionIndex)
         {
+            const RenderMeshSubmission &submission = submissions[submissionIndex];
             MaterialInstanceId materialInstanceId = InvalidMaterialInstanceId;
             if (submission.material.castShadow &&
                 (submission.material.alphaMode == AlphaMode::Opaque || submission.material.alphaMode == AlphaMode::Mask))
@@ -212,9 +177,10 @@ namespace Physara::Engine
                 materialInstanceId = m_MaterialRegistry.Resolve(submission.material);
                 RenderDrawItem item{};
                 item.submission = &submission;
+                item.sourceSubmissionIndex = submissionIndex;
                 item.sortKey = BuildSortKey(submission, materialInstanceId);
-                item.meshKey = RenderProxyDetail::BuildMeshKey(submission);
-                item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(submission);
+                item.meshKey = submission.meshKey;
+                item.primitiveKey = submission.primitiveKey;
                 item.materialInstanceId = materialInstanceId;
                 item.doubleSided = submission.material.doubleSided;
                 m_Buckets.shadowCasters.push_back(item);
@@ -238,11 +204,12 @@ namespace Physara::Engine
             RenderDrawItem item{};
             item.submission = &visibleSubmission;
             item.objectIndex = m_VisibleSubmissionCount++;
+            item.sourceSubmissionIndex = submissionIndex;
             item.sortKey = BuildSortKey(visibleSubmission, materialInstanceId);
             const glm::vec3 cameraToObject = visibleSubmission.boundsCenter - view.position;
             item.cameraDistanceSq = glm::dot(cameraToObject, cameraToObject);
-            item.meshKey = RenderProxyDetail::BuildMeshKey(visibleSubmission);
-            item.primitiveKey = RenderProxyDetail::BuildPrimitiveKey(visibleSubmission);
+            item.meshKey = visibleSubmission.meshKey;
+            item.primitiveKey = visibleSubmission.primitiveKey;
             item.materialInstanceId = materialInstanceId;
             item.doubleSided = visibleSubmission.material.doubleSided;
 
@@ -330,17 +297,26 @@ namespace Physara::Engine
         frameData.materials.reserve(m_SubmissionScratch.size());
         frameData.materialInstanceIds.reserve(m_SubmissionScratch.size());
 
-        std::unordered_map<const RenderMeshSubmission *, std::uint32_t> objectIndexBySubmission{};
-        objectIndexBySubmission.reserve(frameData.objects.capacity());
-        std::unordered_map<MaterialInstanceId, std::uint32_t> materialIndexByInstance{};
-        materialIndexByInstance.reserve(m_SubmissionScratch.size());
+        constexpr std::uint32_t InvalidIndex = std::numeric_limits<std::uint32_t>::max();
+        m_ObjectIndexBySubmissionScratch.assign(m_SubmissionScratch.size(), InvalidIndex);
+        m_MaterialIndexByInstanceScratch.assign(m_MaterialRegistry.GetCount(), InvalidIndex);
 
-        const auto resolveMaterialIndex = [this, &frameData, &materialIndexByInstance](MaterialInstanceId materialInstanceId)
+        const auto resolveMaterialIndex = [this, &frameData](MaterialInstanceId materialInstanceId)
         {
-            const auto found = materialIndexByInstance.find(materialInstanceId);
-            if (found != materialIndexByInstance.end())
+            if (materialInstanceId == InvalidMaterialInstanceId)
             {
-                return found->second;
+                return std::numeric_limits<std::uint32_t>::max();
+            }
+
+            if (materialInstanceId >= m_MaterialIndexByInstanceScratch.size())
+            {
+                m_MaterialIndexByInstanceScratch.resize(materialInstanceId + 1u, std::numeric_limits<std::uint32_t>::max());
+            }
+
+            std::uint32_t &cachedMaterialIndex = m_MaterialIndexByInstanceScratch[materialInstanceId];
+            if (cachedMaterialIndex != std::numeric_limits<std::uint32_t>::max())
+            {
+                return cachedMaterialIndex;
             }
 
             const MaterialComponent *material = m_MaterialRegistry.Get(materialInstanceId);
@@ -350,24 +326,27 @@ namespace Physara::Engine
             }
 
             const std::uint32_t materialIndex = static_cast<std::uint32_t>(frameData.materials.size());
-            materialIndexByInstance.emplace(materialInstanceId, materialIndex);
+            cachedMaterialIndex = materialIndex;
             frameData.materialInstanceIds.push_back(materialInstanceId);
             frameData.materials.push_back(*material);
             return materialIndex;
         };
 
-        const auto appendObject = [&frameData, &objectIndexBySubmission, &resolveMaterialIndex](RenderDrawItem &item)
+        const auto appendObject = [this, &frameData, &resolveMaterialIndex](RenderDrawItem &item)
         {
             if (item.submission == nullptr)
             {
                 return;
             }
 
-            const auto foundObjectIndex = objectIndexBySubmission.find(item.submission);
-            if (foundObjectIndex != objectIndexBySubmission.end())
+            if (item.sourceSubmissionIndex < m_ObjectIndexBySubmissionScratch.size())
             {
-                item.objectIndex = foundObjectIndex->second;
-                return;
+                const std::uint32_t cachedObjectIndex = m_ObjectIndexBySubmissionScratch[item.sourceSubmissionIndex];
+                if (cachedObjectIndex != std::numeric_limits<std::uint32_t>::max())
+                {
+                    item.objectIndex = cachedObjectIndex;
+                    return;
+                }
             }
 
             const RenderMeshSubmission &submission = *item.submission;
@@ -379,7 +358,10 @@ namespace Physara::Engine
             ObjectData object = BuildObjectData(submission, GetBucket(submission));
             object.materialIndex = materialIndex;
             const std::uint32_t objectIndex = static_cast<std::uint32_t>(frameData.objects.size());
-            objectIndexBySubmission.emplace(&submission, objectIndex);
+            if (item.sourceSubmissionIndex < m_ObjectIndexBySubmissionScratch.size())
+            {
+                m_ObjectIndexBySubmissionScratch[item.sourceSubmissionIndex] = objectIndex;
+            }
             item.objectIndex = objectIndex;
             frameData.objects.push_back(object);
         };
@@ -469,7 +451,7 @@ namespace Physara::Engine
     std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission, MaterialInstanceId materialInstanceId)
     {
         const std::uint64_t materialKey = static_cast<std::uint64_t>(materialInstanceId) & 0xffffffffull;
-        const std::uint64_t meshHash = RenderProxyDetail::BuildMeshKey(submission) & 0xffffull;
+        const std::uint64_t meshHash = submission.meshKey & 0xffffull;
         const std::uint64_t primitive = static_cast<std::uint64_t>(submission.primitiveIndex & 0xffffu);
         return (materialKey << 32u) | (meshHash << 16u) | primitive;
     }

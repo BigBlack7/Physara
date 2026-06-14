@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/mat4x4.hpp>
@@ -21,7 +22,8 @@ namespace Physara::Engine
         std::string meshPath{};
         std::uint32_t meshIndex{0};
         std::uint32_t primitiveIndex{0};
-        std::string materialPath{};
+        std::uint64_t meshKey{0};
+        std::uint64_t primitiveKey{0};
         MaterialComponent material{};
         glm::mat4 model{1.f};
         glm::mat4 inverseTransposeModel{1.f};
@@ -31,10 +33,24 @@ namespace Physara::Engine
         bool receiveShadows{true};
     };
 
+    struct RenderSystemCollectScratch
+    {
+        std::unordered_map<std::string, MaterialComponent> resourceMaterials{};
+
+        void Clear()
+        {
+            resourceMaterials.clear();
+        }
+    };
+
     class RenderSystem final
     {
     public:
         // Caller owns Scene::UpdateTransforms() so render and light collection can share one authoritative update.
-        static void Collect(Scene &scene, std::vector<RenderMeshSubmission> &submissions, AssetManager *assetManager = nullptr);
+        static void Collect(
+            Scene &scene,
+            std::vector<RenderMeshSubmission> &submissions,
+            AssetManager *assetManager = nullptr,
+            RenderSystemCollectScratch *scratch = nullptr);
     };
 }

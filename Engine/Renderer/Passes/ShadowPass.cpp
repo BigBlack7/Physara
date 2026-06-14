@@ -296,7 +296,7 @@ namespace Physara::Engine
             return;
         }
 
-        EnsureResources(context);
+        PrepareResources(*context.device);
         RHI::RHIPipelineState *pipeline = GetPipeline(context);
         if (pipeline == nullptr || m_Framebuffer == nullptr)
         {
@@ -376,7 +376,7 @@ namespace Physara::Engine
         m_Settings = sanitized;
     }
 
-    void ShadowPass::EnsureResources(const ShadowPassContext &context)
+    void ShadowPass::PrepareResources(RHI::RHIDevice &device)
     {
         if (m_RenderPassDesc.hasDepth == false)
         {
@@ -400,7 +400,7 @@ namespace Physara::Engine
             desc.mipLevels = 1u;
             desc.arrayLayers = 1u;
             desc.samples = 1u;
-            m_ShadowMap = context.device->CreateTexture(desc);
+            m_ShadowMap = device.CreateTexture(desc);
         }
 
         if (m_Framebuffer == nullptr && m_ShadowMap != nullptr)
@@ -410,7 +410,7 @@ namespace Physara::Engine
             framebufferDesc.width = m_Settings.resolution;
             framebufferDesc.height = m_Settings.resolution;
             framebufferDesc.renderPassDesc = &m_RenderPassDesc;
-            m_Framebuffer = context.device->CreateFramebuffer(framebufferDesc);
+            m_Framebuffer = device.CreateFramebuffer(framebufferDesc);
         }
     }
 

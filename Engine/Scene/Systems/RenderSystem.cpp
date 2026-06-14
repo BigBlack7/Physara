@@ -1,8 +1,10 @@
 #include "RenderSystem.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <memory>
+#include <string_view>
 
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/vec4.hpp>
 
 #include <Engine/Scene/Components/MeshComponent.hpp>
@@ -51,7 +53,42 @@ namespace Physara::Engine
             return component;
         }
 
-        void ApplyResourceTransparency(MaterialComponent &material, const Material &resource)
+        bool ResolveResourceMaterial(
+            AssetManager *assetManager,
+            const std::string &materialPath,
+            RenderSystemCollectScratch *scratch,
+            MaterialComponent &outMaterial)
+        {
+            if (assetManager == nullptr || materialPath.empty())
+            {
+                return false;
+            }
+
+            if (scratch != nullptr)
+            {
+                const auto cached = scratch->resourceMaterials.find(materialPath);
+                if (cached != scratch->resourceMaterials.end())
+                {
+                    outMaterial = cached->second;
+                    return true;
+                }
+            }
+
+            const std::shared_ptr<Material> resource = assetManager->GetByPath<Material>(materialPath);
+            if (resource == nullptr)
+            {
+                return false;
+            }
+
+            outMaterial = ToComponent(*resource);
+            if (scratch != nullptr)
+            {
+                scratch->resourceMaterials.emplace(materialPath, outMaterial);
+            }
+            return true;
+        }
+
+        void ApplyResourceTransparency(MaterialComponent &material, const MaterialComponent &resource)
         {
             if (resource.alphaMode != AlphaMode::Blend)
             {
@@ -81,10 +118,16 @@ namespace Physara::Engine
             return fallback != mesh.materialSlots.end() ? &*fallback : nullptr;
         }
 
-        MaterialComponent GetMaterial(const entt::registry &registry, EntityId entity, const MeshComponent &mesh, AssetManager *assetManager)
+        MaterialComponent GetMaterial(
+            const entt::registry &registry,
+            EntityId entity,
+            const MeshComponent &mesh,
+            AssetManager *assetManager,
+            RenderSystemCollectScratch *scratch)
         {
             MaterialComponent material{};
-            if (const auto *component = registry.try_get<MaterialComponent>(entity))
+            const auto *component = registry.try_get<MaterialComponent>(entity);
+            if (component != nullptr)
             {
                 material = *component;
             }
@@ -95,35 +138,66 @@ namespace Physara::Engine
                 material.materialPath = slot->materialPath;
             }
 
-            if (assetManager != nullptr && !material.materialPath.empty())
+            MaterialComponent resourceMaterial{};
+            if (ResolveResourceMaterial(assetManager, material.materialPath, scratch, resourceMaterial))
             {
-                if (const std::shared_ptr<Material> resource = assetManager->GetByPath<Material>(material.materialPath))
+                if (component == nullptr)
                 {
-                    if (!registry.try_get<MaterialComponent>(entity))
-                    {
-                        material = ToComponent(*resource);
-                    }
-                    else
-                    {
-                        ApplyResourceTransparency(material, *resource);
-                    }
+                    material = resourceMaterial;
+                }
+                else
+                {
+                    ApplyResourceTransparency(material, resourceMaterial);
                 }
             }
 
             material.Sanitize();
             return material;
         }
+
+        std::uint64_t HashString(std::string_view value)
+        {
+            return static_cast<std::uint64_t>(std::hash<std::string_view>{}(value));
+        }
+
+        void HashCombine(std::uint64_t &seed, std::uint64_t value)
+        {
+            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+        }
+
+        std::uint64_t BuildMeshKey(const MeshPrimitiveRef &primitive)
+        {
+            std::uint64_t seed = HashString(primitive.assetPath);
+            HashCombine(seed, static_cast<std::uint64_t>(primitive.meshIndex));
+            return seed;
+        }
+
+        std::uint64_t BuildPrimitiveKey(const MeshPrimitiveRef &primitive, std::uint64_t meshKey)
+        {
+            std::uint64_t seed = meshKey;
+            HashCombine(seed, static_cast<std::uint64_t>(primitive.primitiveIndex));
+            return seed;
+        }
     }
 
-    void RenderSystem::Collect(Scene &scene, std::vector<RenderMeshSubmission> &submissions, AssetManager *assetManager)
+    void RenderSystem::Collect(
+        Scene &scene,
+        std::vector<RenderMeshSubmission> &submissions,
+        AssetManager *assetManager,
+        RenderSystemCollectScratch *scratch)
     {
         auto &registry = scene.GetRegistry();
         auto view = registry.view<MeshComponent, TransformComponent>();
 
         submissions.clear();
         submissions.reserve(view.size_hint());
+        if (scratch != nullptr)
+        {
+            scratch->Clear();
+            scratch->resourceMaterials.reserve(view.size_hint());
+        }
 
-        view.each([&submissions, &registry, assetManager](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
+        view.each([&submissions, &registry, assetManager, scratch](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
         {
             if (!mesh.visible || !mesh.HasMesh())
             {
@@ -135,10 +209,11 @@ namespace Physara::Engine
             submission.meshPath = mesh.primitive.assetPath;
             submission.meshIndex = mesh.primitive.meshIndex;
             submission.primitiveIndex = mesh.primitive.primitiveIndex;
-            submission.material = RenderSystemDetail::GetMaterial(registry, entity, mesh, assetManager);
-            submission.materialPath = submission.material.materialPath;
+            submission.meshKey = RenderSystemDetail::BuildMeshKey(mesh.primitive);
+            submission.primitiveKey = RenderSystemDetail::BuildPrimitiveKey(mesh.primitive, submission.meshKey);
+            submission.material = RenderSystemDetail::GetMaterial(registry, entity, mesh, assetManager, scratch);
             submission.model = transform.GetWorldMatrix();
-            submission.inverseTransposeModel = glm::inverseTranspose(submission.model);
+            submission.inverseTransposeModel = transform.GetInverseTransposeWorldMatrix();
             submission.receiveShadows = mesh.receiveShadows;
 
             if (mesh.localBounds.valid)

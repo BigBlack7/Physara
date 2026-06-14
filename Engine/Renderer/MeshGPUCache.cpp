@@ -1,5 +1,6 @@
 #include "MeshGPUCache.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -16,6 +17,9 @@ namespace Physara::Engine
 {
     namespace MeshGPUCacheDetail
     {
+        constexpr std::uint32_t GeometryPageVertexBytes = 64u * 1024u * 1024u;
+        constexpr std::uint32_t GeometryPageIndexBytes = 32u * 1024u * 1024u;
+
         std::string BuildMeshResourcePath(const RenderMeshSubmission *submission)
         {
             if (submission == nullptr)
@@ -36,22 +40,17 @@ namespace Physara::Engine
             return BuildMeshResourcePath(submission) + "#primitive/" + std::to_string(submission->primitiveIndex);
         }
 
-        std::uint64_t BuildRenderPrimitiveId(std::uint64_t meshKey, std::size_t primitiveIndex)
+        std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment)
         {
-            std::uint64_t seed = meshKey;
-            const std::uint64_t value = static_cast<std::uint64_t>(primitiveIndex);
-            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
-            return seed != 0 ? seed : 1ull;
+            return ((value + alignment - 1u) / alignment) * alignment;
         }
 
-        template <typename T>
-        RHI::RHIBufferDesc StaticBufferDesc(const std::vector<T> &data, RHI::BufferUsageFlags usage)
+        RHI::RHIBufferDesc StaticBufferDesc(std::uint32_t size, RHI::BufferUsageFlags usage)
         {
             RHI::RHIBufferDesc desc{};
-            desc.size = static_cast<std::uint32_t>(data.size() * sizeof(T));
+            desc.size = size;
             desc.usage = usage;
             desc.dynamic = false;
-            desc.initialData = data.data();
             return desc;
         }
     }
@@ -169,37 +168,42 @@ namespace Physara::Engine
             gpuPrimitive.firstIndex = static_cast<std::uint32_t>(indices.size());
             gpuPrimitive.vertexOffset = static_cast<std::int32_t>(vertices.size());
             gpuPrimitive.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-            gpuPrimitive.renderPrimitiveId = MeshGPUCacheDetail::BuildRenderPrimitiveId(meshKey, primitiveIndex);
 
             vertices.insert(vertices.end(), primitive.vertices.begin(), primitive.vertices.end());
             indices.insert(indices.end(), primitive.indices.begin(), primitive.indices.end());
         }
 
-        gpuResource.vertexBuffer = device->CreateBuffer(
-            MeshGPUCacheDetail::StaticBufferDesc(vertices, RHI::BufferUsage::Vertex));
-        gpuResource.indexBuffer = device->CreateBuffer(
-            MeshGPUCacheDetail::StaticBufferDesc(indices, RHI::BufferUsage::Index));
-
-        if (gpuResource.vertexBuffer == nullptr || gpuResource.indexBuffer == nullptr)
+        const std::uint32_t vertexBytes = static_cast<std::uint32_t>(vertices.size() * sizeof(MeshVertex));
+        const std::uint32_t indexBytes = static_cast<std::uint32_t>(indices.size() * sizeof(std::uint32_t));
+        GeometryAllocation allocation = AllocateGeometry(*device, vertexBytes, indexBytes);
+        if (allocation.page == nullptr ||
+            allocation.page->vertexBuffer == nullptr ||
+            allocation.page->indexBuffer == nullptr)
         {
             PHYSARA_CORE_ERROR("Mesh GPU cache failed to upload '{}'.", meshResourcePath);
             return nullptr;
         }
 
+        allocation.page->vertexBuffer->UploadData(vertices.data(), vertexBytes, allocation.vertexByteOffset);
+        allocation.page->indexBuffer->UploadData(indices.data(), indexBytes, allocation.indexByteOffset);
+
+        const std::uint32_t vertexBase = allocation.vertexByteOffset / static_cast<std::uint32_t>(sizeof(MeshVertex));
+        const std::uint32_t indexBase = allocation.indexByteOffset / static_cast<std::uint32_t>(sizeof(std::uint32_t));
         for (MeshGPUPrimitive &primitive : gpuResource.primitives)
         {
             if (primitive.indexCount == 0)
             {
                 continue;
             }
-            primitive.vertexBindings[0] = RHI::RHIVertexBufferBinding{0u, gpuResource.vertexBuffer.get(), 0u};
-            primitive.indexBinding = RHI::RHIIndexBufferBinding{gpuResource.indexBuffer.get(), 0u};
+            primitive.firstIndex += indexBase;
+            primitive.vertexOffset += static_cast<std::int32_t>(vertexBase);
+            primitive.geometryBindingId = allocation.page->bindingId;
+            primitive.vertexBindings[0] = RHI::RHIVertexBufferBinding{0u, allocation.page->vertexBuffer.get(), 0u};
+            primitive.indexBinding = RHI::RHIIndexBufferBinding{allocation.page->indexBuffer.get(), 0u};
         }
 
         if (stats != nullptr)
         {
-            const std::uint64_t vertexBytes = static_cast<std::uint64_t>(vertices.size() * sizeof(MeshVertex));
-            const std::uint64_t indexBytes = static_cast<std::uint64_t>(indices.size() * sizeof(std::uint32_t));
             ++stats->meshUploads;
             stats->meshPrimitiveUploads += static_cast<std::uint32_t>(mesh->primitives.size());
             stats->meshUploadBytes += vertexBytes + indexBytes;
@@ -214,10 +218,74 @@ namespace Physara::Engine
         return &inserted->second;
     }
 
+    MeshGPUCache::GeometryAllocation MeshGPUCache::AllocateGeometry(
+        RHI::RHIDevice &device,
+        std::uint32_t vertexBytes,
+        std::uint32_t indexBytes)
+    {
+        const std::uint32_t alignedVertexBytes = MeshGPUCacheDetail::AlignUp(vertexBytes, static_cast<std::uint32_t>(sizeof(MeshVertex)));
+        const std::uint32_t alignedIndexBytes = MeshGPUCacheDetail::AlignUp(indexBytes, static_cast<std::uint32_t>(sizeof(std::uint32_t)));
+
+        for (std::unique_ptr<GeometryPage> &page : m_GeometryPages)
+        {
+            if (page == nullptr)
+            {
+                continue;
+            }
+
+            const std::uint32_t vertexOffset = MeshGPUCacheDetail::AlignUp(page->vertexBytesUsed, static_cast<std::uint32_t>(sizeof(MeshVertex)));
+            const std::uint32_t indexOffset = MeshGPUCacheDetail::AlignUp(page->indexBytesUsed, static_cast<std::uint32_t>(sizeof(std::uint32_t)));
+            if (vertexOffset <= page->vertexCapacityBytes &&
+                indexOffset <= page->indexCapacityBytes &&
+                alignedVertexBytes <= page->vertexCapacityBytes - vertexOffset &&
+                alignedIndexBytes <= page->indexCapacityBytes - indexOffset)
+            {
+                page->vertexBytesUsed = vertexOffset + alignedVertexBytes;
+                page->indexBytesUsed = indexOffset + alignedIndexBytes;
+                return GeometryAllocation{page.get(), vertexOffset, indexOffset};
+            }
+        }
+
+        GeometryPage *page = CreateGeometryPage(device, vertexBytes, indexBytes);
+        if (page == nullptr)
+        {
+            return {};
+        }
+
+        page->vertexBytesUsed = alignedVertexBytes;
+        page->indexBytesUsed = alignedIndexBytes;
+        return GeometryAllocation{page, 0u, 0u};
+    }
+
+    MeshGPUCache::GeometryPage *MeshGPUCache::CreateGeometryPage(
+        RHI::RHIDevice &device,
+        std::uint32_t vertexBytes,
+        std::uint32_t indexBytes)
+    {
+        auto page = std::make_unique<GeometryPage>();
+        page->vertexCapacityBytes = std::max(vertexBytes, MeshGPUCacheDetail::GeometryPageVertexBytes);
+        page->indexCapacityBytes = std::max(indexBytes, MeshGPUCacheDetail::GeometryPageIndexBytes);
+        page->bindingId = m_NextGeometryBindingId++;
+        page->vertexBuffer = device.CreateBuffer(
+            MeshGPUCacheDetail::StaticBufferDesc(page->vertexCapacityBytes, RHI::BufferUsage::Vertex));
+        page->indexBuffer = device.CreateBuffer(
+            MeshGPUCacheDetail::StaticBufferDesc(page->indexCapacityBytes, RHI::BufferUsage::Index));
+        if (page->vertexBuffer == nullptr || page->indexBuffer == nullptr)
+        {
+            return nullptr;
+        }
+
+        GeometryPage *rawPage = page.get();
+        m_GeometryPages.push_back(std::move(page));
+        return rawPage;
+    }
+
     void MeshGPUCache::Reset()
     {
         m_MeshCache.clear();
         m_MissingMeshWarnings.clear();
+        m_GeometryPages.clear();
+        m_NextGeometryBindingId = 1;
     }
 
     std::string MeshGPUCache::BuildMeshResourcePath(const RenderDrawItem &item)

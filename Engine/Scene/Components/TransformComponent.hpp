@@ -14,6 +14,7 @@ namespace Physara::Engine
 
         glm::mat4 localMatrix{1.f};
         glm::mat4 worldMatrix{1.f};
+        glm::mat4 inverseTransposeWorldMatrix{1.f};
         bool localDirty{true};
         bool worldDirty{true};
 
@@ -32,6 +33,7 @@ namespace Physara::Engine
         [[nodiscard]] glm::vec3 GetLocalEulerRotation() const;
         [[nodiscard]] const glm::mat4 &GetLocalMatrix();
         [[nodiscard]] const glm::mat4 &GetWorldMatrix() const { return worldMatrix; }
+        [[nodiscard]] const glm::mat4 &GetInverseTransposeWorldMatrix() const { return inverseTransposeWorldMatrix; }
 
         void MarkLocalDirty();
         void MarkWorldDirty();

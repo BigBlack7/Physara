@@ -25,6 +25,7 @@ namespace Physara::Engine
     {
         const RenderMeshSubmission *submission{nullptr};
         std::uint32_t objectIndex{0};
+        std::uint32_t sourceSubmissionIndex{0};
         std::uint64_t sortKey{0};
         float cameraDistanceSq{0.f};
         std::uint64_t meshKey{0};
@@ -112,6 +113,9 @@ namespace Physara::Engine
         RenderCommandBuckets m_Commands{};
         MaterialInstanceRegistry m_MaterialRegistry{};
         std::vector<RenderMeshSubmission> m_SubmissionScratch{};
+        std::vector<std::uint32_t> m_ObjectIndexBySubmissionScratch{};
+        std::vector<std::uint32_t> m_MaterialIndexByInstanceScratch{};
+        RenderSystemCollectScratch m_CollectScratch{};
         std::uint32_t m_VisibleSubmissionCount{0};
     };
 }

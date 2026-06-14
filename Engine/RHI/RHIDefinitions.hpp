@@ -287,16 +287,5 @@ namespace Physara::RHI
             return barrier;
         }
 
-        [[nodiscard]] inline RHIResourceBarrier DepthStencilWriteToFragmentRead()
-        {
-            RHIResourceBarrier barrier{};
-            barrier.before = ResourceState::DepthWrite;
-            barrier.after = ResourceState::ShaderResource;
-            barrier.srcStages = ShaderStageBit::Fragment;
-            barrier.dstStages = ShaderStageBit::Fragment;
-            barrier.srcAccess = ResourceAccess::DepthStencilWrite;
-            barrier.dstAccess = ResourceAccess::ShaderRead;
-            return barrier;
-        }
     }
 }

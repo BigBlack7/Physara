@@ -1,6 +1,7 @@
 #include "TransformComponent.hpp"
 
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 namespace Physara::Engine
 {
@@ -99,6 +100,7 @@ namespace Physara::Engine
     void TransformComponent::RecalculateWorldMatrix(const glm::mat4 &parentWorldMatrix)
     {
         worldMatrix = parentWorldMatrix * GetLocalMatrix();
+        inverseTransposeWorldMatrix = glm::inverseTranspose(worldMatrix);
         worldDirty = false;
     }
 }

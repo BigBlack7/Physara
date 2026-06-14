@@ -78,6 +78,7 @@ namespace Physara::Engine
     {
     public:
         void Execute(const ShadowPassContext &context);
+        void PrepareResources(RHI::RHIDevice &device);
         void Reset();
         void SetSettings(const ShadowSettings &settings);
 
@@ -90,7 +91,6 @@ namespace Physara::Engine
             const ShadowPassContext *passContext{nullptr};
         };
 
-        void EnsureResources(const ShadowPassContext &context);
         [[nodiscard]] bool BuildShadowData(
             const ShadowPassContext &context,
             CameraData &shadowCamera,
