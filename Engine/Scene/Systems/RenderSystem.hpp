@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -19,12 +21,13 @@ namespace Physara::Engine
     struct RenderMeshSubmission
     {
         EntityId entity{NullEntity};
-        std::string meshPath{};
+        std::string_view meshPath{};
         std::uint32_t meshIndex{0};
         std::uint32_t primitiveIndex{0};
         std::uint64_t meshKey{0};
         std::uint64_t primitiveKey{0};
         MaterialComponent material{};
+        std::uint64_t materialSignature{0};
         glm::mat4 model{1.f};
         glm::mat4 inverseTransposeModel{1.f};
         glm::vec3 boundsCenter{0.f};
@@ -35,11 +38,44 @@ namespace Physara::Engine
 
     struct RenderSystemCollectScratch
     {
-        std::unordered_map<std::string, MaterialComponent> resourceMaterials{};
+        struct MaterialEntry
+        {
+            MaterialComponent material{};
+            std::uint64_t signature{0};
+        };
+
+        struct RenderableEntry
+        {
+            bool hasMaterial{false};
+            std::uint64_t materialSourceSignature{~0ull};
+            std::string meshPath{};
+            std::uint32_t meshIndex{0};
+            std::uint32_t primitiveIndex{0};
+            std::uint64_t meshKey{0};
+            std::uint64_t primitiveKey{0};
+            MaterialEntry material{};
+        };
+
+        std::unordered_map<std::string, MaterialEntry> resourceMaterials{};
+        std::unordered_map<EntityId, RenderableEntry> renderables{};
+        AssetManager *assetManager{nullptr};
 
         void Clear()
         {
             resourceMaterials.clear();
+            renderables.clear();
+            assetManager = nullptr;
+        }
+
+        void BeginFrame(std::size_t renderableHint, AssetManager *currentAssetManager)
+        {
+            if (assetManager != currentAssetManager)
+            {
+                Clear();
+                assetManager = currentAssetManager;
+            }
+            resourceMaterials.reserve(renderableHint);
+            renderables.reserve(renderableHint);
         }
     };
 

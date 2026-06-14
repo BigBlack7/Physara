@@ -27,7 +27,7 @@ namespace Physara::Engine
                 return {};
             }
 
-            return submission->meshPath + "#mesh/" + std::to_string(submission->meshIndex);
+            return std::string(submission->meshPath) + "#mesh/" + std::to_string(submission->meshIndex);
         }
 
         std::string BuildMeshPrimitiveDebugName(const RenderMeshSubmission *submission)

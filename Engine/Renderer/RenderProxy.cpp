@@ -174,7 +174,7 @@ namespace Physara::Engine
             if (submission.material.castShadow &&
                 (submission.material.alphaMode == AlphaMode::Opaque || submission.material.alphaMode == AlphaMode::Mask))
             {
-                materialInstanceId = m_MaterialRegistry.Resolve(submission.material);
+                materialInstanceId = m_MaterialRegistry.Resolve(submission.materialSignature, submission.material);
                 RenderDrawItem item{};
                 item.submission = &submission;
                 item.sourceSubmissionIndex = submissionIndex;
@@ -198,7 +198,7 @@ namespace Physara::Engine
             const RenderMeshSubmission &visibleSubmission = submission;
             if (materialInstanceId == InvalidMaterialInstanceId)
             {
-                materialInstanceId = m_MaterialRegistry.Resolve(visibleSubmission.material);
+                materialInstanceId = m_MaterialRegistry.Resolve(visibleSubmission.materialSignature, visibleSubmission.material);
             }
 
             RenderDrawItem item{};

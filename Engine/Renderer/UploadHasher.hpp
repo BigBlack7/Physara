@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Physara::Engine::UploadHash
@@ -27,10 +28,15 @@ namespace Physara::Engine::UploadHash
         return Bytes(hash, &value, sizeof(T));
     }
 
-    inline std::uint64_t String(std::uint64_t hash, const std::string &value)
+    inline std::uint64_t String(std::uint64_t hash, std::string_view value)
     {
         hash = Value(hash, value.size());
         return value.empty() ? hash : Bytes(hash, value.data(), value.size());
+    }
+
+    inline std::uint64_t String(std::uint64_t hash, const std::string &value)
+    {
+        return String(hash, std::string_view{value});
     }
 
     template <typename T>

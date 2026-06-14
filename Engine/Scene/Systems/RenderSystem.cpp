@@ -1,7 +1,6 @@
 #include "RenderSystem.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <memory>
 #include <string_view>
 
@@ -9,6 +8,8 @@
 
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
+#include <Engine/Renderer/MaterialSignature.hpp>
+#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 #include <Engine/Resource/Types/Material.hpp>
 #include <Engine/Scene/Scene.hpp>
@@ -57,7 +58,8 @@ namespace Physara::Engine
             AssetManager *assetManager,
             const std::string &materialPath,
             RenderSystemCollectScratch *scratch,
-            MaterialComponent &outMaterial)
+            MaterialComponent &outMaterial,
+            std::uint64_t &outSignature)
         {
             if (assetManager == nullptr || materialPath.empty())
             {
@@ -69,7 +71,8 @@ namespace Physara::Engine
                 const auto cached = scratch->resourceMaterials.find(materialPath);
                 if (cached != scratch->resourceMaterials.end())
                 {
-                    outMaterial = cached->second;
+                    outMaterial = cached->second.material;
+                    outSignature = cached->second.signature;
                     return true;
                 }
             }
@@ -81,9 +84,11 @@ namespace Physara::Engine
             }
 
             outMaterial = ToComponent(*resource);
+            outMaterial.Sanitize();
+            outSignature = MaterialSignature::Build(outMaterial);
             if (scratch != nullptr)
             {
-                scratch->resourceMaterials.emplace(materialPath, outMaterial);
+                scratch->resourceMaterials.emplace(materialPath, RenderSystemCollectScratch::MaterialEntry{outMaterial, outSignature});
             }
             return true;
         }
@@ -118,46 +123,9 @@ namespace Physara::Engine
             return fallback != mesh.materialSlots.end() ? &*fallback : nullptr;
         }
 
-        MaterialComponent GetMaterial(
-            const entt::registry &registry,
-            EntityId entity,
-            const MeshComponent &mesh,
-            AssetManager *assetManager,
-            RenderSystemCollectScratch *scratch)
-        {
-            MaterialComponent material{};
-            const auto *component = registry.try_get<MaterialComponent>(entity);
-            if (component != nullptr)
-            {
-                material = *component;
-            }
-
-            const MaterialSlotRef *slot = FindMaterialSlot(mesh);
-            if (slot != nullptr && slot->HasOverride())
-            {
-                material.materialPath = slot->materialPath;
-            }
-
-            MaterialComponent resourceMaterial{};
-            if (ResolveResourceMaterial(assetManager, material.materialPath, scratch, resourceMaterial))
-            {
-                if (component == nullptr)
-                {
-                    material = resourceMaterial;
-                }
-                else
-                {
-                    ApplyResourceTransparency(material, resourceMaterial);
-                }
-            }
-
-            material.Sanitize();
-            return material;
-        }
-
         std::uint64_t HashString(std::string_view value)
         {
-            return static_cast<std::uint64_t>(std::hash<std::string_view>{}(value));
+            return UploadHash::String(UploadHash::Offset, value);
         }
 
         void HashCombine(std::uint64_t &seed, std::uint64_t value)
@@ -178,6 +146,107 @@ namespace Physara::Engine
             HashCombine(seed, static_cast<std::uint64_t>(primitive.primitiveIndex));
             return seed;
         }
+
+        std::uint64_t BuildMaterialSourceSignature(const MaterialComponent &material, bool hasComponent)
+        {
+            if (hasComponent)
+            {
+                return MaterialSignature::Build(material);
+            }
+
+            std::uint64_t seed = HashString(material.materialPath);
+            HashCombine(seed, 0x7068797361726101ull);
+            return seed;
+        }
+
+        RenderSystemCollectScratch::MaterialEntry GetMaterial(
+            const entt::registry &registry,
+            EntityId entity,
+            const MeshComponent &mesh,
+            AssetManager *assetManager,
+            RenderSystemCollectScratch *scratch,
+            RenderSystemCollectScratch::RenderableEntry *cache)
+        {
+            MaterialComponent material{};
+            const auto *component = registry.try_get<MaterialComponent>(entity);
+            if (component != nullptr)
+            {
+                material = *component;
+            }
+
+            const MaterialSlotRef *slot = FindMaterialSlot(mesh);
+            if (slot != nullptr && slot->HasOverride())
+            {
+                material.materialPath = slot->materialPath;
+            }
+
+            const std::uint64_t materialSourceSignature = BuildMaterialSourceSignature(material, component != nullptr);
+            if (cache != nullptr && cache->hasMaterial && cache->materialSourceSignature == materialSourceSignature)
+            {
+                return cache->material;
+            }
+
+            MaterialComponent resourceMaterial{};
+            std::uint64_t resourceSignature = 0u;
+            if (ResolveResourceMaterial(assetManager, material.materialPath, scratch, resourceMaterial, resourceSignature))
+            {
+                if (component == nullptr)
+                {
+                    RenderSystemCollectScratch::MaterialEntry result{resourceMaterial, resourceSignature};
+                    if (cache != nullptr)
+                    {
+                        cache->hasMaterial = true;
+                        cache->materialSourceSignature = materialSourceSignature;
+                        cache->material = result;
+                    }
+                    return result;
+                }
+                else
+                {
+                    ApplyResourceTransparency(material, resourceMaterial);
+                }
+            }
+
+            material.Sanitize();
+            RenderSystemCollectScratch::MaterialEntry result{material, MaterialSignature::Build(material)};
+            if (cache != nullptr)
+            {
+                cache->hasMaterial = true;
+                cache->materialSourceSignature = materialSourceSignature;
+                cache->material = result;
+            }
+            return result;
+        }
+
+        void ResolveMeshKeys(
+            const MeshPrimitiveRef &primitive,
+            RenderSystemCollectScratch::RenderableEntry *cache,
+            std::uint64_t &meshKey,
+            std::uint64_t &primitiveKey)
+        {
+            if (cache != nullptr &&
+                cache->meshIndex == primitive.meshIndex &&
+                cache->primitiveIndex == primitive.primitiveIndex &&
+                cache->meshPath == primitive.assetPath)
+            {
+                meshKey = cache->meshKey;
+                primitiveKey = cache->primitiveKey;
+                return;
+            }
+
+            const std::uint64_t currentMeshKey = BuildMeshKey(primitive);
+            const std::uint64_t currentPrimitiveKey = BuildPrimitiveKey(primitive, currentMeshKey);
+            meshKey = currentMeshKey;
+            primitiveKey = currentPrimitiveKey;
+            if (cache != nullptr)
+            {
+                cache->meshPath = primitive.assetPath;
+                cache->meshIndex = primitive.meshIndex;
+                cache->primitiveIndex = primitive.primitiveIndex;
+                cache->meshKey = meshKey;
+                cache->primitiveKey = primitiveKey;
+            }
+        }
     }
 
     void RenderSystem::Collect(
@@ -193,8 +262,7 @@ namespace Physara::Engine
         submissions.reserve(view.size_hint());
         if (scratch != nullptr)
         {
-            scratch->Clear();
-            scratch->resourceMaterials.reserve(view.size_hint());
+            scratch->BeginFrame(view.size_hint(), assetManager);
         }
 
         view.each([&submissions, &registry, assetManager, scratch](EntityId entity, const MeshComponent &mesh, const TransformComponent &transform)
@@ -204,14 +272,21 @@ namespace Physara::Engine
                 return;
             }
 
+            RenderSystemCollectScratch::RenderableEntry *cache = nullptr;
+            if (scratch != nullptr)
+            {
+                cache = &scratch->renderables[entity];
+            }
+
             RenderMeshSubmission submission{};
             submission.entity = entity;
             submission.meshPath = mesh.primitive.assetPath;
             submission.meshIndex = mesh.primitive.meshIndex;
             submission.primitiveIndex = mesh.primitive.primitiveIndex;
-            submission.meshKey = RenderSystemDetail::BuildMeshKey(mesh.primitive);
-            submission.primitiveKey = RenderSystemDetail::BuildPrimitiveKey(mesh.primitive, submission.meshKey);
-            submission.material = RenderSystemDetail::GetMaterial(registry, entity, mesh, assetManager, scratch);
+            RenderSystemDetail::ResolveMeshKeys(mesh.primitive, cache, submission.meshKey, submission.primitiveKey);
+            const RenderSystemCollectScratch::MaterialEntry material = RenderSystemDetail::GetMaterial(registry, entity, mesh, assetManager, scratch, cache);
+            submission.material = material.material;
+            submission.materialSignature = material.signature;
             submission.model = transform.GetWorldMatrix();
             submission.inverseTransposeModel = transform.GetInverseTransposeWorldMatrix();
             submission.receiveShadows = mesh.receiveShadows;

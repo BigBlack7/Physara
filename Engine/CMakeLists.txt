@@ -19,6 +19,8 @@ target_sources(Engine PRIVATE
     Renderer/MaterialInstance.hpp
     Renderer/MaterialInstanceRegistry.cpp
     Renderer/MaterialInstanceRegistry.hpp
+    Renderer/MaterialSignature.cpp
+    Renderer/MaterialSignature.hpp
     Renderer/MaterialTextureCache.cpp
     Renderer/MaterialTextureCache.hpp
     Renderer/MeshGPUCache.cpp
