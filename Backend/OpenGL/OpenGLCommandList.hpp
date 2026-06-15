@@ -82,6 +82,7 @@ namespace Physara::RHI
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;
         void InvalidateExternalState() override;
+        void InvalidateImGuiState();
         void ResetStatistics() override;
         [[nodiscard]] RHICommandStatistics GetStatistics() const override;
 
@@ -182,6 +183,17 @@ namespace Physara::RHI
             bool valid{false};
         };
 
+        struct ImageTextureBindingState
+        {
+            GLuint texture{0};
+            GLint mipLevel{0};
+            GLboolean layered{GL_FALSE};
+            GLint layer{0};
+            GLenum access{GL_READ_WRITE};
+            GLenum internalFormat{GL_RGBA8};
+            bool valid{false};
+        };
+
         struct ViewportState
         {
             float x{0.f};
@@ -219,6 +231,7 @@ namespace Physara::RHI
         std::array<BufferRangeBindingState, 32> m_StorageBufferBindings{};
         std::array<GLuint, 32> m_TextureBindings{};
         std::array<GLuint, 32> m_SamplerBindings{};
+        std::array<ImageTextureBindingState, 32> m_ImageTextureBindings{};
         bool m_PipelineStateValid{false};
         std::array<VertexBufferBindingState, kMaxVertexBindings> m_VertexBufferBindings{};
         IndexBufferBindingState m_IndexBufferBinding{};
@@ -239,6 +252,14 @@ namespace Physara::RHI
         void SetDepthMaskState(bool enabled);
         void SetStencilMaskState(GLuint mask);
         void SetScissorEnabled(bool enabled);
+        void BindRawBufferRange(
+            GLenum target,
+            std::array<BufferRangeBindingState, 32> &bindings,
+            std::uint64_t &bindCounter,
+            std::uint32_t slot,
+            GLuint buffer,
+            std::uint32_t offset,
+            std::uint32_t size);
         void BindBufferRange(
             GLenum target,
             bool storageBuffer,

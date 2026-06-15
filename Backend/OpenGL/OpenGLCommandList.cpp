@@ -186,6 +186,10 @@ namespace Physara::RHI
         }
         m_TextureBindings.fill(std::numeric_limits<GLuint>::max());
         m_SamplerBindings.fill(std::numeric_limits<GLuint>::max());
+        for (ImageTextureBindingState &binding : m_ImageTextureBindings)
+        {
+            binding.valid = false;
+        }
         m_IndirectBufferBinding.valid = false;
     }
 
@@ -422,17 +426,25 @@ namespace Physara::RHI
             glDisable(GL_SAMPLE_COVERAGE);
         }
 
-        if (invalidState || m_State.cullMode != desc.rasterizerState.cullMode)
+        const bool currentCullEnabled = m_State.cullMode != CullMode::None;
+        const bool targetCullEnabled = desc.rasterizerState.cullMode != CullMode::None;
+        if (invalidState || currentCullEnabled != targetCullEnabled)
         {
-            if (desc.rasterizerState.cullMode == CullMode::None)
+            if (targetCullEnabled)
             {
-                glDisable(GL_CULL_FACE);
+                glEnable(GL_CULL_FACE);
             }
             else
             {
-                glEnable(GL_CULL_FACE);
-                glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
+                glDisable(GL_CULL_FACE);
             }
+        }
+        if (targetCullEnabled && (invalidState || m_State.cullMode != desc.rasterizerState.cullMode))
+        {
+            glCullFace(ToGLCullMode(desc.rasterizerState.cullMode));
+        }
+        if (invalidState || m_State.cullMode != desc.rasterizerState.cullMode)
+        {
             m_State.cullMode = desc.rasterizerState.cullMode;
         }
 
@@ -497,12 +509,23 @@ namespace Physara::RHI
                 target = desc.blendStates[i];
             }
 
-            if (invalidState || !OpenGLCommandListDetail::BlendStateEqual(m_State.blendStates[i], target))
+            const bool blendDirty = invalidState || !OpenGLCommandListDetail::BlendStateEqual(m_State.blendStates[i], target);
+            if (blendDirty)
             {
+                if (invalidState || m_State.blendStates[i].blendEnable != target.blendEnable)
+                {
+                    if (target.blendEnable)
+                    {
+                        glEnablei(GL_BLEND, i);
+                    }
+                    else
+                    {
+                        glDisablei(GL_BLEND, i);
+                    }
+                }
                 if (target.blendEnable)
                 {
                     // OpenGL的多重blend state是基于draw buffer index的, 这里假设color attachment 0对应draw buffer 0。
-                    glEnablei(GL_BLEND, i);
                     glBlendFuncSeparatei(
                         i,
                         ToGLBlendFactor(target.srcColor),
@@ -513,10 +536,6 @@ namespace Physara::RHI
                         i,
                         ToGLBlendOp(target.colorOp),
                         ToGLBlendOp(target.alphaOp));
-                }
-                else
-                {
-                    glDisablei(GL_BLEND, i);
                 }
                 m_State.blendStates[i] = target;
             }
@@ -714,6 +733,47 @@ namespace Physara::RHI
         BindBufferRange(GL_SHADER_STORAGE_BUFFER, true, slot, buffer, offset, size);
     }
 
+    void OpenGLCommandList::BindRawBufferRange(
+        GLenum target,
+        std::array<BufferRangeBindingState, 32> &bindings,
+        std::uint64_t &bindCounter,
+        std::uint32_t slot,
+        GLuint buffer,
+        std::uint32_t offset,
+        std::uint32_t size)
+    {
+        if (slot >= bindings.size())
+        {
+            if (buffer != 0 && size != 0u)
+            {
+                glBindBufferRange(target, slot, buffer, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size));
+            }
+            else
+            {
+                glBindBufferBase(target, slot, buffer);
+            }
+            ++bindCounter;
+            return;
+        }
+
+        BufferRangeBindingState &cached = bindings[slot];
+        if (cached.valid && cached.buffer == buffer && cached.offset == offset && cached.size == size)
+        {
+            return;
+        }
+
+        if (buffer != 0 && size != 0u)
+        {
+            glBindBufferRange(target, slot, buffer, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size));
+        }
+        else
+        {
+            glBindBufferBase(target, slot, buffer);
+        }
+        ++bindCounter;
+        cached = BufferRangeBindingState{buffer, offset, size, true};
+    }
+
     void OpenGLCommandList::BindBufferRange(
         GLenum target,
         bool storageBuffer,
@@ -722,8 +782,6 @@ namespace Physara::RHI
         std::uint32_t offset,
         std::uint32_t size)
     {
-        auto &bindings = storageBuffer ? m_StorageBufferBindings : m_UniformBufferBindings;
-        std::uint64_t &bindCounter = storageBuffer ? m_Statistics.storageBufferBinds : m_Statistics.uniformBufferBinds;
         GLuint id = 0;
         std::uint32_t bindOffset = 0u;
         std::uint32_t bindSize = 0u;
@@ -745,36 +803,9 @@ namespace Physara::RHI
             bindSize = size;
         }
 
-        if (slot >= bindings.size())
-        {
-            if (id != 0 && bindSize != 0u)
-            {
-                glBindBufferRange(target, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
-            }
-            else
-            {
-                glBindBufferBase(target, slot, id);
-            }
-            ++bindCounter;
-            return;
-        }
-
-        BufferRangeBindingState &cached = bindings[slot];
-        if (cached.valid && cached.buffer == id && cached.offset == bindOffset && cached.size == bindSize)
-        {
-            return;
-        }
-
-        if (id != 0 && bindSize != 0u)
-        {
-            glBindBufferRange(target, slot, id, static_cast<GLintptr>(bindOffset), static_cast<GLsizeiptr>(bindSize));
-        }
-        else
-        {
-            glBindBufferBase(target, slot, id);
-        }
-        ++bindCounter;
-        cached = BufferRangeBindingState{id, bindOffset, bindSize, true};
+        auto &bindings = storageBuffer ? m_StorageBufferBindings : m_UniformBufferBindings;
+        std::uint64_t &bindCounter = storageBuffer ? m_Statistics.storageBufferBinds : m_Statistics.uniformBufferBinds;
+        BindRawBufferRange(target, bindings, bindCounter, slot, id, bindOffset, bindSize);
     }
 
     bool OpenGLCommandList::BindTextureRange(std::span<const RHITextureBinding> bindings)
@@ -919,6 +950,21 @@ namespace Physara::RHI
             glAccess = GL_WRITE_ONLY;
         }
 
+        if (slot < m_ImageTextureBindings.size())
+        {
+            ImageTextureBindingState &cached = m_ImageTextureBindings[slot];
+            if (cached.valid &&
+                cached.texture == id &&
+                cached.mipLevel == static_cast<GLint>(mipLevel) &&
+                cached.layered == layered &&
+                cached.layer == layer &&
+                cached.access == glAccess &&
+                cached.internalFormat == internalFormat)
+            {
+                return;
+            }
+        }
+
         glBindImageTexture(
             slot,
             id,
@@ -928,34 +974,69 @@ namespace Physara::RHI
             glAccess,
             internalFormat);
         ++m_Statistics.textureBinds;
+
+        if (slot < m_ImageTextureBindings.size())
+        {
+            m_ImageTextureBindings[slot] = ImageTextureBindingState{
+                id,
+                static_cast<GLint>(mipLevel),
+                layered,
+                layer,
+                glAccess,
+                internalFormat,
+                true};
+        }
     }
 
     void OpenGLCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
     {
         // Viewport和depth range是动态状态; OpenGL坐标原点在左下
-        if (m_ViewportState.valid &&
-            m_ViewportState.x == x &&
-            m_ViewportState.y == y &&
-            m_ViewportState.width == width &&
-            m_ViewportState.height == height &&
-            m_ViewportState.minDepth == minDepth &&
-            m_ViewportState.maxDepth == maxDepth)
+        const bool viewportDirty =
+            !m_ViewportState.valid ||
+            m_ViewportState.x != x ||
+            m_ViewportState.y != y ||
+            m_ViewportState.width != width ||
+            m_ViewportState.height != height;
+        const bool depthRangeDirty =
+            !m_ViewportState.valid ||
+            m_ViewportState.minDepth != minDepth ||
+            m_ViewportState.maxDepth != maxDepth;
+        if (!viewportDirty && !depthRangeDirty)
         {
             return;
         }
 
-        glViewport(
-            static_cast<GLint>(x),
-            static_cast<GLint>(y),
-            static_cast<GLsizei>(width),
-            static_cast<GLsizei>(height));
-        glDepthRangef(minDepth, maxDepth);
+        if (viewportDirty)
+        {
+            glViewport(
+                static_cast<GLint>(x),
+                static_cast<GLint>(y),
+                static_cast<GLsizei>(width),
+                static_cast<GLsizei>(height));
+        }
+        if (depthRangeDirty)
+        {
+            glDepthRangef(minDepth, maxDepth);
+        }
         m_ViewportState = ViewportState{x, y, width, height, minDepth, maxDepth, true};
     }
 
     void OpenGLCommandList::SetScissor(std::int32_t x, std::int32_t y, std::uint32_t width, std::uint32_t height)
     {
         // 当前RHI只有设置scissor, 没有禁用接口; 设置时确保GL_SCISSOR_TEST开启
+        const bool coversViewport =
+            m_ViewportState.valid &&
+            x == static_cast<std::int32_t>(m_ViewportState.x) &&
+            y == static_cast<std::int32_t>(m_ViewportState.y) &&
+            width == static_cast<std::uint32_t>(m_ViewportState.width) &&
+            height == static_cast<std::uint32_t>(m_ViewportState.height);
+        if (coversViewport)
+        {
+            SetScissorEnabled(false);
+            m_ScissorState = ScissorState{x, y, width, height, false, true};
+            return;
+        }
+
         const bool rectDirty =
             !m_ScissorState.valid ||
             m_ScissorState.x != x ||
@@ -999,15 +1080,14 @@ namespace Physara::RHI
             static_cast<GLsizeiptr>(size),
             data);
 
-        // 直接绑定到slot 0, 后续shader约定一个小uniform block即可读取
-        glBindBufferRange(
+        BindRawBufferRange(
             GL_UNIFORM_BUFFER,
+            m_UniformBufferBindings,
+            m_Statistics.uniformBufferBinds,
             0,
             m_PushConstantsBuffer,
-            static_cast<GLintptr>(offset),
-            static_cast<GLsizeiptr>(size));
-        ++m_Statistics.uniformBufferBinds;
-        m_UniformBufferBindings[0] = BufferRangeBindingState{m_PushConstantsBuffer, offset, size, true};
+            offset,
+            size);
     }
 
     void OpenGLCommandList::BeginRenderPass(
@@ -1031,24 +1111,29 @@ namespace Physara::RHI
         m_CurrentPassDesc = &desc;
 
         const std::uint32_t colorCount = static_cast<std::uint32_t>(desc.colorAttachments.size());
-        for (std::uint32_t i = 0; i < kMaxColorAttachments; ++i)
-        {
-            SetColorMask(i, true, true, true, true);
-        }
-        SetDepthMaskState(true);
-        SetStencilMaskState(0xffffffffu);
-
         if (fboID == 0)
         {
             ConfigureDefaultDrawBuffers(colorCount);
         }
 
         bool needsClear = desc.hasDepth && desc.depthAttachment.loadOp == LoadOp::Clear;
-        for (std::uint32_t i = 0; i < colorCount && !needsClear; ++i)
+        for (std::uint32_t i = 0; i < colorCount; ++i)
         {
-            needsClear = desc.colorAttachments[i].loadOp == LoadOp::Clear;
+            if (desc.colorAttachments[i].loadOp == LoadOp::Clear)
+            {
+                SetColorMask(i, true, true, true, true);
+                needsClear = true;
+            }
         }
-        const ScissorState drawScissorState = m_ScissorState;
+        if (desc.hasDepth && desc.depthAttachment.loadOp == LoadOp::Clear)
+        {
+            SetDepthMaskState(true);
+            if (OpenGLCommandListDetail::IsDepthStencilFormat(desc.depthAttachment.format))
+            {
+                SetStencilMaskState(0xffffffffu);
+            }
+        }
+
         if (needsClear)
         {
             SetScissorEnabled(false);
@@ -1105,14 +1190,6 @@ namespace Physara::RHI
                 }
                 ++m_Statistics.clears;
             }
-        }
-        if (needsClear && drawScissorState.valid && drawScissorState.enabled)
-        {
-            SetScissor(
-                drawScissorState.x,
-                drawScissorState.y,
-                drawScissorState.width,
-                drawScissorState.height);
         }
     }
 
@@ -1528,6 +1605,26 @@ namespace Physara::RHI
         InvalidatePipelineState();
         InvalidateDynamicStateCache();
         InvalidateRenderPassStateCache();
+        m_CurrentPassDesc = nullptr;
+        m_CurrentPipelineDesc = nullptr;
+    }
+
+    void OpenGLCommandList::InvalidateImGuiState()
+    {
+        m_PipelineStateValid = false;
+        m_State.program = 0;
+        m_State.vao = 0;
+        InvalidateVertexInputCache();
+        InvalidateDynamicStateCache();
+        InvalidateRenderPassStateCache();
+        if (!m_TextureBindings.empty())
+        {
+            m_TextureBindings[0] = std::numeric_limits<GLuint>::max();
+        }
+        if (!m_SamplerBindings.empty())
+        {
+            m_SamplerBindings[0] = std::numeric_limits<GLuint>::max();
+        }
         m_CurrentPassDesc = nullptr;
         m_CurrentPipelineDesc = nullptr;
     }

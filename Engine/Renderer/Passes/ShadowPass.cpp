@@ -315,9 +315,9 @@ namespace Physara::Engine
             return;
         }
 
+        context.commandList->BeginRenderPass(m_Framebuffer.get(), m_RenderPassDesc, std::span<const glm::vec4>{}, 1.f);
         context.commandList->SetViewport(0.f, 0.f, static_cast<float>(m_Settings.resolution), static_cast<float>(m_Settings.resolution));
         context.commandList->SetScissor(0, 0, m_Settings.resolution, m_Settings.resolution);
-        context.commandList->BeginRenderPass(m_Framebuffer.get(), m_RenderPassDesc, std::span<const glm::vec4>{}, 1.f);
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(
             ShadowPassDetail::CameraBinding,

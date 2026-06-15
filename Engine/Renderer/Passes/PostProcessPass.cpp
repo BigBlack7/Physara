@@ -126,14 +126,14 @@ namespace Physara::Engine
         ExecuteBloom(context, frameUniformAllocation);
 
         PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessComposite");
+        const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
+        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
         context.commandList->SetViewport(
             0.f,
             0.f,
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
-        const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
-        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
@@ -306,10 +306,10 @@ namespace Physara::Engine
             return;
         }
 
-        context.commandList->SetViewport(0.f, 0.f, 1.f, 1.f);
-        context.commandList->SetScissor(0, 0, 1u, 1u);
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(m_ExposureFramebuffer.get(), m_ExposureRenderPassDesc, clearColors);
+        context.commandList->SetViewport(0.f, 0.f, 1.f, 1.f);
+        context.commandList->SetScissor(0, 0, 1u, 1u);
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
@@ -439,10 +439,10 @@ namespace Physara::Engine
             return;
         }
 
-        context.commandList->SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height));
-        context.commandList->SetScissor(0, 0, width, height);
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(framebuffer, renderPassDesc, clearColors);
+        context.commandList->SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height));
+        context.commandList->SetScissor(0, 0, width, height);
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);

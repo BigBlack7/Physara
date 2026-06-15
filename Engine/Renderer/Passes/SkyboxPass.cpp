@@ -105,13 +105,13 @@ namespace Physara::Engine
         }
         context.frameUploadAllocator->Flush(context.stats);
 
+        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::span<const glm::vec4>{});
         context.commandList->SetViewport(
             0.f,
             0.f,
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
-        context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, std::span<const glm::vec4>{});
         context.commandList->SetPipelineState(pipeline);
         context.commandList->SetUniformBuffer(SkyboxPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
         context.commandList->SetUniformBuffer(SkyboxPassDetail::SettingsBinding, settingsAllocation.buffer, settingsAllocation.offset, settingsAllocation.size);

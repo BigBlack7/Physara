@@ -101,17 +101,17 @@ namespace Physara::Engine
             return;
         }
 
+        const std::array<glm::vec4, 1> clearColors{context.clearColor};
+        context.commandList->BeginRenderPass(
+            context.framebuffer,
+            *context.renderPassDesc,
+            transparent ? std::span<const glm::vec4>{} : std::span<const glm::vec4>{clearColors});
         context.commandList->SetViewport(
             0.f,
             0.f,
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
-        const std::array<glm::vec4, 1> clearColors{context.clearColor};
-        context.commandList->BeginRenderPass(
-            context.framebuffer,
-            *context.renderPassDesc,
-            transparent ? std::span<const glm::vec4>{} : std::span<const glm::vec4>{clearColors});
 
         if (singleSidedPipeline != nullptr && doubleSidedPipeline != nullptr)
         {
