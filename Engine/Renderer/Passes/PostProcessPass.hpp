@@ -106,6 +106,7 @@ namespace Physara::Engine
     private:
         void EnsureResources(const PostProcessPassContext &context);
         void EnsureBloomResources(const PostProcessPassContext &context);
+        void ReleaseBloomResources(const PostProcessPassContext &context);
         void ExecuteExposure(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
         void ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
         void ExecuteFullscreenPass(

@@ -8,6 +8,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec4.hpp>
 
+#include <Engine/Renderer/MaterialSignature.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/Systems/LightSystem.hpp>
 
@@ -230,15 +231,15 @@ namespace Physara::Engine
 
     void RenderProxy::SortBuckets()
     {
-        const auto byMaterialMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
+        const auto byTextureMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
         {
+            if (lhs.sortKey != rhs.sortKey)
+            {
+                return lhs.sortKey < rhs.sortKey;
+            }
             if (lhs.materialInstanceId != rhs.materialInstanceId)
             {
                 return lhs.materialInstanceId < rhs.materialInstanceId;
-            }
-            if (lhs.meshKey != rhs.meshKey)
-            {
-                return lhs.meshKey < rhs.meshKey;
             }
             if (lhs.primitiveKey != rhs.primitiveKey)
             {
@@ -264,8 +265,8 @@ namespace Physara::Engine
             return std::less<const RenderMeshSubmission *>{}(lhs.submission, rhs.submission);
         };
 
-        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, byMaterialMeshPrimitive);
-        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, byMaterialMeshPrimitive);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, byTextureMeshPrimitive);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, byTextureMeshPrimitive);
         std::sort(m_Buckets.shadowCasters.begin(), m_Buckets.shadowCasters.end(), byShadowMeshPrimitive);
         RenderProxyDetail::SortCullBuckets(
             m_Buckets.transparent,
@@ -453,10 +454,11 @@ namespace Physara::Engine
 
     std::uint64_t RenderProxy::BuildSortKey(const RenderMeshSubmission &submission, MaterialInstanceId materialInstanceId)
     {
-        const std::uint64_t materialKey = static_cast<std::uint64_t>(materialInstanceId) & 0xffffffffull;
+        const std::uint64_t textureKey = MaterialSignature::BuildTextureSet(submission.material) & 0xffffffull;
         const std::uint64_t meshHash = submission.meshKey & 0xffffull;
         const std::uint64_t primitive = static_cast<std::uint64_t>(submission.primitiveIndex & 0xffffu);
-        return (materialKey << 32u) | (meshHash << 16u) | primitive;
+        const std::uint64_t materialKey = static_cast<std::uint64_t>(materialInstanceId) & 0xffull;
+        return (textureKey << 40u) | (meshHash << 24u) | (primitive << 8u) | materialKey;
     }
 
     ObjectData RenderProxy::BuildObjectData(const RenderMeshSubmission &submission, RenderBucket bucket)

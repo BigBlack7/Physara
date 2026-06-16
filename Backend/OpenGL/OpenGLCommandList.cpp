@@ -1609,6 +1609,11 @@ namespace Physara::RHI
         m_CurrentPipelineDesc = nullptr;
     }
 
+    void OpenGLCommandList::InvalidateResourceBindings()
+    {
+        InvalidateBindingCache();
+    }
+
     void OpenGLCommandList::InvalidateImGuiState()
     {
         m_PipelineStateValid = false;

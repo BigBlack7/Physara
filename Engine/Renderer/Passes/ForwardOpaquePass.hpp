@@ -76,6 +76,10 @@ namespace Physara::Engine
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         void BindFrameTextures(const ForwardPassContext &context);
         [[nodiscard]] bool BindMaterial(const ForwardPassContext &context, const RenderCommand &command);
+        [[nodiscard]] bool CanMergeIndirectRun(
+            const ForwardPassContext &context,
+            const RenderCommand &lhs,
+            const RenderCommand &rhs) const;
         void DrawCommandGroup(
             const ForwardPassContext &context,
             RHI::RHIPipelineState *pipeline,
@@ -89,6 +93,7 @@ namespace Physara::Engine
             const RenderCommand &command,
             const MeshGPUPrimitive &primitive,
             RenderCommandSubmitMode mode);
+        static bool CanMergeSubmittedCommands(void *userData, const RenderCommand &lhs, const RenderCommand &rhs);
         void RecordSubmittedCommand(
             const ForwardPassContext &context,
             const RenderCommand &command,
@@ -104,7 +109,7 @@ namespace Physara::Engine
         std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBRDFLut{};
         RenderCommandExecutor m_CommandExecutor{};
-        MaterialInstanceId m_BoundMaterialInstanceId{InvalidMaterialInstanceId};
+        std::uint32_t m_BoundMaterialTextureSetId{0};
         bool m_LoggedFirstScene{false};
         bool m_LoggedFirstDraw{false};
     };

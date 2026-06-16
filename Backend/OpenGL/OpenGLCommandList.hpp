@@ -81,6 +81,7 @@ namespace Physara::RHI
 
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;
+        void InvalidateResourceBindings() override;
         void InvalidateExternalState() override;
         void InvalidateImGuiState();
         void ResetStatistics() override;

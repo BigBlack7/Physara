@@ -36,6 +36,7 @@ namespace Physara::Engine
         constexpr std::uint32_t IBLPrefilteredTextureBinding = Binding(GPUTextureBinding::IBLPrefiltered);
         constexpr std::uint32_t IBLBRDFLutBinding = Binding(GPUTextureBinding::IBLBRDFLut);
         constexpr std::uint32_t PerMaterialResourceSet = Binding(GPUResourceSetIndex::PerMaterial);
+        constexpr std::uint32_t InvalidTextureSetId = 0u;
 
         template <typename T>
         constexpr T MaxValue(T lhs, T rhs)
@@ -44,14 +45,6 @@ namespace Physara::Engine
         }
 
         constexpr std::uint32_t VertexStride = sizeof(MeshVertex);
-
-        static bool CanMergeIndirectRun(const RenderCommand &lhs, const RenderCommand &rhs)
-        {
-            return lhs.materialInstanceId == rhs.materialInstanceId &&
-                   lhs.meshKey == rhs.meshKey &&
-                   lhs.bucket == rhs.bucket &&
-                   lhs.doubleSided == rhs.doubleSided;
-        }
     }
 
     void ForwardOpaquePass::Execute(const ForwardPassContext &context)
@@ -343,14 +336,38 @@ namespace Physara::Engine
             return false;
         }
 
-        if (m_BoundMaterialInstanceId == resourceSet->materialInstanceId)
+        if (m_BoundMaterialTextureSetId == resourceSet->textureSetId)
         {
             return true;
         }
 
         context.commandList->SetResourceSet(ForwardOpaquePassDetail::PerMaterialResourceSet, resourceSet->AsRHIResourceSet());
-        m_BoundMaterialInstanceId = resourceSet->materialInstanceId;
+        m_BoundMaterialTextureSetId = resourceSet->textureSetId;
         return true;
+    }
+
+    bool ForwardOpaquePass::CanMergeIndirectRun(
+        const ForwardPassContext &context,
+        const RenderCommand &lhs,
+        const RenderCommand &rhs) const
+    {
+        if (context.frameData == nullptr ||
+            lhs.firstObjectIndex >= context.frameData->objects.size() ||
+            rhs.firstObjectIndex >= context.frameData->objects.size())
+        {
+            return false;
+        }
+
+        const std::uint32_t lhsMaterialIndex = context.frameData->objects[lhs.firstObjectIndex].materialIndex;
+        const std::uint32_t rhsMaterialIndex = context.frameData->objects[rhs.firstObjectIndex].materialIndex;
+        const MaterialResourceSet *lhsResourceSet = m_MaterialTextureCache.GetResourceSet(lhsMaterialIndex);
+        const MaterialResourceSet *rhsResourceSet = m_MaterialTextureCache.GetResourceSet(rhsMaterialIndex);
+        return lhsResourceSet != nullptr &&
+               rhsResourceSet != nullptr &&
+               lhsResourceSet->textureSetId == rhsResourceSet->textureSetId &&
+               lhs.meshKey == rhs.meshKey &&
+               lhs.bucket == rhs.bucket &&
+               lhs.doubleSided == rhs.doubleSided;
     }
 
     void ForwardOpaquePass::DrawCommandGroup(
@@ -381,10 +398,17 @@ namespace Physara::Engine
         executorContext.stats = context.stats;
         RenderCommandSubmitCallbacks callbacks{};
         callbacks.userData = &submitContext;
-        callbacks.canMergeIndirectRun = &ForwardOpaquePassDetail::CanMergeIndirectRun;
+        callbacks.canMergeIndirectRun = &ForwardOpaquePass::CanMergeSubmittedCommands;
         callbacks.bindCommand = &ForwardOpaquePass::BindSubmittedCommand;
         callbacks.recordCommand = &ForwardOpaquePass::RecordSubmittedCommand;
         m_CommandExecutor.Submit(executorContext, commands, callbacks);
+    }
+
+    bool ForwardOpaquePass::CanMergeSubmittedCommands(void *userData, const RenderCommand &lhs, const RenderCommand &rhs)
+    {
+        auto *submitContext = static_cast<CommandSubmitContext *>(userData);
+        return submitContext != nullptr && submitContext->pass != nullptr && submitContext->passContext != nullptr &&
+               submitContext->pass->CanMergeIndirectRun(*submitContext->passContext, lhs, rhs);
     }
 
     bool ForwardOpaquePass::BindSubmittedCommand(void *userData, const RenderCommand &command)
@@ -451,6 +475,6 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::ResetTextureBindings()
     {
-        m_BoundMaterialInstanceId = InvalidMaterialInstanceId;
+        m_BoundMaterialTextureSetId = ForwardOpaquePassDetail::InvalidTextureSetId;
     }
 }

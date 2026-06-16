@@ -75,6 +75,7 @@ namespace Physara::Engine
         [[nodiscard]] bool HasValidRenderTarget() const;
 
     private:
+        void InvalidateResourceBindings();
         void RecreateRenderTarget();
         void BuildRenderGraph();
         void ExecuteTransparentForwardPass(RenderGraphContext &context);

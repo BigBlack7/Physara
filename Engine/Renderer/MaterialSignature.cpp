@@ -83,6 +83,17 @@ namespace Physara::Engine
         return seed;
     }
 
+    std::uint64_t MaterialSignature::BuildTextureSet(const MaterialComponent &material)
+    {
+        std::uint64_t seed = MaterialSignatureDetail::HashString("PhysaraMaterialTextureSet");
+        MaterialSignatureDetail::HashCombine(seed, material.baseColorTexture.path);
+        MaterialSignatureDetail::HashCombine(seed, material.metallicRoughnessTexture.path);
+        MaterialSignatureDetail::HashCombine(seed, material.normalTexture.path);
+        MaterialSignatureDetail::HashCombine(seed, material.occlusionTexture.path);
+        MaterialSignatureDetail::HashCombine(seed, material.emissiveTexture.path);
+        return seed;
+    }
+
     bool MaterialSignature::Equals(const MaterialComponent &lhs, const MaterialComponent &rhs)
     {
         return lhs.materialPath == rhs.materialPath &&

@@ -101,6 +101,7 @@ namespace Physara::Engine
         m_SceneColor.reset();
         m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
+        InvalidateResourceBindings();
         m_ShaderLibrary.SetDevice(nullptr);
         m_PipelineStateCache.SetDevice(nullptr);
         m_ViewportWidth = 0;
@@ -255,6 +256,20 @@ namespace Physara::Engine
         }
     }
 
+    void Renderer::InvalidateResourceBindings()
+    {
+        if (m_Device == nullptr)
+        {
+            return;
+        }
+
+        RHI::RHICommandList *commandList = m_Device->GetCommandList();
+        if (commandList != nullptr)
+        {
+            commandList->InvalidateResourceBindings();
+        }
+    }
+
     void Renderer::RecreateRenderTarget()
     {
         m_RenderGraph.Reset();
@@ -266,6 +281,7 @@ namespace Physara::Engine
         m_SceneColor.reset();
         m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
+        InvalidateResourceBindings();
 
         if (m_Device == nullptr || m_ViewportWidth == 0 || m_ViewportHeight == 0)
         {

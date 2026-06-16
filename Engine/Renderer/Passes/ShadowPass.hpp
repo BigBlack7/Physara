@@ -99,7 +99,7 @@ namespace Physara::Engine
         void BuildShadowCommands(const ShadowPassContext &context);
         void UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera);
         void DrawShadowCasters(const ShadowPassContext &context);
-        static bool CanMergeShadowIndirectRun(const RenderCommand &lhs, const RenderCommand &rhs);
+        static bool CanMergeShadowIndirectRun(void *userData, const RenderCommand &lhs, const RenderCommand &rhs);
         static void RecordSubmittedCommand(
             void *userData,
             const RenderCommand &command,

@@ -35,7 +35,7 @@ namespace Physara::Engine
         }
 
         PreparePrimitives(context, commands);
-        BuildIndirectRuns(context, commands, callbacks.canMergeIndirectRun);
+        BuildIndirectRuns(context, commands, callbacks);
         std::uint32_t runIndex = 0;
         for (std::uint32_t commandIndex = 0; commandIndex < static_cast<std::uint32_t>(commands.size());)
         {
@@ -74,7 +74,7 @@ namespace Physara::Engine
     void RenderCommandExecutor::BuildIndirectRuns(
         const RenderCommandExecutorContext &context,
         std::span<const RenderCommand> commands,
-        RenderCommandMergeCallback canMerge)
+        const RenderCommandSubmitCallbacks &callbacks)
     {
         m_IndirectRuns.clear();
         m_IndirectCommandScratch.clear();
@@ -83,13 +83,15 @@ namespace Physara::Engine
             return;
         }
 
-        const RenderCommandMergeCallback mergeCallback = canMerge != nullptr ? canMerge : &RenderCommandExecutor::CanMergeDefault;
+        const RenderCommandMergeCallback mergeCallback = callbacks.canMergeIndirectRun != nullptr
+                                                             ? callbacks.canMergeIndirectRun
+                                                             : &RenderCommandExecutor::CanMergeDefault;
         for (std::uint32_t commandIndex = 0; commandIndex < static_cast<std::uint32_t>(commands.size());)
         {
             const RenderCommand &firstCommand = commands[commandIndex];
             std::uint32_t runCommandCount = 1u;
             while (commandIndex + runCommandCount < static_cast<std::uint32_t>(commands.size()) &&
-                   mergeCallback(firstCommand, commands[commandIndex + runCommandCount]))
+                   mergeCallback(callbacks.userData, firstCommand, commands[commandIndex + runCommandCount]))
             {
                 ++runCommandCount;
             }
@@ -211,8 +213,9 @@ namespace Physara::Engine
                first.vertexBindings[0].slot == next.vertexBindings[0].slot;
     }
 
-    bool RenderCommandExecutor::CanMergeDefault(const RenderCommand &lhs, const RenderCommand &rhs)
+    bool RenderCommandExecutor::CanMergeDefault(void *userData, const RenderCommand &lhs, const RenderCommand &rhs)
     {
+        (void)userData;
         return lhs.meshKey == rhs.meshKey;
     }
 

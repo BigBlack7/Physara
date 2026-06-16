@@ -219,7 +219,7 @@ namespace Physara::Engine
         const std::uint32_t height = context.frameData != nullptr ? context.frameData->view.viewport.height : 0u;
         if (context.device == nullptr || width == 0u || height == 0u)
         {
-            m_BloomMips.clear();
+            ReleaseBloomResources(context);
             m_BloomWidth = 0u;
             m_BloomHeight = 0u;
             return;
@@ -232,7 +232,7 @@ namespace Physara::Engine
 
         m_BloomWidth = width;
         m_BloomHeight = height;
-        m_BloomMips.clear();
+        ReleaseBloomResources(context);
         m_BloomRenderPassDesc = {};
         m_BloomRenderPassDesc.colorAttachments.push_back({
             RHI::TextureFormat::RGBA16F,
@@ -262,7 +262,7 @@ namespace Physara::Engine
             mip.upTexture = context.device->CreateTexture(textureDesc);
             if (mip.downTexture == nullptr || mip.upTexture == nullptr)
             {
-                m_BloomMips.clear();
+                ReleaseBloomResources(context);
                 return;
             }
 
@@ -282,13 +282,27 @@ namespace Physara::Engine
 
             if (mip.downFramebuffer == nullptr || mip.upFramebuffer == nullptr)
             {
-                m_BloomMips.clear();
+                ReleaseBloomResources(context);
                 return;
             }
 
             m_BloomMips.push_back(std::move(mip));
             mipWidth = PostProcessPassDetail::MaxValue(mipWidth / 2u, 1u);
             mipHeight = PostProcessPassDetail::MaxValue(mipHeight / 2u, 1u);
+        }
+    }
+
+    void PostProcessPass::ReleaseBloomResources(const PostProcessPassContext &context)
+    {
+        if (m_BloomMips.empty())
+        {
+            return;
+        }
+
+        m_BloomMips.clear();
+        if (context.commandList != nullptr)
+        {
+            context.commandList->InvalidateResourceBindings();
         }
     }
 

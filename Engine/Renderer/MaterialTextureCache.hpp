@@ -36,6 +36,7 @@ namespace Physara::Engine
     struct MaterialResourceSet
     {
         MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};
+        std::uint32_t textureSetId{0};
         std::array<RHI::RHITextureBinding, MaterialTextureSlotCount> textureBindings{};
         RHI::RHISampler *sampler{nullptr};
         bool complete{false};
@@ -67,6 +68,13 @@ namespace Physara::Engine
             bool generatedMipmaps{false};
         };
 
+        struct TextureSetEntry
+        {
+            std::array<RHI::RHITexture *, MaterialTextureSlotCount> textures{};
+            RHI::RHISampler *sampler{nullptr};
+            std::uint32_t id{0};
+        };
+
         void EnsureDefaults(RHI::RHIDevice &device);
         [[nodiscard]] RHI::RHITexture *GetOrCreateTexture(
             RHI::RHIDevice &device,
@@ -89,6 +97,9 @@ namespace Physara::Engine
             MaterialInstanceId materialInstanceId,
             const MaterialComponent &material,
             FrameStatistics *stats);
+        [[nodiscard]] std::uint32_t ResolveTextureSetId(
+            const std::array<RHI::RHITextureBinding, MaterialTextureSlotCount> &textureBindings,
+            RHI::RHISampler *sampler);
 
     private:
         std::unique_ptr<RHI::RHISampler> m_LinearRepeatSampler{};
@@ -98,6 +109,8 @@ namespace Physara::Engine
         std::unordered_set<std::string> m_MissingTextureWarnings{};
         std::unordered_map<MaterialInstanceId, MaterialResourceSet> m_ResourceSets{};
         std::vector<const MaterialResourceSet *> m_FrameResourceSets{};
+        std::vector<TextureSetEntry> m_TextureSets{};
+        std::uint32_t m_NextTextureSetId{1u};
         std::uint64_t m_ResourceSetFrameIndex{std::numeric_limits<std::uint64_t>::max()};
     };
 }

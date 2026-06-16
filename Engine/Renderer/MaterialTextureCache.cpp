@@ -64,6 +64,8 @@ namespace Physara::Engine
         m_MissingTextureWarnings.clear();
         m_ResourceSets.clear();
         m_FrameResourceSets.clear();
+        m_TextureSets.clear();
+        m_NextTextureSetId = 1u;
         m_ResourceSetFrameIndex = std::numeric_limits<std::uint64_t>::max();
     }
 
@@ -237,7 +239,45 @@ namespace Physara::Engine
                 Binding(GPUTextureBinding::Emissive),
                 emissive != nullptr ? emissive : m_FallbackWhiteTexture.get(),
                 resourceSet.sampler}};
+        resourceSet.textureSetId = ResolveTextureSetId(resourceSet.textureBindings, resourceSet.sampler);
         return resourceSet;
+    }
+
+    std::uint32_t MaterialTextureCache::ResolveTextureSetId(
+        const std::array<RHI::RHITextureBinding, MaterialTextureSlotCount> &textureBindings,
+        RHI::RHISampler *sampler)
+    {
+        for (const TextureSetEntry &entry : m_TextureSets)
+        {
+            if (entry.sampler != sampler)
+            {
+                continue;
+            }
+
+            bool sameTextures = true;
+            for (std::size_t i = 0; i < textureBindings.size(); ++i)
+            {
+                if (entry.textures[i] != textureBindings[i].texture)
+                {
+                    sameTextures = false;
+                    break;
+                }
+            }
+            if (sameTextures)
+            {
+                return entry.id;
+            }
+        }
+
+        TextureSetEntry entry{};
+        for (std::size_t i = 0; i < textureBindings.size(); ++i)
+        {
+            entry.textures[i] = textureBindings[i].texture;
+        }
+        entry.sampler = sampler;
+        entry.id = m_NextTextureSetId++;
+        m_TextureSets.push_back(entry);
+        return entry.id;
     }
 
     void MaterialTextureCache::EnsureDefaults(RHI::RHIDevice &device)

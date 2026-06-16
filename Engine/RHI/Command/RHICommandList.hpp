@@ -180,6 +180,7 @@ namespace Physara::RHI
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;
+        virtual void InvalidateResourceBindings() {}
         virtual void InvalidateExternalState() {}
 
         virtual void ResetStatistics() {}

@@ -37,7 +37,7 @@ namespace Physara::Engine
         FrameStatistics *stats{nullptr};
     };
 
-    using RenderCommandMergeCallback = bool (*)(const RenderCommand &lhs, const RenderCommand &rhs);
+    using RenderCommandMergeCallback = bool (*)(void *userData, const RenderCommand &lhs, const RenderCommand &rhs);
     using RenderCommandBindCallback = bool (*)(void *userData, const RenderCommand &command);
     using RenderCommandRecordCallback = void (*)(
         void *userData,
@@ -76,10 +76,10 @@ namespace Physara::Engine
         void BuildIndirectRuns(
             const RenderCommandExecutorContext &context,
             std::span<const RenderCommand> commands,
-            RenderCommandMergeCallback canMerge);
+            const RenderCommandSubmitCallbacks &callbacks);
         [[nodiscard]] RHI::RHIBuffer *UploadIndirectCommands(const RenderCommandExecutorContext &context);
         [[nodiscard]] static bool CanUseIndirectRun(const MeshGPUPrimitive &first, const MeshGPUPrimitive &next);
-        [[nodiscard]] static bool CanMergeDefault(const RenderCommand &lhs, const RenderCommand &rhs);
+        [[nodiscard]] static bool CanMergeDefault(void *userData, const RenderCommand &lhs, const RenderCommand &rhs);
         [[nodiscard]] static bool BindCommand(const RenderCommandSubmitCallbacks &callbacks, const RenderCommand &command);
         static void RecordCommand(
             const RenderCommandSubmitCallbacks &callbacks,
