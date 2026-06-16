@@ -104,6 +104,11 @@ namespace Physara::RHI
             return false;
         }
 
+        m_SupportsBindlessTextures = GLAD_GL_ARB_bindless_texture &&
+                                     glGetTextureSamplerHandleARB != nullptr &&
+                                     glMakeTextureHandleResidentARB != nullptr;
+        PHYSARA_CORE_INFO("OpenGL bindless textures: {}.", m_SupportsBindlessTextures ? "enabled" : "unavailable");
+
         glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
         GLint maxAniso = 1;
@@ -182,5 +187,21 @@ namespace Physara::RHI
     {
         // 用于shutdown或显式同步. 正常每帧不应频繁调用glFinish, 否则会强 CPU/GPU同步, 降低性能.
         glFinish();
+    }
+
+    std::uint64_t OpenGLDevice::GetBindlessTextureHandle(RHITexture *texture, RHISampler *sampler)
+    {
+        if (!m_SupportsBindlessTextures || texture == nullptr)
+        {
+            return 0u;
+        }
+
+        auto *glTexture = static_cast<OpenGLTexture *>(texture);
+        GLuint samplerId = 0;
+        if (sampler != nullptr)
+        {
+            samplerId = static_cast<OpenGLSampler *>(sampler)->GetGLID();
+        }
+        return glTexture->GetBindlessHandle(samplerId);
     }
 }

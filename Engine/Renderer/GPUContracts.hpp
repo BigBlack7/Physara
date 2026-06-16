@@ -21,7 +21,9 @@ namespace Physara::Engine
         SkyboxSettings = 4,
         RenderSettings = 5,
         Shadow = 6,
-        IBL = 7
+        IBL = 7,
+        MaterialTextureIndices = 8,
+        BindlessTextureHandles = 9
     };
 
     enum class GPUTextureBinding : std::uint32_t

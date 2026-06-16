@@ -1,4 +1,7 @@
 #version 460 core
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+#extension GL_ARB_bindless_texture : require
+#endif
 #extension GL_ARB_shading_language_include : require
 #include "../../Includes/Lighting.glsl"
 #include "../../Includes/IBL.glsl"
@@ -25,11 +28,34 @@ layout(std430, binding = PHYSARA_BINDING_LIGHTS)readonly buffer LightBuffer
     LightData uLights[];
 };
 
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+struct MaterialTextureIndices
+{
+    uvec4 slots0;
+    uvec4 slots1;
+};
+
+struct BindlessTextureHandle
+{
+    uvec4 words;
+};
+
+layout(std430, binding = PHYSARA_BINDING_MATERIAL_TEXTURE_INDICES)readonly buffer MaterialTextureIndexBuffer
+{
+    MaterialTextureIndices uMaterialTextureIndices[];
+};
+
+layout(std430, binding = PHYSARA_BINDING_BINDLESS_TEXTURE_HANDLES)readonly buffer BindlessTextureHandleBuffer
+{
+    BindlessTextureHandle uBindlessTextureHandles[];
+};
+#else
 layout(binding = PHYSARA_BINDING_BASE_COLOR_TEXTURE)uniform sampler2D uBaseColorTexture;
 layout(binding = PHYSARA_BINDING_METALLIC_ROUGHNESS_TEXTURE)uniform sampler2D uMetallicRoughnessTexture;
 layout(binding = PHYSARA_BINDING_NORMAL_TEXTURE)uniform sampler2D uNormalTexture;
 layout(binding = PHYSARA_BINDING_OCCLUSION_TEXTURE)uniform sampler2D uOcclusionTexture;
 layout(binding = PHYSARA_BINDING_EMISSIVE_TEXTURE)uniform sampler2D uEmissiveTexture;
+#endif
 layout(binding = PHYSARA_BINDING_SHADOW_MAP)uniform sampler2D uShadowMap;
 
 layout(location = 0)out vec4 outColor;
@@ -40,6 +66,60 @@ vec3 SrgbToLinear(vec3 value)
     vec3 low = value / 12.92;
     vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
     return mix(low, high, step(vec3(0.04045), value));
+}
+
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+uvec2 GetBindlessTextureHandle(uint slot)
+{
+    MaterialTextureIndices indices = uMaterialTextureIndices[inMaterialIndex];
+    uint textureIndex = slot < 4u ? indices.slots0[int(slot)] : indices.slots1[int(slot - 4u)];
+    return uBindlessTextureHandles[textureIndex].words.xy;
+}
+#endif
+
+vec4 SampleBaseColorTexture(vec2 texCoord)
+{
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+    return texture(sampler2D(GetBindlessTextureHandle(0u)), texCoord);
+#else
+    return texture(uBaseColorTexture, texCoord);
+#endif
+}
+
+vec4 SampleMetallicRoughnessTexture(vec2 texCoord)
+{
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+    return texture(sampler2D(GetBindlessTextureHandle(1u)), texCoord);
+#else
+    return texture(uMetallicRoughnessTexture, texCoord);
+#endif
+}
+
+vec3 SampleNormalTexture(vec2 texCoord)
+{
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+    return texture(sampler2D(GetBindlessTextureHandle(2u)), texCoord).xyz;
+#else
+    return texture(uNormalTexture, texCoord).xyz;
+#endif
+}
+
+float SampleOcclusionTexture(vec2 texCoord)
+{
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+    return texture(sampler2D(GetBindlessTextureHandle(3u)), texCoord).r;
+#else
+    return texture(uOcclusionTexture, texCoord).r;
+#endif
+}
+
+vec3 SampleEmissiveTexture(vec2 texCoord)
+{
+#ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
+    return texture(sampler2D(GetBindlessTextureHandle(4u)), texCoord).rgb;
+#else
+    return texture(uEmissiveTexture, texCoord).rgb;
+#endif
 }
 
 vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldTangent, vec2 texCoord)
@@ -53,7 +133,7 @@ vec3 ResolveWorldNormal(MaterialInputs inputs, vec3 geometricNormal, vec4 worldT
     vec3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
     vec3 b = normalize(cross(n, t) * worldTangent.w);
     mat3 tbn = mat3(t, b, n);
-    vec3 tangentNormal = texture(uNormalTexture, texCoord).xyz * 2.0 - 1.0;
+    vec3 tangentNormal = SampleNormalTexture(texCoord) * 2.0 - 1.0;
     if (inputs.flipNormalY)
     {
         tangentNormal.y = -tangentNormal.y;
@@ -219,23 +299,23 @@ void main()
     
     if (inputs.hasBaseColorTexture)
     {
-        vec4 baseColorSample = texture(uBaseColorTexture, SelectTexCoord(inputs.baseColorTexCoord));
+        vec4 baseColorSample = SampleBaseColorTexture(SelectTexCoord(inputs.baseColorTexCoord));
         inputs.baseColor *= vec4(SrgbToLinear(baseColorSample.rgb), baseColorSample.a);
     }
     if (inputs.hasMetallicRoughnessTexture)
     {
-        vec4 mrSample = texture(uMetallicRoughnessTexture, SelectTexCoord(inputs.metallicRoughnessTexCoord));
+        vec4 mrSample = SampleMetallicRoughnessTexture(SelectTexCoord(inputs.metallicRoughnessTexCoord));
         inputs.perceptualRoughness = mix(inputs.perceptualRoughness, mrSample.g, Saturate(inputs.roughnessTextureInfluence));
         inputs.metallic = mix(inputs.metallic, mrSample.b, Saturate(inputs.metallicTextureInfluence));
     }
     if (inputs.hasOcclusionTexture)
     {
-        float occlusionSample = texture(uOcclusionTexture, SelectTexCoord(inputs.occlusionTexCoord)).r;
+        float occlusionSample = SampleOcclusionTexture(SelectTexCoord(inputs.occlusionTexCoord));
         inputs.ambientOcclusion = mix(inputs.ambientOcclusion, occlusionSample, Saturate(inputs.ambientOcclusionTextureInfluence));
     }
     if (inputs.hasEmissiveTexture)
     {
-        vec3 emissiveSample = texture(uEmissiveTexture, SelectTexCoord(inputs.emissiveTexCoord)).rgb;
+        vec3 emissiveSample = SampleEmissiveTexture(SelectTexCoord(inputs.emissiveTexCoord));
         inputs.emissiveColor *= SrgbToLinear(emissiveSample);
     }
     

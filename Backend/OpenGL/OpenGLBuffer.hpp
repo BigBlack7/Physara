@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include <glad/glad.h>
@@ -30,8 +29,6 @@ namespace Physara::RHI
 
     private:
         void BeginDynamicWrite();
-        void RetireCurrentSegment();
-        void WaitForSegment(std::uint32_t segment);
 
     private:
         static constexpr std::uint32_t kDynamicRingSegments = 3u;
@@ -45,6 +42,5 @@ namespace Physara::RHI
         void *m_MappedPtr{nullptr};
         std::uint32_t m_CurrentSegment{0};
         bool m_HasActiveSegment{false};
-        std::array<GLsync, kDynamicRingSegments> m_SegmentFences{};
     };
 }

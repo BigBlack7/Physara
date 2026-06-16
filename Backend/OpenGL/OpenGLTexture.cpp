@@ -101,6 +101,14 @@ namespace Physara::RHI
 
     OpenGLTexture::~OpenGLTexture()
     {
+        if (glMakeTextureHandleNonResidentARB != nullptr)
+        {
+            for (const auto &[_, handle] : m_BindlessHandles)
+            {
+                glMakeTextureHandleNonResidentARB(handle);
+            }
+        }
+        m_BindlessHandles.clear();
         if (m_ID != 0)
         {
             glDeleteTextures(1, &m_ID);
@@ -146,6 +154,34 @@ namespace Physara::RHI
     RHI::TextureUsageFlags OpenGLTexture::GetUsage() const
     {
         return m_Desc.usage;
+    }
+
+    std::uint64_t OpenGLTexture::GetBindlessHandle(GLuint sampler)
+    {
+        if (m_ID == 0 || glMakeTextureHandleResidentARB == nullptr ||
+            (sampler != 0 && glGetTextureSamplerHandleARB == nullptr) ||
+            (sampler == 0 && glGetTextureHandleARB == nullptr))
+        {
+            return 0u;
+        }
+
+        auto found = m_BindlessHandles.find(sampler);
+        if (found != m_BindlessHandles.end())
+        {
+            return found->second;
+        }
+
+        const GLuint64 handle = sampler != 0
+                                    ? glGetTextureSamplerHandleARB(m_ID, sampler)
+                                    : glGetTextureHandleARB(m_ID);
+        if (handle == 0u)
+        {
+            return 0u;
+        }
+
+        glMakeTextureHandleResidentARB(handle);
+        m_BindlessHandles.emplace(sampler, handle);
+        return handle;
     }
 
     void OpenGLTexture::Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize)

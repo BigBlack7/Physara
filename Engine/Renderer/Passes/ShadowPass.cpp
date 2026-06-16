@@ -590,7 +590,7 @@ namespace Physara::Engine
     bool ShadowPass::CanMergeShadowIndirectRun(void *userData, const RenderCommand &lhs, const RenderCommand &rhs)
     {
         (void)userData;
-        return lhs.meshKey == rhs.meshKey;
+        return lhs.bucket == rhs.bucket;
     }
 
     void ShadowPass::RecordSubmittedCommand(

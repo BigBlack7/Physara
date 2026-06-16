@@ -30,9 +30,12 @@ namespace Physara::RHI
 
         int GetMaxAnisotropy() const override { return m_MaxAnisotropy; }
         const char *GetBackendName() const override { return "OpenGL 4.6"; }
+        bool SupportsBindlessTextures() const override { return m_SupportsBindlessTextures; }
+        std::uint64_t GetBindlessTextureHandle(RHITexture *texture, RHISampler *sampler) override;
 
     private:
         std::unique_ptr<OpenGLCommandList> m_CommandList{};
         int m_MaxAnisotropy{1};
+        bool m_SupportsBindlessTextures{false};
     };
 }

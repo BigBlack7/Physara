@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -56,5 +57,12 @@ namespace Physara::RHI
         // 查询
         virtual int GetMaxAnisotropy() const = 0; // 纹理各向异性上限, Sampler创建时用
         virtual const char *GetBackendName() const { return "Unknown"; }
+        virtual bool SupportsBindlessTextures() const { return false; }
+        virtual std::uint64_t GetBindlessTextureHandle(RHITexture *texture, RHISampler *sampler)
+        {
+            (void)texture;
+            (void)sampler;
+            return 0u;
+        }
     };
 }

@@ -89,10 +89,22 @@ namespace Physara::Engine
         for (std::uint32_t commandIndex = 0; commandIndex < static_cast<std::uint32_t>(commands.size());)
         {
             const RenderCommand &firstCommand = commands[commandIndex];
+            MeshGPUPrimitive *firstPrimitive = m_CommandPrimitiveScratch[commandIndex];
+            if (firstPrimitive == nullptr || firstPrimitive->indexCount == 0)
+            {
+                ++commandIndex;
+                continue;
+            }
+
             std::uint32_t runCommandCount = 1u;
             while (commandIndex + runCommandCount < static_cast<std::uint32_t>(commands.size()) &&
                    mergeCallback(callbacks.userData, firstCommand, commands[commandIndex + runCommandCount]))
             {
+                MeshGPUPrimitive *nextPrimitive = m_CommandPrimitiveScratch[commandIndex + runCommandCount];
+                if (nextPrimitive == nullptr || nextPrimitive->indexCount == 0 || !CanUseIndirectRun(*firstPrimitive, *nextPrimitive))
+                {
+                    break;
+                }
                 ++runCommandCount;
             }
 
@@ -102,26 +114,13 @@ namespace Physara::Engine
                 continue;
             }
 
-            MeshGPUPrimitive *firstPrimitive = m_CommandPrimitiveScratch[commandIndex];
-            if (firstPrimitive == nullptr || firstPrimitive->indexCount == 0)
-            {
-                commandIndex += runCommandCount;
-                continue;
-            }
-
             const std::uint32_t indirectCommandOffset =
                 static_cast<std::uint32_t>(m_IndirectCommandScratch.size() * sizeof(RHI::RHIDrawIndexedIndirectCommand));
-            bool validRun = true;
             for (std::uint32_t i = 0; i < runCommandCount; ++i)
             {
                 const std::uint32_t currentIndex = commandIndex + i;
                 const RenderCommand &command = commands[currentIndex];
                 MeshGPUPrimitive *primitive = m_CommandPrimitiveScratch[currentIndex];
-                if (primitive == nullptr || primitive->indexCount == 0 || !CanUseIndirectRun(*firstPrimitive, *primitive))
-                {
-                    validRun = false;
-                    break;
-                }
 
                 RHI::RHIDrawIndexedIndirectCommand indirectCommand{};
                 indirectCommand.indexCount = primitive->indexCount;
@@ -130,15 +129,6 @@ namespace Physara::Engine
                 indirectCommand.vertexOffset = primitive->vertexOffset;
                 indirectCommand.firstInstance = command.firstInstanceIndex;
                 m_IndirectCommandScratch.push_back(indirectCommand);
-            }
-
-            if (!validRun)
-            {
-                const std::uint32_t commandScratchSize =
-                    indirectCommandOffset / static_cast<std::uint32_t>(sizeof(RHI::RHIDrawIndexedIndirectCommand));
-                m_IndirectCommandScratch.resize(commandScratchSize);
-                commandIndex += runCommandCount;
-                continue;
             }
 
             m_IndirectRuns.push_back(IndirectRun{commandIndex, runCommandCount, indirectCommandOffset, nullptr});

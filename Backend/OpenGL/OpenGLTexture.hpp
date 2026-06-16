@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
 
 #include <glad/glad.h>
 
@@ -26,6 +27,7 @@ namespace Physara::RHI
 
         GLuint GetGLID() const { return m_ID; }
         GLenum GetGLTarget() const { return m_Target; }
+        [[nodiscard]] std::uint64_t GetBindlessHandle(GLuint sampler);
 
         void Upload(std::uint32_t mip, std::uint32_t layer, const void *data, std::uint32_t dataSize = 0) override;
         void GenerateMipmaps();
@@ -34,5 +36,6 @@ namespace Physara::RHI
         GLuint m_ID{0};
         GLenum m_Target{GL_TEXTURE_2D};
         RHITextureDesc m_Desc{};
+        std::unordered_map<GLuint, GLuint64> m_BindlessHandles{};
     };
 }

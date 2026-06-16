@@ -32,6 +32,8 @@ namespace Physara::Engine
         constexpr std::uint32_t MaterialBinding = Binding(GPUBufferBinding::Materials);
         constexpr std::uint32_t LightBinding = Binding(GPUBufferBinding::Lights);
         constexpr std::uint32_t InstanceObjectIndexBinding = Binding(GPUBufferBinding::InstanceIndices);
+        constexpr std::uint32_t MaterialTextureIndexBinding = Binding(GPUBufferBinding::MaterialTextureIndices);
+        constexpr std::uint32_t BindlessTextureHandleBinding = Binding(GPUBufferBinding::BindlessTextureHandles);
         constexpr std::uint32_t ShadowTextureBinding = Binding(GPUTextureBinding::ShadowMap);
         constexpr std::uint32_t IBLPrefilteredTextureBinding = Binding(GPUTextureBinding::IBLPrefiltered);
         constexpr std::uint32_t IBLBRDFLutBinding = Binding(GPUTextureBinding::IBLBRDFLut);
@@ -141,6 +143,15 @@ namespace Physara::Engine
                 instanceObjectIndexAllocation.buffer,
                 instanceObjectIndexAllocation.offset,
                 instanceObjectIndexAllocation.size);
+            if (m_MaterialTextureCache.HasBindlessTables())
+            {
+                context.commandList->SetStorageBuffer(
+                    ForwardOpaquePassDetail::MaterialTextureIndexBinding,
+                    m_MaterialTextureCache.GetMaterialTextureIndexBuffer());
+                context.commandList->SetStorageBuffer(
+                    ForwardOpaquePassDetail::BindlessTextureHandleBinding,
+                    m_MaterialTextureCache.GetBindlessTextureHandleBuffer());
+            }
             BindFrameTextures(context);
 
             ResetTextureBindings();
@@ -269,6 +280,10 @@ namespace Physara::Engine
         shaderDesc.debugName = "Forward";
         shaderDesc.vertexPath = "Shaders/Passes/Forward/Forward.vert";
         shaderDesc.fragmentPath = "Shaders/Passes/Forward/Forward.frag";
+        if (m_MaterialTextureCache.HasBindlessTables())
+        {
+            shaderDesc.defines.push_back(ShaderDefine{"PHYSARA_BINDLESS_MATERIAL_TEXTURES", "1"});
+        }
 
         ShaderVariant *variant = context.shaderLibrary->GetVariant(shaderDesc);
         if (variant == nullptr || !variant->IsValid())
@@ -335,6 +350,10 @@ namespace Physara::Engine
         {
             return false;
         }
+        if (m_MaterialTextureCache.HasBindlessTables())
+        {
+            return true;
+        }
 
         if (m_BoundMaterialTextureSetId == resourceSet->textureSetId)
         {
@@ -362,12 +381,15 @@ namespace Physara::Engine
         const std::uint32_t rhsMaterialIndex = context.frameData->objects[rhs.firstObjectIndex].materialIndex;
         const MaterialResourceSet *lhsResourceSet = m_MaterialTextureCache.GetResourceSet(lhsMaterialIndex);
         const MaterialResourceSet *rhsResourceSet = m_MaterialTextureCache.GetResourceSet(rhsMaterialIndex);
-        return lhsResourceSet != nullptr &&
-               rhsResourceSet != nullptr &&
-               lhsResourceSet->textureSetId == rhsResourceSet->textureSetId &&
-               lhs.meshKey == rhs.meshKey &&
-               lhs.bucket == rhs.bucket &&
-               lhs.doubleSided == rhs.doubleSided;
+        if (lhsResourceSet == nullptr || rhsResourceSet == nullptr || lhs.bucket != rhs.bucket || lhs.doubleSided != rhs.doubleSided)
+        {
+            return false;
+        }
+        if (m_MaterialTextureCache.HasBindlessTables())
+        {
+            return true;
+        }
+        return lhsResourceSet->textureSetId == rhsResourceSet->textureSetId && lhs.meshKey == rhs.meshKey;
     }
 
     void ForwardOpaquePass::DrawCommandGroup(

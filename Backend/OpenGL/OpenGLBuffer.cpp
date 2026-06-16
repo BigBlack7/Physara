@@ -23,7 +23,7 @@ namespace Physara::RHI
         }
         m_StorageSize = m_Dynamic ? m_SegmentStride * kDynamicRingSegments : m_Size;
 
-        // 动态buffer使用多段ring storage。上传从不覆盖当前绑定段，避免CPU/GPU围绕同一地址串行。
+        // 动态buffer使用多段ring storage错开常规帧写入，不在上传热路径插入显式fence查询。
         GLbitfield storageFlags = GL_DYNAMIC_STORAGE_BIT;
         if (m_Dynamic)
         {
@@ -52,15 +52,6 @@ namespace Physara::RHI
                 glUnmapNamedBuffer(m_ID);
                 m_MappedPtr = nullptr;
             }
-            for (GLsync &fence : m_SegmentFences)
-            {
-                if (fence != nullptr)
-                {
-                    glDeleteSync(fence);
-                    fence = nullptr;
-                }
-            }
-
             glDeleteBuffers(1, &m_ID);
             m_ID = 0;
         }
@@ -127,39 +118,9 @@ namespace Physara::RHI
         assert(m_Dynamic);
         if (m_HasActiveSegment)
         {
-            RetireCurrentSegment();
             m_CurrentSegment = (m_CurrentSegment + 1u) % kDynamicRingSegments;
         }
 
-        WaitForSegment(m_CurrentSegment);
         m_HasActiveSegment = true;
-    }
-
-    void OpenGLBuffer::RetireCurrentSegment()
-    {
-        GLsync &fence = m_SegmentFences[m_CurrentSegment];
-        if (fence != nullptr)
-        {
-            glDeleteSync(fence);
-        }
-        fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    }
-
-    void OpenGLBuffer::WaitForSegment(std::uint32_t segment)
-    {
-        GLsync &fence = m_SegmentFences[segment];
-        if (fence == nullptr)
-        {
-            return;
-        }
-
-        GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
-        while (result == GL_TIMEOUT_EXPIRED)
-        {
-            result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1'000'000);
-        }
-
-        glDeleteSync(fence);
-        fence = nullptr;
     }
 }

@@ -5,6 +5,7 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/UploadHasher.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 #include <Engine/Resource/Types/Texture.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
@@ -60,13 +61,20 @@ namespace Physara::Engine
         m_LinearRepeatSampler.reset();
         m_FallbackWhiteTexture.reset();
         m_FallbackNormalTexture.reset();
+        m_MaterialTextureIndexBuffer.reset();
+        m_BindlessTextureHandleBuffer.reset();
         m_TextureCache.clear();
         m_MissingTextureWarnings.clear();
         m_ResourceSets.clear();
         m_FrameResourceSets.clear();
         m_TextureSets.clear();
+        m_FrameTextureIndices.clear();
+        m_BindlessTextureHandles.clear();
+        m_BindlessTextureHandleEntries.clear();
         m_NextTextureSetId = 1u;
         m_ResourceSetFrameIndex = std::numeric_limits<std::uint64_t>::max();
+        m_BindlessUploadSignature = std::numeric_limits<std::uint64_t>::max();
+        m_BindlessReady = false;
     }
 
     void MaterialTextureCache::Update(
@@ -82,9 +90,13 @@ namespace Physara::Engine
         }
 
         EnsureDefaults(device);
+        m_BindlessReady = false;
         if (frameData.materials.empty())
         {
             m_FrameResourceSets.clear();
+            m_FrameTextureIndices.clear();
+            m_BindlessTextureHandles.clear();
+            m_BindlessTextureHandleEntries.clear();
             m_ResourceSetFrameIndex = frameData.frameIndex;
             if (stats != nullptr)
             {
@@ -115,6 +127,7 @@ namespace Physara::Engine
         {
             stats->materialResourceSets = static_cast<std::uint32_t>(m_ResourceSets.size());
         }
+        UpdateBindlessTables(device, frameData, stats);
         m_ResourceSetFrameIndex = frameData.frameIndex;
     }
 
@@ -278,6 +291,169 @@ namespace Physara::Engine
         entry.id = m_NextTextureSetId++;
         m_TextureSets.push_back(entry);
         return entry.id;
+    }
+
+    void MaterialTextureCache::UpdateBindlessTables(
+        RHI::RHIDevice &device,
+        const FrameData &frameData,
+        FrameStatistics *stats)
+    {
+        if (!device.SupportsBindlessTextures() || m_FrameResourceSets.empty())
+        {
+            m_BindlessReady = false;
+            return;
+        }
+
+        m_FrameTextureIndices.clear();
+        m_FrameTextureIndices.resize(frameData.materials.size());
+        m_BindlessTextureHandles.clear();
+        m_BindlessTextureHandles.push_back(BindlessTextureHandleData{});
+        m_BindlessTextureHandleEntries.clear();
+
+        bool complete = true;
+        for (std::size_t materialIndex = 0; materialIndex < m_FrameResourceSets.size(); ++materialIndex)
+        {
+            const MaterialResourceSet *resourceSet = m_FrameResourceSets[materialIndex];
+            if (resourceSet == nullptr)
+            {
+                complete = false;
+                continue;
+            }
+
+            MaterialTextureIndexData indices{};
+            for (std::size_t slot = 0; slot < resourceSet->textureBindings.size(); ++slot)
+            {
+                const RHI::RHITextureBinding &binding = resourceSet->textureBindings[slot];
+                const std::uint32_t index = ResolveBindlessTextureIndex(device, binding.texture, binding.sampler);
+                if (index == 0u)
+                {
+                    complete = false;
+                }
+                if (slot < 4u)
+                {
+                    indices.slots0[static_cast<glm::length_t>(slot)] = index;
+                }
+                else
+                {
+                    indices.slots1[static_cast<glm::length_t>(slot - 4u)] = index;
+                }
+            }
+            m_FrameTextureIndices[materialIndex] = indices;
+        }
+
+        if (!complete || m_BindlessTextureHandles.size() <= 1u || m_FrameTextureIndices.empty())
+        {
+            m_BindlessReady = false;
+            return;
+        }
+
+        const std::uint64_t signature = BuildBindlessUploadSignature();
+        const std::uint32_t indexBytes =
+            static_cast<std::uint32_t>(m_FrameTextureIndices.size() * sizeof(MaterialTextureIndexData));
+        const std::uint32_t handleBytes =
+            static_cast<std::uint32_t>(m_BindlessTextureHandles.size() * sizeof(BindlessTextureHandleData));
+        if (signature != m_BindlessUploadSignature ||
+            m_MaterialTextureIndexBuffer == nullptr ||
+            m_MaterialTextureIndexBuffer->GetSize() < indexBytes ||
+            m_BindlessTextureHandleBuffer == nullptr ||
+            m_BindlessTextureHandleBuffer->GetSize() < handleBytes)
+        {
+            UploadBindlessStorageBuffer(
+                device,
+                m_MaterialTextureIndexBuffer,
+                m_FrameTextureIndices.data(),
+                indexBytes,
+                stats);
+            UploadBindlessStorageBuffer(
+                device,
+                m_BindlessTextureHandleBuffer,
+                m_BindlessTextureHandles.data(),
+                handleBytes,
+                stats);
+            m_BindlessUploadSignature = signature;
+        }
+
+        m_BindlessReady = m_MaterialTextureIndexBuffer != nullptr && m_BindlessTextureHandleBuffer != nullptr;
+    }
+
+    std::uint32_t MaterialTextureCache::ResolveBindlessTextureIndex(
+        RHI::RHIDevice &device,
+        RHI::RHITexture *texture,
+        RHI::RHISampler *sampler)
+    {
+        if (texture == nullptr)
+        {
+            return 0u;
+        }
+
+        for (const BindlessTextureHandleEntry &entry : m_BindlessTextureHandleEntries)
+        {
+            if (entry.texture == texture && entry.sampler == sampler)
+            {
+                return entry.index;
+            }
+        }
+
+        const std::uint64_t handle = device.GetBindlessTextureHandle(texture, sampler);
+        if (handle == 0u)
+        {
+            return 0u;
+        }
+
+        BindlessTextureHandleData data{};
+        data.words.x = static_cast<std::uint32_t>(handle & 0xffffffffull);
+        data.words.y = static_cast<std::uint32_t>(handle >> 32u);
+        const std::uint32_t index = static_cast<std::uint32_t>(m_BindlessTextureHandles.size());
+        m_BindlessTextureHandles.push_back(data);
+        m_BindlessTextureHandleEntries.push_back(BindlessTextureHandleEntry{texture, sampler, index});
+        return index;
+    }
+
+    void MaterialTextureCache::UploadBindlessStorageBuffer(
+        RHI::RHIDevice &device,
+        std::unique_ptr<RHI::RHIBuffer> &buffer,
+        const void *data,
+        std::uint32_t size,
+        FrameStatistics *stats)
+    {
+        if (data == nullptr || size == 0u)
+        {
+            return;
+        }
+
+        if (buffer == nullptr || buffer->GetSize() < size)
+        {
+            std::uint32_t capacity = 256u;
+            while (capacity < size)
+            {
+                capacity *= 2u;
+            }
+
+            RHI::RHIBufferDesc desc{};
+            desc.size = capacity;
+            desc.usage = RHI::BufferUsage::Storage;
+            desc.dynamic = true;
+            buffer = device.CreateBuffer(desc);
+        }
+        if (buffer == nullptr)
+        {
+            return;
+        }
+
+        buffer->UploadData(data, size);
+        if (stats != nullptr)
+        {
+            stats->bufferUploadBytes += size;
+            ++stats->bufferUploadChunks;
+        }
+    }
+
+    std::uint64_t MaterialTextureCache::BuildBindlessUploadSignature() const
+    {
+        std::uint64_t hash = UploadHash::Offset;
+        hash = UploadHash::Vector(hash, m_FrameTextureIndices);
+        hash = UploadHash::Vector(hash, m_BindlessTextureHandles);
+        return hash;
     }
 
     void MaterialTextureCache::EnsureDefaults(RHI::RHIDevice &device)
