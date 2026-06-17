@@ -66,6 +66,24 @@ namespace Physara::Engine
             return true;
         }
 
+        glm::vec3 GetSubmissionCenter(const RenderMeshSubmission &submission)
+        {
+            return submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
+        }
+
+        float GetSubmissionRadius(const RenderMeshSubmission &submission)
+        {
+            return submission.hasBounds ? std::max(submission.boundsRadius, 0.f) : 0.f;
+        }
+
+        float ComputeNearCameraDepth(const RenderMeshSubmission &submission, const RenderView &view)
+        {
+            const glm::vec3 center = GetSubmissionCenter(submission);
+            const float radius = GetSubmissionRadius(submission);
+            const float viewZ = glm::vec3(view.view * glm::vec4(center, 1.f)).z;
+            return std::max(-viewZ - radius, 0.f);
+        }
+
         std::uint32_t EntityToObjectId(EntityId entity)
         {
             return static_cast<std::uint32_t>(entity);
@@ -207,8 +225,10 @@ namespace Physara::Engine
             item.objectIndex = m_VisibleSubmissionCount++;
             item.sourceSubmissionIndex = submissionIndex;
             item.sortKey = BuildSortKey(visibleSubmission, materialInstanceId);
-            const glm::vec3 cameraToObject = visibleSubmission.boundsCenter - view.position;
+            const glm::vec3 itemCenter = RenderProxyDetail::GetSubmissionCenter(visibleSubmission);
+            const glm::vec3 cameraToObject = itemCenter - view.position;
             item.cameraDistanceSq = glm::dot(cameraToObject, cameraToObject);
+            item.cameraDepth = RenderProxyDetail::ComputeNearCameraDepth(visibleSubmission, view);
             item.meshKey = visibleSubmission.meshKey;
             item.primitiveKey = visibleSubmission.primitiveKey;
             item.materialInstanceId = materialInstanceId;
@@ -231,19 +251,27 @@ namespace Physara::Engine
 
     void RenderProxy::SortBuckets()
     {
-        const auto byTextureMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
+        const auto byOpaqueDepthMeshPrimitive = [](const RenderDrawItem &lhs, const RenderDrawItem &rhs)
         {
-            if (lhs.sortKey != rhs.sortKey)
+            if (lhs.cameraDepth != rhs.cameraDepth)
             {
-                return lhs.sortKey < rhs.sortKey;
+                return lhs.cameraDepth < rhs.cameraDepth;
+            }
+            if (lhs.meshKey != rhs.meshKey)
+            {
+                return lhs.meshKey < rhs.meshKey;
+            }
+            if (lhs.primitiveKey != rhs.primitiveKey)
+            {
+                return lhs.primitiveKey < rhs.primitiveKey;
             }
             if (lhs.materialInstanceId != rhs.materialInstanceId)
             {
                 return lhs.materialInstanceId < rhs.materialInstanceId;
             }
-            if (lhs.primitiveKey != rhs.primitiveKey)
+            if (lhs.sortKey != rhs.sortKey)
             {
-                return lhs.primitiveKey < rhs.primitiveKey;
+                return lhs.sortKey < rhs.sortKey;
             }
             return lhs.objectIndex < rhs.objectIndex;
         };
@@ -265,8 +293,8 @@ namespace Physara::Engine
             return std::less<const RenderMeshSubmission *>{}(lhs.submission, rhs.submission);
         };
 
-        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, byTextureMeshPrimitive);
-        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, byTextureMeshPrimitive);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.opaque, byOpaqueDepthMeshPrimitive);
+        RenderProxyDetail::SortCullBuckets(m_Buckets.unlit, byOpaqueDepthMeshPrimitive);
         std::sort(m_Buckets.shadowCasters.begin(), m_Buckets.shadowCasters.end(), byShadowMeshPrimitive);
         RenderProxyDetail::SortCullBuckets(
             m_Buckets.transparent,

@@ -84,8 +84,13 @@ namespace Physara::Engine
         EnsureDefaultTextures(context);
         m_CommandExecutor.BeginFrame();
         m_MaterialTextureCache.Update(*context.device, *context.commandList, context.assetManager, *context.frameData, context.stats);
-        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back, transparent);
-        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None, transparent);
+        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(
+            context,
+            transparent ? RHI::CullMode::None : RHI::CullMode::Back,
+            transparent);
+        RHI::RHIPipelineState *doubleSidedPipeline = transparent
+            ? singleSidedPipeline
+            : GetPipeline(context, RHI::CullMode::None, transparent);
         const FrameUploadAllocation &frameUniformAllocation = context.gpuScene->GetFrameUniformBuffer();
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &lightAllocation = context.gpuScene->GetLightBuffer();
@@ -160,9 +165,9 @@ namespace Physara::Engine
             {
                 DrawCommandGroup(
                     context,
-                    singleSidedPipeline,
+                    doubleSidedPipeline,
                     commands.transparent.singleSided,
-                    std::span<const RenderCommand>{},
+                    commands.transparent.doubleSided,
                     true);
             }
             else
@@ -175,16 +180,7 @@ namespace Physara::Engine
                     false);
             }
 
-            if (transparent)
-            {
-                DrawCommandGroup(
-                    context,
-                    doubleSidedPipeline,
-                    commands.transparent.doubleSided,
-                    std::span<const RenderCommand>{},
-                    true);
-            }
-            else
+            if (!transparent)
             {
                 DrawCommandGroup(
                     context,

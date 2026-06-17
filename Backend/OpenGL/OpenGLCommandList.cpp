@@ -1633,4 +1633,116 @@ namespace Physara::RHI
         m_CurrentPassDesc = nullptr;
         m_CurrentPipelineDesc = nullptr;
     }
+
+    void OpenGLCommandList::SetImGuiRenderState(
+        GLuint program,
+        GLuint vertexArray,
+        GLuint sampler,
+        std::uint32_t framebufferWidth,
+        std::uint32_t framebufferHeight)
+    {
+        const bool invalidState = !m_PipelineStateValid;
+        BindFramebuffer(0);
+
+        if (invalidState || m_State.program != program)
+        {
+            glUseProgram(program);
+            ++m_Statistics.programBinds;
+            m_State.program = program;
+        }
+        if (invalidState || m_State.vao != vertexArray)
+        {
+            glBindVertexArray(vertexArray);
+            ++m_Statistics.vaoBinds;
+            m_State.vao = vertexArray;
+            InvalidateVertexInputCache();
+        }
+
+        RHIBlendState uiBlend{};
+        uiBlend.blendEnable = true;
+        uiBlend.srcColor = BlendFactor::SrcAlpha;
+        uiBlend.dstColor = BlendFactor::OneMinusSrcAlpha;
+        uiBlend.srcAlpha = BlendFactor::One;
+        uiBlend.dstAlpha = BlendFactor::OneMinusSrcAlpha;
+        RHIBlendState &blendState = m_State.blendStates[0];
+        if (invalidState || blendState.blendEnable != uiBlend.blendEnable)
+        {
+            glEnablei(GL_BLEND, 0);
+        }
+        if (invalidState ||
+            blendState.srcColor != uiBlend.srcColor ||
+            blendState.dstColor != uiBlend.dstColor ||
+            blendState.srcAlpha != uiBlend.srcAlpha ||
+            blendState.dstAlpha != uiBlend.dstAlpha)
+        {
+            glBlendFuncSeparatei(
+                0,
+                ToGLBlendFactor(uiBlend.srcColor),
+                ToGLBlendFactor(uiBlend.dstColor),
+                ToGLBlendFactor(uiBlend.srcAlpha),
+                ToGLBlendFactor(uiBlend.dstAlpha));
+        }
+        if (invalidState ||
+            blendState.colorOp != uiBlend.colorOp ||
+            blendState.alphaOp != uiBlend.alphaOp)
+        {
+            glBlendEquationSeparatei(0, ToGLBlendOp(uiBlend.colorOp), ToGLBlendOp(uiBlend.alphaOp));
+        }
+        blendState = uiBlend;
+
+        if (invalidState || m_State.cullMode != CullMode::None)
+        {
+            glDisable(GL_CULL_FACE);
+            m_State.cullMode = CullMode::None;
+        }
+        if (invalidState || m_State.depthTest)
+        {
+            glDisable(GL_DEPTH_TEST);
+            m_State.depthTest = false;
+        }
+        if (invalidState || m_State.polygonMode != PolygonMode::Fill)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            m_State.polygonMode = PolygonMode::Fill;
+        }
+
+        const float width = static_cast<float>(framebufferWidth);
+        const float height = static_cast<float>(framebufferHeight);
+        const bool viewportDirty =
+            !m_ViewportState.valid ||
+            m_ViewportState.x != 0.f ||
+            m_ViewportState.y != 0.f ||
+            m_ViewportState.width != width ||
+            m_ViewportState.height != height;
+        if (viewportDirty)
+        {
+            glViewport(0, 0, static_cast<GLsizei>(framebufferWidth), static_cast<GLsizei>(framebufferHeight));
+            m_ViewportState.x = 0.f;
+            m_ViewportState.y = 0.f;
+            m_ViewportState.width = width;
+            m_ViewportState.height = height;
+            m_ViewportState.valid = true;
+        }
+        SetScissorEnabled(true);
+
+        if (m_SamplerBindings[0] != sampler)
+        {
+            glBindSampler(0, sampler);
+            ++m_Statistics.samplerBinds;
+            m_SamplerBindings[0] = sampler;
+        }
+        m_State.topology = GL_TRIANGLES;
+        m_PipelineStateValid = true;
+        m_CurrentPassDesc = nullptr;
+        m_CurrentPipelineDesc = nullptr;
+    }
+
+    void OpenGLCommandList::AdoptImGuiDrawState(GLuint texture, GLuint sampler)
+    {
+        m_TextureBindings[0] = texture != 0 ? texture : std::numeric_limits<GLuint>::max();
+        m_SamplerBindings[0] = sampler;
+        m_ScissorState.valid = false;
+        m_CurrentPassDesc = nullptr;
+        m_CurrentPipelineDesc = nullptr;
+    }
 }

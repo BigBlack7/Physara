@@ -28,6 +28,7 @@ namespace Physara::Engine
         std::uint32_t sourceSubmissionIndex{0};
         std::uint64_t sortKey{0};
         float cameraDistanceSq{0.f};
+        float cameraDepth{0.f};
         std::uint64_t meshKey{0};
         std::uint64_t primitiveKey{0};
         MaterialInstanceId materialInstanceId{InvalidMaterialInstanceId};

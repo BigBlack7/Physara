@@ -14,6 +14,8 @@ struct ImTextureData;
 
 namespace Physara::RHI
 {
+    class OpenGLCommandList;
+
     class OpenGLImGuiBackend final : public IImGuiBackend
     {
     public:
@@ -46,6 +48,7 @@ namespace Physara::RHI
         void SetupRenderState(const ImDrawData &drawData, const DrawDimensions &dimensions);
         void UploadDrawData(const ImDrawData &drawData);
         void RenderCommandLists(const ImDrawData &drawData, const DrawDimensions &dimensions);
+        [[nodiscard]] OpenGLCommandList *GetOpenGLCommandList() const;
         static void ResetRenderStateCallback(const ImDrawList *, const ImDrawCmd *);
         static GLuint CompileShader(GLenum type, const char *source);
 

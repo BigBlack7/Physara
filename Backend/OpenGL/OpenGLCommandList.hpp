@@ -84,6 +84,13 @@ namespace Physara::RHI
         void InvalidateResourceBindings() override;
         void InvalidateExternalState() override;
         void InvalidateImGuiState();
+        void SetImGuiRenderState(
+            GLuint program,
+            GLuint vertexArray,
+            GLuint sampler,
+            std::uint32_t framebufferWidth,
+            std::uint32_t framebufferHeight);
+        void AdoptImGuiDrawState(GLuint texture, GLuint sampler);
         void ResetStatistics() override;
         [[nodiscard]] RHICommandStatistics GetStatistics() const override;
 

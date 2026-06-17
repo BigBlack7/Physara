@@ -123,6 +123,22 @@ namespace Physara::RHI
     {
     }
 
+    OpenGLCommandList *OpenGLImGuiBackend::GetOpenGLCommandList() const
+    {
+        if (m_Device == nullptr)
+        {
+            return nullptr;
+        }
+
+        RHICommandList *commandList = m_Device->GetCommandList();
+        if (commandList == nullptr)
+        {
+            return nullptr;
+        }
+
+        return dynamic_cast<OpenGLCommandList *>(commandList);
+    }
+
     GLuint OpenGLImGuiBackend::CompileShader(GLenum type, const char *source)
     {
         const GLuint shader = glCreateShader(type);
@@ -398,16 +414,32 @@ namespace Physara::RHI
 
     void OpenGLImGuiBackend::SetupRenderState(const ImDrawData &drawData, const DrawDimensions &dimensions)
     {
-        glEnable(GL_BLEND);
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_STENCIL_TEST);
-        glDisable(GL_PRIMITIVE_RESTART);
-        glEnable(GL_SCISSOR_TEST);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glViewport(0, 0, dimensions.framebufferWidth, dimensions.framebufferHeight);
+        if (OpenGLCommandList *commandList = GetOpenGLCommandList())
+        {
+            commandList->SetImGuiRenderState(
+                m_ShaderProgram,
+                m_VertexArray,
+                m_LinearSampler,
+                static_cast<std::uint32_t>(dimensions.framebufferWidth),
+                static_cast<std::uint32_t>(dimensions.framebufferHeight));
+        }
+        else
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glEnable(GL_BLEND);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_PRIMITIVE_RESTART);
+            glEnable(GL_SCISSOR_TEST);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glViewport(0, 0, dimensions.framebufferWidth, dimensions.framebufferHeight);
+            glUseProgram(m_ShaderProgram);
+            glBindSampler(0, m_LinearSampler);
+            glBindVertexArray(m_VertexArray);
+        }
 
         const float left = drawData.DisplayPos.x;
         const float right = drawData.DisplayPos.x + drawData.DisplaySize.x;
@@ -419,11 +451,8 @@ namespace Physara::RHI
             {0.0f, 0.0f, -1.0f, 0.0f},
             {(right + left) / (left - right), (top + bottom) / (bottom - top), 0.0f, 1.0f}};
 
-        glUseProgram(m_ShaderProgram);
         glUniform1i(m_TextureLocation, 0);
         glUniformMatrix4fv(m_ProjectionLocation, 1, GL_FALSE, &projection[0][0]);
-        glBindSampler(0, m_LinearSampler);
-        glBindVertexArray(m_VertexArray);
         m_BoundTexture = 0;
     }
 
@@ -504,6 +533,10 @@ namespace Physara::RHI
                     if (command->UserCallback == ImGui::GetPlatformIO().DrawCallback_ResetRenderState)
                     {
                         SetupRenderState(drawData, dimensions);
+                        lastScissorX = -1;
+                        lastScissorY = -1;
+                        lastScissorWidth = -1;
+                        lastScissorHeight = -1;
                     }
                     else
                     {
@@ -567,6 +600,7 @@ namespace Physara::RHI
         if (ImDrawData *drawData = ImGui::GetDrawData())
         {
             const auto start = std::chrono::steady_clock::now();
+            bool submitted = false;
             m_LastRenderStatistics.drawLists = static_cast<std::uint32_t>(drawData->CmdListsCount);
             m_LastRenderStatistics.vertexCount = static_cast<std::uint32_t>(drawData->TotalVtxCount);
             m_LastRenderStatistics.indexCount = static_cast<std::uint32_t>(drawData->TotalIdxCount);
@@ -598,9 +632,9 @@ namespace Physara::RHI
                 {
                     UpdateTextureRequests(*drawData);
                     UploadDrawData(*drawData);
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
                     SetupRenderState(*drawData, dimensions);
                     RenderCommandLists(*drawData, dimensions);
+                    submitted = true;
                 }
             }
 
@@ -609,18 +643,15 @@ namespace Physara::RHI
                 glPopDebugGroup();
             }
 
-            if (m_Device != nullptr)
+            if (submitted && m_Device != nullptr)
             {
-                if (RHICommandList *commandList = m_Device->GetCommandList())
+                if (OpenGLCommandList *openGLCommandList = GetOpenGLCommandList())
                 {
-                    if (auto *openGLCommandList = dynamic_cast<OpenGLCommandList *>(commandList))
-                    {
-                        openGLCommandList->InvalidateImGuiState();
-                    }
-                    else
-                    {
-                        commandList->InvalidateExternalState();
-                    }
+                    openGLCommandList->AdoptImGuiDrawState(m_BoundTexture, m_LinearSampler);
+                }
+                else if (RHICommandList *commandList = m_Device->GetCommandList())
+                {
+                    commandList->InvalidateExternalState();
                 }
             }
 
