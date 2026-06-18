@@ -2,15 +2,12 @@
 
 #include <algorithm>
 
-#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
-#include <glm/gtx/matrix_decompose.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
 #include <imgui/ImGuizmo.h>
 
-#include <Engine/Scene/Components/RelationshipComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Scene.hpp>
 
@@ -37,33 +34,6 @@ namespace Physara::Editor
             return space == GizmoSpace::Local ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
         }
 
-        glm::mat4 GetParentWorldMatrix(Engine::Scene &scene, Engine::EntityId entity)
-        {
-            auto &registry = scene.GetRegistry();
-            const auto *relationship = registry.try_get<Engine::RelationshipComponent>(entity);
-            if (relationship == nullptr || relationship->parent == Engine::NullEntity)
-            {
-                return glm::mat4(1.f);
-            }
-
-            auto *parentTransform = registry.try_get<Engine::TransformComponent>(relationship->parent);
-            return parentTransform != nullptr ? parentTransform->GetWorldMatrix() : glm::mat4(1.f);
-        }
-
-        void ApplyLocalMatrix(Engine::TransformComponent &transform, const glm::mat4 &localMatrix)
-        {
-            glm::vec3 scale{};
-            glm::quat rotation{};
-            glm::vec3 translation{};
-            glm::vec3 skew{};
-            glm::vec4 perspective{};
-            if (!glm::decompose(localMatrix, scale, rotation, translation, skew, perspective))
-            {
-                return;
-            }
-
-            transform.SetLocalTRS(translation, glm::normalize(rotation), scale);
-        }
     }
 
     void Gizmo::Draw(EditorContext &context, const ImVec2 &viewportOrigin, float width, float height)
@@ -79,8 +49,6 @@ namespace Physara::Editor
         auto &transform = entity.GetComponent<Engine::TransformComponent>();
 
         glm::mat4 worldMatrix = transform.GetWorldMatrix();
-        const glm::mat4 parentWorld = GizmoDetail::GetParentWorldMatrix(scene, context.selectedEntity);
-        const glm::mat4 inverseParentWorld = glm::inverse(parentWorld);
 
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
@@ -102,8 +70,7 @@ namespace Physara::Editor
         m_UsingOrHovered = ImGuizmo::IsUsing() || ImGuizmo::IsOver();
         if (manipulated)
         {
-            const glm::mat4 localMatrix = inverseParentWorld * worldMatrix;
-            GizmoDetail::ApplyLocalMatrix(transform, localMatrix);
+            scene.SetWorldMatrix(context.selectedEntity, worldMatrix);
         }
     }
 

@@ -299,6 +299,11 @@ namespace Physara::Editor
             break;
         }
 
+        if (parent)
+        {
+            entity.GetComponent<Engine::TransformComponent>().SetLocalPosition(glm::vec3(0.f));
+        }
+        m_Context.activeScene->UpdateTransforms();
         m_Context.selectedEntity = entity.GetHandle();
         m_Context.selectedEntities.clear();
         m_Context.selectedEntities.push_back(entity.GetHandle());

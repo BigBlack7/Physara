@@ -29,8 +29,10 @@ namespace Physara::Engine
         void SetLocalScale(const glm::vec3 &scale);
         void SetLocalTRS(const glm::vec3 &position, const glm::quat &rotation, const glm::vec3 &scale);
         void SetLocalTRS(const glm::vec3 &position, const glm::vec3 &eulerRotation, const glm::vec3 &scale);
+        bool SetLocalMatrix(const glm::mat4 &matrix);
 
         [[nodiscard]] glm::vec3 GetLocalEulerRotation() const;
+        [[nodiscard]] bool GetWorldTRS(glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale) const;
         [[nodiscard]] const glm::mat4 &GetLocalMatrix();
         [[nodiscard]] const glm::mat4 &GetWorldMatrix() const { return worldMatrix; }
         [[nodiscard]] const glm::mat4 &GetInverseTransposeWorldMatrix() const { return inverseTransposeWorldMatrix; }

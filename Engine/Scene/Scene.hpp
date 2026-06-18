@@ -4,6 +4,9 @@
 #include <vector>
 
 #include <entt/entt.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 
 #include <Engine/Scene/Entity.hpp>
 #include <Engine/Scene/EntityId.hpp>
@@ -29,6 +32,8 @@ namespace Physara::Engine
         bool SetParent(EntityId child, EntityId parent);
         void ClearParent(Entity child);
         void ClearParent(EntityId child);
+        bool SetWorldTransform(EntityId entity, const glm::vec3 &position, const glm::quat &rotation, const glm::vec3 &scale);
+        bool SetWorldMatrix(EntityId entity, const glm::mat4 &worldMatrix);
 
         [[nodiscard]] bool IsValid(EntityId entity) const;
         [[nodiscard]] Entity GetEntity(EntityId entity);
@@ -43,6 +48,7 @@ namespace Physara::Engine
         void DetachFromParent(EntityId child);
         void AttachToParent(EntityId child, EntityId parent);
         bool WouldCreateCycle(EntityId child, EntityId parent) const;
+        [[nodiscard]] glm::mat4 GetParentWorldMatrix(EntityId entity) const;
         void MarkWorldTransformDirty(EntityId entity);
 
     private:

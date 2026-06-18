@@ -1,6 +1,10 @@
 #include "Scene.hpp"
 
+#include <cmath>
 #include <vector>
+
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 #include <Engine/Scene/Components/CameraComponent.hpp>
 #include <Engine/Scene/Components/RelationshipComponent.hpp>
@@ -202,6 +206,44 @@ namespace Physara::Engine
         MarkWorldTransformDirty(child);
     }
 
+    bool Scene::SetWorldTransform(
+        EntityId entity,
+        const glm::vec3 &position,
+        const glm::quat &rotation,
+        const glm::vec3 &scale)
+    {
+        const glm::mat4 worldMatrix =
+            glm::translate(glm::mat4(1.f), position) *
+            glm::mat4_cast(glm::normalize(rotation)) *
+            glm::scale(glm::mat4(1.f), scale);
+        return SetWorldMatrix(entity, worldMatrix);
+    }
+
+    bool Scene::SetWorldMatrix(EntityId entity, const glm::mat4 &worldMatrix)
+    {
+        auto *transform = m_Registry.try_get<TransformComponent>(entity);
+        if (transform == nullptr)
+        {
+            return false;
+        }
+
+        UpdateTransforms();
+        const glm::mat4 parentWorld = GetParentWorldMatrix(entity);
+        const float determinant = glm::determinant(parentWorld);
+        if (!std::isfinite(determinant) || std::abs(determinant) <= 0.000001f)
+        {
+            return false;
+        }
+
+        if (!transform->SetLocalMatrix(glm::inverse(parentWorld) * worldMatrix))
+        {
+            return false;
+        }
+
+        UpdateTransforms();
+        return true;
+    }
+
     bool Scene::IsValid(EntityId entity) const
     {
         return entity != NullEntity && m_Registry.valid(entity);
@@ -313,6 +355,18 @@ namespace Physara::Engine
         }
 
         return false;
+    }
+
+    glm::mat4 Scene::GetParentWorldMatrix(EntityId entity) const
+    {
+        const auto *relationship = m_Registry.try_get<RelationshipComponent>(entity);
+        if (relationship == nullptr || relationship->parent == NullEntity)
+        {
+            return glm::mat4(1.f);
+        }
+
+        const auto *parentTransform = m_Registry.try_get<TransformComponent>(relationship->parent);
+        return parentTransform != nullptr ? parentTransform->GetWorldMatrix() : glm::mat4(1.f);
     }
 
     void Scene::MarkWorldTransformDirty(EntityId entity)

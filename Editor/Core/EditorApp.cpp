@@ -25,7 +25,6 @@
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/Resource/BuiltinPrimitives.hpp>
-#include <Engine/Resource/Loaders/GLTFLoader.hpp>
 #include <Engine/Scene/Scene.hpp>
 #include <Engine/Scene/SceneSerializer.hpp>
 #include <Engine/Scene/Components/CameraComponent.hpp>
@@ -184,8 +183,8 @@ namespace Physara::Editor
 
         PHYSARA_INFO("Applying editor theme...");
         EditorTheme::Apply();
-        PHYSARA_INFO("Creating default scene...");
-        CreateDefaultScene();
+        PHYSARA_INFO("Creating empty editor scene...");
+        CreateEmptyScene();
         PHYSARA_INFO("Initializing editor icons...");
         InitializeIcons();
         PHYSARA_INFO("Connecting scene view camera input...");
@@ -677,53 +676,18 @@ namespace Physara::Editor
         m_SceneViewPanel.SetIconSet(icons);
     }
 
-    void EditorApp::CreateDefaultScene()
+    void EditorApp::CreateEmptyScene()
     {
         m_EditorScene = std::make_unique<Engine::Scene>();
         m_Context.activeScene = m_EditorScene.get();
 
-        const std::filesystem::path defaultScenePath = m_Context.assetsRootPath / "Scenes" / "default.scene.json";
-        bool loadedDefaultScene = false;
-        if (std::filesystem::exists(defaultScenePath))
-        {
-            loadedDefaultScene = Engine::SceneSerializer::Deserialize(*m_EditorScene, defaultScenePath, &m_AssetManager);
-            if (loadedDefaultScene)
-            {
-                m_Context.currentScenePath = defaultScenePath;
-                PHYSARA_INFO("Loaded default scene: {}", defaultScenePath.string());
-            }
-            else
-            {
-                PHYSARA_ERROR("Failed to load default scene: {}", defaultScenePath.string());
-            }
-        }
-
-        if (!loadedDefaultScene)
-        {
-            Engine::Entity importRoot = Engine::GLTFLoader::LoadToScene(
-                *m_EditorScene,
-                m_Context.assetsRootPath / "Models" / "su7_ultra" / "su7_ultra.gltf",
-                &m_AssetManager);
-            if (importRoot)
-            {
-                PHYSARA_INFO("Fallback startup GLTF loaded.");
-            }
-        }
-
         Engine::Entity entity = m_EditorScene->EnsureSceneCamera();
-        if (loadedDefaultScene)
-        {
-            m_EditorCamera.SyncFromSceneCamera(m_EditorScene.get());
-        }
-        else
-        {
-            entity.GetComponent<Engine::TransformComponent>().SetLocalPosition({0.f, 1.6f, 5.f});
-            FrameEditorCameraToScene();
-            m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
-        }
+        FrameEditorCameraToScene();
+        m_EditorCamera.SyncToSceneCamera(m_EditorScene.get());
         m_Context.selectedEntity = entity.GetHandle();
         m_Context.selectedEntities.clear();
         m_Context.selectedEntities.push_back(entity.GetHandle());
+        PHYSARA_INFO("Started with an empty untitled scene.");
     }
 
     void EditorApp::FrameEditorCameraToScene()

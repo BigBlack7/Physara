@@ -101,7 +101,7 @@ namespace Physara::Engine
         m_SceneColor.reset();
         m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
-        InvalidateResourceBindings();
+        InvalidateCommandState();
         m_ShaderLibrary.SetDevice(nullptr);
         m_PipelineStateCache.SetDevice(nullptr);
         m_ViewportWidth = 0;
@@ -213,8 +213,13 @@ namespace Physara::Engine
 
     void Renderer::SetShadowSettings(const ShadowSettings &settings)
     {
-        m_ShadowSettings = settings;
+        const std::uint32_t previousResolution = m_ShadowPass.GetSettings().resolution;
         m_ShadowPass.SetSettings(settings);
+        m_ShadowSettings = m_ShadowPass.GetSettings();
+        if (previousResolution != m_ShadowSettings.resolution)
+        {
+            InvalidateCommandState();
+        }
     }
 
     void Renderer::SetMSAASamples(std::uint32_t samples)
@@ -256,7 +261,7 @@ namespace Physara::Engine
         }
     }
 
-    void Renderer::InvalidateResourceBindings()
+    void Renderer::InvalidateCommandState()
     {
         if (m_Device == nullptr)
         {
@@ -266,7 +271,7 @@ namespace Physara::Engine
         RHI::RHICommandList *commandList = m_Device->GetCommandList();
         if (commandList != nullptr)
         {
-            commandList->InvalidateResourceBindings();
+            commandList->InvalidateExternalState();
         }
     }
 
@@ -281,7 +286,7 @@ namespace Physara::Engine
         m_SceneColor.reset();
         m_SceneHDRColorMSAA.reset();
         m_SceneHDRColor.reset();
-        InvalidateResourceBindings();
+        InvalidateCommandState();
 
         if (m_Device == nullptr || m_ViewportWidth == 0 || m_ViewportHeight == 0)
         {

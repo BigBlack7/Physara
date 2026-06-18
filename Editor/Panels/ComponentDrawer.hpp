@@ -28,6 +28,7 @@
 #include <Engine/Scene/Components/MeshComponent.hpp>
 #include <Engine/Scene/Components/TransformComponent.hpp>
 #include <Engine/Scene/Entity.hpp>
+#include <Engine/Scene/Scene.hpp>
 
 namespace Physara::Editor
 {
@@ -279,30 +280,43 @@ namespace Physara::Editor
     template <>
     inline bool DrawComponent<Engine::TransformComponent>(Engine::Entity entity, EditorContext &context, Engine::AssetManager *assetManager)
     {
-        (void)context;
         (void)assetManager;
         auto &transform = entity.GetComponent<Engine::TransformComponent>();
-        bool changed = false;
-
-        glm::vec3 position = transform.localPosition;
-        if (ImGui::DragFloat3("Position", &position.x, 0.05f))
+        if (context.activeScene == nullptr)
         {
-            transform.SetLocalPosition(position);
+            return false;
+        }
+
+        context.activeScene->UpdateTransforms();
+        glm::vec3 position{};
+        glm::quat rotation{};
+        glm::vec3 scale{};
+        if (!transform.GetWorldTRS(position, rotation, scale))
+        {
+            ImGui::TextDisabled("World transform is not decomposable.");
+            return false;
+        }
+
+        bool changed = ImGui::DragFloat3("World Position", &position.x, 0.05f);
+
+        glm::vec3 rotationDegrees = glm::degrees(glm::eulerAngles(rotation));
+        if (ImGui::DragFloat3("World Rotation", &rotationDegrees.x, 0.25f))
+        {
             changed = true;
         }
 
-        glm::vec3 rotationDegrees = glm::degrees(transform.GetLocalEulerRotation());
-        if (ImGui::DragFloat3("Rotation", &rotationDegrees.x, 0.25f))
+        if (ImGui::DragFloat3("World Scale", &scale.x, 0.02f, 0.001f, 0.f))
         {
-            transform.SetLocalEulerRotation(glm::radians(rotationDegrees));
             changed = true;
         }
 
-        glm::vec3 scale = transform.localScale;
-        if (ImGui::DragFloat3("Scale", &scale.x, 0.02f, 0.001f, 0.f))
+        if (changed)
         {
-            transform.SetLocalScale(scale);
-            changed = true;
+            context.activeScene->SetWorldTransform(
+                entity.GetHandle(),
+                position,
+                glm::quat(glm::radians(rotationDegrees)),
+                scale);
         }
 
         return changed;

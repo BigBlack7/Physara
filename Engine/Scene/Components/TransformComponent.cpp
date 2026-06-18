@@ -1,10 +1,42 @@
 #include "TransformComponent.hpp"
 
+#include <cmath>
+
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 
 namespace Physara::Engine
 {
+    namespace TransformComponentDetail
+    {
+        bool IsFinite(const glm::vec3 &value)
+        {
+            return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+        }
+
+        bool DecomposeTRS(
+            const glm::mat4 &matrix,
+            glm::vec3 &position,
+            glm::quat &rotation,
+            glm::vec3 &scale)
+        {
+            glm::vec3 skew{};
+            glm::vec4 perspective{};
+            if (!glm::decompose(matrix, scale, rotation, position, skew, perspective) ||
+                !IsFinite(position) || !IsFinite(scale) ||
+                !std::isfinite(rotation.x) || !std::isfinite(rotation.y) ||
+                !std::isfinite(rotation.z) || !std::isfinite(rotation.w))
+            {
+                return false;
+            }
+
+            rotation = glm::normalize(rotation);
+            return true;
+        }
+    }
+
     TransformComponent::TransformComponent(const glm::vec3 &position)
         : localPosition(position)
     {
@@ -60,9 +92,28 @@ namespace Physara::Engine
         MarkLocalDirty();
     }
 
+    bool TransformComponent::SetLocalMatrix(const glm::mat4 &matrix)
+    {
+        glm::vec3 position{};
+        glm::quat rotation{};
+        glm::vec3 scale{};
+        if (!TransformComponentDetail::DecomposeTRS(matrix, position, rotation, scale))
+        {
+            return false;
+        }
+
+        SetLocalTRS(position, rotation, scale);
+        return true;
+    }
+
     glm::vec3 TransformComponent::GetLocalEulerRotation() const
     {
         return glm::eulerAngles(localRotationQuat);
+    }
+
+    bool TransformComponent::GetWorldTRS(glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale) const
+    {
+        return TransformComponentDetail::DecomposeTRS(worldMatrix, position, rotation, scale);
     }
 
     const glm::mat4 &TransformComponent::GetLocalMatrix()
