@@ -68,7 +68,10 @@ namespace Physara::RHI
 
     [[nodiscard]] constexpr GLTextureFormat ToGLTextureFormat(TextureFormat format, TextureColorSpace colorSpace)
     {
-        (void)colorSpace;
+        if (format == TextureFormat::RGBA8 && colorSpace == TextureColorSpace::SRGB)
+        {
+            return {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE};
+        }
         return ToGLTextureFormat(format);
     }
 

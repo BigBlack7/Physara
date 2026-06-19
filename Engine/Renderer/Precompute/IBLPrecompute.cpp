@@ -25,7 +25,7 @@ namespace Physara::Engine
     {
         constexpr float Pi = 3.14159265358979323846f;
         constexpr float InvPi = 0.31830988618379067154f;
-        constexpr std::uint32_t CacheVersion = 8u;
+        constexpr std::uint32_t CacheVersion = 9u;
 
         struct CacheHeader
         {
@@ -432,6 +432,7 @@ namespace Physara::Engine
 
         [[nodiscard]] glm::vec2 IntegrateBRDF(float NoV, float perceptualRoughness, std::uint32_t sampleCount)
         {
+            const glm::vec2 smoothLimit(std::pow(1.f - NoV, 5.f), 1.f);
             const glm::vec3 view(std::sqrt(std::max(1.f - NoV * NoV, 0.f)), 0.f, NoV);
             const glm::vec3 normal(0.f, 0.f, 1.f);
             float a = 0.f;
@@ -453,7 +454,10 @@ namespace Physara::Engine
                     b += gVis;
                 }
             }
-            return glm::vec2(a, b) / static_cast<float>(sampleCount);
+            glm::vec2 integrated = glm::vec2(a, b) / static_cast<float>(sampleCount);
+            integrated = glm::clamp(integrated, glm::vec2(0.f), glm::vec2(1.f));
+            const float smoothBlend = std::clamp((perceptualRoughness - 0.045f) / 0.055f, 0.f, 1.f);
+            return glm::mix(smoothLimit, integrated, smoothBlend);
         }
 
         [[nodiscard]] std::vector<float> BuildBRDFLut(std::uint32_t size, std::uint32_t sampleCount)
@@ -769,7 +773,7 @@ namespace Physara::Engine
             settings.writeDebugOutputs};
         const IBLPrecomputeDetail::CacheHeader expectedHeader = IBLPrecomputeDetail::BuildHeader(environmentPath, clampedSettings);
         const std::filesystem::path cacheDirectory = GetCacheDirectory(environmentPath);
-        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v8.bin";
+        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v9.bin";
 
         if (clampedSettings.useCache)
         {

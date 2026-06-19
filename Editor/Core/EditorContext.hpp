@@ -95,12 +95,11 @@ namespace Physara::Editor
         bool bloomEnabled{true};
         int antiAliasingModeIndex{3};
         int msaaSamplesIndex{1};
-        int bloomModeIndex{1};
         int debugViewIndex{0};
         float bloomThreshold{1.f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.12f};
-        float bloomRadius{2.f};
+        float bloomScatter{0.7f};
         float aaSubpixel{0.75f};
         float aaEdgeThreshold{0.125f};
         float aaEdgeThresholdMin{0.0312f};
@@ -109,10 +108,16 @@ namespace Physara::Editor
 
     struct ShadowSettings
     {
-        int algorithmIndex{2};
+        bool enabled{true};
+        int filterIndex{1};
         int resolutionIndex{1};
+        int cascadeCountIndex{2};
+        float maxDistanceMeters{250.f};
+        float splitLambda{0.7f};
+        float transitionFraction{0.1f};
         float depthBias{2.f};
         float slopeBias{2.f};
+        float normalBiasTexels{1.5f};
         float receiverBiasScale{1.f};
         float filterRadiusTexels{1.5f};
         float lightSizeTexels{24.f};

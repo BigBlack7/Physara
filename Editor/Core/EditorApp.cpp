@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <cstdio>
 #include <filesystem>
@@ -129,24 +130,13 @@ namespace Physara::Editor
         float EnvironmentIntensityToEV(float intensity, float cameraEV100)
         {
             constexpr float blackEV = -32.f;
-            constexpr float nativeIntensity = 1.f;
-            constexpr float maxEditorIntensity = 4.f;
-            constexpr float maxBoostEV = 8.f;
-            constexpr float boostCurve = 1.45f;
             constexpr float exposureCalibration = 1.2f;
-            const float neutralEV = std::max(cameraEV100, 0.f) + std::log2(exposureCalibration);
 
-            if (!std::isfinite(intensity) || intensity <= 0.f)
+            if (!std::isfinite(intensity) || !std::isfinite(cameraEV100) || intensity <= 0.f)
             {
                 return blackEV;
             }
-            if (intensity < nativeIntensity)
-            {
-                return neutralEV + std::log2(std::max(intensity, std::exp2(blackEV)));
-            }
-
-            const float t = std::clamp((intensity - nativeIntensity) / (maxEditorIntensity - nativeIntensity), 0.f, 1.f);
-            return neutralEV + maxBoostEV * std::pow(t, boostCurve);
+            return cameraEV100 + std::log2(exposureCalibration) + std::log2(intensity);
         }
 
     }
@@ -185,6 +175,31 @@ namespace Physara::Editor
         EditorTheme::Apply();
         PHYSARA_INFO("Creating empty editor scene...");
         CreateEmptyScene();
+        if (const char *requestedScene = std::getenv("PHYSARA_STARTUP_SCENE");
+            requestedScene != nullptr && requestedScene[0] != '\0')
+        {
+            std::filesystem::path scenePath(requestedScene);
+            if (scenePath.is_relative())
+            {
+                const std::filesystem::path assetsRelative = m_Context.assetsRootPath / scenePath;
+                scenePath = std::filesystem::exists(assetsRelative)
+                                ? assetsRelative
+                                : std::filesystem::absolute(scenePath);
+            }
+
+            if (Engine::SceneSerializer::Deserialize(*m_EditorScene, scenePath, &m_AssetManager))
+            {
+                m_Context.currentScenePath = scenePath.lexically_normal();
+                const std::string sceneName = EditorAppDetail::SceneNameFromPath(scenePath);
+                std::snprintf(m_SaveSceneName.data(), m_SaveSceneName.size(), "%s", sceneName.c_str());
+                FrameEditorCameraToScene();
+                PHYSARA_INFO("Loaded explicitly requested startup scene '{}'.", scenePath.string());
+            }
+            else
+            {
+                PHYSARA_WARN("Could not load explicitly requested startup scene '{}'; keeping the empty scene.", scenePath.string());
+            }
+        }
         PHYSARA_INFO("Initializing editor icons...");
         InitializeIcons();
         PHYSARA_INFO("Connecting scene view camera input...");
@@ -466,7 +481,8 @@ namespace Physara::Editor
                 ? m_Context.assetsRootPath / m_Context.settings.environment.skyboxPath
                 : std::filesystem::path{};
         m_Renderer->SetSkyboxEnabled(m_Context.settings.environment.skyboxEnabled);
-        m_Renderer->SetSkyboxExposureCompensation(EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
+        m_Renderer->SetSkyboxExposureCompensation(
+            EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
         m_Renderer->SetEnvironmentMapPath(environmentPath);
         Engine::PostProcessSettings postProcessSettings{};
         postProcessSettings.toneMappingMode = static_cast<Engine::ToneMappingMode>(
@@ -476,8 +492,6 @@ namespace Physara::Editor
         postProcessSettings.antiAliasingMode = aaIndex <= 1
                                                    ? Engine::AntiAliasingMode::None
                                                    : static_cast<Engine::AntiAliasingMode>(aaIndex - 1);
-        postProcessSettings.bloomMode = static_cast<Engine::BloomMode>(
-            std::clamp(m_Context.settings.postProcess.bloomModeIndex, 0, 2));
         postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
         if (m_Context.activeScene != nullptr)
         {
@@ -485,14 +499,13 @@ namespace Physara::Editor
             if (sceneCamera.HasComponent<Engine::CameraComponent>())
             {
                 const Engine::CameraComponent &camera = sceneCamera.GetComponent<Engine::CameraComponent>();
-                postProcessSettings.exposureMode = Engine::ExposureMode::Manual;
                 postProcessSettings.exposureCompensationEV = camera.exposureCompensationEV;
             }
         }
         postProcessSettings.bloomThreshold = m_Context.settings.postProcess.bloomThreshold;
         postProcessSettings.bloomKnee = m_Context.settings.postProcess.bloomKnee;
         postProcessSettings.bloomIntensity = m_Context.settings.postProcess.bloomIntensity;
-        postProcessSettings.bloomRadius = m_Context.settings.postProcess.bloomRadius;
+        postProcessSettings.bloomScatter = m_Context.settings.postProcess.bloomScatter;
         postProcessSettings.aaSubpixel = m_Context.settings.postProcess.aaSubpixel;
         postProcessSettings.aaEdgeThreshold = m_Context.settings.postProcess.aaEdgeThreshold;
         postProcessSettings.aaEdgeThresholdMin = m_Context.settings.postProcess.aaEdgeThresholdMin;
@@ -501,13 +514,20 @@ namespace Physara::Editor
         const std::uint32_t msaaSamples[] = {2u, 4u, 8u};
         m_Renderer->SetMSAASamples(aaIndex == 1 ? msaaSamples[std::clamp(m_Context.settings.postProcess.msaaSamplesIndex, 0, 2)] : 1u);
         Engine::ShadowSettings shadowSettings{};
-        const int shadowAlgorithmIndex = std::clamp(m_Context.settings.shadow.algorithmIndex, 0, 5);
-        shadowSettings.algorithm = static_cast<Engine::ShadowAlgorithm>(shadowAlgorithmIndex);
+        shadowSettings.enabled = m_Context.settings.shadow.enabled;
+        shadowSettings.filter = static_cast<Engine::ShadowFilter>(
+            std::clamp(m_Context.settings.shadow.filterIndex, 0, 4));
         const std::uint32_t shadowResolutions[] = {1024u, 2048u, 4096u, 8192u};
         const int shadowResolutionIndex = std::clamp(m_Context.settings.shadow.resolutionIndex, 0, 3);
         shadowSettings.resolution = shadowResolutions[shadowResolutionIndex];
+        const std::uint32_t shadowCascadeCounts[] = {2u, 3u, 4u};
+        shadowSettings.cascadeCount = shadowCascadeCounts[std::clamp(m_Context.settings.shadow.cascadeCountIndex, 0, 2)];
+        shadowSettings.maxDistanceMeters = m_Context.settings.shadow.maxDistanceMeters;
+        shadowSettings.splitLambda = m_Context.settings.shadow.splitLambda;
+        shadowSettings.transitionFraction = m_Context.settings.shadow.transitionFraction;
         shadowSettings.depthBias = m_Context.settings.shadow.depthBias;
         shadowSettings.slopeBias = m_Context.settings.shadow.slopeBias;
+        shadowSettings.normalBiasTexels = m_Context.settings.shadow.normalBiasTexels;
         shadowSettings.receiverBiasScale = m_Context.settings.shadow.receiverBiasScale;
         shadowSettings.filterRadiusTexels = m_Context.settings.shadow.filterRadiusTexels;
         shadowSettings.lightSizeTexels = m_Context.settings.shadow.lightSizeTexels;

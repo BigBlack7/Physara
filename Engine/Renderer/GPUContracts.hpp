@@ -8,6 +8,7 @@
 namespace Physara::Engine
 {
     constexpr std::uint32_t MaxForwardLights = 128u;
+    constexpr std::uint32_t MaxShadowCascades = 4u;
 
     enum class GPUBufferBinding : std::uint32_t
     {
@@ -39,8 +40,7 @@ namespace Physara::Engine
         ShadowMap = 8,
         IBLPrefiltered = 9,
         IBLBRDFLut = 10,
-        Bloom = 11,
-        Exposure = 12
+        Bloom = 11
     };
 
     enum class GPUResourceSetIndex : std::uint32_t
@@ -71,14 +71,13 @@ namespace Physara::Engine
         Blend = 2
     };
 
-    enum class ShadowModeGPU : std::uint32_t
+    enum class ShadowFilterGPU : std::uint32_t
     {
-        None = 0,
-        Hard = 1,
-        PCF3x3 = 2,
-        PCF5x5 = 3,
-        Poisson16 = 4,
-        PCSS = 5
+        Hard = 0,
+        PCF3x3 = 1,
+        PCF5x5 = 2,
+        Poisson16 = 3,
+        PCSS = 4
     };
 
     namespace ObjectFlags
@@ -120,6 +119,7 @@ namespace Physara::Engine
         glm::mat4 inverseProjection{1.f};
         glm::mat4 inverseViewProjection{1.f};
         glm::vec4 cameraPositionEV100{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 exposure{1.f, 1.f, 0.f, 0.f};
         glm::vec4 viewportRect{0.f, 0.f, 1.f, 1.f};
         glm::vec4 clipPlanes{0.1f, 1000.f, 0.f, 0.f};
     };
@@ -158,9 +158,16 @@ namespace Physara::Engine
 
     struct alignas(16) ShadowData
     {
-        glm::mat4 lightViewProjection{1.f};
+        glm::mat4 lightViewProjection[MaxShadowCascades]{
+            glm::mat4(1.f),
+            glm::mat4(1.f),
+            glm::mat4(1.f),
+            glm::mat4(1.f)};
+        glm::vec4 cascadeSplits{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 cascadeTexelWorldSize{0.f, 0.f, 0.f, 0.f};
         glm::vec4 params{0.f, 0.f, 0.f, 0.f};
-        glm::vec4 controls{1.f, 0.f, 0.f, 0.f};
+        glm::vec4 controls{0.f, 0.f, 0.f, 0.f};
+        glm::vec4 samplingParams{0.f, 0.f, 0.f, 0.f};
     };
 
     struct alignas(16) IBLData

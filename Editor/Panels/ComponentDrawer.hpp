@@ -341,12 +341,11 @@ namespace Physara::Editor
         camera.primary = true;
         changed |= ImGui::DragFloat("Sensor Width", &camera.sensorWidthMillimeters, 0.1f, 1.f, 100.f, "%.1f mm");
         changed |= ImGui::DragFloat("Sensor Height", &camera.sensorHeightMillimeters, 0.1f, 1.f, 100.f, "%.1f mm");
-        changed |= ImGui::DragFloat("Focal Length", &camera.focalLengthMillimeters, 0.25f, 1.f, 300.f, "%.1f mm");
-        changed |= ImGui::DragFloat("Aperture", &camera.apertureFStop, 0.05f, 0.1f, 64.f, "f/%.1f");
-        changed |= ImGui::DragFloat("Shutter", &camera.shutterTimeSeconds, 0.0005f, 1.f / 32000.f, 30.f, "%.4f s");
-        changed |= ImGui::DragFloat("ISO", &camera.iso, 1.f, 1.f, 25600.f, "%.0f");
-        camera.exposureMode = Engine::CameraExposureMode::Manual;
-        changed |= ImGui::SliderFloat("Exposure Compensation EV", &camera.exposureCompensationEV, -8.f, 8.f, "%.2f");
+        changed |= ImGui::DragFloat("Focal Length", &camera.focalLengthMillimeters, 0.25f, 1.f, 1000.f, "%.1f mm");
+        changed |= ImGui::DragFloat("Aperture", &camera.apertureFStop, 0.05f, 0.5f, 64.f, "f/%.1f");
+        changed |= ImGui::DragFloat("Shutter", &camera.shutterTimeSeconds, 0.0005f, 1.f / 25000.f, 60.f, "%.4f s");
+        changed |= ImGui::DragFloat("ISO", &camera.iso, 1.f, 10.f, 204800.f, "%.0f", ImGuiSliderFlags_Logarithmic);
+        changed |= ImGui::SliderFloat("Exposure Compensation EV", &camera.exposureCompensationEV, -16.f, 16.f, "%.2f");
         changed |= ImGui::SliderFloat("Navigation Speed", &camera.navigationSpeedMetersPerSecond, 0.1f, 100.f, "%.1f m/s", ImGuiSliderFlags_Logarithmic);
         changed |= ImGui::DragFloat("Near Clip", &camera.nearClipMeters, 0.01f, 0.001f, 100.f, "%.3f m");
         changed |= ImGui::DragFloat("Far Clip", &camera.farClipMeters, 1.f, 0.01f, 100000.f, "%.1f m");
@@ -506,15 +505,7 @@ namespace Physara::Editor
         changed |= ImGui::ColorEdit3("Emissive", &material.emissiveColor.x);
         changed |= ImGui::DragFloat("Emissive Luminance", &material.emissiveLuminance, 1.f, 0.f, 100000.f, "%.1f cd/m2");
         changed |= ImGui::Checkbox("Double Sided", &material.doubleSided);
-        if (material.shadingModel == Engine::ShadingModel::Lit)
-        {
-            changed |= ImGui::Checkbox("Cast Shadow", &material.castShadow);
-        }
-        else
-        {
-            material.castShadow = false;
-            ImGui::TextDisabled("Unlit materials do not cast shadows.");
-        }
+        changed |= ImGui::Checkbox("Cast Shadow", &material.castShadow);
 
         if (changed)
         {
@@ -574,7 +565,7 @@ namespace Physara::Editor
         bool changed = false;
 
         int typeIndex = static_cast<int>(light.type);
-        const char *typeLabels[] = {"Directional", "Point", "Spot", "Area"};
+        const char *typeLabels[] = {"Directional", "Point", "Spot", "Area (Legacy / Unsupported)"};
         if (ImGui::Combo("Type", &typeIndex, typeLabels, IM_ARRAYSIZE(typeLabels)))
         {
             light.type = static_cast<Engine::LightType>(typeIndex);
@@ -616,12 +607,12 @@ namespace Physara::Editor
             changed |= ImGui::DragFloat("Range", &light.rangeMeters, 0.1f, 0.001f, 1000.f, "%.2f m");
             float innerDegrees = glm::degrees(light.innerConeAngleRadians);
             float outerDegrees = glm::degrees(light.outerConeAngleRadians);
-            if (ImGui::DragFloat("Inner Cone", &innerDegrees, 0.25f, 0.f, 179.f, "%.1f deg"))
+            if (ImGui::DragFloat("Inner Cone", &innerDegrees, 0.25f, 0.f, 90.f, "%.1f deg"))
             {
                 light.innerConeAngleRadians = glm::radians(innerDegrees);
                 changed = true;
             }
-            if (ImGui::DragFloat("Outer Cone", &outerDegrees, 0.25f, 0.f, 179.f, "%.1f deg"))
+            if (ImGui::DragFloat("Outer Cone", &outerDegrees, 0.25f, 0.f, 90.f, "%.1f deg"))
             {
                 light.outerConeAngleRadians = glm::radians(outerDegrees);
                 changed = true;
@@ -629,26 +620,28 @@ namespace Physara::Editor
             break;
         }
         case Engine::LightType::Area:
+            ImGui::TextDisabled("Area lights are retained for scene compatibility but are not submitted by the renderer.");
             changed |= ImGui::DragFloat("Luminance", &light.areaLuminanceCandelaPerSquareMeter, 10.f, 0.f, 200000.f, "%.0f cd/m2");
             changed |= ImGui::DragFloat2("Size", &light.areaSizeMeters.x, 0.01f, 0.001f, 100.f, "%.2f m");
             break;
         }
 
-        changed |= ImGui::Checkbox("Cast Shadows", &light.castsShadow);
-        if (light.castsShadow)
+        if (light.type == Engine::LightType::Directional)
         {
-            changed |= ImGui::DragFloat("Shadow Bias", &light.shadowBias, 0.0001f, 0.f, 1.f, "%.5f");
+            changed |= ImGui::Checkbox("Cast Cascaded Shadows", &light.castsShadow);
+            if (light.castsShadow)
+            {
+                changed |= ImGui::DragFloat("Receiver Depth Bias", &light.shadowBias, 0.00001f, 0.f, 0.05f, "%.5f");
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("Punctual shadow maps are not implemented; CSM is directional-only.");
         }
 
         if (light.type == Engine::LightType::Spot)
         {
-            std::array<char, 260> iesPath{};
-            std::snprintf(iesPath.data(), iesPath.size(), "%s", light.iesProfilePath.c_str());
-            if (ImGui::InputText("IES Profile", iesPath.data(), iesPath.size()))
-            {
-                light.iesProfilePath = iesPath.data();
-                changed = true;
-            }
+            ImGui::TextDisabled("IES profiles are serialized for compatibility but are not evaluated yet.");
         }
 
         if (changed)

@@ -17,17 +17,17 @@ void main()
 {
     vec2 texel = 1.0 / max(vec2(textureSize(uSceneColor, 0)), vec2(1.0));
     vec3 color = SampleSafe(inUV) * 0.125;
-    color += (SampleSafe(inUV + vec2(-1.0, -1.0) * texel) +
-              SampleSafe(inUV + vec2(1.0, -1.0) * texel) +
-              SampleSafe(inUV + vec2(-1.0, 1.0) * texel) +
-              SampleSafe(inUV + vec2(1.0, 1.0) * texel)) * 0.03125;
+    color += (SampleSafe(inUV + vec2(-2.0, -2.0) * texel) +
+              SampleSafe(inUV + vec2(2.0, -2.0) * texel) +
+              SampleSafe(inUV + vec2(-2.0, 2.0) * texel) +
+              SampleSafe(inUV + vec2(2.0, 2.0) * texel)) * 0.03125;
     color += (SampleSafe(inUV + vec2(-2.0, 0.0) * texel) +
               SampleSafe(inUV + vec2(2.0, 0.0) * texel) +
               SampleSafe(inUV + vec2(0.0, -2.0) * texel) +
               SampleSafe(inUV + vec2(0.0, 2.0) * texel)) * 0.0625;
-    color += (SampleSafe(inUV + vec2(-1.0, 0.0) * texel) +
-              SampleSafe(inUV + vec2(1.0, 0.0) * texel) +
-              SampleSafe(inUV + vec2(0.0, -1.0) * texel) +
-              SampleSafe(inUV + vec2(0.0, 1.0) * texel)) * 0.125;
+    color += (SampleSafe(inUV + vec2(-1.0, -1.0) * texel) +
+              SampleSafe(inUV + vec2(1.0, -1.0) * texel) +
+              SampleSafe(inUV + vec2(-1.0, 1.0) * texel) +
+              SampleSafe(inUV + vec2(1.0, 1.0) * texel)) * 0.125;
     outColor = vec4(color, 1.0);
 }

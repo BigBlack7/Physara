@@ -56,17 +56,9 @@ layout(binding = PHYSARA_BINDING_NORMAL_TEXTURE)uniform sampler2D uNormalTexture
 layout(binding = PHYSARA_BINDING_OCCLUSION_TEXTURE)uniform sampler2D uOcclusionTexture;
 layout(binding = PHYSARA_BINDING_EMISSIVE_TEXTURE)uniform sampler2D uEmissiveTexture;
 #endif
-layout(binding = PHYSARA_BINDING_SHADOW_MAP)uniform sampler2D uShadowMap;
+layout(binding = PHYSARA_BINDING_SHADOW_MAP)uniform sampler2DArray uShadowMap;
 
 layout(location = 0)out vec4 outColor;
-
-vec3 SrgbToLinear(vec3 value)
-{
-    value = clamp(value, vec3(0.0), vec3(1.0));
-    vec3 low = value / 12.92;
-    vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
-    return mix(low, high, step(vec3(0.04045), value));
-}
 
 #ifdef PHYSARA_BINDLESS_MATERIAL_TEXTURES
 uvec2 GetBindlessTextureHandle(uint slot)
@@ -166,49 +158,58 @@ const vec2 kPoissonDisk16[16] = vec2[16](
     vec2(0.14383161, -0.14100790)
 );
 
-float CompareShadowDepth(vec2 uv, float receiverDepth)
+float CompareShadowDepth(vec2 uv, float receiverDepth, int cascadeIndex)
 {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
     {
         return 1.0;
     }
 
-    float closestDepth = texture(uShadowMap, uv).r;
+    float closestDepth = texture(uShadowMap, vec3(uv, float(cascadeIndex))).r;
     return receiverDepth <= closestDepth ? 1.0 : 0.0;
 }
 
-float SampleShadowGrid(vec2 uv, float receiverDepth, float texel, int radius, float filterRadiusTexels)
+float SampleShadowGrid(vec2 uv, float receiverDepth, int cascadeIndex, int radius, float radiusTexels)
 {
     float visibility = 0.0;
     float sampleCount = 0.0;
-    float scale = filterRadiusTexels / max(float(radius), 1.0);
+    float texel = max(uFrame.shadow.params.w, 1.0 / max(uFrame.shadow.params.y, 1.0));
+    float scale = max(radiusTexels, 0.25) / max(float(radius), 1.0);
     for (int y = -radius; y <= radius; ++y)
     {
         for (int x = -radius; x <= radius; ++x)
         {
-            vec2 offset = vec2(float(x), float(y)) * texel * scale;
-            visibility += CompareShadowDepth(uv + offset, receiverDepth);
+            visibility += CompareShadowDepth(
+                uv + vec2(float(x), float(y)) * texel * scale,
+                receiverDepth,
+                cascadeIndex);
             sampleCount += 1.0;
         }
     }
     return visibility / max(sampleCount, 1.0);
 }
 
-float SampleShadowPoisson16(vec2 uv, float receiverDepth, float texel, float radiusTexels)
+float SampleShadowPoisson16(vec2 uv, float receiverDepth, int cascadeIndex, float radiusTexels)
 {
     float visibility = 0.0;
+    float texel = max(uFrame.shadow.params.w, 1.0 / max(uFrame.shadow.params.y, 1.0));
     float radius = max(radiusTexels, 0.25) * texel;
     for (int i = 0; i < 16; ++i)
     {
-        visibility += CompareShadowDepth(uv + kPoissonDisk16[i] * radius, receiverDepth);
+        visibility += CompareShadowDepth(uv + kPoissonDisk16[i] * radius, receiverDepth, cascadeIndex);
     }
     return visibility / 16.0;
 }
 
-float FindAverageBlockerDepth(vec2 uv, float receiverDepth, float texel, float searchRadiusTexels)
+float FindAverageBlockerDepth(
+    vec2 uv,
+    float receiverDepth,
+    int cascadeIndex,
+    float searchRadiusTexels)
 {
-    float averageBlocker = 0.0;
+    float blockerDepthSum = 0.0;
     float blockerCount = 0.0;
+    float texel = max(uFrame.shadow.params.w, 1.0 / max(uFrame.shadow.params.y, 1.0));
     float radius = max(searchRadiusTexels, 0.25) * texel;
     for (int i = 0; i < 16; ++i)
     {
@@ -218,33 +219,111 @@ float FindAverageBlockerDepth(vec2 uv, float receiverDepth, float texel, float s
             continue;
         }
 
-        float depth = texture(uShadowMap, sampleUV).r;
+        float depth = texture(uShadowMap, vec3(sampleUV, float(cascadeIndex))).r;
         if (depth < receiverDepth)
         {
-            averageBlocker += depth;
+            blockerDepthSum += depth;
             blockerCount += 1.0;
         }
     }
-
-    if (blockerCount < 0.5)
-    {
-        return -1.0;
-    }
-    return averageBlocker / blockerCount;
+    return blockerCount > 0.0 ? blockerDepthSum / blockerCount : -1.0;
 }
 
-float SampleShadowPCSS(vec2 uv, float receiverDepth, float texel, float filterRadiusTexels, float lightSizeTexels)
+float SampleShadowPCSS(
+    vec2 uv,
+    float receiverDepth,
+    int cascadeIndex,
+    float filterRadiusTexels,
+    float lightSizeTexels)
 {
-    float searchRadius = max(lightSizeTexels * 0.5, filterRadiusTexels);
-    float blockerDepth = FindAverageBlockerDepth(uv, receiverDepth, texel, searchRadius);
+    float blockerDepth = FindAverageBlockerDepth(
+        uv,
+        receiverDepth,
+        cascadeIndex,
+        max(lightSizeTexels * 0.5, filterRadiusTexels));
     if (blockerDepth < 0.0)
     {
         return 1.0;
     }
 
-    float penumbraRatio = clamp((receiverDepth - blockerDepth) / max(blockerDepth, PHYSARA_EPSILON), 0.0, 1.0);
-    float penumbraTexels = clamp(filterRadiusTexels + penumbraRatio * lightSizeTexels, filterRadiusTexels, max(lightSizeTexels, filterRadiusTexels));
-    return SampleShadowPoisson16(uv, receiverDepth, texel, penumbraTexels);
+    float penumbraRatio = clamp(
+        (receiverDepth - blockerDepth) / max(blockerDepth, PHYSARA_EPSILON),
+        0.0,
+        1.0);
+    float penumbraRadius = clamp(
+        filterRadiusTexels + penumbraRatio * lightSizeTexels,
+        filterRadiusTexels,
+        max(lightSizeTexels, filterRadiusTexels));
+    return SampleShadowPoisson16(uv, receiverDepth, cascadeIndex, penumbraRadius);
+}
+
+bool BuildCascadeShadowCoordinates(
+    vec3 worldPosition,
+    vec3 normal,
+    LightData light,
+    int cascadeIndex,
+    out vec3 shadowCoord)
+{
+    vec3 lightDirection = SafeNormalize(light.directionType.xyz);
+    float NoL = Saturate(dot(normal, -lightDirection));
+    float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
+    float texelWorldSize = uFrame.shadow.cascadeTexelWorldSize[cascadeIndex];
+    float normalOffset = texelWorldSize * max(uFrame.shadow.controls.z, 0.0) * sinTheta;
+    vec3 biasedWorldPosition = worldPosition + normal * normalOffset;
+
+    vec4 lightClip = uFrame.shadow.lightViewProjection[cascadeIndex] * vec4(biasedWorldPosition, 1.0);
+    shadowCoord = lightClip.xyz / max(abs(lightClip.w), PHYSARA_EPSILON);
+    shadowCoord = shadowCoord * 0.5 + 0.5;
+    if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
+        shadowCoord.y < 0.0 || shadowCoord.y > 1.0 ||
+        shadowCoord.z < 0.0 || shadowCoord.z > 1.0)
+    {
+        return false;
+    }
+    return true;
+}
+
+float SampleCascadeShadow(vec3 worldPosition, vec3 normal, LightData light, int cascadeIndex)
+{
+    vec3 shadowCoord;
+    if (!BuildCascadeShadowCoordinates(worldPosition, normal, light, cascadeIndex, shadowCoord))
+    {
+        return 1.0;
+    }
+    float receiverBias = max(light.shadowParams.y, 0.0) * max(uFrame.shadow.controls.w, 0.0);
+    float receiverDepth = clamp(shadowCoord.z - receiverBias, 0.0, 1.0);
+    float filterRadius = max(uFrame.shadow.samplingParams.x, 0.25);
+    float lightSize = max(uFrame.shadow.samplingParams.y, 1.0);
+    uint filterMode = uint(uFrame.shadow.samplingParams.z + 0.5);
+    if (filterMode == PHYSARA_SHADOW_FILTER_HARD)
+    {
+        return CompareShadowDepth(shadowCoord.xy, receiverDepth, cascadeIndex);
+    }
+    if (filterMode == PHYSARA_SHADOW_FILTER_PCF_5X5)
+    {
+        return SampleShadowGrid(shadowCoord.xy, receiverDepth, cascadeIndex, 2, filterRadius);
+    }
+    if (filterMode == PHYSARA_SHADOW_FILTER_POISSON_16)
+    {
+        return SampleShadowPoisson16(shadowCoord.xy, receiverDepth, cascadeIndex, filterRadius);
+    }
+    if (filterMode == PHYSARA_SHADOW_FILTER_PCSS)
+    {
+        return SampleShadowPCSS(shadowCoord.xy, receiverDepth, cascadeIndex, filterRadius, lightSize);
+    }
+    return SampleShadowGrid(shadowCoord.xy, receiverDepth, cascadeIndex, 1, filterRadius);
+}
+
+int SelectShadowCascade(float viewDepth, int cascadeCount)
+{
+    for (int cascadeIndex = 0; cascadeIndex < cascadeCount; ++cascadeIndex)
+    {
+        if (viewDepth <= uFrame.shadow.cascadeSplits[cascadeIndex])
+        {
+            return cascadeIndex;
+        }
+    }
+    return -1;
 }
 
 float SampleShadow(vec3 worldPosition, vec3 normal, LightData light, uint lightIndex)
@@ -254,43 +333,30 @@ float SampleShadow(vec3 worldPosition, vec3 normal, LightData light, uint lightI
         return 1.0;
     }
 
-    vec4 lightClip = uFrame.shadow.lightViewProjection * vec4(worldPosition, 1.0);
-    vec3 projected = lightClip.xyz / max(lightClip.w, PHYSARA_EPSILON);
-    vec3 shadowCoord = projected * 0.5 + 0.5;
-    if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
-        shadowCoord.y < 0.0 || shadowCoord.y > 1.0 ||
-        shadowCoord.z < 0.0 || shadowCoord.z > 1.0)
+    int cascadeCount = clamp(int(uFrame.shadow.controls.x + 0.5), 1, PHYSARA_MAX_SHADOW_CASCADES);
+    float viewDepth = max(-(uFrame.camera.view * vec4(worldPosition, 1.0)).z, 0.0);
+    int cascadeIndex = SelectShadowCascade(viewDepth, cascadeCount);
+    if (cascadeIndex < 0)
     {
         return 1.0;
     }
 
-    vec3 lightToSurface = SafeNormalize(light.directionType.xyz);
-    float NoL = Saturate(dot(normal, -lightToSurface));
-    float receiverBiasScale = max(uFrame.shadow.controls.x, 0.0);
-    float bias = max(light.shadowParams.y * receiverBiasScale * (1.0 - NoL), light.shadowParams.y * receiverBiasScale * 0.25);
-    uint algorithm = uint(uFrame.shadow.controls.y + 0.5);
-    float filterRadiusTexels = max(uFrame.shadow.controls.z, 0.25);
-    float lightSizeTexels = max(uFrame.shadow.controls.w, 0.25);
-    float texel = max(uFrame.shadow.params.w, 1.0 / max(uFrame.shadow.params.y, 1.0));
-    float receiverDepth = clamp(shadowCoord.z - bias, 0.0, 1.0);
-
-    if (algorithm == PHYSARA_SHADOW_HARD)
+    float visibility = SampleCascadeShadow(worldPosition, normal, light, cascadeIndex);
+    if (cascadeIndex + 1 < cascadeCount)
     {
-        return CompareShadowDepth(shadowCoord.xy, receiverDepth);
+        float cascadeNear = cascadeIndex == 0
+                                ? uFrame.camera.clipPlanes.x
+                                : uFrame.shadow.cascadeSplits[cascadeIndex - 1];
+        float cascadeFar = uFrame.shadow.cascadeSplits[cascadeIndex];
+        float transitionWidth = max((cascadeFar - cascadeNear) * uFrame.shadow.controls.y, PHYSARA_EPSILON);
+        float transition = smoothstep(cascadeFar - transitionWidth, cascadeFar, viewDepth);
+        if (transition > 0.0)
+        {
+            float nextVisibility = SampleCascadeShadow(worldPosition, normal, light, cascadeIndex + 1);
+            visibility = mix(visibility, nextVisibility, transition);
+        }
     }
-    if (algorithm == PHYSARA_SHADOW_PCF_5X5)
-    {
-        return SampleShadowGrid(shadowCoord.xy, receiverDepth, texel, 2, filterRadiusTexels);
-    }
-    if (algorithm == PHYSARA_SHADOW_POISSON_16)
-    {
-        return SampleShadowPoisson16(shadowCoord.xy, receiverDepth, texel, filterRadiusTexels);
-    }
-    if (algorithm == PHYSARA_SHADOW_PCSS)
-    {
-        return SampleShadowPCSS(shadowCoord.xy, receiverDepth, texel, filterRadiusTexels, lightSizeTexels);
-    }
-    return SampleShadowGrid(shadowCoord.xy, receiverDepth, texel, 1, filterRadiusTexels);
+    return visibility;
 }
 
 void main()
@@ -300,7 +366,7 @@ void main()
     if (inputs.hasBaseColorTexture)
     {
         vec4 baseColorSample = SampleBaseColorTexture(SelectTexCoord(inputs.baseColorTexCoord));
-        inputs.baseColor *= vec4(SrgbToLinear(baseColorSample.rgb), baseColorSample.a);
+        inputs.baseColor *= baseColorSample;
     }
     if (inputs.hasMetallicRoughnessTexture)
     {
@@ -316,7 +382,7 @@ void main()
     if (inputs.hasEmissiveTexture)
     {
         vec3 emissiveSample = SampleEmissiveTexture(SelectTexCoord(inputs.emissiveTexCoord));
-        inputs.emissiveColor *= SrgbToLinear(emissiveSample);
+        inputs.emissiveColor *= emissiveSample;
     }
     
     PixelMaterial material = PrepareMaterial(inputs);
@@ -327,7 +393,8 @@ void main()
     
     if (material.shadingModel == PHYSARA_SHADING_MODEL_UNLIT)
     {
-        outColor = vec4(material.emissive, material.baseColor.a);
+        vec3 unlitRadiance = material.baseColor.rgb + material.emissive;
+        outColor = vec4(unlitRadiance * GetPreExposure(uFrame.camera), material.baseColor.a);
         return;
     }
     
@@ -357,6 +424,6 @@ void main()
         color += EvaluateLight(material, context, uLights[i]) * shadowVisibility;
     }
     color += EvaluateIBL(material, context.normal, context.view);
-    color += material.emissive;
+    color += material.emissive * GetPreExposure(uFrame.camera);
     outColor = vec4(color, material.baseColor.a);
 }

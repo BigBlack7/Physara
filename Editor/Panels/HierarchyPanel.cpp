@@ -170,10 +170,6 @@ namespace Physara::Editor
             {
                 CreateEntity(CreateEntityKind::SpotLight, parent);
             }
-            if (ImGui::MenuItem("Area Light"))
-            {
-                CreateEntity(CreateEntityKind::AreaLight, parent);
-            }
             ImGui::EndMenu();
         }
 
@@ -248,15 +244,15 @@ namespace Physara::Editor
             else if (type == Engine::LightType::Point)
             {
                 auto &light = entity.GetComponent<Engine::LightComponent>();
-                light.pointLuminousPowerLumens = 200000.f;
-                light.rangeMeters = 20.f;
+                light.pointLuminousPowerLumens = 1500.f;
+                light.rangeMeters = 12.f;
                 transform.SetLocalPosition({0.f, 2.f, 3.f});
             }
             else if (type == Engine::LightType::Spot)
             {
                 auto &light = entity.GetComponent<Engine::LightComponent>();
-                light.spotLuminousIntensityCandela = 50000.f;
-                light.rangeMeters = 25.f;
+                light.spotLuminousIntensityCandela = 1500.f;
+                light.rangeMeters = 20.f;
                 light.innerConeAngleRadians = glm::radians(18.f);
                 light.outerConeAngleRadians = glm::radians(32.f);
                 transform.SetLocalPosition({0.f, 3.f, 4.f});

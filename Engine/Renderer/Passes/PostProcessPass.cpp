@@ -25,7 +25,6 @@ namespace Physara::Engine
         constexpr std::uint32_t SceneColorBinding = Binding(GPUTextureBinding::SceneColor);
         constexpr std::uint32_t SceneDepthBinding = Binding(GPUTextureBinding::SceneDepth);
         constexpr std::uint32_t BloomTextureBinding = Binding(GPUTextureBinding::Bloom);
-        constexpr std::uint32_t ExposureTextureBinding = Binding(GPUTextureBinding::Exposure);
         constexpr std::uint32_t MaxBloomMips = 7u;
 
         template <typename T>
@@ -36,7 +35,7 @@ namespace Physara::Engine
 
         struct SettingsGPUData
         {
-            glm::vec4 bloomParams{1.f, 0.5f, 0.12f, 2.f};
+            glm::vec4 bloomParams{1.f, 0.5f, 0.12f, 0.7f};
             glm::vec4 flags{1.f, 1.f, 2.f, 0.f};
             glm::vec4 exposureParams{0.f, 0.f, 0.f, 0.f};
             glm::vec4 aaParams{0.75f, 0.125f, 0.0312f, 24.f};
@@ -76,16 +75,16 @@ namespace Physara::Engine
                 std::max(settings.bloomThreshold, 0.f),
                 std::max(settings.bloomKnee, 0.f),
                 std::max(settings.bloomIntensity, 0.f),
-                std::max(settings.bloomRadius, 1.f));
+                std::clamp(settings.bloomScatter, 0.f, 1.f));
             data.flags = glm::vec4(
                 static_cast<float>(settings.toneMappingMode),
                 settings.bloomEnabled ? 1.f : 0.f,
                 static_cast<float>(settings.antiAliasingMode),
                 static_cast<float>(settings.debugView));
             data.exposureParams = glm::vec4(
-                settings.exposureMode == ExposureMode::Auto ? 1.f : 0.f,
                 settings.exposureCompensationEV,
-                static_cast<float>(settings.bloomMode),
+                0.f,
+                0.f,
                 0.f);
             data.aaParams = glm::vec4(
                 std::clamp(settings.aaSubpixel, 0.f, 1.f),
@@ -94,7 +93,6 @@ namespace Physara::Engine
                 std::max(settings.aaDepthSensitivity, 0.f));
             return data;
         }
-
     }
 
     void PostProcessPass::Execute(const PostProcessPassContext &context)
@@ -122,7 +120,6 @@ namespace Physara::Engine
         }
         context.frameUploadAllocator->Flush(context.stats);
 
-        ExecuteExposure(context, frameUniformAllocation);
         ExecuteBloom(context, frameUniformAllocation);
 
         PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessComposite");
@@ -140,7 +137,6 @@ namespace Physara::Engine
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, context.sceneDepth, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::BloomTextureBinding, GetBloomTexture(), m_LinearClampSampler.get());
-        context.commandList->SetTexture(PostProcessPassDetail::ExposureTextureBinding, GetExposureTexture(), m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
@@ -180,37 +176,6 @@ namespace Physara::Engine
             m_BlackTexture = context.device->CreateTexture(desc);
         }
 
-        if (m_ExposureRenderPassDesc.colorAttachments.empty())
-        {
-            m_ExposureRenderPassDesc.colorAttachments.push_back({
-                RHI::TextureFormat::RGBA16F,
-                RHI::LoadOp::Clear,
-                RHI::StoreOp::Store,
-                1u});
-            m_ExposureRenderPassDesc.hasDepth = false;
-        }
-
-        if (m_ExposureTexture == nullptr)
-        {
-            RHI::RHITextureDesc desc{};
-            desc.width = 1u;
-            desc.height = 1u;
-            desc.format = RHI::TextureFormat::RGBA16F;
-            desc.dimension = RHI::TextureDimension::Tex2D;
-            desc.usage = RHI::TextureUsage::Sampled | RHI::TextureUsage::RenderTarget;
-            m_ExposureTexture = context.device->CreateTexture(desc);
-            m_ExposureFramebuffer.reset();
-        }
-
-        if (m_ExposureFramebuffer == nullptr && m_ExposureTexture != nullptr)
-        {
-            RHI::RHIFramebufferDesc framebufferDesc{};
-            framebufferDesc.colorAttachments.push_back(m_ExposureTexture.get());
-            framebufferDesc.width = 1u;
-            framebufferDesc.height = 1u;
-            framebufferDesc.renderPassDesc = &m_ExposureRenderPassDesc;
-            m_ExposureFramebuffer = context.device->CreateFramebuffer(framebufferDesc);
-        }
     }
 
     void PostProcessPass::EnsureBloomResources(const PostProcessPassContext &context)
@@ -306,43 +271,9 @@ namespace Physara::Engine
         }
     }
 
-    void PostProcessPass::ExecuteExposure(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation)
-    {
-        if (context.commandList == nullptr || context.sceneHDR == nullptr || m_ExposureFramebuffer == nullptr || m_ExposureTexture == nullptr)
-        {
-            return;
-        }
-        PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessExposure");
-
-        RHI::RHIPipelineState *pipeline = GetExposurePipeline(context);
-        if (pipeline == nullptr)
-        {
-            return;
-        }
-
-        const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
-        context.commandList->BeginRenderPass(m_ExposureFramebuffer.get(), m_ExposureRenderPassDesc, clearColors);
-        context.commandList->SetViewport(0.f, 0.f, 1.f, 1.f);
-        context.commandList->SetScissor(0, 0, 1u, 1u);
-        context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::FrameUniformsBinding, frameUniformAllocation.buffer, frameUniformAllocation.offset, frameUniformAllocation.size);
-        context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
-        context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
-        context.commandList->Draw(3u, 1u, 0u, 0u);
-        if (context.stats != nullptr)
-        {
-            ++context.stats->drawCalls;
-            ++context.stats->postProcessDrawCalls;
-            ++context.stats->instances;
-            ++context.stats->triangles;
-        }
-        context.commandList->EndRenderPass();
-        context.commandList->TextureBarrier(m_ExposureTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
-    }
-
     void PostProcessPass::ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation)
     {
-        if (!context.settings.bloomEnabled || context.settings.bloomMode == BloomMode::Legacy || context.commandList == nullptr ||
+        if (!context.settings.bloomEnabled || context.commandList == nullptr ||
             context.sceneHDR == nullptr || context.device == nullptr || context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
         {
             return;
@@ -355,16 +286,15 @@ namespace Physara::Engine
         }
 
         RHI::RHIPipelineState *prefilterPipeline = GetBloomPipeline(context, "BloomPrefilter", "Shaders/Passes/PostProcess/BloomPrefilter.frag");
-        const bool kawase = context.settings.bloomMode == BloomMode::DualKawase;
         RHI::RHIPipelineState *downPipeline = GetBloomPipeline(
             context,
-            kawase ? "BloomKawaseDownsample" : "BloomDownsample",
-            kawase ? "Shaders/Passes/PostProcess/BloomKawaseDownsample.frag" : "Shaders/Passes/PostProcess/BloomDownsample.frag");
+            "BloomDownsample",
+            "Shaders/Passes/PostProcess/BloomDownsample.frag");
         RHI::RHIPipelineState *copyPipeline = GetBloomPipeline(context, "BloomCopy", "Shaders/Passes/PostProcess/BloomCopy.frag");
         RHI::RHIPipelineState *upPipeline = GetBloomPipeline(
             context,
-            kawase ? "BloomKawaseUpsample" : "BloomUpsample",
-            kawase ? "Shaders/Passes/PostProcess/BloomKawaseUpsample.frag" : "Shaders/Passes/PostProcess/BloomUpsample.frag");
+            "BloomUpsample",
+            "Shaders/Passes/PostProcess/BloomUpsample.frag");
         if (prefilterPipeline == nullptr || downPipeline == nullptr || copyPipeline == nullptr || upPipeline == nullptr)
         {
             return;
@@ -462,7 +392,6 @@ namespace Physara::Engine
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, source0, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, source1, m_LinearClampSampler.get());
-        context.commandList->SetTexture(PostProcessPassDetail::ExposureTextureBinding, GetExposureTexture(), m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
@@ -496,36 +425,6 @@ namespace Physara::Engine
         pipelineDesc.vertexShader = variant->vertexShader.get();
         pipelineDesc.fragmentShader = variant->fragmentShader.get();
         pipelineDesc.renderPassDesc = context.renderPassDesc;
-        pipelineDesc.rasterizerState.cullMode = RHI::CullMode::None;
-        pipelineDesc.depthStencilState.depthTest = false;
-        pipelineDesc.depthStencilState.depthWrite = false;
-        pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::Always;
-        pipelineDesc.blendStates.push_back({});
-        return context.pipelineCache->GetOrCreate(pipelineDesc);
-    }
-
-    RHI::RHIPipelineState *PostProcessPass::GetExposurePipeline(const PostProcessPassContext &context)
-    {
-        if (context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
-        {
-            return nullptr;
-        }
-
-        ShaderProgramDesc shaderDesc{};
-        shaderDesc.debugName = "PostProcessExposure";
-        shaderDesc.vertexPath = "Shaders/Passes/PostProcess/Composite.vert";
-        shaderDesc.fragmentPath = "Shaders/Passes/PostProcess/Exposure.frag";
-
-        ShaderVariant *variant = context.shaderLibrary->GetVariant(shaderDesc);
-        if (variant == nullptr || !variant->IsValid())
-        {
-            return nullptr;
-        }
-
-        RHI::RHIPipelineStateDesc pipelineDesc{};
-        pipelineDesc.vertexShader = variant->vertexShader.get();
-        pipelineDesc.fragmentShader = variant->fragmentShader.get();
-        pipelineDesc.renderPassDesc = &m_ExposureRenderPassDesc;
         pipelineDesc.rasterizerState.cullMode = RHI::CullMode::None;
         pipelineDesc.depthStencilState.depthTest = false;
         pipelineDesc.depthStencilState.depthWrite = false;
@@ -570,10 +469,5 @@ namespace Physara::Engine
     RHI::RHITexture *PostProcessPass::GetBloomTexture() const
     {
         return !m_BloomMips.empty() && m_BloomMips.front().upTexture != nullptr ? m_BloomMips.front().upTexture.get() : m_BlackTexture.get();
-    }
-
-    RHI::RHITexture *PostProcessPass::GetExposureTexture() const
-    {
-        return m_ExposureTexture != nullptr ? m_ExposureTexture.get() : m_BlackTexture.get();
     }
 }

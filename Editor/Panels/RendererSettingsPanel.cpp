@@ -93,12 +93,10 @@ namespace Physara::Editor
             ImGui::EndDisabled();
             ImGui::Checkbox("Bloom", &m_Context.settings.postProcess.bloomEnabled);
             ImGui::BeginDisabled(!m_Context.settings.postProcess.bloomEnabled);
-            const char *bloomItems[] = {"Legacy 5x5", "Mip Chain", "Dual Kawase"};
-            ImGui::Combo("Bloom Mode", &m_Context.settings.postProcess.bloomModeIndex, bloomItems, IM_ARRAYSIZE(bloomItems));
             ImGui::SliderFloat("Threshold", &m_Context.settings.postProcess.bloomThreshold, 0.f, 10.f, "%.2f");
             ImGui::SliderFloat("Knee", &m_Context.settings.postProcess.bloomKnee, 0.f, 2.f, "%.2f");
             ImGui::SliderFloat("Intensity", &m_Context.settings.postProcess.bloomIntensity, 0.f, 4.f, "%.3f");
-            ImGui::SliderFloat("Radius", &m_Context.settings.postProcess.bloomRadius, 0.5f, 8.f, "%.1f");
+            ImGui::SliderFloat("Scatter", &m_Context.settings.postProcess.bloomScatter, 0.f, 1.f, "%.2f");
             ImGui::EndDisabled();
         }
     }
@@ -107,21 +105,25 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Shadow", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const char *algorithmItems[] = {"None", "Hard", "PCF 3x3", "PCF 5x5", "Poisson 16", "PCSS"};
-            ImGui::Combo("Algorithm", &m_Context.settings.shadow.algorithmIndex, algorithmItems, IM_ARRAYSIZE(algorithmItems));
-
-            const bool shadowEnabled = m_Context.settings.shadow.algorithmIndex != 0;
-            ImGui::BeginDisabled(!shadowEnabled);
+            ImGui::Checkbox("Cascaded Shadows", &m_Context.settings.shadow.enabled);
+            ImGui::BeginDisabled(!m_Context.settings.shadow.enabled);
+            const char *filterItems[] = {"Hard", "PCF 3x3", "PCF 5x5", "Poisson 16", "PCSS"};
+            ImGui::Combo("Filter", &m_Context.settings.shadow.filterIndex, filterItems, IM_ARRAYSIZE(filterItems));
             const char *resolutionItems[] = {"1024", "2048", "4096", "8192"};
-            ImGui::Combo("Resolution", &m_Context.settings.shadow.resolutionIndex, resolutionItems, IM_ARRAYSIZE(resolutionItems));
+            ImGui::Combo("Resolution / Cascade", &m_Context.settings.shadow.resolutionIndex, resolutionItems, IM_ARRAYSIZE(resolutionItems));
+            const char *cascadeItems[] = {"2", "3", "4"};
+            ImGui::Combo("Cascade Count", &m_Context.settings.shadow.cascadeCountIndex, cascadeItems, IM_ARRAYSIZE(cascadeItems));
+            ImGui::SliderFloat("Shadow Distance", &m_Context.settings.shadow.maxDistanceMeters, 10.f, 2000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("Split Lambda", &m_Context.settings.shadow.splitLambda, 0.f, 1.f, "%.2f");
+            ImGui::SliderFloat("Cascade Blend", &m_Context.settings.shadow.transitionFraction, 0.f, 0.3f, "%.2f");
             ImGui::SliderFloat("Depth Bias", &m_Context.settings.shadow.depthBias, 0.f, 8.f, "%.2f");
             ImGui::SliderFloat("Slope Bias", &m_Context.settings.shadow.slopeBias, 0.f, 8.f, "%.2f");
+            ImGui::SliderFloat("Normal Bias", &m_Context.settings.shadow.normalBiasTexels, 0.f, 8.f, "%.2f texels");
             ImGui::SliderFloat("Receiver Bias", &m_Context.settings.shadow.receiverBiasScale, 0.f, 4.f, "%.2f");
-            ImGui::SliderFloat("Filter Radius", &m_Context.settings.shadow.filterRadiusTexels, 0.25f, 16.f, "%.2f px");
-            if (m_Context.settings.shadow.algorithmIndex == 5)
-            {
-                ImGui::SliderFloat("Light Size", &m_Context.settings.shadow.lightSizeTexels, 0.25f, 96.f, "%.1f px");
-            }
+            ImGui::SliderFloat("Filter Radius", &m_Context.settings.shadow.filterRadiusTexels, 0.25f, 8.f, "%.2f texels");
+            ImGui::BeginDisabled(m_Context.settings.shadow.filterIndex != 4);
+            ImGui::SliderFloat("Light Size", &m_Context.settings.shadow.lightSizeTexels, 1.f, 128.f, "%.1f texels", ImGuiSliderFlags_Logarithmic);
+            ImGui::EndDisabled();
             ImGui::EndDisabled();
         }
     }

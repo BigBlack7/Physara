@@ -99,10 +99,13 @@ namespace Physara::Engine
             spotLuminousIntensityCandela = std::max(spotLuminousIntensityCandela, 0.f);
             areaLuminanceCandelaPerSquareMeter = std::max(areaLuminanceCandelaPerSquareMeter, 0.f);
             rangeMeters = std::max(rangeMeters, 0.001f);
-            sourceRadiusMeters = std::max(sourceRadiusMeters, 0.f);
+            sourceRadiusMeters = std::clamp(sourceRadiusMeters, 0.f, rangeMeters);
             areaSizeMeters = glm::max(areaSizeMeters, glm::vec2(0.001f));
-            innerConeAngleRadians = std::clamp(innerConeAngleRadians, 0.f, std::numbers::pi_v<float>);
-            outerConeAngleRadians = std::clamp(outerConeAngleRadians, innerConeAngleRadians, std::numbers::pi_v<float>);
+            innerConeAngleRadians = std::clamp(innerConeAngleRadians, 0.f, std::numbers::pi_v<float> * 0.5f);
+            outerConeAngleRadians = std::clamp(
+                outerConeAngleRadians,
+                innerConeAngleRadians,
+                std::numbers::pi_v<float> * 0.5f);
             shadowBias = std::max(shadowBias, 0.f);
         }
 

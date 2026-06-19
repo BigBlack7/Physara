@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -16,15 +15,9 @@ namespace Physara::Engine
 {
     namespace RendererDetail
     {
-        float ExposureFromEV100(float ev100)
+        glm::vec4 BuildPreExposedClearColor(const glm::vec4 &displayColor)
         {
-            return 1.f / (std::pow(2.f, ev100) * 1.2f);
-        }
-
-        glm::vec4 BuildSceneReferredClearColor(const glm::vec4 &displayColor, float ev100)
-        {
-            const float inverseExposure = 1.f / std::max(ExposureFromEV100(ev100), 0.000001f);
-            return glm::vec4(glm::vec3(displayColor) * inverseExposure, displayColor.a);
+            return displayColor;
         }
 
         float ElapsedMilliseconds(std::chrono::steady_clock::time_point start)
@@ -214,9 +207,11 @@ namespace Physara::Engine
     void Renderer::SetShadowSettings(const ShadowSettings &settings)
     {
         const std::uint32_t previousResolution = m_ShadowPass.GetSettings().resolution;
+        const std::uint32_t previousCascadeCount = m_ShadowPass.GetSettings().cascadeCount;
         m_ShadowPass.SetSettings(settings);
         m_ShadowSettings = m_ShadowPass.GetSettings();
-        if (previousResolution != m_ShadowSettings.resolution)
+        if (previousResolution != m_ShadowSettings.resolution ||
+            previousCascadeCount != m_ShadowSettings.cascadeCount)
         {
             InvalidateCommandState();
         }
@@ -432,7 +427,7 @@ namespace Physara::Engine
         RenderGraphResourceHandle renderHDR = msaaEnabled ? m_RenderGraph.ImportTexture("SceneHDRMSAA", *m_SceneHDRColorMSAA) : sceneHDR;
         RenderGraphResourceHandle renderDepth = msaaEnabled ? m_RenderGraph.ImportTexture("SceneDepthMSAA", *m_SceneDepthMSAA) : sceneDepth;
         RenderGraphResourceHandle shadowMap{};
-        const bool shadowEnabled = m_ShadowSettings.algorithm != ShadowAlgorithm::None;
+        const bool shadowEnabled = m_ShadowSettings.enabled;
         if (shadowEnabled)
         {
             m_ShadowPass.PrepareResources(*m_Device);
@@ -565,7 +560,7 @@ namespace Physara::Engine
                                      passContext.shadowMap = m_ShadowPass.GetShadowMap();
                                      passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
                                      passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
-                                     passContext.clearColor = RendererDetail::BuildSceneReferredClearColor(m_ClearColor, m_FrameData.view.ev100);
+                                     passContext.clearColor = RendererDetail::BuildPreExposedClearColor(m_ClearColor);
                                      passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
                                      const auto passStart = std::chrono::steady_clock::now();
                                      m_ForwardOpaquePass.Execute(passContext);

@@ -1,6 +1,7 @@
 #ifndef PHYSARA_LIGHTING_GLSL
 #define PHYSARA_LIGHTING_GLSL
 
+#include "FrameUniforms.glsl"
 #include "Material.glsl"
 
 struct ShadingContext
@@ -10,12 +11,13 @@ struct ShadingContext
     vec3 view;
 };
 
-float GetSquareFalloffAttenuation(vec3 positionToLight, float inverseRange)
+float GetSquareFalloffAttenuation(vec3 positionToLight, float inverseRange, float sourceRadius)
 {
     float distanceSquare = dot(positionToLight, positionToLight);
     float factor = distanceSquare * inverseRange * inverseRange;
     float smoothFactor = max(1.0 - factor * factor, 0.0);
-    return (smoothFactor * smoothFactor) / max(distanceSquare, PHYSARA_EPSILON);
+    float minimumDistanceSquare = max(sourceRadius * sourceRadius, 0.0001);
+    return (smoothFactor * smoothFactor) / max(distanceSquare, minimumDistanceSquare);
 }
 
 float GetSpotAngleAttenuation(vec3 light, vec3 lightDirection, vec2 spotScaleOffset)
@@ -40,14 +42,14 @@ vec3 EvaluatePunctualLight(PixelMaterial material, ShadingContext context, Light
     BRDFInputs brdf = BuildMaterialBRDFInputs(material, context.normal, context.view, l);
 
     float inverseRange = 1.0 / max(light.positionRange.w, PHYSARA_EPSILON);
-    float attenuation = GetSquareFalloffAttenuation(positionToLight, inverseRange);
+    float attenuation = GetSquareFalloffAttenuation(positionToLight, inverseRange, max(light.shadowParams.z, 0.0));
     if (uint(light.directionType.w) == PHYSARA_LIGHT_SPOT)
     {
         attenuation *= GetSpotAngleAttenuation(l, light.directionType.xyz, light.spotAngles.xy);
     }
 
     vec3 luminousIntensity = light.colorIntensity.rgb * light.colorIntensity.a;
-    return EvaluateSurfaceBRDF(brdf) * luminousIntensity * attenuation * brdf.NoL;
+    return EvaluateSurfaceBRDF(brdf) * luminousIntensity * attenuation * brdf.NoL * GetPreExposure(uFrame.camera);
 }
 
 vec3 EvaluateLight(PixelMaterial material, ShadingContext context, LightData light)

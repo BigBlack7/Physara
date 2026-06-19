@@ -25,17 +25,16 @@ vec3 SampleLower(vec2 uv)
 void main()
 {
     vec2 texel = 1.0 / max(vec2(textureSize(uLowerBloom, 0)), vec2(1.0));
-    float radius = max(uBloomParams.w, 0.5);
     vec3 lower = SampleLower(inUV) * 4.0;
-    lower += (SampleLower(inUV + vec2(1.0, 0.0) * texel * radius) +
-              SampleLower(inUV + vec2(-1.0, 0.0) * texel * radius) +
-              SampleLower(inUV + vec2(0.0, 1.0) * texel * radius) +
-              SampleLower(inUV + vec2(0.0, -1.0) * texel * radius)) * 2.0;
-    lower += SampleLower(inUV + vec2(1.0, 1.0) * texel * radius) +
-             SampleLower(inUV + vec2(-1.0, 1.0) * texel * radius) +
-             SampleLower(inUV + vec2(1.0, -1.0) * texel * radius) +
-             SampleLower(inUV + vec2(-1.0, -1.0) * texel * radius);
+    lower += (SampleLower(inUV + vec2(1.0, 0.0) * texel) +
+              SampleLower(inUV + vec2(-1.0, 0.0) * texel) +
+              SampleLower(inUV + vec2(0.0, 1.0) * texel) +
+              SampleLower(inUV + vec2(0.0, -1.0) * texel)) * 2.0;
+    lower += SampleLower(inUV + vec2(1.0, 1.0) * texel) +
+             SampleLower(inUV + vec2(-1.0, 1.0) * texel) +
+             SampleLower(inUV + vec2(1.0, -1.0) * texel) +
+             SampleLower(inUV + vec2(-1.0, -1.0) * texel);
     lower *= 1.0 / 16.0;
     vec3 high = clamp(texture(uSceneColor, inUV).rgb, vec3(0.0), vec3(60000.0));
-    outColor = vec4(high + lower, 1.0);
+    outColor = vec4(high + lower * uBloomParams.w, 1.0);
 }

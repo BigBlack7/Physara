@@ -181,7 +181,7 @@ namespace Physara::Engine
                 uniforms.ibl.irradianceSH[i] = sh[i];
             }
             uniforms.ibl.params = glm::vec4(
-                std::exp2(environmentExposureCompensation),
+                std::exp2(environmentExposureCompensation) * frameData.camera.exposure.x,
                 static_cast<float>(iblResources->GetSpecularMipCount() > 0u ? iblResources->GetSpecularMipCount() - 1u : 0u),
                 1.f,
                 0.f);

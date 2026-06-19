@@ -63,6 +63,7 @@ def verify():
     defines = parse_glsl_defines(glsl)
 
     require_equal("MaxForwardLights", parse_constant(cpp, "MaxForwardLights"), defines["PHYSARA_MAX_LIGHTS"])
+    require_equal("MaxShadowCascades", parse_constant(cpp, "MaxShadowCascades"), defines["PHYSARA_MAX_SHADOW_CASCADES"])
 
     buffer_bindings = parse_enum(cpp, "GPUBufferBinding")
     for name, define in {
@@ -94,7 +95,6 @@ def verify():
         "IBLPrefiltered": "PHYSARA_BINDING_IBL_PREFILTERED_TEXTURE",
         "IBLBRDFLut": "PHYSARA_BINDING_IBL_BRDF_LUT",
         "Bloom": "PHYSARA_BINDING_BLOOM_TEXTURE",
-        "Exposure": "PHYSARA_BINDING_EXPOSURE_TEXTURE",
     }.items():
         require_equal(f"GPUTextureBinding::{name}", texture_bindings[name], defines[define])
 
@@ -106,6 +106,16 @@ def verify():
         "Area": "PHYSARA_LIGHT_AREA",
     }.items():
         require_equal(f"LightTypeGPU::{name}", light_types[name], defines[define])
+
+    shadow_filters = parse_enum(cpp, "ShadowFilterGPU")
+    for name, define in {
+        "Hard": "PHYSARA_SHADOW_FILTER_HARD",
+        "PCF3x3": "PHYSARA_SHADOW_FILTER_PCF_3X3",
+        "PCF5x5": "PHYSARA_SHADOW_FILTER_PCF_5X5",
+        "Poisson16": "PHYSARA_SHADOW_FILTER_POISSON_16",
+        "PCSS": "PHYSARA_SHADOW_FILTER_PCSS",
+    }.items():
+        require_equal(f"ShadowFilterGPU::{name}", shadow_filters[name], defines[define])
 
     shading_models = parse_enum(cpp, "ShadingModelGPU")
     require_equal("ShadingModelGPU::Lit", shading_models["Lit"], defines["PHYSARA_SHADING_MODEL_LIT"])
@@ -121,18 +131,6 @@ def verify():
     require_equal("ObjectFlags::ReceiveShadow", flags["ReceiveShadow"], defines["PHYSARA_OBJECT_RECEIVE_SHADOW"])
     require_equal("ObjectFlags::Transparent", flags["Transparent"], defines["PHYSARA_OBJECT_TRANSPARENT"])
     require_equal("ObjectFlags::Unlit", flags["Unlit"], defines["PHYSARA_OBJECT_UNLIT"])
-
-    shadow_modes = parse_enum(cpp, "ShadowModeGPU")
-    for name, define in {
-        "None": "PHYSARA_SHADOW_NONE",
-        "Hard": "PHYSARA_SHADOW_HARD",
-        "PCF3x3": "PHYSARA_SHADOW_PCF_3X3",
-        "PCF5x5": "PHYSARA_SHADOW_PCF_5X5",
-        "Poisson16": "PHYSARA_SHADOW_POISSON_16",
-        "PCSS": "PHYSARA_SHADOW_PCSS",
-    }.items():
-        require_equal(f"ShadowModeGPU::{name}", shadow_modes[name], defines[define])
-
 
 if __name__ == "__main__":
     try:

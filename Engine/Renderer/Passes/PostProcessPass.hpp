@@ -32,12 +32,6 @@ namespace Physara::Engine
         Depth = 2
     };
 
-    enum class ExposureMode : std::uint32_t
-    {
-        Manual = 0,
-        Auto = 1
-    };
-
     enum class ToneMappingMode : std::uint32_t
     {
         None = 0,
@@ -55,26 +49,17 @@ namespace Physara::Engine
         SMAALite = 3
     };
 
-    enum class BloomMode : std::uint32_t
-    {
-        Legacy = 0,
-        MipChain = 1,
-        DualKawase = 2
-    };
-
     struct PostProcessSettings
     {
         ToneMappingMode toneMappingMode{ToneMappingMode::ACES};
         bool bloomEnabled{true};
         AntiAliasingMode antiAliasingMode{AntiAliasingMode::FXAAQuality};
-        BloomMode bloomMode{BloomMode::MipChain};
         DebugViewMode debugView{DebugViewMode::None};
-        ExposureMode exposureMode{ExposureMode::Manual};
         float exposureCompensationEV{0.f};
         float bloomThreshold{1.0f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.12f};
-        float bloomRadius{2.0f};
+        float bloomScatter{0.7f};
         float aaSubpixel{0.75f};
         float aaEdgeThreshold{0.125f};
         float aaEdgeThresholdMin{0.0312f};
@@ -107,7 +92,6 @@ namespace Physara::Engine
         void EnsureResources(const PostProcessPassContext &context);
         void EnsureBloomResources(const PostProcessPassContext &context);
         void ReleaseBloomResources(const PostProcessPassContext &context);
-        void ExecuteExposure(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
         void ExecuteBloom(const PostProcessPassContext &context, const FrameUploadAllocation &frameUniformAllocation);
         void ExecuteFullscreenPass(
             const PostProcessPassContext &context,
@@ -120,10 +104,8 @@ namespace Physara::Engine
             RHI::RHITexture *source0,
             RHI::RHITexture *source1);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const PostProcessPassContext &context);
-        [[nodiscard]] RHI::RHIPipelineState *GetExposurePipeline(const PostProcessPassContext &context);
         [[nodiscard]] RHI::RHIPipelineState *GetBloomPipeline(const PostProcessPassContext &context, const char *debugName, const char *fragmentPath);
         [[nodiscard]] RHI::RHITexture *GetBloomTexture() const;
-        [[nodiscard]] RHI::RHITexture *GetExposureTexture() const;
 
     private:
         struct BloomMip
@@ -139,10 +121,7 @@ namespace Physara::Engine
         FrameUploadAllocation m_SettingsAllocation{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
         std::unique_ptr<RHI::RHITexture> m_BlackTexture{};
-        std::unique_ptr<RHI::RHITexture> m_ExposureTexture{};
-        std::unique_ptr<RHI::RHIFramebuffer> m_ExposureFramebuffer{};
         std::vector<BloomMip> m_BloomMips{};
-        RHI::RHIRenderPassDesc m_ExposureRenderPassDesc{};
         RHI::RHIRenderPassDesc m_BloomRenderPassDesc{};
         std::uint32_t m_BloomWidth{0};
         std::uint32_t m_BloomHeight{0};

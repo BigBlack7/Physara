@@ -1,5 +1,8 @@
 #include "FrameData.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace Physara::Engine
 {
     void FrameStatistics::Reset()
@@ -55,6 +58,12 @@ namespace Physara::Engine
         camera.inverseProjection = view.inverseProjection;
         camera.inverseViewProjection = view.inverseViewProjection;
         camera.cameraPositionEV100 = glm::vec4(view.position, view.ev100);
+        const float preExposure = 1.f / (std::exp2(view.ev100) * 1.2f);
+        camera.exposure = glm::vec4(
+            preExposure,
+            1.f / std::max(preExposure, 0.000001f),
+            0.f,
+            0.f);
         camera.viewportRect = glm::vec4(
             static_cast<float>(view.viewport.x),
             static_cast<float>(view.viewport.y),

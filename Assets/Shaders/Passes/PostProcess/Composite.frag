@@ -16,7 +16,6 @@ layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProce
 layout(binding = PHYSARA_BINDING_SCENE_COLOR_TEXTURE)uniform sampler2D uSceneColor;
 layout(binding = PHYSARA_BINDING_SCENE_DEPTH_TEXTURE)uniform sampler2D uSceneDepth;
 layout(binding = PHYSARA_BINDING_BLOOM_TEXTURE)uniform sampler2D uBloomTexture;
-layout(binding = PHYSARA_BINDING_EXPOSURE_TEXTURE)uniform sampler2D uExposureTexture;
 
 layout(location = 0)out vec4 outColor;
 
@@ -113,39 +112,9 @@ vec3 SampleHDR(vec2 uv)
     return SanitizeHDR(texture(uSceneColor, uv).rgb);
 }
 
-float ResolveExposure()
+float ResolveExposureAdjustment()
 {
-    return max(texture(uExposureTexture, vec2(0.5)).r, 0.0);
-}
-
-vec3 LegacyBloomContribution(vec2 uv)
-{
-    vec2 texel = 1.0 / max(uFrame.camera.viewportRect.zw, vec2(1.0));
-    float threshold = uBloomParams.x;
-    float knee = max(uBloomParams.y, 0.0001);
-    float radius = max(uBloomParams.w, 1.0);
-    float exposure = ResolveExposure();
-
-    vec3 sum = vec3(0.0);
-    float weightSum = 0.0;
-    for (int y = -2; y <= 2; ++y)
-    {
-        for (int x = -2; x <= 2; ++x)
-        {
-            vec2 offset = vec2(float(x), float(y)) * texel * radius;
-            vec3 sampleColor = SampleHDR(uv + offset);
-            vec3 exposedSample = sampleColor * exposure;
-            float brightness = max(max(exposedSample.r, exposedSample.g), exposedSample.b);
-            float soft = clamp((brightness - threshold + knee) / (2.0 * knee), 0.0, 1.0);
-            float contribution = max(brightness - threshold, 0.0) + soft * soft * knee;
-            float thresholdWeight = contribution / max(brightness, PHYSARA_EPSILON);
-            float gaussianWeight = 1.0 / (1.0 + dot(vec2(x, y), vec2(x, y)));
-            sum += sampleColor * thresholdWeight * gaussianWeight;
-            weightSum += thresholdWeight * gaussianWeight;
-        }
-    }
-
-    return weightSum > 0.0 ? sum / weightSum : vec3(0.0);
+    return exp2(uExposureParams.x);
 }
 
 vec3 ResolveMappedColor(vec2 uv)
@@ -153,11 +122,9 @@ vec3 ResolveMappedColor(vec2 uv)
     vec3 hdrColor = SampleHDR(uv);
     if (uFlags.y > 0.5)
     {
-        float bloomMode = uExposureParams.z;
-        vec3 bloom = bloomMode < 0.5 ? LegacyBloomContribution(uv) : SanitizeHDR(texture(uBloomTexture, uv).rgb);
-        hdrColor += bloom * uBloomParams.z;
+        hdrColor += SanitizeHDR(texture(uBloomTexture, uv).rgb) * uBloomParams.z;
     }
-    vec3 exposed = hdrColor * ResolveExposure();
+    vec3 exposed = hdrColor * ResolveExposureAdjustment();
     return ApplyToneMapping(exposed);
 }
 

@@ -128,7 +128,6 @@ namespace Physara::Engine
             ambientOcclusionTextureInfluence = std::clamp(ambientOcclusionTextureInfluence, 0.f, 1.f);
             normalScale = std::max(normalScale, 0.f);
             emissiveLuminance = std::max(emissiveLuminance, 0.f);
-            castShadow = shadingModel == ShadingModel::Unlit ? false : castShadow;
         }
 
         [[nodiscard]] bool IsTransparent() const { return alphaMode == AlphaMode::Blend; }

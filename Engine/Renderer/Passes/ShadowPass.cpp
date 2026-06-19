@@ -1,20 +1,21 @@
 #include "ShadowPass.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <span>
 
+#include <glm/common.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
-#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <Engine/Renderer/FrustumPartition.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
-#include <Engine/Renderer/GPUContracts.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderView.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
@@ -58,11 +59,9 @@ namespace Physara::Engine
         glm::vec3 PickStableUpVector(const glm::vec3 &direction)
         {
             const glm::vec3 worldUp(0.f, 1.f, 0.f);
-            if (std::abs(glm::dot(direction, worldUp)) > 0.95f)
-            {
-                return {0.f, 0.f, 1.f};
-            }
-            return worldUp;
+            return std::abs(glm::dot(direction, worldUp)) > 0.95f
+                       ? glm::vec3(0.f, 0.f, 1.f)
+                       : worldUp;
         }
 
         void ExpandBounds(glm::vec3 &minBounds, glm::vec3 &maxBounds, const glm::vec3 &center, float radius)
@@ -72,56 +71,27 @@ namespace Physara::Engine
             maxBounds = glm::max(maxBounds, center + extent);
         }
 
-        void ExpandItemWorldBounds(glm::vec3 &minBounds, glm::vec3 &maxBounds, const RenderDrawItem &item)
+        void GetItemBounds(const RenderDrawItem &item, glm::vec3 &center, float &radius)
         {
-            if (item.submission == nullptr)
-            {
-                return;
-            }
-
             const RenderMeshSubmission &submission = *item.submission;
-            if (submission.hasBounds)
-            {
-                ExpandBounds(minBounds, maxBounds, submission.boundsCenter, submission.boundsRadius);
-            }
-            else
-            {
-                ExpandBounds(minBounds, maxBounds, glm::vec3(submission.model[3]), 1.f);
-            }
-        }
-
-        void ExpandItemLightSpaceBounds(
-            const glm::mat4 &lightView,
-            glm::vec3 &minBounds,
-            glm::vec3 &maxBounds,
-            const RenderDrawItem &item)
-        {
-            if (item.submission == nullptr)
-            {
-                return;
-            }
-
-            const RenderMeshSubmission &submission = *item.submission;
-            const glm::vec3 center = submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
-            const float radius = submission.hasBounds ? std::max(submission.boundsRadius, 0.05f) : 1.f;
-            const glm::vec3 lightSpaceCenter = glm::vec3(lightView * glm::vec4(center, 1.f));
-            ExpandBounds(minBounds, maxBounds, lightSpaceCenter, radius);
+            center = submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
+            radius = submission.hasBounds ? std::max(submission.boundsRadius, 0.05f) : 1.f;
         }
 
         bool ItemOverlapsLightSpaceXY(
             const glm::mat4 &lightView,
             const RenderDrawItem &item,
-            const glm::vec3 &minBounds,
-            const glm::vec3 &maxBounds)
+            const glm::vec2 &minBounds,
+            const glm::vec2 &maxBounds)
         {
             if (item.submission == nullptr)
             {
                 return false;
             }
 
-            const RenderMeshSubmission &submission = *item.submission;
-            const glm::vec3 center = submission.hasBounds ? submission.boundsCenter : glm::vec3(submission.model[3]);
-            const float radius = submission.hasBounds ? std::max(submission.boundsRadius, 0.05f) : 1.f;
+            glm::vec3 center{};
+            float radius = 0.f;
+            GetItemBounds(item, center, radius);
             const glm::vec3 lightSpaceCenter = glm::vec3(lightView * glm::vec4(center, 1.f));
             return lightSpaceCenter.x + radius >= minBounds.x &&
                    lightSpaceCenter.x - radius <= maxBounds.x &&
@@ -129,148 +99,126 @@ namespace Physara::Engine
                    lightSpaceCenter.y - radius <= maxBounds.y;
         }
 
-        bool BuildBucketWorldBounds(
-            const std::vector<RenderDrawItem> &items,
-            glm::vec3 &minBounds,
-            glm::vec3 &maxBounds)
+        float QuantizeCascadeRadius(float radius)
         {
-            bool hasBounds = false;
-            for (const RenderDrawItem &item : items)
-            {
-                if (item.submission == nullptr)
-                {
-                    continue;
-                }
-
-                ExpandItemWorldBounds(minBounds, maxBounds, item);
-                hasBounds = true;
-            }
-            return hasBounds;
+            constexpr float RadiusQuantization = 16.f;
+            return std::ceil(std::max(radius, 1.f) * RadiusQuantization) / RadiusQuantization;
         }
 
-        bool BuildBucketWorldBounds(
-            const RenderCullDrawBuckets &buckets,
-            glm::vec3 &minBounds,
-            glm::vec3 &maxBounds)
+        glm::vec3 SnapCascadeCenter(
+            const glm::vec3 &center,
+            const glm::vec3 &lightDirection,
+            const glm::vec3 &up,
+            float texelWorldSize)
         {
-            const bool hasSingleSidedBounds = BuildBucketWorldBounds(buckets.singleSided, minBounds, maxBounds);
-            const bool hasDoubleSidedBounds = BuildBucketWorldBounds(buckets.doubleSided, minBounds, maxBounds);
-            return hasSingleSidedBounds || hasDoubleSidedBounds;
+            const glm::vec3 right = glm::normalize(glm::cross(lightDirection, up));
+            const glm::vec3 lightUp = glm::normalize(glm::cross(right, lightDirection));
+            const float centerX = glm::dot(center, right);
+            const float centerY = glm::dot(center, lightUp);
+            const float snappedX = std::floor(centerX / texelWorldSize + 0.5f) * texelWorldSize;
+            const float snappedY = std::floor(centerY / texelWorldSize + 0.5f) * texelWorldSize;
+            return center + right * (snappedX - centerX) + lightUp * (snappedY - centerY);
         }
 
-        bool BuildVisibleReceiverBounds(
-            const RenderDrawBuckets &buckets,
-            glm::vec3 &minBounds,
-            glm::vec3 &maxBounds)
-        {
-            const bool hasOpaqueBounds = BuildBucketWorldBounds(buckets.opaque, minBounds, maxBounds);
-            const bool hasUnlitBounds = BuildBucketWorldBounds(buckets.unlit, minBounds, maxBounds);
-            const bool hasTransparentBounds = BuildBucketWorldBounds(buckets.transparent, minBounds, maxBounds);
-            return hasOpaqueBounds || hasUnlitBounds || hasTransparentBounds;
-        }
-
-        bool BuildSingleMapLightViewProjection(
-            const RenderDrawBuckets &buckets,
+        bool BuildCascade(
+            const std::array<glm::vec3, 8> &corners,
+            const std::vector<RenderDrawItem> &shadowCasters,
             const glm::vec3 &lightDirection,
             std::uint32_t resolution,
             glm::mat4 &lightViewProjection,
+            float &texelWorldSize,
             std::vector<RenderDrawItem> &visibleShadowCasters)
         {
-            glm::vec3 minWorld{};
-            glm::vec3 maxWorld{};
-            minWorld = glm::vec3(std::numeric_limits<float>::max());
-            maxWorld = glm::vec3(-std::numeric_limits<float>::max());
-            bool hasReceiverBounds = BuildVisibleReceiverBounds(buckets, minWorld, maxWorld);
-            if (!hasReceiverBounds)
+            glm::vec3 center(0.f);
+            for (const glm::vec3 &corner : corners)
             {
-                minWorld = glm::vec3(std::numeric_limits<float>::max());
-                maxWorld = glm::vec3(-std::numeric_limits<float>::max());
-                hasReceiverBounds = BuildBucketWorldBounds(buckets.shadowCasters, minWorld, maxWorld);
+                center += corner;
             }
-            if (!hasReceiverBounds)
+            center /= static_cast<float>(corners.size());
+
+            float radius = 0.f;
+            for (const glm::vec3 &corner : corners)
             {
-                return false;
+                radius = std::max(radius, glm::length(corner - center));
             }
+            radius = QuantizeCascadeRadius(radius);
+            radius = QuantizeCascadeRadius(
+                radius + (2.f * radius) / static_cast<float>(std::max(resolution, 1u)));
+            texelWorldSize = (2.f * radius) / static_cast<float>(std::max(resolution, 1u));
 
-            const glm::vec3 center = (minWorld + maxWorld) * 0.5f;
-            const float radius = std::max(glm::length(maxWorld - center), 1.f);
-            const glm::mat4 lightView = glm::lookAt(center - lightDirection * radius * 2.5f, center, PickStableUpVector(lightDirection));
+            const glm::vec3 up = PickStableUpVector(lightDirection);
+            const glm::vec3 snappedCenter = SnapCascadeCenter(center, lightDirection, up, texelWorldSize);
+            float eyeDistance = radius * 2.f + 10.f;
+            glm::mat4 lightView = glm::lookAt(
+                snappedCenter - lightDirection * eyeDistance,
+                snappedCenter,
+                up);
 
-            glm::vec3 minReceiverLS(std::numeric_limits<float>::max());
-            glm::vec3 maxReceiverLS(-std::numeric_limits<float>::max());
-            for (float z : {minWorld.z, maxWorld.z})
+            glm::vec3 minReceiver{};
+            glm::vec3 maxReceiver{};
+            glm::vec3 minCaster{};
+            glm::vec3 maxCaster{};
+            auto collectLightSpaceBounds = [&]()
             {
-                for (float y : {minWorld.y, maxWorld.y})
+                minReceiver = glm::vec3(std::numeric_limits<float>::max());
+                maxReceiver = glm::vec3(-std::numeric_limits<float>::max());
+                for (const glm::vec3 &corner : corners)
                 {
-                    for (float x : {minWorld.x, maxWorld.x})
+                    const glm::vec3 lightSpaceCorner = glm::vec3(lightView * glm::vec4(corner, 1.f));
+                    minReceiver = glm::min(minReceiver, lightSpaceCorner);
+                    maxReceiver = glm::max(maxReceiver, lightSpaceCorner);
+                }
+                minReceiver.x = -radius;
+                minReceiver.y = -radius;
+                maxReceiver.x = radius;
+                maxReceiver.y = radius;
+
+                visibleShadowCasters.clear();
+                visibleShadowCasters.reserve(shadowCasters.size());
+                minCaster = minReceiver;
+                maxCaster = maxReceiver;
+                const glm::vec2 minXY(minReceiver);
+                const glm::vec2 maxXY(maxReceiver);
+                for (const RenderDrawItem &item : shadowCasters)
+                {
+                    if (!ItemOverlapsLightSpaceXY(lightView, item, minXY, maxXY))
                     {
-                        const glm::vec3 pointLS = glm::vec3(lightView * glm::vec4(x, y, z, 1.f));
-                        minReceiverLS = glm::min(minReceiverLS, pointLS);
-                        maxReceiverLS = glm::max(maxReceiverLS, pointLS);
+                        continue;
                     }
+
+                    visibleShadowCasters.push_back(item);
+                    glm::vec3 centerWS{};
+                    float boundsRadius = 0.f;
+                    GetItemBounds(item, centerWS, boundsRadius);
+                    const glm::vec3 centerLS = glm::vec3(lightView * glm::vec4(centerWS, 1.f));
+                    ExpandBounds(minCaster, maxCaster, centerLS, boundsRadius);
                 }
-            }
+            };
+            collectLightSpaceBounds();
 
-            const float paddingXY = std::max(radius * 0.05f, 0.5f);
-            minReceiverLS.x -= paddingXY;
-            minReceiverLS.y -= paddingXY;
-            maxReceiverLS.x += paddingXY;
-            maxReceiverLS.y += paddingXY;
-
-            visibleShadowCasters.clear();
-            visibleShadowCasters.reserve(buckets.shadowCasters.size());
-            glm::vec3 minCasterLS = minReceiverLS;
-            glm::vec3 maxCasterLS = maxReceiverLS;
-            for (const RenderDrawItem &item : buckets.shadowCasters)
+            const float depthPadding = std::max(radius * 0.25f, 10.f);
+            const float cameraShift = std::max(maxCaster.z + depthPadding + 0.01f, 0.f);
+            if (cameraShift > 0.f)
             {
-                if (!ItemOverlapsLightSpaceXY(lightView, item, minReceiverLS, maxReceiverLS))
-                {
-                    continue;
-                }
-
-                visibleShadowCasters.push_back(item);
-                ExpandItemLightSpaceBounds(lightView, minCasterLS, maxCasterLS, item);
+                eyeDistance += cameraShift;
+                lightView = glm::lookAt(
+                    snappedCenter - lightDirection * eyeDistance,
+                    snappedCenter,
+                    up);
+                collectLightSpaceBounds();
             }
-            if (visibleShadowCasters.empty())
-            {
-                return false;
-            }
-
-            glm::vec3 minLS = minReceiverLS;
-            glm::vec3 maxLS = maxReceiverLS;
-            minLS.z = minCasterLS.z;
-            maxLS.z = maxCasterLS.z;
-
-            const float minExtent = 1.f;
-            if (maxLS.x - minLS.x < minExtent)
-            {
-                const float centerX = (minLS.x + maxLS.x) * 0.5f;
-                minLS.x = centerX - minExtent * 0.5f;
-                maxLS.x = centerX + minExtent * 0.5f;
-            }
-            if (maxLS.y - minLS.y < minExtent)
-            {
-                const float centerY = (minLS.y + maxLS.y) * 0.5f;
-                minLS.y = centerY - minExtent * 0.5f;
-                maxLS.y = centerY + minExtent * 0.5f;
-            }
-
-            const float safeResolution = static_cast<float>(std::max(resolution, 1u));
-            const float texelSizeX = (maxLS.x - minLS.x) / safeResolution;
-            const float texelSizeY = (maxLS.y - minLS.y) / safeResolution;
-            minLS.x = std::floor(minLS.x / texelSizeX) * texelSizeX;
-            maxLS.x = std::floor(maxLS.x / texelSizeX) * texelSizeX;
-            minLS.y = std::floor(minLS.y / texelSizeY) * texelSizeY;
-            maxLS.y = std::floor(maxLS.y / texelSizeY) * texelSizeY;
-
-            const float depthPadding = std::max((maxLS.z - minLS.z) * 0.5f, 10.f);
-            const float nearDistance = std::max(0.01f, -maxLS.z - depthPadding);
-            const float farDistance = std::max(nearDistance + 0.01f, -minLS.z + depthPadding);
-            const glm::mat4 lightProjection = glm::ortho(minLS.x, maxLS.x, minLS.y, maxLS.y, nearDistance, farDistance);
+            const float nearDistance = std::max(0.01f, -maxCaster.z - depthPadding);
+            const float farDistance = std::max(nearDistance + 0.01f, -minCaster.z + depthPadding);
+            const glm::mat4 lightProjection = glm::ortho(
+                minReceiver.x,
+                maxReceiver.x,
+                minReceiver.y,
+                maxReceiver.y,
+                nearDistance,
+                farDistance);
             lightViewProjection = lightProjection * lightView;
             return true;
         }
-
     }
 
     void ShadowPass::Execute(const ShadowPassContext &context)
@@ -283,80 +231,85 @@ namespace Physara::Engine
         }
 
         context.frameData->shadow = {};
-        m_ShadowCasterScratch.clear();
-        if (m_Settings.algorithm == ShadowAlgorithm::None)
+        if (!m_Settings.enabled)
         {
             return;
         }
 
-        CameraData shadowCamera{};
         std::uint32_t lightIndex = 0u;
-        if (!BuildShadowData(context, shadowCamera, lightIndex))
+        if (!BuildShadowData(context, lightIndex))
         {
             return;
         }
 
         PrepareResources(*context.device);
-        RHI::RHIPipelineState *pipeline = GetPipeline(context);
-        if (pipeline == nullptr || m_Framebuffer == nullptr)
+        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Front);
+        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None);
+        if (singleSidedPipeline == nullptr || doubleSidedPipeline == nullptr || m_ShadowMap == nullptr)
         {
             context.frameData->shadow = {};
             return;
         }
 
         BuildShadowCommands(context);
-        UploadFrameBuffers(context, shadowCamera);
+        UploadFrameBuffers(context);
         context.frameUploadAllocator->Flush(context.stats);
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetShadowInstanceObjectIndexBuffer();
-        if (!m_CameraAllocation.IsValid() || !objectAllocation.IsValid() || !instanceObjectIndexAllocation.IsValid())
+        if (!objectAllocation.IsValid() || !instanceObjectIndexAllocation.IsValid())
         {
             context.frameData->shadow = {};
             return;
         }
 
-        context.commandList->BeginRenderPass(m_Framebuffer.get(), m_RenderPassDesc, std::span<const glm::vec4>{}, 1.f);
-        context.commandList->SetViewport(0.f, 0.f, static_cast<float>(m_Settings.resolution), static_cast<float>(m_Settings.resolution));
-        context.commandList->SetScissor(0, 0, m_Settings.resolution, m_Settings.resolution);
-        context.commandList->SetPipelineState(pipeline);
-        context.commandList->SetUniformBuffer(
-            ShadowPassDetail::CameraBinding,
-            m_CameraAllocation.buffer,
-            m_CameraAllocation.offset,
-            m_CameraAllocation.size);
-        context.commandList->SetStorageBuffer(
-            ShadowPassDetail::ObjectBinding,
-            objectAllocation.buffer,
-            objectAllocation.offset,
-            objectAllocation.size);
-        context.commandList->SetStorageBuffer(
-            ShadowPassDetail::InstanceObjectIndexBinding,
-            instanceObjectIndexAllocation.buffer,
-            instanceObjectIndexAllocation.offset,
-            instanceObjectIndexAllocation.size);
         m_CommandExecutor.BeginFrame();
-        DrawShadowCasters(context);
-        context.commandList->EndRenderPass();
+        for (std::uint32_t cascadeIndex = 0u; cascadeIndex < m_Settings.cascadeCount; ++cascadeIndex)
+        {
+            CascadeState &cascade = m_Cascades[cascadeIndex];
+            RHI::RHIFramebuffer *framebuffer = m_Framebuffers[cascadeIndex].get();
+            if (framebuffer == nullptr || !cascade.cameraAllocation.IsValid())
+            {
+                context.frameData->shadow = {};
+                return;
+            }
 
-        context.frameData->shadow.params = glm::vec4(
-            1.f,
-            static_cast<float>(m_Settings.resolution),
-            static_cast<float>(lightIndex),
-            1.f / static_cast<float>(m_Settings.resolution));
-        context.frameData->shadow.controls = glm::vec4(
-            std::max(m_Settings.receiverBiasScale, 0.f),
-            static_cast<float>(m_Settings.algorithm),
-            m_Settings.filterRadiusTexels,
-            m_Settings.lightSizeTexels);
+            context.commandList->BeginRenderPass(framebuffer, m_RenderPassDesc, std::span<const glm::vec4>{}, 1.f);
+            context.commandList->SetViewport(0.f, 0.f, static_cast<float>(m_Settings.resolution), static_cast<float>(m_Settings.resolution));
+            context.commandList->SetScissor(0, 0, m_Settings.resolution, m_Settings.resolution);
+            context.commandList->SetUniformBuffer(
+                ShadowPassDetail::CameraBinding,
+                cascade.cameraAllocation.buffer,
+                cascade.cameraAllocation.offset,
+                cascade.cameraAllocation.size);
+            context.commandList->SetStorageBuffer(
+                ShadowPassDetail::ObjectBinding,
+                objectAllocation.buffer,
+                objectAllocation.offset,
+                objectAllocation.size);
+            context.commandList->SetStorageBuffer(
+                ShadowPassDetail::InstanceObjectIndexBinding,
+                instanceObjectIndexAllocation.buffer,
+                instanceObjectIndexAllocation.offset,
+                instanceObjectIndexAllocation.size);
+            context.commandList->SetPipelineState(singleSidedPipeline);
+            DrawShadowCasters(context, cascade.singleSidedCommands);
+            context.commandList->SetPipelineState(doubleSidedPipeline);
+            DrawShadowCasters(context, cascade.doubleSidedCommands);
+            context.commandList->EndRenderPass();
+        }
     }
 
     void ShadowPass::Reset()
     {
-        m_Framebuffer.reset();
+        for (std::unique_ptr<RHI::RHIFramebuffer> &framebuffer : m_Framebuffers)
+        {
+            framebuffer.reset();
+        }
         m_ShadowMap.reset();
-        m_CameraAllocation = {};
-        m_ShadowCasterScratch.clear();
-        m_ShadowCommandScratch.clear();
+        for (CascadeState &cascade : m_Cascades)
+        {
+            cascade = {};
+        }
         m_ShadowInstanceObjectIndexScratch.clear();
         m_CommandExecutor.Reset();
     }
@@ -365,12 +318,18 @@ namespace Physara::Engine
     {
         ShadowSettings sanitized = settings;
         sanitized.resolution = std::clamp(sanitized.resolution, 256u, 8192u);
+        sanitized.cascadeCount = std::clamp(sanitized.cascadeCount, 1u, MaxShadowCascades);
+        sanitized.maxDistanceMeters = std::clamp(sanitized.maxDistanceMeters, 1.f, 100000.f);
+        sanitized.splitLambda = std::clamp(sanitized.splitLambda, 0.f, 1.f);
+        sanitized.transitionFraction = std::clamp(sanitized.transitionFraction, 0.f, 0.3f);
         sanitized.depthBias = std::max(sanitized.depthBias, 0.f);
         sanitized.slopeBias = std::max(sanitized.slopeBias, 0.f);
-        sanitized.receiverBiasScale = std::max(sanitized.receiverBiasScale, 0.f);
-        sanitized.filterRadiusTexels = std::clamp(sanitized.filterRadiusTexels, 0.25f, 32.f);
-        sanitized.lightSizeTexels = std::clamp(sanitized.lightSizeTexels, 0.25f, 128.f);
-        if (m_Settings.resolution != sanitized.resolution)
+        sanitized.normalBiasTexels = std::clamp(sanitized.normalBiasTexels, 0.f, 8.f);
+        sanitized.receiverBiasScale = std::clamp(sanitized.receiverBiasScale, 0.f, 8.f);
+        sanitized.filterRadiusTexels = std::clamp(sanitized.filterRadiusTexels, 0.25f, 8.f);
+        sanitized.lightSizeTexels = std::clamp(sanitized.lightSizeTexels, 1.f, 128.f);
+        if (m_Settings.resolution != sanitized.resolution ||
+            m_Settings.cascadeCount != sanitized.cascadeCount)
         {
             Reset();
         }
@@ -396,31 +355,40 @@ namespace Physara::Engine
             desc.width = m_Settings.resolution;
             desc.height = m_Settings.resolution;
             desc.format = RHI::TextureFormat::Depth32F;
-            desc.dimension = RHI::TextureDimension::Tex2D;
+            desc.dimension = RHI::TextureDimension::Tex2DArray;
             desc.usage = RHI::TextureUsage::DepthStencil | RHI::TextureUsage::Sampled;
             desc.mipLevels = 1u;
-            desc.arrayLayers = 1u;
+            desc.arrayLayers = m_Settings.cascadeCount;
             desc.samples = 1u;
             m_ShadowMap = device.CreateTexture(desc);
         }
 
-        if (m_Framebuffer == nullptr && m_ShadowMap != nullptr)
+        if (m_ShadowMap == nullptr)
         {
+            return;
+        }
+
+        for (std::uint32_t cascadeIndex = 0u; cascadeIndex < m_Settings.cascadeCount; ++cascadeIndex)
+        {
+            if (m_Framebuffers[cascadeIndex] != nullptr)
+            {
+                continue;
+            }
+
             RHI::RHIFramebufferDesc framebufferDesc{};
             framebufferDesc.depthAttachment = m_ShadowMap.get();
             framebufferDesc.width = m_Settings.resolution;
             framebufferDesc.height = m_Settings.resolution;
+            framebufferDesc.arrayLayer = cascadeIndex;
+            framebufferDesc.bindArrayLayer = true;
             framebufferDesc.renderPassDesc = &m_RenderPassDesc;
-            m_Framebuffer = device.CreateFramebuffer(framebufferDesc);
+            m_Framebuffers[cascadeIndex] = device.CreateFramebuffer(framebufferDesc);
         }
     }
 
-    bool ShadowPass::BuildShadowData(
-        const ShadowPassContext &context,
-        CameraData &shadowCamera,
-        std::uint32_t &lightIndex)
+    bool ShadowPass::BuildShadowData(const ShadowPassContext &context, std::uint32_t &lightIndex)
     {
-        const FrameData &frameData = *context.frameData;
+        FrameData &frameData = *context.frameData;
         const RenderDrawBuckets &buckets = context.renderProxy->GetBuckets();
         if (buckets.shadowCasters.empty())
         {
@@ -428,11 +396,11 @@ namespace Physara::Engine
         }
 
         bool foundLight = false;
-        for (std::uint32_t i = 0u; i < frameData.lights.size(); ++i)
+        for (std::uint32_t index = 0u; index < frameData.lights.size(); ++index)
         {
-            if (ShadowPassDetail::IsShadowedDirectionalLight(frameData.lights[i]))
+            if (ShadowPassDetail::IsShadowedDirectionalLight(frameData.lights[index]))
             {
-                lightIndex = i;
+                lightIndex = index;
                 foundLight = true;
                 break;
             }
@@ -442,44 +410,90 @@ namespace Physara::Engine
             return false;
         }
 
-        const LightData &light = frameData.lights[lightIndex];
-        const glm::vec3 lightDirection = ShadowPassDetail::SafeLightDirection(glm::vec3(light.directionType));
-        glm::mat4 lightViewProjection{1.f};
-        if (!ShadowPassDetail::BuildSingleMapLightViewProjection(
-            buckets,
-            lightDirection,
-            m_Settings.resolution,
-            lightViewProjection,
-            m_ShadowCasterScratch))
+        const float nearDistance = std::max(frameData.view.nearClipMeters, 0.001f);
+        const float farDistance = std::min(
+            std::max(frameData.view.farClipMeters, nearDistance + 0.001f),
+            std::max(m_Settings.maxDistanceMeters, nearDistance + 0.001f));
+        const std::vector<float> splits = FrustumPartition::BuildPracticalDepthSplits(
+            nearDistance,
+            farDistance,
+            m_Settings.cascadeCount,
+            m_Settings.splitLambda);
+        if (splits.size() != m_Settings.cascadeCount)
         {
             return false;
         }
 
-        RenderView shadowView = RenderView::FromMatrices(
-            glm::mat4(1.f),
-            lightViewProjection,
-            frameData.view.position,
-            ViewportRect{0u, 0u, m_Settings.resolution, m_Settings.resolution},
-            frameData.view.ev100,
-            0.01f,
-            1.f);
-        shadowView.viewProjection = lightViewProjection;
-        shadowCamera = BuildCameraData(shadowView);
-        context.frameData->shadow.lightViewProjection = lightViewProjection;
-        context.frameData->shadow.params = glm::vec4(
+        const glm::vec3 lightDirection = ShadowPassDetail::SafeLightDirection(
+            glm::vec3(frameData.lights[lightIndex].directionType));
+        float cascadeNear = nearDistance;
+        for (std::uint32_t cascadeIndex = 0u; cascadeIndex < m_Settings.cascadeCount; ++cascadeIndex)
+        {
+            CascadeState &cascade = m_Cascades[cascadeIndex];
+            const float cascadeFar = splits[cascadeIndex];
+            const std::array<glm::vec3, 8> corners = FrustumPartition::BuildSliceCorners(
+                frameData.view,
+                cascadeNear,
+                cascadeFar);
+
+            glm::mat4 lightViewProjection(1.f);
+            float texelWorldSize = 0.f;
+            if (!ShadowPassDetail::BuildCascade(
+                    corners,
+                    buckets.shadowCasters,
+                    lightDirection,
+                    m_Settings.resolution,
+                    lightViewProjection,
+                    texelWorldSize,
+                    cascade.shadowCasters))
+            {
+                return false;
+            }
+
+            cascade.camera = {};
+            cascade.camera.viewProjection = lightViewProjection;
+            cascade.camera.projection = lightViewProjection;
+            cascade.camera.inverseProjection = glm::inverse(lightViewProjection);
+            cascade.camera.inverseViewProjection = cascade.camera.inverseProjection;
+            cascade.camera.viewportRect = glm::vec4(
+                0.f,
+                0.f,
+                static_cast<float>(m_Settings.resolution),
+                static_cast<float>(m_Settings.resolution));
+            cascade.camera.clipPlanes = glm::vec4(0.01f, farDistance, 0.f, 0.f);
+            frameData.shadow.lightViewProjection[cascadeIndex] = lightViewProjection;
+            frameData.shadow.cascadeSplits[cascadeIndex] = cascadeFar;
+            frameData.shadow.cascadeTexelWorldSize[cascadeIndex] = texelWorldSize;
+            cascadeNear = cascadeFar;
+        }
+
+        for (std::uint32_t cascadeIndex = m_Settings.cascadeCount; cascadeIndex < MaxShadowCascades; ++cascadeIndex)
+        {
+            m_Cascades[cascadeIndex] = {};
+            frameData.shadow.lightViewProjection[cascadeIndex] = glm::mat4(1.f);
+            frameData.shadow.cascadeSplits[cascadeIndex] = farDistance;
+            frameData.shadow.cascadeTexelWorldSize[cascadeIndex] = 0.f;
+        }
+
+        frameData.shadow.params = glm::vec4(
             1.f,
             static_cast<float>(m_Settings.resolution),
             static_cast<float>(lightIndex),
             1.f / static_cast<float>(m_Settings.resolution));
-        context.frameData->shadow.controls = glm::vec4(
-            std::max(m_Settings.receiverBiasScale, 0.f),
-            static_cast<float>(m_Settings.algorithm),
+        frameData.shadow.controls = glm::vec4(
+            static_cast<float>(m_Settings.cascadeCount),
+            m_Settings.transitionFraction,
+            m_Settings.normalBiasTexels,
+            m_Settings.receiverBiasScale);
+        frameData.shadow.samplingParams = glm::vec4(
             m_Settings.filterRadiusTexels,
-            m_Settings.lightSizeTexels);
+            m_Settings.lightSizeTexels,
+            static_cast<float>(m_Settings.filter),
+            farDistance);
         return true;
     }
 
-    RHI::RHIPipelineState *ShadowPass::GetPipeline(const ShadowPassContext &context)
+    RHI::RHIPipelineState *ShadowPass::GetPipeline(const ShadowPassContext &context, RHI::CullMode cullMode)
     {
         if (context.shaderLibrary == nullptr || context.pipelineCache == nullptr)
         {
@@ -487,7 +501,7 @@ namespace Physara::Engine
         }
 
         ShaderProgramDesc shaderDesc{};
-        shaderDesc.debugName = "Shadow";
+        shaderDesc.debugName = "ShadowCSM";
         shaderDesc.vertexPath = "Shaders/Passes/Shadow/Shadow.vert";
         shaderDesc.fragmentPath = "Shaders/Passes/Shadow/Shadow.frag";
 
@@ -503,7 +517,7 @@ namespace Physara::Engine
         pipelineDesc.renderPassDesc = &m_RenderPassDesc;
         pipelineDesc.vertexBindings.push_back({0u, ShadowPassDetail::VertexStride, 0u});
         pipelineDesc.vertexAttributes.push_back({0u, 0u, RHI::VertexFormat::RGB32F, static_cast<std::uint32_t>(offsetof(MeshVertex, position))});
-        pipelineDesc.rasterizerState.cullMode = RHI::CullMode::Front;
+        pipelineDesc.rasterizerState.cullMode = cullMode;
         pipelineDesc.rasterizerState.depthBias = m_Settings.depthBias;
         pipelineDesc.rasterizerState.depthBiasSlope = m_Settings.slopeBias;
         pipelineDesc.depthStencilState.depthTest = true;
@@ -514,56 +528,71 @@ namespace Physara::Engine
 
     void ShadowPass::BuildShadowCommands(const ShadowPassContext &context)
     {
-        m_ShadowCommandScratch.clear();
-        m_ShadowCommandScratch.reserve(m_ShadowCasterScratch.size());
         m_ShadowInstanceObjectIndexScratch.clear();
-        m_ShadowInstanceObjectIndexScratch.reserve(m_ShadowCasterScratch.size());
-
-        const std::uint32_t objectCount = context.frameData != nullptr
-                                              ? static_cast<std::uint32_t>(context.frameData->objects.size())
-                                              : 0u;
-        for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(m_ShadowCasterScratch.size()); ++i)
+        std::uint32_t totalCommandCount = 0u;
+        const std::uint32_t objectCount = static_cast<std::uint32_t>(context.frameData->objects.size());
+        for (std::uint32_t cascadeIndex = 0u; cascadeIndex < m_Settings.cascadeCount; ++cascadeIndex)
         {
-            const RenderDrawItem &item = m_ShadowCasterScratch[i];
-            if (item.submission == nullptr || item.objectIndex >= objectCount)
+            CascadeState &cascade = m_Cascades[cascadeIndex];
+            cascade.singleSidedCommands.clear();
+            cascade.doubleSidedCommands.clear();
+            cascade.singleSidedCommands.reserve(cascade.shadowCasters.size());
+            cascade.doubleSidedCommands.reserve(cascade.shadowCasters.size());
+            for (std::uint32_t itemIndex = 0u; itemIndex < cascade.shadowCasters.size(); ++itemIndex)
             {
-                continue;
-            }
+                const RenderDrawItem &item = cascade.shadowCasters[itemIndex];
+                if (item.submission == nullptr || item.objectIndex >= objectCount)
+                {
+                    continue;
+                }
 
-            if (!m_ShadowCommandScratch.empty() &&
-                item.primitiveKey == m_ShadowCommandScratch.back().primitiveKey)
-            {
-                ++m_ShadowCommandScratch.back().instanceCount;
+                std::vector<RenderCommand> &commands = item.doubleSided
+                                                           ? cascade.doubleSidedCommands
+                                                           : cascade.singleSidedCommands;
+                if (!commands.empty() &&
+                    item.primitiveKey == commands.back().primitiveKey)
+                {
+                    ++commands.back().instanceCount;
+                    m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
+                    continue;
+                }
+
+                RenderCommand command{};
+                command.submission = item.submission;
+                command.sourceItemIndex = itemIndex;
+                command.instanceCount = 1u;
+                command.firstObjectIndex = item.objectIndex;
+                command.firstInstanceIndex = static_cast<std::uint32_t>(m_ShadowInstanceObjectIndexScratch.size());
+                command.sortKey = item.sortKey;
+                command.meshKey = item.meshKey;
+                command.primitiveKey = item.primitiveKey;
+                command.materialInstanceId = item.materialInstanceId;
+                command.bucket = RenderBucket::Opaque;
+                command.doubleSided = item.doubleSided;
+                commands.push_back(command);
                 m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
-                continue;
             }
-
-            RenderCommand command{};
-            command.submission = item.submission;
-            command.sourceItemIndex = i;
-            command.instanceCount = 1u;
-            command.firstObjectIndex = item.objectIndex;
-            command.firstInstanceIndex = static_cast<std::uint32_t>(m_ShadowInstanceObjectIndexScratch.size());
-            command.sortKey = item.sortKey;
-            command.meshKey = item.meshKey;
-            command.primitiveKey = item.primitiveKey;
-            command.materialInstanceId = item.materialInstanceId;
-            command.bucket = RenderBucket::Opaque;
-            command.doubleSided = item.doubleSided;
-            m_ShadowCommandScratch.push_back(command);
-            m_ShadowInstanceObjectIndexScratch.push_back(item.objectIndex);
+            totalCommandCount += static_cast<std::uint32_t>(
+                cascade.singleSidedCommands.size() + cascade.doubleSidedCommands.size());
         }
 
         if (context.stats != nullptr)
         {
-            context.stats->shadowBatches = static_cast<std::uint32_t>(m_ShadowCommandScratch.size());
-            context.stats->drawBatches += context.stats->shadowBatches;
+            context.stats->shadowBatches = totalCommandCount;
+            context.stats->drawBatches += totalCommandCount;
         }
     }
 
-    void ShadowPass::UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera)
+    void ShadowPass::UploadFrameBuffers(const ShadowPassContext &context)
     {
-        m_CameraAllocation = context.frameUploadAllocator->Upload(*context.device, shadowCamera, context.stats);
+        for (std::uint32_t cascadeIndex = 0u; cascadeIndex < m_Settings.cascadeCount; ++cascadeIndex)
+        {
+            CascadeState &cascade = m_Cascades[cascadeIndex];
+            cascade.cameraAllocation = context.frameUploadAllocator->Upload(
+                *context.device,
+                cascade.camera,
+                context.stats);
+        }
         context.gpuScene->UploadShadowInstanceObjectIndices(
             *context.device,
             *context.frameUploadAllocator,
@@ -571,7 +600,7 @@ namespace Physara::Engine
             context.stats);
     }
 
-    void ShadowPass::DrawShadowCasters(const ShadowPassContext &context)
+    void ShadowPass::DrawShadowCasters(const ShadowPassContext &context, const std::vector<RenderCommand> &commands)
     {
         CommandSubmitContext submitContext{&context};
         RenderCommandExecutorContext executorContext{};
@@ -584,7 +613,7 @@ namespace Physara::Engine
         callbacks.userData = &submitContext;
         callbacks.canMergeIndirectRun = &ShadowPass::CanMergeShadowIndirectRun;
         callbacks.recordCommand = &ShadowPass::RecordSubmittedCommand;
-        m_CommandExecutor.Submit(executorContext, m_ShadowCommandScratch, callbacks);
+        m_CommandExecutor.Submit(executorContext, commands, callbacks);
     }
 
     bool ShadowPass::CanMergeShadowIndirectRun(void *userData, const RenderCommand &lhs, const RenderCommand &rhs)

@@ -11,6 +11,8 @@ target_sources(Engine PRIVATE
     Renderer/FrameData.hpp
     Renderer/FrameUploadAllocator.cpp
     Renderer/FrameUploadAllocator.hpp
+    Renderer/FrustumPartition.cpp
+    Renderer/FrustumPartition.hpp
     Renderer/GPUContracts.hpp
     Renderer/GPUScene.cpp
     Renderer/GPUScene.hpp

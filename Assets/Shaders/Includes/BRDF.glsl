@@ -90,7 +90,7 @@ vec3 EvaluateSpecularBRDF(BRDFInputs inputs)
 
 vec3 EvaluateDiffuseBRDF(BRDFInputs inputs)
 {
-    return inputs.diffuseColor * Fd_Burley(inputs.NoV, inputs.NoL, inputs.LoH, inputs.roughness);
+    return inputs.diffuseColor * Fd_Lambert();
 }
 
 vec3 EvaluateSurfaceBRDF(BRDFInputs inputs)

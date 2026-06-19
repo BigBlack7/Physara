@@ -1,11 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <vector>
-
-#include <glm/mat4x4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Renderer/FrameUploadAllocator.hpp>
@@ -13,7 +11,6 @@
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/RenderCommandExecutor.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
-#include <Engine/RHI/Resource/RHIBuffer.hpp>
 #include <Engine/RHI/Resource/RHITexture.hpp>
 
 namespace Physara::RHI
@@ -31,29 +28,27 @@ namespace Physara::Engine
     class RenderProxy;
     class ShaderLibrary;
 
-    enum class ShadowAlgorithm : std::uint32_t
+    enum class ShadowFilter : std::uint32_t
     {
-        None = 0,
-        SingleMapHard = 1,
-        SingleMapPCF3x3 = 2,
-        SingleMapPCF5x5 = 3,
-        SingleMapPoisson16 = 4,
-        SingleMapPCSS = 5
+        Hard = GPUValue(ShadowFilterGPU::Hard),
+        PCF3x3 = GPUValue(ShadowFilterGPU::PCF3x3),
+        PCF5x5 = GPUValue(ShadowFilterGPU::PCF5x5),
+        Poisson16 = GPUValue(ShadowFilterGPU::Poisson16),
+        PCSS = GPUValue(ShadowFilterGPU::PCSS)
     };
-
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::None) == GPUValue(ShadowModeGPU::None));
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapHard) == GPUValue(ShadowModeGPU::Hard));
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCF3x3) == GPUValue(ShadowModeGPU::PCF3x3));
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCF5x5) == GPUValue(ShadowModeGPU::PCF5x5));
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPoisson16) == GPUValue(ShadowModeGPU::Poisson16));
-    static_assert(static_cast<std::uint32_t>(ShadowAlgorithm::SingleMapPCSS) == GPUValue(ShadowModeGPU::PCSS));
 
     struct ShadowSettings
     {
-        ShadowAlgorithm algorithm{ShadowAlgorithm::SingleMapPCF3x3};
+        bool enabled{true};
+        ShadowFilter filter{ShadowFilter::PCF3x3};
         std::uint32_t resolution{2048u};
+        std::uint32_t cascadeCount{4u};
+        float maxDistanceMeters{250.f};
+        float splitLambda{0.7f};
+        float transitionFraction{0.1f};
         float depthBias{2.f};
         float slopeBias{2.f};
+        float normalBiasTexels{1.5f};
         float receiverBiasScale{1.f};
         float filterRadiusTexels{1.5f};
         float lightSizeTexels{24.f};
@@ -86,19 +81,25 @@ namespace Physara::Engine
         [[nodiscard]] const ShadowSettings &GetSettings() const { return m_Settings; }
 
     private:
+        struct CascadeState
+        {
+            CameraData camera{};
+            FrameUploadAllocation cameraAllocation{};
+            std::vector<RenderDrawItem> shadowCasters{};
+            std::vector<RenderCommand> singleSidedCommands{};
+            std::vector<RenderCommand> doubleSidedCommands{};
+        };
+
         struct CommandSubmitContext
         {
             const ShadowPassContext *passContext{nullptr};
         };
 
-        [[nodiscard]] bool BuildShadowData(
-            const ShadowPassContext &context,
-            CameraData &shadowCamera,
-            std::uint32_t &lightIndex);
-        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ShadowPassContext &context);
+        [[nodiscard]] bool BuildShadowData(const ShadowPassContext &context, std::uint32_t &lightIndex);
+        [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ShadowPassContext &context, RHI::CullMode cullMode);
         void BuildShadowCommands(const ShadowPassContext &context);
-        void UploadFrameBuffers(const ShadowPassContext &context, const CameraData &shadowCamera);
-        void DrawShadowCasters(const ShadowPassContext &context);
+        void UploadFrameBuffers(const ShadowPassContext &context);
+        void DrawShadowCasters(const ShadowPassContext &context, const std::vector<RenderCommand> &commands);
         static bool CanMergeShadowIndirectRun(void *userData, const RenderCommand &lhs, const RenderCommand &rhs);
         static void RecordSubmittedCommand(
             void *userData,
@@ -109,10 +110,8 @@ namespace Physara::Engine
     private:
         RHI::RHIRenderPassDesc m_RenderPassDesc{};
         std::unique_ptr<RHI::RHITexture> m_ShadowMap{};
-        std::unique_ptr<RHI::RHIFramebuffer> m_Framebuffer{};
-        FrameUploadAllocation m_CameraAllocation{};
-        std::vector<RenderDrawItem> m_ShadowCasterScratch{};
-        std::vector<RenderCommand> m_ShadowCommandScratch{};
+        std::array<std::unique_ptr<RHI::RHIFramebuffer>, MaxShadowCascades> m_Framebuffers{};
+        std::array<CascadeState, MaxShadowCascades> m_Cascades{};
         std::vector<std::uint32_t> m_ShadowInstanceObjectIndexScratch{};
         RenderCommandExecutor m_CommandExecutor{};
         ShadowSettings m_Settings{};

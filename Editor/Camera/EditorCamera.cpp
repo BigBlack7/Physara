@@ -65,7 +65,8 @@ namespace Physara::Editor
         }
 
         const Engine::TransformComponent &transform = entity.GetComponent<Engine::TransformComponent>();
-        m_Position = transform.localPosition;
+        const glm::mat4 &world = transform.GetWorldMatrix();
+        m_Position = glm::vec3(world[3]);
         if (entity.HasComponent<Engine::CameraComponent>())
         {
             Engine::CameraComponent camera = entity.GetComponent<Engine::CameraComponent>();
@@ -73,7 +74,7 @@ namespace Physara::Editor
             m_Settings.flySpeedMetersPerSecond = camera.navigationSpeedMetersPerSecond;
         }
 
-        glm::vec3 forward = transform.localRotationQuat * glm::vec3(0.f, 0.f, -1.f);
+        glm::vec3 forward = glm::vec3(world * glm::vec4(0.f, 0.f, -1.f, 0.f));
         if (glm::dot(forward, forward) <= 0.f)
         {
             return;
@@ -99,7 +100,14 @@ namespace Physara::Editor
 
         auto &transform = entity.GetComponent<Engine::TransformComponent>();
         const glm::quat rotation = glm::quatLookAtRH(GetForward(), EditorCameraDetail::WorldUp);
-        transform.SetLocalTRS(m_Position, rotation, transform.localScale);
+        glm::vec3 worldPosition{};
+        glm::quat worldRotation{};
+        glm::vec3 worldScale{1.f};
+        if (!transform.GetWorldTRS(worldPosition, worldRotation, worldScale))
+        {
+            worldScale = transform.localScale;
+        }
+        scene->SetWorldTransform(entity.GetHandle(), m_Position, rotation, worldScale);
 
         if (entity.HasComponent<Engine::CameraComponent>())
         {

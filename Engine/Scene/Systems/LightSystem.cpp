@@ -80,6 +80,11 @@ namespace Physara::Engine
             return 0.f;
         }
 
+        float ExposureFromEV100(float ev100)
+        {
+            return 1.f / (std::exp2(ev100) * 1.2f);
+        }
+
         float SrgbChannelToLinear(float value)
         {
             value = std::clamp(value, 0.f, 1.f);
@@ -147,12 +152,16 @@ namespace Physara::Engine
             return {scale, -cosOuter * scale};
         }
 
-        LightData BuildDefaultViewerLight()
+        LightData BuildDefaultViewerLight(const RenderView *view)
         {
             LightData light{};
             light.positionRange = glm::vec4(0.f, 0.f, 0.f, 0.f);
             light.directionType = glm::vec4(DefaultLightDirection(), static_cast<float>(GPUValue(LightTypeGPU::Directional)));
             light.colorIntensity = glm::vec4(1.f, 1.f, 1.f, 25000.f);
+            if (view != nullptr)
+            {
+                light.colorIntensity.a *= ExposureFromEV100(view->ev100);
+            }
             light.spotAngles = glm::vec4(0.f);
             light.shadowParams = glm::vec4(0.f);
             return light;
@@ -208,11 +217,15 @@ namespace Physara::Engine
                 LightSystemDetail::GetForwardDirection(transform.GetWorldMatrix()),
                 static_cast<float>(GPUValue(LightSystemDetail::ToLightTypeGPU(component.type))));
             light.colorIntensity = glm::vec4(LightSystemDetail::GetLightColor(component), LightSystemDetail::GetIntensity(component));
+            if (component.type == LightType::Directional && view != nullptr)
+            {
+                light.colorIntensity.a *= LightSystemDetail::ExposureFromEV100(view->ev100);
+            }
 
             const glm::vec2 spotScaleOffset = LightSystemDetail::GetSpotScaleOffset(component);
             light.spotAngles = glm::vec4(spotScaleOffset, component.innerConeAngleRadians, component.outerConeAngleRadians);
             light.shadowParams = glm::vec4(
-                component.castsShadow ? 1.f : 0.f,
+                component.type == LightType::Directional && component.castsShadow ? 1.f : 0.f,
                 component.shadowBias,
                 component.sourceRadiusMeters,
                 0.f);
@@ -241,7 +254,7 @@ namespace Physara::Engine
 
         if (lights.empty())
         {
-            lights.push_back(LightSystemDetail::BuildDefaultViewerLight());
+            lights.push_back(LightSystemDetail::BuildDefaultViewerLight(view));
         }
     }
 }

@@ -7,6 +7,7 @@
 #define PHYSARA_EPSILON 1e-5
 
 #define PHYSARA_MAX_LIGHTS 128
+#define PHYSARA_MAX_SHADOW_CASCADES 4
 
 #define PHYSARA_BINDING_FRAME_UNIFORMS 0
 #define PHYSARA_BINDING_CAMERA 0
@@ -34,7 +35,6 @@
 #define PHYSARA_BINDING_IBL_PREFILTERED_TEXTURE 9
 #define PHYSARA_BINDING_IBL_BRDF_LUT 10
 #define PHYSARA_BINDING_BLOOM_TEXTURE 11
-#define PHYSARA_BINDING_EXPOSURE_TEXTURE 12
 
 #define PHYSARA_LIGHT_DIRECTIONAL 0u
 #define PHYSARA_LIGHT_POINT 1u
@@ -53,12 +53,11 @@
 #define PHYSARA_OBJECT_TRANSPARENT 4u
 #define PHYSARA_OBJECT_UNLIT 8u
 
-#define PHYSARA_SHADOW_NONE 0u
-#define PHYSARA_SHADOW_HARD 1u
-#define PHYSARA_SHADOW_PCF_3X3 2u
-#define PHYSARA_SHADOW_PCF_5X5 3u
-#define PHYSARA_SHADOW_POISSON_16 4u
-#define PHYSARA_SHADOW_PCSS 5u
+#define PHYSARA_SHADOW_FILTER_HARD 0u
+#define PHYSARA_SHADOW_FILTER_PCF_3X3 1u
+#define PHYSARA_SHADOW_FILTER_PCF_5X5 2u
+#define PHYSARA_SHADOW_FILTER_POISSON_16 3u
+#define PHYSARA_SHADOW_FILTER_PCSS 4u
 
 struct CameraData
 {
@@ -69,6 +68,7 @@ struct CameraData
     mat4 inverseProjection;
     mat4 inverseViewProjection;
     vec4 cameraPositionEV100;
+    vec4 exposure;
     vec4 viewportRect;
     vec4 clipPlanes;
 };
@@ -92,9 +92,12 @@ struct LightData
 
 struct ShadowData
 {
-    mat4 lightViewProjection;
+    mat4 lightViewProjection[PHYSARA_MAX_SHADOW_CASCADES];
+    vec4 cascadeSplits;
+    vec4 cascadeTexelWorldSize;
     vec4 params;
     vec4 controls;
+    vec4 samplingParams;
 };
 
 struct IBLData
@@ -124,6 +127,11 @@ vec3 GetCameraPosition(CameraData camera)
 float ExposureFromEV100(float ev100)
 {
     return 1.0 / (pow(2.0, ev100) * 1.2);
+}
+
+float GetPreExposure(CameraData camera)
+{
+    return camera.exposure.x;
 }
 
 #endif

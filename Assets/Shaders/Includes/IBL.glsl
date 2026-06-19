@@ -48,26 +48,26 @@ vec3 EvaluateIBL(PixelMaterial material, vec3 normal, vec3 view)
 {
     if (!HasIBL())
     {
-        return material.diffuseColor * material.ambientOcclusion * 0.04;
+        return vec3(0.0);
     }
 
     float NoV = max(dot(normal, view), PHYSARA_EPSILON);
     vec3 reflection = reflect(-view, normal);
     float maxLod = max(uFrame.ibl.params.y, 0.0);
-    float lod = clamp(material.perceptualRoughness * maxLod, 0.0, maxLod);
+    float lodRoughness = material.perceptualRoughness * (2.0 - material.perceptualRoughness);
+    float lod = clamp(lodRoughness * maxLod, 0.0, maxLod);
     float lod0 = floor(lod);
     float lod1 = min(lod0 + 1.0, maxLod);
     float lodWeight = lod - lod0;
 
     vec3 irradiance = EvaluateIrradianceSH(normal);
-    vec3 diffuse = material.diffuseColor * irradiance * PHYSARA_INV_PI;
-    diffuse *= material.ambientOcclusion;
-
     vec3 prefiltered0 = textureLod(uIBLPrefilteredTexture, reflection, lod0).rgb;
     vec3 prefiltered1 = textureLod(uIBLPrefilteredTexture, reflection, lod1).rgb;
     vec3 prefiltered = mix(prefiltered0, prefiltered1, lodWeight) * uFrame.ibl.params.x;
     vec2 dfg = SampleIBLDFG(NoV, material.perceptualRoughness);
     vec3 specularColor = mix(dfg.xxx, dfg.yyy, material.f0);
+    vec3 diffuse = material.diffuseColor * irradiance * PHYSARA_INV_PI * (vec3(1.0) - specularColor);
+    diffuse *= material.ambientOcclusion;
     vec3 specular = prefiltered * specularColor * material.energyCompensation;
     specular *= ComputeSpecularAO(NoV, material.ambientOcclusion, material.roughness);
 
