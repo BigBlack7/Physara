@@ -12,6 +12,7 @@ namespace Physara::Editor
         void Draw();
 
     private:
+        void DrawViewportSection();
         void DrawPostProcessSection();
         void DrawShadowSection();
         void DrawEnvironmentSection();

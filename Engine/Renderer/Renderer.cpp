@@ -226,6 +226,17 @@ namespace Physara::Engine
         }
     }
 
+    void Renderer::SetWorldGridSettings(const WorldGridSettings &settings)
+    {
+        m_WorldGridSettings = settings;
+        m_WorldGridSettings.minorSpacingMeters = std::max(m_WorldGridSettings.minorSpacingMeters, 0.001f);
+        m_WorldGridSettings.majorLineInterval = std::max(m_WorldGridSettings.majorLineInterval, 2u);
+        m_WorldGridSettings.fadeStartMeters =
+            std::max(m_WorldGridSettings.fadeStartMeters, m_WorldGridSettings.minorSpacingMeters);
+        m_WorldGridSettings.fadeEndMeters =
+            std::max(m_WorldGridSettings.fadeEndMeters, m_WorldGridSettings.fadeStartMeters + m_WorldGridSettings.minorSpacingMeters);
+    }
+
     void Renderer::SetMSAASamples(std::uint32_t samples)
     {
         const std::uint32_t sanitized = samples >= 8u ? 8u : (samples >= 4u ? 4u : (samples >= 2u ? 2u : 1u));
@@ -497,6 +508,7 @@ namespace Physara::Engine
         m_RenderGraph.MarkOutput(sceneColor);
         const bool gBufferDebug = deferred && m_PostProcessSettings.debugView >= DebugViewMode::GBufferBaseColor;
         const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() && !gBufferDebug;
+        const bool drawWorldGrid = m_WorldGridSettings.enabled && m_PostProcessSettings.debugView == DebugViewMode::None;
         if (!m_EnvironmentMapPath.empty())
         {
             (void)m_IBLResources.Ensure(m_Device, m_EnvironmentMapPath);
@@ -747,6 +759,26 @@ namespace Physara::Engine
                                      });
         }
 
+        if (drawWorldGrid)
+        {
+            m_RenderGraph.AddPass("WorldGrid")
+                .Read(
+                    renderHDR,
+                    RHI::ResourceState::RenderTarget,
+                    RHI::ShaderStageBit::Fragment,
+                    RHI::ResourceAccess::ColorAttachmentRead)
+                .Read(
+                    renderDepth,
+                    RHI::ResourceState::DepthRead,
+                    RHI::ShaderStageBit::Fragment,
+                    RHI::ResourceAccess::DepthStencilRead)
+                .WriteAttachment(renderHDR)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                ExecuteWorldGridPass(context);
+                            });
+        }
+
         if (!gBufferDebug && !m_RenderProxy.GetBuckets().transparent.Empty())
         {
             RGBuilder forwardTransparent = m_RenderGraph.AddPass("ForwardTransparent")
@@ -870,5 +902,22 @@ namespace Physara::Engine
         const auto passStart = std::chrono::steady_clock::now();
         m_ForwardOpaquePass.ExecuteUnlit(passContext);
         m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+    }
+
+    void Renderer::ExecuteWorldGridPass(RenderGraphContext &context)
+    {
+        WorldGridPassContext passContext{};
+        passContext.device = m_Device;
+        passContext.commandList = &context.commandList;
+        passContext.framebuffer = m_Framebuffer.get();
+        passContext.renderPassDesc = &m_SkyboxRenderPassDesc;
+        passContext.shaderLibrary = &m_ShaderLibrary;
+        passContext.pipelineCache = &m_PipelineStateCache;
+        passContext.frameData = &m_FrameData;
+        passContext.frameUploadAllocator = &m_FrameUploadAllocator;
+        passContext.gpuScene = &m_GPUScene;
+        passContext.stats = &m_FrameData.stats;
+        passContext.settings = m_WorldGridSettings;
+        m_WorldGridPass.Execute(passContext);
     }
 }

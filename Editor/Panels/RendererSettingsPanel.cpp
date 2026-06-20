@@ -88,11 +88,56 @@ namespace Physara::Editor
     {
         ImGui::Begin(RendererSettingsPanelDetail::PanelName);
 
+        DrawViewportSection();
         DrawPostProcessSection();
         DrawShadowSection();
         DrawEnvironmentSection();
 
         ImGui::End();
+    }
+
+    void RendererSettingsPanel::DrawViewportSection()
+    {
+        if (ImGui::CollapsingHeader("Viewport", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Checkbox("Vertical Sync", &m_Context.settings.viewport.verticalSync);
+            ImGui::Checkbox("World Grid", &m_Context.settings.viewport.worldGridEnabled);
+            ImGui::BeginDisabled(!m_Context.settings.viewport.worldGridEnabled);
+            ImGui::SliderFloat(
+                "Grid Spacing",
+                &m_Context.settings.viewport.gridSpacingMeters,
+                0.01f,
+                100.f,
+                "%.2f m",
+                ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderInt(
+                "Major Line Interval",
+                &m_Context.settings.viewport.gridMajorLineInterval,
+                2,
+                100,
+                "%d cells");
+            ImGui::SliderFloat(
+                "Grid Fade Start",
+                &m_Context.settings.viewport.gridFadeStartMeters,
+                1.f,
+                5000.f,
+                "%.0f m",
+                ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat(
+                "Grid Fade End",
+                &m_Context.settings.viewport.gridFadeEndMeters,
+                2.f,
+                10000.f,
+                "%.0f m",
+                ImGuiSliderFlags_Logarithmic);
+            m_Context.settings.viewport.gridFadeStartMeters =
+                std::max(m_Context.settings.viewport.gridFadeStartMeters, m_Context.settings.viewport.gridSpacingMeters);
+            m_Context.settings.viewport.gridFadeEndMeters =
+                std::max(
+                    m_Context.settings.viewport.gridFadeEndMeters,
+                    m_Context.settings.viewport.gridFadeStartMeters + m_Context.settings.viewport.gridSpacingMeters);
+            ImGui::EndDisabled();
+        }
     }
 
     void RendererSettingsPanel::DrawPostProcessSection()

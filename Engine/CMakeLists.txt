@@ -43,6 +43,8 @@ target_sources(Engine PRIVATE
     Renderer/Passes/ShadowPass.hpp
     Renderer/Passes/SkyboxPass.cpp
     Renderer/Passes/SkyboxPass.hpp
+    Renderer/Passes/WorldGridPass.cpp
+    Renderer/Passes/WorldGridPass.hpp
     Renderer/Precompute/IBLPrecompute.cpp
     Renderer/Precompute/IBLPrecompute.hpp
     Renderer/PipelineStateCache.cpp

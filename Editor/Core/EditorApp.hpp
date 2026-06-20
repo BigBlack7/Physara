@@ -12,6 +12,7 @@
 #include <Engine/Renderer/Renderer.hpp>
 #include <Engine/Resource/AssetManager.hpp>
 #include <Platform/Input/IInput.hpp>
+#include <Platform/Window/IWindow.hpp>
 
 #include <Editor/Core/EditorContext.hpp>
 #include <Editor/Core/IconManager.hpp>
@@ -33,7 +34,11 @@ namespace Physara::Editor
         EditorApp();
         ~EditorApp();
 
-        void Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Physara::Platform::IInput *input);
+        void Init(
+            RHI::RHIDevice *device,
+            RHI::IImGuiBackend *backend,
+            Physara::Platform::IInput *input,
+            Physara::Platform::IWindow *window);
         void Shutdown();
         void OnUIRender();
 
@@ -62,11 +67,13 @@ namespace Physara::Editor
         void FrameEditorCameraToScene();
         void DeleteSelectedEntity();
         void ConnectSceneViewCameraInput();
+        void ApplyRuntimeSettings();
 
     private:
         RHI::IImGuiBackend *m_Backend{nullptr};
         RHI::RHIDevice *m_Device{nullptr};
         Physara::Platform::IInput *m_Input{nullptr};
+        Physara::Platform::IWindow *m_Window{nullptr};
         std::unique_ptr<Engine::Scene> m_EditorScene{};
         std::unique_ptr<Engine::Renderer> m_Renderer{};
         EditorContext m_Context{};
@@ -84,6 +91,8 @@ namespace Physara::Editor
 
         bool m_LayoutInitialized{false};
         bool m_OpenSaveScenePopup{false};
+        bool m_VSyncSettingApplied{false};
+        bool m_AppliedVSync{false};
         Platform::CursorMode m_CurrentCursorMode{Platform::CursorMode::Normal};
         std::uint32_t m_DockspaceId{0};
         std::array<char, 128> m_SaveSceneName{};

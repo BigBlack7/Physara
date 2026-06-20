@@ -1,7 +1,5 @@
 #include <memory>
-#include <cstdlib>
 #include <stdexcept>
-#include <string_view>
 
 #include <Backend/RuntimeBackendFactory.hpp>
 #include <Editor/Core/EditorAppHost.hpp>
@@ -12,20 +10,6 @@
 #include <Platform/FileSystem/FileSystem.hpp>
 #include <Platform/Input/IInput.hpp>
 #include <Platform/Window/IWindow.hpp>
-
-namespace MainDetail
-{
-    bool IsTruthy(std::string_view value)
-    {
-        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
-    }
-
-    bool ReadVSyncSetting()
-    {
-        const char *value = std::getenv("PHYSARA_VSYNC");
-        return value != nullptr && IsTruthy(value);
-    }
-}
 
 int main()
 {
@@ -65,10 +49,6 @@ int main()
             throw std::runtime_error("Failed to initialize graphics device.");
         }
 
-        const bool vsyncEnabled = MainDetail::ReadVSyncSetting();
-        window->SetVSync(vsyncEnabled);
-        PHYSARA_CORE_INFO("VSync {}", vsyncEnabled ? "enabled" : "disabled");
-
         imguiBackend = Physara::RHI::CreateRuntimeImGuiBackend(graphicsBackend);
         PHYSARA_CORE_INFO("Initializing ImGui backend...");
         if (!imguiBackend->Initialize(device.get(), nativeWindow))
@@ -80,7 +60,7 @@ int main()
         PHYSARA_CORE_INFO("Creating editor app host...");
         editorApp = std::make_unique<Physara::Editor::EditorAppHost>();
         PHYSARA_CORE_INFO("Initializing editor app...");
-        editorApp->Init(device.get(), imguiBackend.get(), input.get());
+        editorApp->Init(device.get(), imguiBackend.get(), input.get(), window.get());
         PHYSARA_CORE_INFO("Editor app initialized.");
 
         while (!window->IsCloseRequested())

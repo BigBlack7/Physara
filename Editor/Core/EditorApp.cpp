@@ -152,11 +152,18 @@ namespace Physara::Editor
 
     EditorApp::~EditorApp() = default;
 
-    void EditorApp::Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Platform::IInput *input)
+    void EditorApp::Init(
+        RHI::RHIDevice *device,
+        RHI::IImGuiBackend *backend,
+        Platform::IInput *input,
+        Platform::IWindow *window)
     {
         m_Device = device;
         m_Backend = backend;
         m_Input = input;
+        m_Window = window;
+        m_VSyncSettingApplied = false;
+        ApplyRuntimeSettings();
         m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
         m_Renderer->SetAssetManager(&m_AssetManager);
         m_Renderer->SetClearColor({0.16f, 0.22f, 0.2f, 1.f});
@@ -225,6 +232,8 @@ namespace Physara::Editor
         m_Device = nullptr;
         m_Backend = nullptr;
         m_Input = nullptr;
+        m_Window = nullptr;
+        m_VSyncSettingApplied = false;
     }
 
     void EditorApp::OnUIRender()
@@ -256,6 +265,7 @@ namespace Physara::Editor
         }
 
         DrawPanels();
+        ApplyRuntimeSettings();
         ProcessCaptureRequests();
         DrawSaveScenePopup();
         const auto uiBuildEnd = std::chrono::steady_clock::now();
@@ -484,6 +494,14 @@ namespace Physara::Editor
         m_Renderer->SetSkyboxExposureCompensation(
             EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
         m_Renderer->SetEnvironmentMapPath(environmentPath);
+        Engine::WorldGridSettings gridSettings{};
+        gridSettings.enabled = m_Context.settings.viewport.worldGridEnabled;
+        gridSettings.minorSpacingMeters = m_Context.settings.viewport.gridSpacingMeters;
+        gridSettings.majorLineInterval =
+            static_cast<std::uint32_t>(std::max(m_Context.settings.viewport.gridMajorLineInterval, 2));
+        gridSettings.fadeStartMeters = m_Context.settings.viewport.gridFadeStartMeters;
+        gridSettings.fadeEndMeters = m_Context.settings.viewport.gridFadeEndMeters;
+        m_Renderer->SetWorldGridSettings(gridSettings);
         Engine::PostProcessSettings postProcessSettings{};
         m_Renderer->SetRenderPath(static_cast<Engine::RenderPath>(
             std::clamp(m_Context.settings.postProcess.renderPathIndex, 0, 2)));
@@ -858,5 +876,24 @@ namespace Physara::Editor
                                                              m_CurrentCursorMode = desiredCursorMode;
                                                          }
                                                      } });
+    }
+
+    void EditorApp::ApplyRuntimeSettings()
+    {
+        if (m_Window == nullptr)
+        {
+            return;
+        }
+
+        const bool requestedVSync = m_Context.settings.viewport.verticalSync;
+        if (m_VSyncSettingApplied && requestedVSync == m_AppliedVSync)
+        {
+            return;
+        }
+
+        m_Window->SetVSync(requestedVSync);
+        m_AppliedVSync = requestedVSync;
+        m_VSyncSettingApplied = true;
+        PHYSARA_INFO("VSync {}.", requestedVSync ? "enabled" : "disabled");
     }
 }

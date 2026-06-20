@@ -75,6 +75,7 @@ def verify():
         "InstanceIndices": "PHYSARA_BINDING_INSTANCE_INDICES",
         "PostProcessSettings": "PHYSARA_BINDING_POST_PROCESS_SETTINGS",
         "SkyboxSettings": "PHYSARA_BINDING_SKYBOX_SETTINGS",
+        "WorldGridSettings": "PHYSARA_BINDING_WORLD_GRID_SETTINGS",
         "RenderSettings": "PHYSARA_BINDING_RENDER_SETTINGS",
         "Shadow": "PHYSARA_BINDING_SHADOW",
         "IBL": "PHYSARA_BINDING_IBL",

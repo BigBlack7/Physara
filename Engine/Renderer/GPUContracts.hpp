@@ -20,6 +20,7 @@ namespace Physara::Engine
         InstanceIndices = 4,
         PostProcessSettings = 4,
         SkyboxSettings = 4,
+        WorldGridSettings = 4,
         RenderSettings = 5,
         Shadow = 6,
         IBL = 7,

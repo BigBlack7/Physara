@@ -131,6 +131,8 @@ namespace Physara::Platform
 
         m_Width = 0;
         m_Height = 0;
+        m_VSyncEnabled = false;
+        m_VSyncInitialized = false;
         m_ResizeCallback = nullptr;
     }
 
@@ -166,7 +168,27 @@ namespace Physara::Platform
 
     void GLFWWindowOpenGL::SetVSync(bool enabled)
     {
-        glfwSwapInterval(enabled ? 1 : 0); // 垂直同步
+        if (m_Window == nullptr)
+        {
+            throw std::runtime_error("GLFWWindowOpenGL::SetVSync failed: window is null.");
+        }
+        if (m_VSyncInitialized && m_VSyncEnabled == enabled)
+        {
+            return;
+        }
+
+        GLFWwindow *previousContext = glfwGetCurrentContext();
+        if (previousContext != m_Window)
+        {
+            glfwMakeContextCurrent(m_Window);
+        }
+        glfwSwapInterval(enabled ? 1 : 0);
+        if (previousContext != m_Window)
+        {
+            glfwMakeContextCurrent(previousContext);
+        }
+        m_VSyncEnabled = enabled;
+        m_VSyncInitialized = true;
     }
 
     void GLFWWindowOpenGL::SetTitle(std::string_view title)

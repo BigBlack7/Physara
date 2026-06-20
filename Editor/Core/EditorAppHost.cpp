@@ -21,9 +21,13 @@ namespace Physara::Editor
 
     EditorAppHost &EditorAppHost::operator=(EditorAppHost &&) noexcept = default;
 
-    void EditorAppHost::Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Platform::IInput *input)
+    void EditorAppHost::Init(
+        RHI::RHIDevice *device,
+        RHI::IImGuiBackend *backend,
+        Platform::IInput *input,
+        Platform::IWindow *window)
     {
-        m_Impl->app.Init(device, backend, input);
+        m_Impl->app.Init(device, backend, input, window);
     }
 
     void EditorAppHost::Shutdown()

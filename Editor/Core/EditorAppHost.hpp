@@ -5,6 +5,7 @@
 namespace Physara::Platform
 {
     class IInput;
+    class IWindow;
 }
 
 namespace Physara::RHI
@@ -26,7 +27,11 @@ namespace Physara::Editor
         EditorAppHost(EditorAppHost &&) noexcept;
         EditorAppHost &operator=(EditorAppHost &&) noexcept;
 
-        void Init(RHI::RHIDevice *device, RHI::IImGuiBackend *backend, Platform::IInput *input);
+        void Init(
+            RHI::RHIDevice *device,
+            RHI::IImGuiBackend *backend,
+            Platform::IInput *input,
+            Platform::IWindow *window);
         void Shutdown();
         void OnUIRender();
 

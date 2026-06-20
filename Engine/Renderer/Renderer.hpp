@@ -21,6 +21,7 @@
 #include <Engine/Renderer/Passes/PostProcessPass.hpp>
 #include <Engine/Renderer/Passes/ShadowPass.hpp>
 #include <Engine/Renderer/Passes/SkyboxPass.hpp>
+#include <Engine/Renderer/Passes/WorldGridPass.hpp>
 #include <Engine/Renderer/PipelineStateCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderGraph/RenderGraph.hpp>
@@ -70,6 +71,7 @@ namespace Physara::Engine
         void SetSkyboxExposureCompensation(float ev) { m_SkyboxExposureCompensation = ev; }
         void SetPostProcessSettings(const PostProcessSettings &settings);
         void SetShadowSettings(const ShadowSettings &settings);
+        void SetWorldGridSettings(const WorldGridSettings &settings);
         void SetMSAASamples(std::uint32_t samples);
         void SetRenderPath(RenderPath path);
         [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
@@ -88,6 +90,7 @@ namespace Physara::Engine
         void BuildRenderGraph();
         void ExecuteTransparentForwardPass(RenderGraphContext &context);
         void ExecuteUnlitForwardPass(RenderGraphContext &context);
+        void ExecuteWorldGridPass(RenderGraphContext &context);
         void ProcessPendingCapture();
 
     private:
@@ -118,6 +121,7 @@ namespace Physara::Engine
         DeferredLightingPass m_DeferredLightingPass{};
         DeferredResources m_DeferredResources{};
         SkyboxPass m_SkyboxPass{};
+        WorldGridPass m_WorldGridPass{};
         PostProcessPass m_PostProcessPass{};
         IBLResources m_IBLResources{};
         FrameData m_FrameData{};
@@ -126,6 +130,7 @@ namespace Physara::Engine
         std::filesystem::path m_EnvironmentMapPath{};
         PostProcessSettings m_PostProcessSettings{};
         ShadowSettings m_ShadowSettings{};
+        WorldGridSettings m_WorldGridSettings{};
         float m_SkyboxExposureCompensation{0.f};
         bool m_SkyboxEnabled{true};
         std::uint64_t m_FrameIndex{0};

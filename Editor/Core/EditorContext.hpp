@@ -89,6 +89,16 @@ namespace Physara::Editor
         bool skyboxEnabled{true};
     };
 
+    struct ViewportSettings
+    {
+        bool verticalSync{false};
+        bool worldGridEnabled{true};
+        float gridSpacingMeters{1.f};
+        int gridMajorLineInterval{10};
+        float gridFadeStartMeters{50.f};
+        float gridFadeEndMeters{500.f};
+    };
+
     struct PostProcessSettings
     {
         int renderPathIndex{1};
@@ -141,6 +151,7 @@ namespace Physara::Editor
         GizmoSpace gizmoSpace{GizmoSpace::World};
         CaptureSettings capture{};
         EnvironmentSettings environment{};
+        ViewportSettings viewport{};
         PostProcessSettings postProcess{};
         ShadowSettings shadow{};
     };
