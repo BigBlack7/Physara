@@ -9,6 +9,30 @@
 
 namespace Physara::Engine
 {
+    std::uint32_t LogarithmicDepthPartition::GetSlice(float depth) const
+    {
+        const float safeDepth = std::clamp(depth, nearDistance, farDistance);
+        const float slice = std::log(safeDepth) * sliceScale + sliceBias;
+        return std::min(
+            static_cast<std::uint32_t>(std::max(std::floor(slice), 0.f)),
+            sliceCount - 1u);
+    }
+
+    LogarithmicDepthPartition FrustumPartition::BuildLogarithmicDepthPartition(
+        float nearDistance,
+        float farDistance,
+        std::uint32_t partitionCount)
+    {
+        LogarithmicDepthPartition partition{};
+        partition.nearDistance = std::max(nearDistance, 0.001f);
+        partition.farDistance = std::max(farDistance, partition.nearDistance + 0.001f);
+        partition.sliceCount = std::max(partitionCount, 1u);
+        partition.sliceScale =
+            static_cast<float>(partition.sliceCount) / std::log(partition.farDistance / partition.nearDistance);
+        partition.sliceBias = -std::log(partition.nearDistance) * partition.sliceScale;
+        return partition;
+    }
+
     std::vector<float> FrustumPartition::BuildPracticalDepthSplits(
         float nearDistance,
         float farDistance,

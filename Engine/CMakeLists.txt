@@ -11,6 +11,10 @@ target_sources(Engine PRIVATE
     Renderer/FrameData.hpp
     Renderer/FrameUploadAllocator.cpp
     Renderer/FrameUploadAllocator.hpp
+    Renderer/ClusteredLightGrid.cpp
+    Renderer/ClusteredLightGrid.hpp
+    Renderer/DeferredResources.cpp
+    Renderer/DeferredResources.hpp
     Renderer/FrustumPartition.cpp
     Renderer/FrustumPartition.hpp
     Renderer/GPUContracts.hpp
@@ -29,6 +33,10 @@ target_sources(Engine PRIVATE
     Renderer/MeshGPUCache.hpp
     Renderer/Passes/ForwardOpaquePass.cpp
     Renderer/Passes/ForwardOpaquePass.hpp
+    Renderer/Passes/DeferredLightingPass.cpp
+    Renderer/Passes/DeferredLightingPass.hpp
+    Renderer/Passes/GBufferPass.cpp
+    Renderer/Passes/GBufferPass.hpp
     Renderer/Passes/PostProcessPass.cpp
     Renderer/Passes/PostProcessPass.hpp
     Renderer/Passes/ShadowPass.cpp
@@ -53,6 +61,7 @@ target_sources(Engine PRIVATE
     Renderer/RenderGraph/RGBuilder.hpp
     Renderer/RenderProxy.cpp
     Renderer/RenderProxy.hpp
+    Renderer/RenderPath.hpp
     Renderer/RenderView.cpp
     Renderer/RenderView.hpp
     Renderer/UploadHasher.hpp

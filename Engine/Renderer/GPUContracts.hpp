@@ -24,7 +24,9 @@ namespace Physara::Engine
         Shadow = 6,
         IBL = 7,
         MaterialTextureIndices = 8,
-        BindlessTextureHandles = 9
+        BindlessTextureHandles = 9,
+        ClusterEntries = 10,
+        ClusterLightIndices = 11
     };
 
     enum class GPUTextureBinding : std::uint32_t
@@ -40,7 +42,11 @@ namespace Physara::Engine
         ShadowMap = 8,
         IBLPrefiltered = 9,
         IBLBRDFLut = 10,
-        Bloom = 11
+        Bloom = 11,
+        GBufferBaseColor = 12,
+        GBufferNormal = 13,
+        GBufferMaterial = 14,
+        GBufferEmissive = 15
     };
 
     enum class GPUResourceSetIndex : std::uint32_t
@@ -176,11 +182,25 @@ namespace Physara::Engine
         glm::vec4 params{0.f, 0.f, 0.f, 0.f};
     };
 
+    struct alignas(16) ClusterGridData
+    {
+        glm::uvec4 dimensions{1u, 1u, 1u, 1u};
+        glm::vec4 depthParams{0.1f, 1000.f, 1.f, 0.f};
+        glm::uvec4 counts{1u, 0u, 0u, 0u};
+    };
+
+    struct ClusterEntryGPU
+    {
+        std::uint32_t offset{0};
+        std::uint32_t count{0};
+    };
+
     struct alignas(16) FrameUniforms
     {
         CameraData camera{};
         ShadowData shadow{};
         IBLData ibl{};
+        ClusterGridData clusterGrid{};
         glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
     };
 
@@ -190,5 +210,7 @@ namespace Physara::Engine
     static_assert(sizeof(LightData) % 16 == 0);
     static_assert(sizeof(ShadowData) % 16 == 0);
     static_assert(sizeof(IBLData) % 16 == 0);
+    static_assert(sizeof(ClusterGridData) % 16 == 0);
+    static_assert(sizeof(ClusterEntryGPU) == 8);
     static_assert(sizeof(FrameUniforms) % 16 == 0);
 }

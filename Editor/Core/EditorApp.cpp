@@ -485,6 +485,8 @@ namespace Physara::Editor
             EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
         m_Renderer->SetEnvironmentMapPath(environmentPath);
         Engine::PostProcessSettings postProcessSettings{};
+        m_Renderer->SetRenderPath(static_cast<Engine::RenderPath>(
+            std::clamp(m_Context.settings.postProcess.renderPathIndex, 0, 2)));
         postProcessSettings.toneMappingMode = static_cast<Engine::ToneMappingMode>(
             std::clamp(m_Context.settings.postProcess.toneMappingModeIndex, 0, 4));
         postProcessSettings.bloomEnabled = m_Context.settings.postProcess.bloomEnabled;
@@ -492,7 +494,13 @@ namespace Physara::Editor
         postProcessSettings.antiAliasingMode = aaIndex <= 1
                                                    ? Engine::AntiAliasingMode::None
                                                    : static_cast<Engine::AntiAliasingMode>(aaIndex - 1);
-        postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 2));
+        postProcessSettings.debugView = static_cast<Engine::DebugViewMode>(std::clamp(m_Context.settings.postProcess.debugViewIndex, 0, 10));
+        const std::uint32_t selectedShadowCascadeCount =
+            static_cast<std::uint32_t>(std::clamp(m_Context.settings.shadow.cascadeCountIndex, 0, 2) + 2);
+        postProcessSettings.shadowMapCascadeIndex = static_cast<std::uint32_t>(std::clamp(
+            m_Context.settings.postProcess.shadowMapCascadeIndex,
+            0,
+            static_cast<int>(selectedShadowCascadeCount - 1u)));
         if (m_Context.activeScene != nullptr)
         {
             Engine::Entity sceneCamera = m_Context.activeScene->GetSceneCameraEntity();

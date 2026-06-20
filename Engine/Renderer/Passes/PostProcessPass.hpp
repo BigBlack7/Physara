@@ -29,7 +29,15 @@ namespace Physara::Engine
     {
         None = 0,
         Normals = 1,
-        Depth = 2
+        Depth = 2,
+        Wireframe = 3,
+        ShadowMap = 4,
+        ShadowCascades = 5,
+        LightClusters = 6,
+        GBufferBaseColor = 7,
+        GBufferNormal = 8,
+        GBufferMaterial = 9,
+        GBufferEmissive = 10
     };
 
     enum class ToneMappingMode : std::uint32_t
@@ -55,6 +63,7 @@ namespace Physara::Engine
         bool bloomEnabled{true};
         AntiAliasingMode antiAliasingMode{AntiAliasingMode::FXAAQuality};
         DebugViewMode debugView{DebugViewMode::None};
+        std::uint32_t shadowMapCascadeIndex{0u};
         float exposureCompensationEV{0.f};
         float bloomThreshold{1.0f};
         float bloomKnee{0.5f};
@@ -80,6 +89,7 @@ namespace Physara::Engine
         FrameStatistics *stats{nullptr};
         RHI::RHITexture *sceneHDR{nullptr};
         RHI::RHITexture *sceneDepth{nullptr};
+        RHI::RHITexture *shadowMap{nullptr};
         PostProcessSettings settings{};
     };
 
@@ -120,7 +130,9 @@ namespace Physara::Engine
 
         FrameUploadAllocation m_SettingsAllocation{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampSampler{};
+        std::unique_ptr<RHI::RHISampler> m_NearestClampSampler{};
         std::unique_ptr<RHI::RHITexture> m_BlackTexture{};
+        std::unique_ptr<RHI::RHITexture> m_FallbackShadowMap{};
         std::vector<BloomMip> m_BloomMips{};
         RHI::RHIRenderPassDesc m_BloomRenderPassDesc{};
         std::uint32_t m_BloomWidth{0};

@@ -6,17 +6,17 @@
 vec2 PackNormalOctahedron(vec3 normal)
 {
     normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), PHYSARA_EPSILON);
-    vec2 packed = normal.xy;
+    vec2 packedNormal = normal.xy;
     if (normal.z < 0.0)
     {
-        packed = (1.0 - abs(packed.yx)) * sign(packed.xy);
+        packedNormal = (1.0 - abs(packedNormal.yx)) * sign(packedNormal.xy);
     }
-    return packed * 0.5 + 0.5;
+    return packedNormal * 0.5 + 0.5;
 }
 
-vec3 UnpackNormalOctahedron(vec2 packed)
+vec3 UnpackNormalOctahedron(vec2 packedNormal)
 {
-    vec2 f = packed * 2.0 - 1.0;
+    vec2 f = packedNormal * 2.0 - 1.0;
     vec3 normal = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
     if (normal.z < 0.0)
     {

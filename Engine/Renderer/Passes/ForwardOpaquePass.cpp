@@ -34,6 +34,8 @@ namespace Physara::Engine
         constexpr std::uint32_t InstanceObjectIndexBinding = Binding(GPUBufferBinding::InstanceIndices);
         constexpr std::uint32_t MaterialTextureIndexBinding = Binding(GPUBufferBinding::MaterialTextureIndices);
         constexpr std::uint32_t BindlessTextureHandleBinding = Binding(GPUBufferBinding::BindlessTextureHandles);
+        constexpr std::uint32_t ClusterEntryBinding = Binding(GPUBufferBinding::ClusterEntries);
+        constexpr std::uint32_t ClusterLightIndexBinding = Binding(GPUBufferBinding::ClusterLightIndices);
         constexpr std::uint32_t ShadowTextureBinding = Binding(GPUTextureBinding::ShadowMap);
         constexpr std::uint32_t IBLPrefilteredTextureBinding = Binding(GPUTextureBinding::IBLPrefiltered);
         constexpr std::uint32_t IBLBRDFLutBinding = Binding(GPUTextureBinding::IBLBRDFLut);
@@ -51,17 +53,21 @@ namespace Physara::Engine
 
     void ForwardOpaquePass::Execute(const ForwardPassContext &context)
     {
-        ExecuteBuckets(context, false);
+        ExecuteBuckets(context, RenderBucket::Opaque);
+    }
+
+    void ForwardOpaquePass::ExecuteUnlit(const ForwardPassContext &context)
+    {
+        ExecuteBuckets(context, RenderBucket::Unlit);
     }
 
     void ForwardOpaquePass::ExecuteTransparent(const ForwardPassContext &context)
     {
-        ExecuteBuckets(context, true);
+        ExecuteBuckets(context, RenderBucket::Transparent);
     }
 
     void ForwardOpaquePass::Reset()
     {
-        m_MaterialTextureCache.Reset();
         m_LinearClampMipSampler.reset();
         m_ShadowSampler.reset();
         m_FallbackBlackCubeTexture.reset();
@@ -72,18 +78,18 @@ namespace Physara::Engine
         m_LoggedFirstDraw = false;
     }
 
-    void ForwardOpaquePass::ExecuteBuckets(const ForwardPassContext &context, bool transparent)
+    void ForwardOpaquePass::ExecuteBuckets(const ForwardPassContext &context, RenderBucket bucket)
     {
         if (context.commandList == nullptr || context.framebuffer == nullptr || context.renderPassDesc == nullptr ||
             context.frameData == nullptr || context.renderProxy == nullptr || context.device == nullptr ||
-            context.gpuScene == nullptr)
+            context.gpuScene == nullptr || context.materialTextureCache == nullptr)
         {
             return;
         }
 
+        const bool transparent = bucket == RenderBucket::Transparent;
         EnsureDefaultTextures(context);
         m_CommandExecutor.BeginFrame();
-        m_MaterialTextureCache.Update(*context.device, *context.commandList, context.assetManager, *context.frameData, context.stats);
         RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(
             context,
             transparent ? RHI::CullMode::None : RHI::CullMode::Back,
@@ -94,6 +100,8 @@ namespace Physara::Engine
         const FrameUploadAllocation &frameUniformAllocation = context.gpuScene->GetFrameUniformBuffer();
         const FrameUploadAllocation &objectAllocation = context.gpuScene->GetObjectBuffer();
         const FrameUploadAllocation &lightAllocation = context.gpuScene->GetLightBuffer();
+        const FrameUploadAllocation &clusterEntryAllocation = context.gpuScene->GetClusterEntryBuffer();
+        const FrameUploadAllocation &clusterLightIndexAllocation = context.gpuScene->GetClusterLightIndexBuffer();
         const FrameUploadAllocation &instanceObjectIndexAllocation = context.gpuScene->GetForwardInstanceObjectIndexBuffer();
         if (!frameUniformAllocation.IsValid() || !objectAllocation.IsValid() || !lightAllocation.IsValid() ||
             !instanceObjectIndexAllocation.IsValid() || context.gpuScene->GetMaterialBuffer() == nullptr)
@@ -148,20 +156,34 @@ namespace Physara::Engine
                 instanceObjectIndexAllocation.buffer,
                 instanceObjectIndexAllocation.offset,
                 instanceObjectIndexAllocation.size);
-            if (m_MaterialTextureCache.HasBindlessTables())
+            if (context.lightingMode == ForwardLightingMode::Clustered &&
+                clusterEntryAllocation.IsValid() && clusterLightIndexAllocation.IsValid())
+            {
+                context.commandList->SetStorageBuffer(
+                    ForwardOpaquePassDetail::ClusterEntryBinding,
+                    clusterEntryAllocation.buffer,
+                    clusterEntryAllocation.offset,
+                    clusterEntryAllocation.size);
+                context.commandList->SetStorageBuffer(
+                    ForwardOpaquePassDetail::ClusterLightIndexBinding,
+                    clusterLightIndexAllocation.buffer,
+                    clusterLightIndexAllocation.offset,
+                    clusterLightIndexAllocation.size);
+            }
+            if (context.materialTextureCache->HasBindlessTables())
             {
                 context.commandList->SetStorageBuffer(
                     ForwardOpaquePassDetail::MaterialTextureIndexBinding,
-                    m_MaterialTextureCache.GetMaterialTextureIndexBuffer());
+                    context.materialTextureCache->GetMaterialTextureIndexBuffer());
                 context.commandList->SetStorageBuffer(
                     ForwardOpaquePassDetail::BindlessTextureHandleBinding,
-                    m_MaterialTextureCache.GetBindlessTextureHandleBuffer());
+                    context.materialTextureCache->GetBindlessTextureHandleBuffer());
             }
             BindFrameTextures(context);
 
             ResetTextureBindings();
             const RenderCommandBuckets &commands = context.renderProxy->GetCommands();
-            if (transparent)
+            if (bucket == RenderBucket::Transparent)
             {
                 DrawCommandGroup(
                     context,
@@ -169,6 +191,21 @@ namespace Physara::Engine
                     commands.transparent.singleSided,
                     commands.transparent.doubleSided,
                     true);
+            }
+            else if (bucket == RenderBucket::Unlit)
+            {
+                DrawCommandGroup(
+                    context,
+                    singleSidedPipeline,
+                    commands.unlit.singleSided,
+                    {},
+                    false);
+                DrawCommandGroup(
+                    context,
+                    doubleSidedPipeline,
+                    commands.unlit.doubleSided,
+                    {},
+                    false);
             }
             else
             {
@@ -178,10 +215,6 @@ namespace Physara::Engine
                     commands.opaque.singleSided,
                     commands.unlit.singleSided,
                     false);
-            }
-
-            if (!transparent)
-            {
                 DrawCommandGroup(
                     context,
                     doubleSidedPipeline,
@@ -276,9 +309,13 @@ namespace Physara::Engine
         shaderDesc.debugName = "Forward";
         shaderDesc.vertexPath = "Shaders/Passes/Forward/Forward.vert";
         shaderDesc.fragmentPath = "Shaders/Passes/Forward/Forward.frag";
-        if (m_MaterialTextureCache.HasBindlessTables())
+        if (context.materialTextureCache != nullptr && context.materialTextureCache->HasBindlessTables())
         {
             shaderDesc.defines.push_back(ShaderDefine{"PHYSARA_BINDLESS_MATERIAL_TEXTURES", "1"});
+        }
+        if (context.lightingMode == ForwardLightingMode::Clustered)
+        {
+            shaderDesc.defines.push_back(ShaderDefine{"PHYSARA_CLUSTERED_LIGHTING", "1"});
         }
 
         ShaderVariant *variant = context.shaderLibrary->GetVariant(shaderDesc);
@@ -298,6 +335,7 @@ namespace Physara::Engine
         pipelineDesc.vertexAttributes.push_back({3u, 0u, RHI::VertexFormat::RG32F, static_cast<std::uint32_t>(offsetof(MeshVertex, texCoord0))});
         pipelineDesc.vertexAttributes.push_back({4u, 0u, RHI::VertexFormat::RG32F, static_cast<std::uint32_t>(offsetof(MeshVertex, texCoord1))});
         pipelineDesc.rasterizerState.cullMode = cullMode;
+        pipelineDesc.rasterizerState.polygonMode = context.wireframe ? RHI::PolygonMode::Line : RHI::PolygonMode::Fill;
         pipelineDesc.depthStencilState.depthTest = true;
         pipelineDesc.depthStencilState.depthWrite = !transparent;
         pipelineDesc.depthStencilState.compareOp = RHI::DepthCompareOp::Less;
@@ -341,12 +379,12 @@ namespace Physara::Engine
         }
 
         const std::uint32_t materialIndex = context.frameData->objects[command.firstObjectIndex].materialIndex;
-        const MaterialResourceSet *resourceSet = m_MaterialTextureCache.GetResourceSet(materialIndex);
+        const MaterialResourceSet *resourceSet = context.materialTextureCache->GetResourceSet(materialIndex);
         if (resourceSet == nullptr)
         {
             return false;
         }
-        if (m_MaterialTextureCache.HasBindlessTables())
+        if (context.materialTextureCache->HasBindlessTables())
         {
             return true;
         }
@@ -375,13 +413,13 @@ namespace Physara::Engine
 
         const std::uint32_t lhsMaterialIndex = context.frameData->objects[lhs.firstObjectIndex].materialIndex;
         const std::uint32_t rhsMaterialIndex = context.frameData->objects[rhs.firstObjectIndex].materialIndex;
-        const MaterialResourceSet *lhsResourceSet = m_MaterialTextureCache.GetResourceSet(lhsMaterialIndex);
-        const MaterialResourceSet *rhsResourceSet = m_MaterialTextureCache.GetResourceSet(rhsMaterialIndex);
+        const MaterialResourceSet *lhsResourceSet = context.materialTextureCache->GetResourceSet(lhsMaterialIndex);
+        const MaterialResourceSet *rhsResourceSet = context.materialTextureCache->GetResourceSet(rhsMaterialIndex);
         if (lhsResourceSet == nullptr || rhsResourceSet == nullptr || lhs.bucket != rhs.bucket || lhs.doubleSided != rhs.doubleSided)
         {
             return false;
         }
-        if (m_MaterialTextureCache.HasBindlessTables())
+        if (context.materialTextureCache->HasBindlessTables())
         {
             return true;
         }

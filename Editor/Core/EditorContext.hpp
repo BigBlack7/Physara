@@ -91,11 +91,13 @@ namespace Physara::Editor
 
     struct PostProcessSettings
     {
+        int renderPathIndex{1};
         int toneMappingModeIndex{1};
         bool bloomEnabled{true};
         int antiAliasingModeIndex{3};
         int msaaSamplesIndex{1};
         int debugViewIndex{0};
+        int shadowMapCascadeIndex{0};
         float bloomThreshold{1.f};
         float bloomKnee{0.5f};
         float bloomIntensity{0.12f};

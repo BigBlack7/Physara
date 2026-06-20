@@ -15,6 +15,35 @@ namespace Physara::Editor
     {
         constexpr const char *PanelName = "Renderer Settings";
 
+        struct DebugViewOption
+        {
+            const char *label;
+            int value;
+        };
+
+        std::vector<DebugViewOption> BuildDebugViewOptions(int renderPath)
+        {
+            std::vector<DebugViewOption> options{
+                {"None", 0},
+                {"Normals", 1},
+                {"Depth", 2},
+                {"Wireframe", 3},
+                {"Shadow Map", 4},
+                {"Shadow Cascades", 5}};
+            if (renderPath >= 1)
+            {
+                options.push_back({"Light Clusters", 6});
+            }
+            if (renderPath == 2)
+            {
+                options.push_back({"GBuffer Base Color", 7});
+                options.push_back({"GBuffer Normal", 8});
+                options.push_back({"GBuffer Material", 9});
+                options.push_back({"GBuffer Emissive", 10});
+            }
+            return options;
+        }
+
         std::vector<std::filesystem::path> CollectEnvironmentMaps(const std::filesystem::path &assetsRoot)
         {
             std::vector<std::filesystem::path> maps;
@@ -70,16 +99,68 @@ namespace Physara::Editor
     {
         if (ImGui::CollapsingHeader("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const char *debugItems[] = {"None", "Normals", "Depth"};
-            ImGui::Combo("Debug View", &m_Context.settings.postProcess.debugViewIndex, debugItems, IM_ARRAYSIZE(debugItems));
+            const char *renderPathItems[] = {"Forward", "Forward+", "Deferred"};
+            ImGui::Combo("Render Path", &m_Context.settings.postProcess.renderPathIndex, renderPathItems, IM_ARRAYSIZE(renderPathItems));
+            const int renderPath = std::clamp(m_Context.settings.postProcess.renderPathIndex, 0, 2);
+            const std::vector<RendererSettingsPanelDetail::DebugViewOption> debugOptions =
+                RendererSettingsPanelDetail::BuildDebugViewOptions(renderPath);
+            const auto selectedDebug = std::find_if(
+                debugOptions.begin(),
+                debugOptions.end(),
+                [this](const RendererSettingsPanelDetail::DebugViewOption &option)
+                {
+                    return option.value == m_Context.settings.postProcess.debugViewIndex;
+                });
+            if (selectedDebug == debugOptions.end())
+            {
+                m_Context.settings.postProcess.debugViewIndex = 0;
+            }
+            const char *debugLabel = selectedDebug != debugOptions.end() ? selectedDebug->label : "None";
+            if (ImGui::BeginCombo("Debug View", debugLabel))
+            {
+                for (const RendererSettingsPanelDetail::DebugViewOption &option : debugOptions)
+                {
+                    const bool selected = option.value == m_Context.settings.postProcess.debugViewIndex;
+                    if (ImGui::Selectable(option.label, selected))
+                    {
+                        m_Context.settings.postProcess.debugViewIndex = option.value;
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (m_Context.settings.postProcess.debugViewIndex == 4)
+            {
+                const int cascadeCount = std::clamp(m_Context.settings.shadow.cascadeCountIndex, 0, 2) + 2;
+                m_Context.settings.postProcess.shadowMapCascadeIndex =
+                    std::clamp(m_Context.settings.postProcess.shadowMapCascadeIndex, 0, cascadeCount - 1);
+                const char *cascadeItems[] = {"Cascade 1", "Cascade 2", "Cascade 3", "Cascade 4"};
+                ImGui::Combo(
+                    "Shadow Map Cascade",
+                    &m_Context.settings.postProcess.shadowMapCascadeIndex,
+                    cascadeItems,
+                    cascadeCount);
+                ImGui::TextDisabled("Shadow map inspection locks Scene View camera navigation.");
+            }
             const char *toneMappingItems[] = {"None", "ACES", "Reinhard", "Filmic", "Neutral"};
             ImGui::Combo("Tone Mapping", &m_Context.settings.postProcess.toneMappingModeIndex, toneMappingItems, IM_ARRAYSIZE(toneMappingItems));
             const char *aaItems[] = {"None", "MSAA", "FXAA Basic", "FXAA Quality", "SMAA Lite"};
             ImGui::Combo("Anti-Aliasing", &m_Context.settings.postProcess.antiAliasingModeIndex, aaItems, IM_ARRAYSIZE(aaItems));
+            if (renderPath == 2 && m_Context.settings.postProcess.antiAliasingModeIndex == 1)
+            {
+                m_Context.settings.postProcess.antiAliasingModeIndex = 3;
+            }
             if (m_Context.settings.postProcess.antiAliasingModeIndex == 1)
             {
                 const char *msaaItems[] = {"2x", "4x", "8x"};
                 ImGui::Combo("MSAA Samples", &m_Context.settings.postProcess.msaaSamplesIndex, msaaItems, IM_ARRAYSIZE(msaaItems));
+            }
+            if (renderPath == 2)
+            {
+                ImGui::TextDisabled("Deferred uses a single-sample GBuffer; post-process AA remains available.");
             }
             const bool postAA = m_Context.settings.postProcess.antiAliasingModeIndex >= 2;
             ImGui::BeginDisabled(!postAA);

@@ -54,7 +54,7 @@ namespace Physara::Engine
     private:
         void EnsureResources(const SkyboxPassContext &context);
         void EnsureSkyboxTexture(const SkyboxPassContext &context);
-        void UploadPanorama(const SkyboxPassContext &context, const Texture &panorama);
+        [[nodiscard]] bool UploadPanorama(const SkyboxPassContext &context, const Texture &panorama);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const SkyboxPassContext &context);
 
     private:

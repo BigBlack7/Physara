@@ -166,31 +166,35 @@ namespace Physara::Engine
             if (texture != nullptr && texture->IsLoaded() && !texture->rgba32fPixels.empty())
             {
                 const glm::vec3 averageColor = SkyboxPassDetail::AverageColor(texture->rgba32fPixels);
-                UploadPanorama(context, *texture);
-                m_LoadedEnvironmentPath = requestedPath;
-                PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, format=RGBA32F, avg=({}, {}, {}).",
-                                  requestedPath.string(),
-                                  texture->width,
-                                  texture->height,
-                                  averageColor.r,
-                                  averageColor.g,
-                                  averageColor.b);
-                return;
+                if (UploadPanorama(context, *texture))
+                {
+                    m_LoadedEnvironmentPath = requestedPath;
+                    PHYSARA_CORE_INFO("Skybox environment loaded '{}': panorama={}x{}, format=RGBA32F, avg=({}, {}, {}).",
+                                      requestedPath.string(),
+                                      texture->width,
+                                      texture->height,
+                                      averageColor.r,
+                                      averageColor.g,
+                                      averageColor.b);
+                    return;
+                }
             }
 
             PHYSARA_CORE_WARN("Skybox environment '{}' could not be loaded; using placeholder.", requestedPath.string());
         }
 
-        UploadPanorama(context, SkyboxPassDetail::BuildPlaceholderPanorama(32u, 16u));
-        m_LoadedEnvironmentPath = requestedPath;
-        if (!m_LoggedPlaceholder)
+        if (UploadPanorama(context, SkyboxPassDetail::BuildPlaceholderPanorama(32u, 16u)))
         {
-            PHYSARA_CORE_INFO("Skybox using placeholder cubemap.");
-            m_LoggedPlaceholder = true;
+            m_LoadedEnvironmentPath = requestedPath;
+            if (!m_LoggedPlaceholder)
+            {
+                PHYSARA_CORE_INFO("Skybox using placeholder cubemap.");
+                m_LoggedPlaceholder = true;
+            }
         }
     }
 
-    void SkyboxPass::UploadPanorama(const SkyboxPassContext &context, const Texture &panorama)
+    bool SkyboxPass::UploadPanorama(const SkyboxPassContext &context, const Texture &panorama)
     {
         RHI::RHITextureDesc desc{};
         desc.width = panorama.width;
@@ -206,7 +210,7 @@ namespace Physara::Engine
         if (m_SkyboxTexture == nullptr)
         {
             PHYSARA_CORE_ERROR("Failed to create skybox panorama texture.");
-            return;
+            return false;
         }
 
         if (context.stats != nullptr)
@@ -214,6 +218,7 @@ namespace Physara::Engine
             ++context.stats->textureUploads;
             context.stats->textureUploadBytes += static_cast<std::uint64_t>(panorama.rgba32fPixels.size() * sizeof(float));
         }
+        return true;
     }
 
     RHI::RHIPipelineState *SkyboxPass::GetPipeline(const SkyboxPassContext &context)

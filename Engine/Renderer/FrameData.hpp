@@ -21,6 +21,9 @@ namespace Physara::Engine
         std::uint32_t lightCount{0};
         std::uint32_t materialInstances{0};
         std::uint32_t materialResourceSets{0};
+        std::uint32_t clusterCount{0};
+        std::uint32_t clusterLightReferences{0};
+        std::uint32_t maxLightsPerCluster{0};
         std::uint32_t meshUploads{0};
         std::uint32_t meshPrimitiveUploads{0};
         std::uint32_t textureUploads{0};
@@ -33,6 +36,8 @@ namespace Physara::Engine
         std::uint64_t forwardOpaqueDrawCalls{0};
         std::uint64_t skyboxDrawCalls{0};
         std::uint64_t forwardTransparentDrawCalls{0};
+        std::uint64_t deferredGBufferDrawCalls{0};
+        std::uint64_t deferredLightingDrawCalls{0};
         std::uint64_t postProcessDrawCalls{0};
         std::uint64_t instances{0};
         std::uint64_t triangles{0};
@@ -46,6 +51,8 @@ namespace Physara::Engine
         float forwardOpaqueCpuMs{0.f};
         float skyboxCpuMs{0.f};
         float forwardTransparentCpuMs{0.f};
+        float deferredGBufferCpuMs{0.f};
+        float deferredLightingCpuMs{0.f};
         float postProcessCpuMs{0.f};
         RHI::RHICommandStatistics backend{};
 
@@ -63,6 +70,9 @@ namespace Physara::Engine
         std::vector<MaterialInstanceId> materialInstanceIds{};
         std::vector<std::uint64_t> materialSignatures{};
         std::vector<LightData> lights{};
+        ClusterGridData clusterGrid{};
+        std::vector<ClusterEntryGPU> clusterEntries{};
+        std::vector<std::uint32_t> clusterLightIndices{};
         FrameStatistics stats{};
         std::uint64_t frameIndex{0};
         float deltaTimeSeconds{0.f};

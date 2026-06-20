@@ -87,6 +87,10 @@ namespace Physara::Engine
         m_FinalFramebuffer.reset();
         m_ShadowPass.Reset();
         m_ForwardOpaquePass.Reset();
+        m_GBufferPass.Reset();
+        m_DeferredLightingPass.Reset();
+        m_DeferredResources.Reset();
+        m_MaterialTextureCache.Reset();
         m_IBLResources.Reset();
         m_MeshGPUCache.Reset();
         m_SceneDepthMSAA.reset();
@@ -142,6 +146,10 @@ namespace Physara::Engine
             scene.UpdateTransforms();
         }
         m_RenderProxy.Build(scene, view, m_FrameData, m_AssetManager);
+        if (UsesClusteredLighting(m_RenderPath))
+        {
+            m_ClusteredLightGrid.Build(m_FrameData);
+        }
         m_FrameData.stats.sceneBuildCpuMs = RendererDetail::ElapsedMilliseconds(buildStart);
         RenderClear();
         ProcessPendingCapture();
@@ -202,6 +210,7 @@ namespace Physara::Engine
         m_EnvironmentMapPath = std::move(path);
         m_SkyboxPass.InvalidateEnvironment();
         m_IBLResources.Invalidate();
+        InvalidateCommandState();
     }
 
     void Renderer::SetShadowSettings(const ShadowSettings &settings)
@@ -226,6 +235,30 @@ namespace Physara::Engine
         }
 
         m_MSAASamples = sanitized;
+        RecreateRenderTarget();
+    }
+
+    void Renderer::SetPostProcessSettings(const PostProcessSettings &settings)
+    {
+        m_PostProcessSettings = settings;
+        const bool gBufferView = m_PostProcessSettings.debugView >= DebugViewMode::GBufferBaseColor;
+        const bool clusterView = m_PostProcessSettings.debugView == DebugViewMode::LightClusters;
+        if ((gBufferView && m_RenderPath != RenderPath::Deferred) ||
+            (clusterView && !UsesClusteredLighting(m_RenderPath)))
+        {
+            m_PostProcessSettings.debugView = DebugViewMode::None;
+        }
+    }
+
+    void Renderer::SetRenderPath(RenderPath path)
+    {
+        if (m_RenderPath == path)
+        {
+            return;
+        }
+
+        m_RenderPath = path;
+        SetPostProcessSettings(m_PostProcessSettings);
         RecreateRenderTarget();
     }
 
@@ -276,6 +309,7 @@ namespace Physara::Engine
         m_RenderGraph.ReleasePooledResources();
         m_Framebuffer.reset();
         m_FinalFramebuffer.reset();
+        m_DeferredResources.Reset();
         m_SceneDepthMSAA.reset();
         m_SceneDepth.reset();
         m_SceneColor.reset();
@@ -288,13 +322,14 @@ namespace Physara::Engine
             return;
         }
 
+        const std::uint32_t effectiveSamples = m_RenderPath == RenderPath::Deferred ? 1u : m_MSAASamples;
         if (!m_RenderPassDesc.colorAttachments.empty())
         {
-            m_RenderPassDesc.colorAttachments[0].samples = m_MSAASamples;
+            m_RenderPassDesc.colorAttachments[0].samples = effectiveSamples;
         }
         if (m_RenderPassDesc.hasDepth)
         {
-            m_RenderPassDesc.depthAttachment.samples = m_MSAASamples;
+            m_RenderPassDesc.depthAttachment.samples = effectiveSamples;
         }
         m_SkyboxRenderPassDesc = m_RenderPassDesc;
         if (!m_SkyboxRenderPassDesc.colorAttachments.empty())
@@ -351,15 +386,15 @@ namespace Physara::Engine
 
         RHI::RHITexture *frameColor = m_SceneHDRColor.get();
         RHI::RHITexture *frameDepth = m_SceneDepth.get();
-        if (m_MSAASamples > 1u)
+        if (effectiveSamples > 1u)
         {
             RHI::RHITextureDesc sceneHDRMSAADesc = sceneHDRDesc;
-            sceneHDRMSAADesc.samples = m_MSAASamples;
+            sceneHDRMSAADesc.samples = effectiveSamples;
             sceneHDRMSAADesc.usage = RHI::TextureUsage::RenderTarget;
             m_SceneHDRColorMSAA = m_Device->CreateTexture(sceneHDRMSAADesc);
 
             RHI::RHITextureDesc sceneDepthMSAADesc = sceneDepthDesc;
-            sceneDepthMSAADesc.samples = m_MSAASamples;
+            sceneDepthMSAADesc.samples = effectiveSamples;
             sceneDepthMSAADesc.usage = RHI::TextureUsage::DepthStencil;
             m_SceneDepthMSAA = m_Device->CreateTexture(sceneDepthMSAADesc);
 
@@ -423,9 +458,32 @@ namespace Physara::Engine
         RenderGraphResourceHandle sceneHDR = m_RenderGraph.ImportTexture("SceneHDR", *m_SceneHDRColor);
         RenderGraphResourceHandle sceneDepth = m_RenderGraph.ImportTexture("SceneDepth", *m_SceneDepth);
         RenderGraphResourceHandle sceneColor = m_RenderGraph.ImportTexture("SceneColor", *m_SceneColor);
-        const bool msaaEnabled = m_MSAASamples > 1u && m_SceneHDRColorMSAA != nullptr && m_SceneDepthMSAA != nullptr;
+        const bool deferred = m_RenderPath == RenderPath::Deferred;
+        if (deferred && !m_DeferredResources.Ensure(
+                            *m_Device,
+                            m_ViewportWidth,
+                            m_ViewportHeight,
+                            *m_SceneHDRColor,
+                            *m_SceneDepth))
+        {
+            PHYSARA_CORE_ERROR("Renderer failed to prepare deferred render targets.");
+            return;
+        }
+        const bool msaaEnabled = !deferred && m_MSAASamples > 1u &&
+                                 m_SceneHDRColorMSAA != nullptr && m_SceneDepthMSAA != nullptr;
         RenderGraphResourceHandle renderHDR = msaaEnabled ? m_RenderGraph.ImportTexture("SceneHDRMSAA", *m_SceneHDRColorMSAA) : sceneHDR;
         RenderGraphResourceHandle renderDepth = msaaEnabled ? m_RenderGraph.ImportTexture("SceneDepthMSAA", *m_SceneDepthMSAA) : sceneDepth;
+        RenderGraphResourceHandle gBufferBaseColor{};
+        RenderGraphResourceHandle gBufferNormal{};
+        RenderGraphResourceHandle gBufferMaterial{};
+        RenderGraphResourceHandle gBufferEmissive{};
+        if (deferred)
+        {
+            gBufferBaseColor = m_RenderGraph.ImportTexture("GBufferBaseColor", *m_DeferredResources.GetBaseColor());
+            gBufferNormal = m_RenderGraph.ImportTexture("GBufferNormal", *m_DeferredResources.GetNormal());
+            gBufferMaterial = m_RenderGraph.ImportTexture("GBufferMaterial", *m_DeferredResources.GetMaterial());
+            gBufferEmissive = m_RenderGraph.ImportTexture("GBufferEmissive", *m_DeferredResources.GetEmissive());
+        }
         RenderGraphResourceHandle shadowMap{};
         const bool shadowEnabled = m_ShadowSettings.enabled;
         if (shadowEnabled)
@@ -437,7 +495,8 @@ namespace Physara::Engine
             }
         }
         m_RenderGraph.MarkOutput(sceneColor);
-        const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty();
+        const bool gBufferDebug = deferred && m_PostProcessSettings.debugView >= DebugViewMode::GBufferBaseColor;
+        const bool drawSkybox = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() && !gBufferDebug;
         if (!m_EnvironmentMapPath.empty())
         {
             (void)m_IBLResources.Ensure(m_Device, m_EnvironmentMapPath);
@@ -445,7 +504,7 @@ namespace Physara::Engine
 
         m_RenderGraph.AddPass("GPUSceneUpload")
             .SetSideEffect()
-            .SetExecute([this](RenderGraphContext &)
+            .SetExecute([this](RenderGraphContext &context)
                         {
                             if (m_Device == nullptr)
                             {
@@ -458,6 +517,12 @@ namespace Physara::Engine
                                 m_FrameData,
                                 m_RenderProxy,
                                 m_AssetManager,
+                                &m_FrameData.stats);
+                            m_MaterialTextureCache.Update(
+                                *m_Device,
+                                context.commandList,
+                                m_AssetManager,
+                                m_FrameData,
                                 &m_FrameData.stats);
                         });
 
@@ -535,42 +600,167 @@ namespace Physara::Engine
                             });
         }
 
-        RGBuilder forwardOpaque = m_RenderGraph.AddPass("ForwardOpaque")
-            .WriteAttachment(renderHDR)
-            .WriteAttachment(renderDepth);
-        if (shadowMap.IsValid())
+        if (deferred)
         {
-            forwardOpaque.ReadTexture(shadowMap);
-        }
-        forwardOpaque.SetExecute([this](RenderGraphContext &context)
-                                 {
-                                     ForwardPassContext passContext{};
-                                     passContext.device = m_Device;
-                                     passContext.commandList = &context.commandList;
-                                     passContext.framebuffer = m_Framebuffer.get();
-                                     passContext.renderPassDesc = m_SkyboxEnabled && !m_EnvironmentMapPath.empty() ? &m_SkyboxRenderPassDesc : &m_RenderPassDesc;
-                                     passContext.shaderLibrary = &m_ShaderLibrary;
-                                     passContext.pipelineCache = &m_PipelineStateCache;
-                                     passContext.frameData = &m_FrameData;
-                                     passContext.gpuScene = &m_GPUScene;
-                                     passContext.stats = &m_FrameData.stats;
-                                     passContext.renderProxy = &m_RenderProxy;
-                                     passContext.meshCache = &m_MeshGPUCache;
-                                     passContext.assetManager = m_AssetManager;
-                                     passContext.shadowMap = m_ShadowPass.GetShadowMap();
-                                     passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
-                                     passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
-                                     passContext.clearColor = RendererDetail::BuildPreExposedClearColor(m_ClearColor);
-                                     passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
-                                     const auto passStart = std::chrono::steady_clock::now();
-                                     m_ForwardOpaquePass.Execute(passContext);
-                                     m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
-                                 });
+            m_RenderGraph.AddPass("GBuffer")
+                .WriteAttachment(gBufferBaseColor)
+                .WriteAttachment(gBufferNormal)
+                .WriteAttachment(gBufferMaterial)
+                .WriteAttachment(gBufferEmissive)
+                .WriteAttachment(sceneDepth)
+                .SetExecute([this](RenderGraphContext &context)
+                            {
+                                GBufferPassContext passContext{};
+                                passContext.device = m_Device;
+                                passContext.commandList = &context.commandList;
+                                passContext.framebuffer = m_DeferredResources.GetGBufferFramebuffer();
+                                passContext.renderPassDesc = &m_DeferredResources.GetGBufferRenderPassDesc();
+                                passContext.shaderLibrary = &m_ShaderLibrary;
+                                passContext.pipelineCache = &m_PipelineStateCache;
+                                passContext.frameData = &m_FrameData;
+                                passContext.gpuScene = &m_GPUScene;
+                                passContext.stats = &m_FrameData.stats;
+                                passContext.renderProxy = &m_RenderProxy;
+                                passContext.meshCache = &m_MeshGPUCache;
+                                passContext.assetManager = m_AssetManager;
+                                passContext.materialTextureCache = &m_MaterialTextureCache;
+                                passContext.wireframe = m_PostProcessSettings.debugView == DebugViewMode::Wireframe;
+                                const auto passStart = std::chrono::steady_clock::now();
+                                m_GBufferPass.Execute(passContext);
+                                m_FrameData.stats.deferredGBufferCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                            });
 
-        if (!m_RenderProxy.GetBuckets().transparent.Empty())
+            RGBuilder deferredLighting = m_RenderGraph.AddPass("DeferredLighting")
+                .ReadTexture(gBufferBaseColor)
+                .ReadTexture(gBufferNormal)
+                .ReadTexture(gBufferMaterial)
+                .ReadTexture(gBufferEmissive)
+                .ReadTexture(sceneDepth)
+                .WriteAttachment(sceneHDR);
+            if (drawSkybox)
+            {
+                deferredLighting.Read(
+                    sceneHDR,
+                    RHI::ResourceState::RenderTarget,
+                    RHI::ShaderStageBit::Fragment,
+                    RHI::ResourceAccess::ColorAttachmentRead);
+            }
+            if (shadowMap.IsValid())
+            {
+                deferredLighting.ReadTexture(shadowMap);
+            }
+            deferredLighting.SetExecute([this, drawSkybox, gBufferDebug](RenderGraphContext &context)
+                                        {
+                                            DeferredLightingPassContext passContext{};
+                                            passContext.device = m_Device;
+                                            passContext.commandList = &context.commandList;
+                                            passContext.framebuffer = m_DeferredResources.GetLightingFramebuffer();
+                                            passContext.renderPassDesc = drawSkybox
+                                                                             ? &m_DeferredResources.GetLightingLoadRenderPassDesc()
+                                                                             : &m_DeferredResources.GetLightingClearRenderPassDesc();
+                                            passContext.shaderLibrary = &m_ShaderLibrary;
+                                            passContext.pipelineCache = &m_PipelineStateCache;
+                                            passContext.frameData = &m_FrameData;
+                                            passContext.gpuScene = &m_GPUScene;
+                                            passContext.stats = &m_FrameData.stats;
+                                            passContext.sceneDepth = m_SceneDepth.get();
+                                            passContext.baseColor = m_DeferredResources.GetBaseColor();
+                                            passContext.normal = m_DeferredResources.GetNormal();
+                                            passContext.material = m_DeferredResources.GetMaterial();
+                                            passContext.emissive = m_DeferredResources.GetEmissive();
+                                            passContext.shadowMap = m_ShadowPass.GetShadowMap();
+                                            passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+                                            passContext.clearColor = gBufferDebug
+                                                                         ? glm::vec4(0.f, 0.f, 0.f, 1.f)
+                                                                         : RendererDetail::BuildPreExposedClearColor(m_ClearColor);
+                                            const auto passStart = std::chrono::steady_clock::now();
+                                            m_DeferredLightingPass.Execute(passContext);
+                                            m_FrameData.stats.deferredLightingCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                                        });
+
+            if (!gBufferDebug && !m_RenderProxy.GetBuckets().unlit.Empty())
+            {
+                m_RenderGraph.AddPass("ForwardUnlit")
+                    .Read(
+                        sceneHDR,
+                        RHI::ResourceState::RenderTarget,
+                        RHI::ShaderStageBit::Fragment,
+                        RHI::ResourceAccess::ColorAttachmentRead)
+                    .WriteAttachment(sceneHDR)
+                    .WriteAttachment(sceneDepth)
+                    .SetExecute([this](RenderGraphContext &context)
+                                {
+                                    ExecuteUnlitForwardPass(context);
+                                });
+            }
+        }
+        else
+        {
+            RGBuilder forwardOpaque = m_RenderGraph.AddPass(
+                                                   m_RenderPath == RenderPath::ForwardPlus
+                                                       ? "ForwardPlusOpaque"
+                                                       : "ForwardOpaque")
+                                                  .WriteAttachment(renderHDR)
+                                                  .WriteAttachment(renderDepth);
+            if (shadowMap.IsValid())
+            {
+                forwardOpaque.ReadTexture(shadowMap);
+            }
+            if (drawSkybox)
+            {
+                forwardOpaque.Read(
+                    renderHDR,
+                    RHI::ResourceState::RenderTarget,
+                    RHI::ShaderStageBit::Fragment,
+                    RHI::ResourceAccess::ColorAttachmentRead);
+            }
+            forwardOpaque.SetExecute([this](RenderGraphContext &context)
+                                     {
+                                         ForwardPassContext passContext{};
+                                         passContext.device = m_Device;
+                                         passContext.commandList = &context.commandList;
+                                         passContext.framebuffer = m_Framebuffer.get();
+                                         passContext.renderPassDesc = m_SkyboxEnabled && !m_EnvironmentMapPath.empty()
+                                                                          ? &m_SkyboxRenderPassDesc
+                                                                          : &m_RenderPassDesc;
+                                         passContext.shaderLibrary = &m_ShaderLibrary;
+                                         passContext.pipelineCache = &m_PipelineStateCache;
+                                         passContext.frameData = &m_FrameData;
+                                         passContext.gpuScene = &m_GPUScene;
+                                         passContext.stats = &m_FrameData.stats;
+                                         passContext.renderProxy = &m_RenderProxy;
+                                         passContext.meshCache = &m_MeshGPUCache;
+                                         passContext.assetManager = m_AssetManager;
+                                         passContext.materialTextureCache = &m_MaterialTextureCache;
+                                         passContext.shadowMap = m_ShadowPass.GetShadowMap();
+                                         passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+                                         passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
+                                         passContext.clearColor = RendererDetail::BuildPreExposedClearColor(m_ClearColor);
+                                         passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
+                                         passContext.lightingMode = UsesClusteredLighting(m_RenderPath)
+                                                                        ? ForwardLightingMode::Clustered
+                                                                        : ForwardLightingMode::FullLightList;
+                                         passContext.wireframe = m_PostProcessSettings.debugView == DebugViewMode::Wireframe;
+                                         const auto passStart = std::chrono::steady_clock::now();
+                                         m_ForwardOpaquePass.Execute(passContext);
+                                         m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+                                     });
+        }
+
+        if (!gBufferDebug && !m_RenderProxy.GetBuckets().transparent.Empty())
         {
             RGBuilder forwardTransparent = m_RenderGraph.AddPass("ForwardTransparent")
                 .WriteAttachment(renderHDR);
+            forwardTransparent.Read(
+                renderHDR,
+                RHI::ResourceState::RenderTarget,
+                RHI::ShaderStageBit::Fragment,
+                RHI::ResourceAccess::ColorAttachmentRead);
+            forwardTransparent.Read(
+                deferred ? sceneDepth : renderDepth,
+                RHI::ResourceState::DepthRead,
+                RHI::ShaderStageBit::Fragment,
+                RHI::ResourceAccess::DepthStencilRead);
             if (shadowMap.IsValid())
             {
                 forwardTransparent.ReadTexture(shadowMap);
@@ -595,11 +785,15 @@ namespace Physara::Engine
                             });
         }
 
-        m_RenderGraph.AddPass("PostProcess")
+        RGBuilder postProcess = m_RenderGraph.AddPass("PostProcess")
             .ReadTexture(sceneHDR)
             .ReadTexture(sceneDepth)
-            .WriteAttachment(sceneColor)
-            .SetExecute([this](RenderGraphContext &context)
+            .WriteAttachment(sceneColor);
+        if (shadowMap.IsValid())
+        {
+            postProcess.ReadTexture(shadowMap);
+        }
+        postProcess.SetExecute([this](RenderGraphContext &context)
                         {
                             PostProcessPassContext passContext{};
                             passContext.device = m_Device;
@@ -614,6 +808,7 @@ namespace Physara::Engine
                             passContext.stats = &m_FrameData.stats;
                             passContext.sceneHDR = m_SceneHDRColor.get();
                             passContext.sceneDepth = m_SceneDepth.get();
+                            passContext.shadowMap = m_ShadowPass.GetShadowMap();
                             passContext.settings = m_PostProcessSettings;
                             const auto passStart = std::chrono::steady_clock::now();
                             m_PostProcessPass.Execute(passContext);
@@ -636,12 +831,44 @@ namespace Physara::Engine
         passContext.renderProxy = &m_RenderProxy;
         passContext.meshCache = &m_MeshGPUCache;
         passContext.assetManager = m_AssetManager;
+        passContext.materialTextureCache = &m_MaterialTextureCache;
         passContext.shadowMap = m_ShadowPass.GetShadowMap();
         passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
         passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
         passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
+        passContext.lightingMode = UsesClusteredLighting(m_RenderPath)
+                                       ? ForwardLightingMode::Clustered
+                                       : ForwardLightingMode::FullLightList;
+        passContext.wireframe = m_PostProcessSettings.debugView == DebugViewMode::Wireframe;
         const auto passStart = std::chrono::steady_clock::now();
         m_ForwardOpaquePass.ExecuteTransparent(passContext);
         m_FrameData.stats.forwardTransparentCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+    }
+
+    void Renderer::ExecuteUnlitForwardPass(RenderGraphContext &context)
+    {
+        ForwardPassContext passContext{};
+        passContext.device = m_Device;
+        passContext.commandList = &context.commandList;
+        passContext.framebuffer = m_Framebuffer.get();
+        passContext.renderPassDesc = &m_SkyboxRenderPassDesc;
+        passContext.shaderLibrary = &m_ShaderLibrary;
+        passContext.pipelineCache = &m_PipelineStateCache;
+        passContext.frameData = &m_FrameData;
+        passContext.gpuScene = &m_GPUScene;
+        passContext.stats = &m_FrameData.stats;
+        passContext.renderProxy = &m_RenderProxy;
+        passContext.meshCache = &m_MeshGPUCache;
+        passContext.assetManager = m_AssetManager;
+        passContext.materialTextureCache = &m_MaterialTextureCache;
+        passContext.shadowMap = m_ShadowPass.GetShadowMap();
+        passContext.iblResources = m_IBLResources.IsReady() ? &m_IBLResources : nullptr;
+        passContext.environmentExposureCompensation = m_SkyboxExposureCompensation;
+        passContext.debugView = static_cast<std::uint32_t>(m_PostProcessSettings.debugView);
+        passContext.lightingMode = ForwardLightingMode::Clustered;
+        passContext.wireframe = m_PostProcessSettings.debugView == DebugViewMode::Wireframe;
+        const auto passStart = std::chrono::steady_clock::now();
+        m_ForwardOpaquePass.ExecuteUnlit(passContext);
+        m_FrameData.stats.forwardOpaqueCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
     }
 }

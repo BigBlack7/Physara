@@ -52,6 +52,8 @@ namespace Physara::Engine
         [[nodiscard]] const FrameUploadAllocation &GetFrameUniformBuffer() const { return m_FrameUniformAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetObjectBuffer() const { return m_ObjectAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetLightBuffer() const { return m_LightAllocation; }
+        [[nodiscard]] const FrameUploadAllocation &GetClusterEntryBuffer() const { return m_ClusterEntryAllocation; }
+        [[nodiscard]] const FrameUploadAllocation &GetClusterLightIndexBuffer() const { return m_ClusterLightIndexAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetForwardInstanceObjectIndexBuffer() const { return m_ForwardInstanceObjectIndexAllocation; }
         [[nodiscard]] const FrameUploadAllocation &GetShadowInstanceObjectIndexBuffer() const { return m_ShadowInstanceObjectIndexAllocation; }
         [[nodiscard]] RHI::RHIBuffer *GetMaterialBuffer() const { return m_MaterialBuffer.get(); }
@@ -91,6 +93,8 @@ namespace Physara::Engine
         FrameUploadAllocation m_FrameUniformAllocation{};
         FrameUploadAllocation m_ObjectAllocation{};
         FrameUploadAllocation m_LightAllocation{};
+        FrameUploadAllocation m_ClusterEntryAllocation{};
+        FrameUploadAllocation m_ClusterLightIndexAllocation{};
         FrameUploadAllocation m_ForwardInstanceObjectIndexAllocation{};
         FrameUploadAllocation m_ShadowInstanceObjectIndexAllocation{};
         std::unique_ptr<RHI::RHIBuffer> m_MaterialBuffer{};

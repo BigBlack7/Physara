@@ -35,6 +35,12 @@ namespace Physara::Engine
     struct FrameData;
     struct ShadowData;
 
+    enum class ForwardLightingMode : std::uint32_t
+    {
+        FullLightList = 0,
+        Clustered = 1
+    };
+
     struct ForwardPassContext
     {
         RHI::RHIDevice *device{nullptr};
@@ -49,17 +55,21 @@ namespace Physara::Engine
         const RenderProxy *renderProxy{nullptr};
         MeshGPUCache *meshCache{nullptr};
         AssetManager *assetManager{nullptr};
+        MaterialTextureCache *materialTextureCache{nullptr};
         RHI::RHITexture *shadowMap{nullptr};
         const IBLResources *iblResources{nullptr};
         float environmentExposureCompensation{0.f};
         glm::vec4 clearColor{0.f, 0.f, 0.f, 1.f};
         std::uint32_t debugView{0};
+        ForwardLightingMode lightingMode{ForwardLightingMode::FullLightList};
+        bool wireframe{false};
     };
 
     class ForwardOpaquePass final
     {
     public:
         void Execute(const ForwardPassContext &context);
+        void ExecuteUnlit(const ForwardPassContext &context);
         void ExecuteTransparent(const ForwardPassContext &context);
         void Reset();
 
@@ -72,7 +82,7 @@ namespace Physara::Engine
         };
 
         void EnsureDefaultTextures(const ForwardPassContext &context);
-        void ExecuteBuckets(const ForwardPassContext &context, bool transparent);
+        void ExecuteBuckets(const ForwardPassContext &context, RenderBucket bucket);
         [[nodiscard]] RHI::RHIPipelineState *GetPipeline(const ForwardPassContext &context, RHI::CullMode cullMode, bool transparent);
         void BindFrameTextures(const ForwardPassContext &context);
         [[nodiscard]] bool BindMaterial(const ForwardPassContext &context, const RenderCommand &command);
@@ -103,7 +113,6 @@ namespace Physara::Engine
         void ResetTextureBindings();
 
     private:
-        MaterialTextureCache m_MaterialTextureCache{};
         std::unique_ptr<RHI::RHISampler> m_LinearClampMipSampler{};
         std::unique_ptr<RHI::RHISampler> m_ShadowSampler{};
         std::unique_ptr<RHI::RHITexture> m_FallbackBlackCubeTexture{};

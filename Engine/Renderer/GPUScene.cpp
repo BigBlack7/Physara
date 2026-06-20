@@ -169,6 +169,7 @@ namespace Physara::Engine
             FrameUniforms uniforms{};
             uniforms.camera = frameData.camera;
             uniforms.shadow = frameData.shadow;
+            uniforms.clusterGrid = frameData.clusterGrid;
             uniforms.debugParams.x = static_cast<float>(debugView);
             if (iblResources == nullptr || !iblResources->IsReady())
             {
@@ -194,6 +195,8 @@ namespace Physara::Engine
         m_FrameUniformAllocation = {};
         m_ObjectAllocation = {};
         m_LightAllocation = {};
+        m_ClusterEntryAllocation = {};
+        m_ClusterLightIndexAllocation = {};
         m_ForwardInstanceObjectIndexAllocation = {};
         m_ShadowInstanceObjectIndexAllocation = {};
         m_ObjectCount = 0u;
@@ -223,6 +226,22 @@ namespace Physara::Engine
         Reset();
         m_ObjectAllocation = UploadObjectTable(device, allocator, frameData.objects, stats);
         m_LightAllocation = UploadLightTable(device, allocator, frameData.lights, stats);
+        const ClusterEntryGPU defaultClusterEntry{};
+        m_ClusterEntryAllocation = frameData.clusterEntries.empty()
+                                       ? allocator.Upload(device, defaultClusterEntry, stats)
+                                       : allocator.Upload(
+                                             device,
+                                             frameData.clusterEntries.data(),
+                                             static_cast<std::uint32_t>(frameData.clusterEntries.size() * sizeof(ClusterEntryGPU)),
+                                             stats);
+        const std::uint32_t defaultClusterLightIndex = 0u;
+        m_ClusterLightIndexAllocation = frameData.clusterLightIndices.empty()
+                                            ? allocator.Upload(device, defaultClusterLightIndex, stats)
+                                            : allocator.Upload(
+                                                  device,
+                                                  frameData.clusterLightIndices.data(),
+                                                  static_cast<std::uint32_t>(frameData.clusterLightIndices.size() * sizeof(std::uint32_t)),
+                                                  stats);
         UploadMaterialTable(device, frameData, assetManager, stats);
         m_ForwardInstanceObjectIndexAllocation = UploadInstanceObjectIndices(
             device,

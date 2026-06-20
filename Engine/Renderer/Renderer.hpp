@@ -8,11 +8,16 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
+#include <Engine/Renderer/ClusteredLightGrid.hpp>
+#include <Engine/Renderer/DeferredResources.hpp>
 #include <Engine/Renderer/FrameUploadAllocator.hpp>
 #include <Engine/Renderer/GPUScene.hpp>
 #include <Engine/Renderer/IBLResources.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
+#include <Engine/Renderer/MaterialTextureCache.hpp>
 #include <Engine/Renderer/Passes/ForwardOpaquePass.hpp>
+#include <Engine/Renderer/Passes/DeferredLightingPass.hpp>
+#include <Engine/Renderer/Passes/GBufferPass.hpp>
 #include <Engine/Renderer/Passes/PostProcessPass.hpp>
 #include <Engine/Renderer/Passes/ShadowPass.hpp>
 #include <Engine/Renderer/Passes/SkyboxPass.hpp>
@@ -20,6 +25,7 @@
 #include <Engine/Renderer/RenderProxy.hpp>
 #include <Engine/Renderer/RenderGraph/RenderGraph.hpp>
 #include <Engine/Renderer/RendererCapture.hpp>
+#include <Engine/Renderer/RenderPath.hpp>
 #include <Engine/Resource/ShaderLibrary.hpp>
 #include <Engine/RHI/Pipeline/RHIFramebuffer.hpp>
 #include <Engine/RHI/Pipeline/RHIRenderPassDesc.hpp>
@@ -62,9 +68,10 @@ namespace Physara::Engine
         void SetEnvironmentMapPath(std::filesystem::path path);
         void SetSkyboxEnabled(bool enabled) { m_SkyboxEnabled = enabled; }
         void SetSkyboxExposureCompensation(float ev) { m_SkyboxExposureCompensation = ev; }
-        void SetPostProcessSettings(const PostProcessSettings &settings) { m_PostProcessSettings = settings; }
+        void SetPostProcessSettings(const PostProcessSettings &settings);
         void SetShadowSettings(const ShadowSettings &settings);
         void SetMSAASamples(std::uint32_t samples);
+        void SetRenderPath(RenderPath path);
         [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
 
         [[nodiscard]] RHI::RHITexture *GetSceneColorTexture() const { return m_SceneColor.get(); }
@@ -72,6 +79,7 @@ namespace Physara::Engine
         [[nodiscard]] std::uint32_t GetViewportHeight() const { return m_ViewportHeight; }
         [[nodiscard]] const FrameData &GetFrameData() const { return m_FrameData; }
         [[nodiscard]] const RenderProxy &GetRenderProxy() const { return m_RenderProxy; }
+        [[nodiscard]] RenderPath GetRenderPath() const { return m_RenderPath; }
         [[nodiscard]] bool HasValidRenderTarget() const;
 
     private:
@@ -79,6 +87,7 @@ namespace Physara::Engine
         void RecreateRenderTarget();
         void BuildRenderGraph();
         void ExecuteTransparentForwardPass(RenderGraphContext &context);
+        void ExecuteUnlitForwardPass(RenderGraphContext &context);
         void ProcessPendingCapture();
 
     private:
@@ -99,10 +108,15 @@ namespace Physara::Engine
         ShaderLibrary m_ShaderLibrary{};
         PipelineStateCache m_PipelineStateCache{};
         MeshGPUCache m_MeshGPUCache{};
+        MaterialTextureCache m_MaterialTextureCache{};
+        ClusteredLightGrid m_ClusteredLightGrid{};
         FrameUploadAllocator m_FrameUploadAllocator{};
         GPUScene m_GPUScene{};
         ShadowPass m_ShadowPass{};
         ForwardOpaquePass m_ForwardOpaquePass{};
+        GBufferPass m_GBufferPass{};
+        DeferredLightingPass m_DeferredLightingPass{};
+        DeferredResources m_DeferredResources{};
         SkyboxPass m_SkyboxPass{};
         PostProcessPass m_PostProcessPass{};
         IBLResources m_IBLResources{};
@@ -118,5 +132,6 @@ namespace Physara::Engine
         std::uint32_t m_ViewportWidth{0};
         std::uint32_t m_ViewportHeight{0};
         std::uint32_t m_MSAASamples{1};
+        RenderPath m_RenderPath{RenderPath::ForwardPlus};
     };
 }

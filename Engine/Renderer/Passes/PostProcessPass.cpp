@@ -24,6 +24,7 @@ namespace Physara::Engine
         constexpr std::uint32_t SettingsBinding = Binding(GPUBufferBinding::PostProcessSettings);
         constexpr std::uint32_t SceneColorBinding = Binding(GPUTextureBinding::SceneColor);
         constexpr std::uint32_t SceneDepthBinding = Binding(GPUTextureBinding::SceneDepth);
+        constexpr std::uint32_t ShadowMapBinding = Binding(GPUTextureBinding::ShadowMap);
         constexpr std::uint32_t BloomTextureBinding = Binding(GPUTextureBinding::Bloom);
         constexpr std::uint32_t MaxBloomMips = 7u;
 
@@ -39,6 +40,7 @@ namespace Physara::Engine
             glm::vec4 flags{1.f, 1.f, 2.f, 0.f};
             glm::vec4 exposureParams{0.f, 0.f, 0.f, 0.f};
             glm::vec4 aaParams{0.75f, 0.125f, 0.0312f, 24.f};
+            glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
         };
 
         class ScopedDebugLabel final
@@ -71,6 +73,7 @@ namespace Physara::Engine
         SettingsGPUData BuildSettings(const PostProcessSettings &settings)
         {
             SettingsGPUData data{};
+            const bool debugViewEnabled = settings.debugView != DebugViewMode::None;
             data.bloomParams = glm::vec4(
                 std::max(settings.bloomThreshold, 0.f),
                 std::max(settings.bloomKnee, 0.f),
@@ -78,8 +81,8 @@ namespace Physara::Engine
                 std::clamp(settings.bloomScatter, 0.f, 1.f));
             data.flags = glm::vec4(
                 static_cast<float>(settings.toneMappingMode),
-                settings.bloomEnabled ? 1.f : 0.f,
-                static_cast<float>(settings.antiAliasingMode),
+                settings.bloomEnabled && !debugViewEnabled ? 1.f : 0.f,
+                static_cast<float>(debugViewEnabled ? AntiAliasingMode::None : settings.antiAliasingMode),
                 static_cast<float>(settings.debugView));
             data.exposureParams = glm::vec4(
                 settings.exposureCompensationEV,
@@ -91,6 +94,11 @@ namespace Physara::Engine
                 std::max(settings.aaEdgeThreshold, 0.001f),
                 std::max(settings.aaEdgeThresholdMin, 0.0001f),
                 std::max(settings.aaDepthSensitivity, 0.f));
+            data.debugParams = glm::vec4(
+                static_cast<float>(std::min(settings.shadowMapCascadeIndex, MaxShadowCascades - 1u)),
+                0.f,
+                0.f,
+                0.f);
             return data;
         }
     }
@@ -120,7 +128,10 @@ namespace Physara::Engine
         }
         context.frameUploadAllocator->Flush(context.stats);
 
-        ExecuteBloom(context, frameUniformAllocation);
+        if (context.settings.debugView == DebugViewMode::None)
+        {
+            ExecuteBloom(context, frameUniformAllocation);
+        }
 
         PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessComposite");
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
@@ -136,7 +147,14 @@ namespace Physara::Engine
         context.commandList->SetUniformBuffer(PostProcessPassDetail::SettingsBinding, m_SettingsAllocation.buffer, m_SettingsAllocation.offset, m_SettingsAllocation.size);
         context.commandList->SetTexture(PostProcessPassDetail::SceneColorBinding, context.sceneHDR, m_LinearClampSampler.get());
         context.commandList->SetTexture(PostProcessPassDetail::SceneDepthBinding, context.sceneDepth, m_LinearClampSampler.get());
-        context.commandList->SetTexture(PostProcessPassDetail::BloomTextureBinding, GetBloomTexture(), m_LinearClampSampler.get());
+        context.commandList->SetTexture(
+            PostProcessPassDetail::ShadowMapBinding,
+            context.shadowMap != nullptr ? context.shadowMap : m_FallbackShadowMap.get(),
+            m_NearestClampSampler.get());
+        RHI::RHITexture *bloomTexture = context.settings.debugView == DebugViewMode::None
+                                            ? GetBloomTexture()
+                                            : m_BlackTexture.get();
+        context.commandList->SetTexture(PostProcessPassDetail::BloomTextureBinding, bloomTexture, m_LinearClampSampler.get());
         context.commandList->Draw(3u, 1u, 0u, 0u);
         if (context.stats != nullptr)
         {
@@ -163,6 +181,18 @@ namespace Physara::Engine
             m_LinearClampSampler = context.device->CreateSampler(desc);
         }
 
+        if (m_NearestClampSampler == nullptr)
+        {
+            RHI::RHISamplerDesc desc{};
+            desc.minFilter = RHI::FilterMode::Nearest;
+            desc.magFilter = RHI::FilterMode::Nearest;
+            desc.mipFilter = RHI::FilterMode::Nearest;
+            desc.wrapU = RHI::WrapMode::ClampToEdge;
+            desc.wrapV = RHI::WrapMode::ClampToEdge;
+            desc.wrapW = RHI::WrapMode::ClampToEdge;
+            m_NearestClampSampler = context.device->CreateSampler(desc);
+        }
+
         if (m_BlackTexture == nullptr)
         {
             const float black[4]{0.f, 0.f, 0.f, 1.f};
@@ -174,6 +204,23 @@ namespace Physara::Engine
             desc.usage = RHI::TextureUsage::Sampled;
             desc.initialData = black;
             m_BlackTexture = context.device->CreateTexture(desc);
+        }
+
+        if (m_FallbackShadowMap == nullptr)
+        {
+            const float depth = 1.f;
+            RHI::RHITextureDesc desc{};
+            desc.width = 1u;
+            desc.height = 1u;
+            desc.format = RHI::TextureFormat::Depth32F;
+            desc.dimension = RHI::TextureDimension::Tex2DArray;
+            desc.usage = RHI::TextureUsage::Sampled;
+            desc.arrayLayers = 1u;
+            m_FallbackShadowMap = context.device->CreateTexture(desc);
+            if (m_FallbackShadowMap != nullptr)
+            {
+                m_FallbackShadowMap->Upload(0u, 0u, &depth, 0u);
+            }
         }
 
     }

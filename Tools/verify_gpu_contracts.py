@@ -78,6 +78,10 @@ def verify():
         "RenderSettings": "PHYSARA_BINDING_RENDER_SETTINGS",
         "Shadow": "PHYSARA_BINDING_SHADOW",
         "IBL": "PHYSARA_BINDING_IBL",
+        "MaterialTextureIndices": "PHYSARA_BINDING_MATERIAL_TEXTURE_INDICES",
+        "BindlessTextureHandles": "PHYSARA_BINDING_BINDLESS_TEXTURE_HANDLES",
+        "ClusterEntries": "PHYSARA_BINDING_CLUSTER_ENTRIES",
+        "ClusterLightIndices": "PHYSARA_BINDING_CLUSTER_LIGHT_INDICES",
     }.items():
         require_equal(f"GPUBufferBinding::{name}", buffer_bindings[name], defines[define])
 
@@ -95,6 +99,10 @@ def verify():
         "IBLPrefiltered": "PHYSARA_BINDING_IBL_PREFILTERED_TEXTURE",
         "IBLBRDFLut": "PHYSARA_BINDING_IBL_BRDF_LUT",
         "Bloom": "PHYSARA_BINDING_BLOOM_TEXTURE",
+        "GBufferBaseColor": "PHYSARA_BINDING_GBUFFER_BASE_COLOR_TEXTURE",
+        "GBufferNormal": "PHYSARA_BINDING_GBUFFER_NORMAL_TEXTURE",
+        "GBufferMaterial": "PHYSARA_BINDING_GBUFFER_MATERIAL_TEXTURE",
+        "GBufferEmissive": "PHYSARA_BINDING_GBUFFER_EMISSIVE_TEXTURE",
     }.items():
         require_equal(f"GPUTextureBinding::{name}", texture_bindings[name], defines[define])
 

@@ -18,10 +18,38 @@ namespace Physara::Editor
         constexpr float OverlayPadding = 12.f;
         constexpr float IconSize = 18.f;
         constexpr float IconButtonSize = 26.f;
+        constexpr int ShadowMapDebugView = 4;
+
+        bool IsShadowMapInspector(const EditorContext &context)
+        {
+            return context.settings.postProcess.debugViewIndex == ShadowMapDebugView;
+        }
 
         void AddOverlayText(ImDrawList *drawList, const ImVec2 &pos, const char *text)
         {
             drawList->AddText(pos, IM_COL32(232, 244, 230, 255), text);
+        }
+
+        void DrawShadowMapInspectorLabel(
+            ImDrawList *drawList,
+            const ImVec2 &origin,
+            float height,
+            int cascadeIndex)
+        {
+            char label[96]{};
+            std::snprintf(
+                label,
+                sizeof(label),
+                "Shadow Map - Cascade %d - Camera navigation locked",
+                cascadeIndex + 1);
+            const ImVec2 textSize = ImGui::CalcTextSize(label);
+            const ImVec2 boxMin(
+                origin.x + OverlayPadding,
+                origin.y + height - OverlayPadding - textSize.y - 14.f);
+            const ImVec2 boxMax(boxMin.x + textSize.x + 20.f, boxMin.y + textSize.y + 14.f);
+            drawList->AddRectFilled(boxMin, boxMax, IM_COL32(14, 20, 18, 210), 7.f);
+            drawList->AddRect(boxMin, boxMax, IM_COL32(143, 164, 151, 130), 7.f);
+            AddOverlayText(drawList, ImVec2(boxMin.x + 10.f, boxMin.y + 7.f), label);
         }
 
         void ShowTooltip(const char *text)
@@ -114,11 +142,22 @@ namespace Physara::Editor
                                ImVec2(origin.x + width, origin.y + height),
                                ImVec2(0.f, 1.f),
                                ImVec2(1.f, 0.f));
-            m_LightProxyPass.Draw(m_Context, origin, width, height);
-            m_Gizmo.Draw(m_Context, origin, width, height);
-            DrawViewportToolbar(origin, width);
-            DrawOverlay(origin, width, height);
-            HandlePicking(origin, width, height);
+            if (SceneViewPanelDetail::IsShadowMapInspector(m_Context))
+            {
+                SceneViewPanelDetail::DrawShadowMapInspectorLabel(
+                    drawList,
+                    origin,
+                    height,
+                    m_Context.settings.postProcess.shadowMapCascadeIndex);
+            }
+            else
+            {
+                m_LightProxyPass.Draw(m_Context, origin, width, height);
+                m_Gizmo.Draw(m_Context, origin, width, height);
+                DrawViewportToolbar(origin, width);
+                DrawOverlay(origin, width, height);
+                HandlePicking(origin, width, height);
+            }
             ImGui::Dummy(ImVec2(width, height));
         }
         else
@@ -164,7 +203,7 @@ namespace Physara::Editor
         char fpsLine[128]{};
         char cameraLine[128]{};
         char drawLine[160]{};
-        char visibleLine[160]{};
+        char visibleLine[224]{};
         char cpuLine[160]{};
         char frameLine[192]{};
         char uiLine[192]{};
@@ -186,12 +225,15 @@ namespace Physara::Editor
                       stats.drawBatches,
                       static_cast<unsigned long long>(stats.instances),
                       static_cast<unsigned long long>(stats.triangles));
-        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u  Mat/Sets: %u/%u",
+        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u  Clusters/Refs/Max: %u/%u/%u  Mat/Sets: %u/%u",
                       stats.visibleSubmissions,
                       stats.opaqueItems,
                       stats.unlitItems,
                       stats.transparentItems,
                       stats.lightCount,
+                      stats.clusterCount,
+                      stats.clusterLightReferences,
+                      stats.maxLightsPerCluster,
                       stats.materialInstances,
                       stats.materialResourceSets);
         std::snprintf(cpuLine, sizeof(cpuLine), "CPU: build %.2f ms, render %.2f ms",
@@ -208,17 +250,36 @@ namespace Physara::Editor
                       frameStats.imgui.vertexCount,
                       frameStats.imgui.indexCount,
                       frameStats.imgui.renderCpuMs);
-        std::snprintf(passLine, sizeof(passLine), "Pass: Fwd %.2f, Sky %.2f, Trans %.2f, Post %.2f ms",
-                      stats.forwardOpaqueCpuMs,
-                      stats.skyboxCpuMs,
-                      stats.forwardTransparentCpuMs,
-                      stats.postProcessCpuMs);
-        std::snprintf(passDrawLine, sizeof(passDrawLine), "Pass Draws: Sh/Fwd/Sky/Tr/Post %llu/%llu/%llu/%llu/%llu",
-                      static_cast<unsigned long long>(stats.shadowDrawCalls),
-                      static_cast<unsigned long long>(stats.forwardOpaqueDrawCalls),
-                      static_cast<unsigned long long>(stats.skyboxDrawCalls),
-                      static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
-                      static_cast<unsigned long long>(stats.postProcessDrawCalls));
+        if (m_Context.settings.postProcess.renderPathIndex == 2)
+        {
+            std::snprintf(passLine, sizeof(passLine), "Pass: GBuf %.2f, Light %.2f, Fwd %.2f, Trans %.2f, Post %.2f ms",
+                          stats.deferredGBufferCpuMs,
+                          stats.deferredLightingCpuMs,
+                          stats.forwardOpaqueCpuMs,
+                          stats.forwardTransparentCpuMs,
+                          stats.postProcessCpuMs);
+            std::snprintf(passDrawLine, sizeof(passDrawLine), "Pass Draws: Sh/GBuf/Light/Fwd/Tr/Post %llu/%llu/%llu/%llu/%llu/%llu",
+                          static_cast<unsigned long long>(stats.shadowDrawCalls),
+                          static_cast<unsigned long long>(stats.deferredGBufferDrawCalls),
+                          static_cast<unsigned long long>(stats.deferredLightingDrawCalls),
+                          static_cast<unsigned long long>(stats.forwardOpaqueDrawCalls),
+                          static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
+                          static_cast<unsigned long long>(stats.postProcessDrawCalls));
+        }
+        else
+        {
+            std::snprintf(passLine, sizeof(passLine), "Pass: Fwd %.2f, Sky %.2f, Trans %.2f, Post %.2f ms",
+                          stats.forwardOpaqueCpuMs,
+                          stats.skyboxCpuMs,
+                          stats.forwardTransparentCpuMs,
+                          stats.postProcessCpuMs);
+            std::snprintf(passDrawLine, sizeof(passDrawLine), "Pass Draws: Sh/Fwd/Sky/Tr/Post %llu/%llu/%llu/%llu/%llu",
+                          static_cast<unsigned long long>(stats.shadowDrawCalls),
+                          static_cast<unsigned long long>(stats.forwardOpaqueDrawCalls),
+                          static_cast<unsigned long long>(stats.skyboxDrawCalls),
+                          static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
+                          static_cast<unsigned long long>(stats.postProcessDrawCalls));
+        }
         std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, Draw/MDI/Cmd %llu/%llu/%llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, IBuf %llu, Bar %llu",
                       static_cast<unsigned long long>(stats.backend.renderPasses),
                       static_cast<unsigned long long>(stats.backend.drawCalls),
@@ -624,6 +685,16 @@ namespace Physara::Editor
     {
         if (!m_InputCallback)
         {
+            return;
+        }
+
+        if (SceneViewPanelDetail::IsShadowMapInspector(m_Context))
+        {
+            m_NavigationCaptureActive = false;
+            m_Context.sceneView.inputCaptured = false;
+            EditorCameraInputFrame snapshot{};
+            snapshot.escapePressed = true;
+            m_InputCallback(snapshot);
             return;
         }
 

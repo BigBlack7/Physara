@@ -14,6 +14,9 @@ namespace Physara::Engine
         lightCount = 0;
         materialInstances = 0;
         materialResourceSets = 0;
+        clusterCount = 0;
+        clusterLightReferences = 0;
+        maxLightsPerCluster = 0;
         meshUploads = 0;
         meshPrimitiveUploads = 0;
         textureUploads = 0;
@@ -26,6 +29,8 @@ namespace Physara::Engine
         forwardOpaqueDrawCalls = 0;
         skyboxDrawCalls = 0;
         forwardTransparentDrawCalls = 0;
+        deferredGBufferDrawCalls = 0;
+        deferredLightingDrawCalls = 0;
         postProcessDrawCalls = 0;
         instances = 0;
         triangles = 0;
@@ -39,6 +44,8 @@ namespace Physara::Engine
         forwardOpaqueCpuMs = 0.f;
         skyboxCpuMs = 0.f;
         forwardTransparentCpuMs = 0.f;
+        deferredGBufferCpuMs = 0.f;
+        deferredLightingCpuMs = 0.f;
         postProcessCpuMs = 0.f;
         backend.Reset();
     }
@@ -83,6 +90,9 @@ namespace Physara::Engine
         materialInstanceIds.clear();
         materialSignatures.clear();
         lights.clear();
+        clusterGrid = {};
+        clusterEntries.clear();
+        clusterLightIndices.clear();
         stats.Reset();
         frameIndex = newFrameIndex;
         deltaTimeSeconds = deltaTime;

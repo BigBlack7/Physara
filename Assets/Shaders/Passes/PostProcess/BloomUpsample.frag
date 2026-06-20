@@ -10,6 +10,7 @@ layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProce
     vec4 uFlags;
     vec4 uExposureParams;
     vec4 uAAParams;
+    vec4 uDebugParams;
 };
 
 layout(binding = PHYSARA_BINDING_SCENE_COLOR_TEXTURE)uniform sampler2D uSceneColor;

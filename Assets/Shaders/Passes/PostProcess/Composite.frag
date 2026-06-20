@@ -11,11 +11,13 @@ layout(std140, binding = PHYSARA_BINDING_POST_PROCESS_SETTINGS)uniform PostProce
     vec4 uFlags;
     vec4 uExposureParams;
     vec4 uAAParams;
+    vec4 uDebugParams;
 };
 
 layout(binding = PHYSARA_BINDING_SCENE_COLOR_TEXTURE)uniform sampler2D uSceneColor;
 layout(binding = PHYSARA_BINDING_SCENE_DEPTH_TEXTURE)uniform sampler2D uSceneDepth;
 layout(binding = PHYSARA_BINDING_BLOOM_TEXTURE)uniform sampler2D uBloomTexture;
+layout(binding = PHYSARA_BINDING_SHADOW_MAP)uniform sampler2DArray uShadowMap;
 
 layout(location = 0)out vec4 outColor;
 
@@ -238,9 +240,14 @@ float LinearizeDepth(float depth)
 void main()
 {
     uint debugView = uint(uFlags.w + 0.5);
-    if (debugView == 1u)
+    if (debugView == 1u || debugView == 5u || debugView == 6u || debugView == 8u || debugView == 9u)
     {
         outColor = vec4(SampleHDR(inUV), 1.0);
+        return;
+    }
+    if (debugView == 7u)
+    {
+        outColor = vec4(LinearToSrgb(clamp(SampleHDR(inUV), 0.0, 1.0)), 1.0);
         return;
     }
     if (debugView == 2u)
@@ -249,6 +256,20 @@ void main()
         float linearDepth = LinearizeDepth(rawDepth);
         float normalizedDepth = clamp(linearDepth / 100.0, 0.0, 1.0);
         outColor = vec4(vec3(pow(normalizedDepth, 0.45)), 1.0);
+        return;
+    }
+    if (debugView == 4u)
+    {
+        uint cascadeCount = uint(clamp(int(uFrame.shadow.controls.x + 0.5), 1, PHYSARA_MAX_SHADOW_CASCADES));
+        uint layer = min(uint(max(uDebugParams.x, 0.0) + 0.5), cascadeCount - 1u);
+        float shadowDepth = texture(uShadowMap, vec3(inUV, float(layer))).r;
+        outColor = vec4(vec3(pow(clamp(shadowDepth, 0.0, 1.0), 0.35)), 1.0);
+        return;
+    }
+    if (debugView == 10u)
+    {
+        vec3 exposed = SampleHDR(inUV) * ResolveExposureAdjustment();
+        outColor = vec4(LinearToSrgb(ApplyToneMapping(exposed)), 1.0);
         return;
     }
 
