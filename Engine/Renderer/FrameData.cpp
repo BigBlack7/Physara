@@ -17,6 +17,8 @@ namespace Physara::Engine
         clusterCount = 0;
         clusterLightReferences = 0;
         maxLightsPerCluster = 0;
+        localLightCount = 0;
+        clusterOverflowedLightReferences = 0;
         meshUploads = 0;
         meshPrimitiveUploads = 0;
         textureUploads = 0;
@@ -38,8 +40,21 @@ namespace Physara::Engine
         bufferUploadChunks = 0;
         meshUploadBytes = 0;
         textureUploadBytes = 0;
+        deferredGBufferBytes = 0;
+        directSubmittedCommands = 0;
+        indirectRuns = 0;
+        indirectRunCommands = 0;
+        maxIndirectRunCommands = 0;
+        indirectMergeBreaks = 0;
+        indirectGeometryBreaks = 0;
+        indirectInvalidBreaks = 0;
+        indirectShortRuns = 0;
         sceneBuildCpuMs = 0.f;
+        sceneCollectionCpuMs = 0.f;
+        clusterBuildCpuMs = 0.f;
         renderGraphCpuMs = 0.f;
+        renderGraphBuildCpuMs = 0.f;
+        renderGraphExecuteCpuMs = 0.f;
         shadowCpuMs = 0.f;
         forwardOpaqueCpuMs = 0.f;
         skyboxCpuMs = 0.f;
@@ -47,7 +62,31 @@ namespace Physara::Engine
         deferredGBufferCpuMs = 0.f;
         deferredLightingCpuMs = 0.f;
         postProcessCpuMs = 0.f;
+        gpuFrameMs = 0.f;
+        shadowGpuMs = 0.f;
+        forwardOpaqueGpuMs = 0.f;
+        skyboxGpuMs = 0.f;
+        forwardTransparentGpuMs = 0.f;
+        deferredGBufferGpuMs = 0.f;
+        deferredLightingGpuMs = 0.f;
+        worldGridGpuMs = 0.f;
+        postProcessGpuMs = 0.f;
+        bloomPrefilterGpuMs = 0.f;
+        bloomDownsampleGpuMs = 0.f;
+        bloomUpsampleGpuMs = 0.f;
+        postProcessCompositeGpuMs = 0.f;
+        benchmarkEnabled = false;
+        benchmarkComplete = false;
+        benchmarkWarmupFrame = 0;
+        benchmarkWarmupFrames = 0;
+        benchmarkSampleFrame = 0;
+        benchmarkSampleFrames = 0;
+        benchmarkCpuMedianMs = 0.f;
+        benchmarkCpuP95Ms = 0.f;
+        benchmarkGpuMedianMs = 0.f;
+        benchmarkGpuP95Ms = 0.f;
         backend.Reset();
+        barrierDiagnostics.clear();
     }
 
     std::uint64_t FrameStatistics::TotalUploadBytes() const

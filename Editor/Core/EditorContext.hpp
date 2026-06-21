@@ -93,6 +93,10 @@ namespace Physara::Editor
     {
         bool verticalSync{false};
         bool worldGridEnabled{true};
+        bool pipelineBenchmarkEnabled{false};
+        int pipelineBenchmarkWarmupFrames{120};
+        int pipelineBenchmarkSampleFrames{300};
+        std::uint64_t pipelineBenchmarkRestartToken{0};
         float gridSpacingMeters{1.f};
         int gridMajorLineInterval{10};
         float gridFadeStartMeters{50.f};

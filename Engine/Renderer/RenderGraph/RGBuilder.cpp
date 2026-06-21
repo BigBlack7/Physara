@@ -87,6 +87,12 @@ namespace Physara::Engine
         return *this;
     }
 
+    RGBuilder &RGBuilder::SetGPUTimingScope(std::uint32_t scope)
+    {
+        GetPass().SetGPUTimingScope(scope);
+        return *this;
+    }
+
     RGBuilder &RGBuilder::SetExecute(PassNode::ExecuteCallback callback)
     {
         GetPass().SetExecuteCallback(std::move(callback));

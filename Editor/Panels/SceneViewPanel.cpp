@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdint>
+#include <string_view>
 #include <utility>
 
 #include <imgui/imgui.h>
+
+#include <Engine/Renderer/RenderPath.hpp>
 
 namespace Physara::Editor
 {
@@ -142,7 +145,11 @@ namespace Physara::Editor
                                ImVec2(origin.x + width, origin.y + height),
                                ImVec2(0.f, 1.f),
                                ImVec2(1.f, 0.f));
-            if (SceneViewPanelDetail::IsShadowMapInspector(m_Context))
+            if (m_Context.settings.viewport.pipelineBenchmarkEnabled)
+            {
+                DrawOverlay(origin, width, height);
+            }
+            else if (SceneViewPanelDetail::IsShadowMapInspector(m_Context))
             {
                 SceneViewPanelDetail::DrawShadowMapInspectorLabel(
                     drawList,
@@ -188,7 +195,8 @@ namespace Physara::Editor
 
     void SceneViewPanel::DrawOverlay(const ImVec2 &origin, float width, float height)
     {
-        if (m_Context.ui.cleanSceneView || !m_Context.ui.showSceneViewInfo)
+        const bool benchmarkEnabled = m_Context.settings.viewport.pipelineBenchmarkEnabled;
+        if (!benchmarkEnabled && (m_Context.ui.cleanSceneView || !m_Context.ui.showSceneViewInfo))
         {
             return;
         }
@@ -201,6 +209,7 @@ namespace Physara::Editor
 
         char sizeLine[128]{};
         char fpsLine[128]{};
+        char pathLine[128]{};
         char cameraLine[128]{};
         char drawLine[160]{};
         char visibleLine[224]{};
@@ -210,6 +219,10 @@ namespace Physara::Editor
         char passLine[192]{};
         char passDrawLine[192]{};
         char glLine[320]{};
+        char submitLine[256]{};
+        char gpuLine[256]{};
+        char postGpuLine[192]{};
+        char benchmarkLine[256]{};
         char uploadLine[160]{};
         char hoveredLine[128]{};
         char focusedLine[128]{};
@@ -217,28 +230,47 @@ namespace Physara::Editor
 
         const Engine::FrameStatistics &stats = m_Context.sceneView.rendererStats;
         const EditorFrameStatistics &frameStats = m_Context.frameStats;
+        const Engine::RenderPath renderPath = static_cast<Engine::RenderPath>(
+            std::clamp(m_Context.settings.postProcess.renderPathIndex, 0, 2));
+        const std::string_view renderPathName = Engine::RenderPathName(renderPath);
         const double uploadMegabytes = static_cast<double>(stats.TotalUploadBytes()) / (1024.0 * 1024.0);
+        const double gBufferMegabytes = static_cast<double>(stats.deferredGBufferBytes) / (1024.0 * 1024.0);
+        const double indirectRunAverage = stats.indirectRuns > 0u
+                                              ? static_cast<double>(stats.indirectRunCommands) /
+                                                    static_cast<double>(stats.indirectRuns)
+                                              : 0.0;
         std::snprintf(sizeLine, sizeof(sizeLine), "Size: %.f x %.f", width, height);
         std::snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f", ImGui::GetIO().Framerate);
+        std::snprintf(
+            pathLine,
+            sizeof(pathLine),
+            "Render Path: %.*s",
+            static_cast<int>(renderPathName.size()),
+            renderPathName.data());
         std::snprintf(drawLine, sizeof(drawLine), "Draws/Cmds: %llu/%u, Instances: %llu, Tris: %llu",
                       static_cast<unsigned long long>(stats.drawCalls),
                       stats.drawBatches,
                       static_cast<unsigned long long>(stats.instances),
                       static_cast<unsigned long long>(stats.triangles));
-        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u  Clusters/Refs/Max: %u/%u/%u  Mat/Sets: %u/%u",
+        std::snprintf(visibleLine, sizeof(visibleLine), "Visible: %u  O/U/T: %u/%u/%u  Lights: %u/%u  Clusters/Refs/Max/Ov: %u/%u/%u/%u  Mat/Sets: %u/%u",
                       stats.visibleSubmissions,
                       stats.opaqueItems,
                       stats.unlitItems,
                       stats.transparentItems,
                       stats.lightCount,
+                      stats.localLightCount,
                       stats.clusterCount,
                       stats.clusterLightReferences,
                       stats.maxLightsPerCluster,
+                      stats.clusterOverflowedLightReferences,
                       stats.materialInstances,
                       stats.materialResourceSets);
-        std::snprintf(cpuLine, sizeof(cpuLine), "CPU: build %.2f ms, render %.2f ms",
+        std::snprintf(cpuLine, sizeof(cpuLine), "CPU: scene %.2f (collect %.2f, cluster %.2f), graph build/exec %.2f/%.2f ms",
                       stats.sceneBuildCpuMs,
-                      stats.renderGraphCpuMs);
+                      stats.sceneCollectionCpuMs,
+                      stats.clusterBuildCpuMs,
+                      stats.renderGraphBuildCpuMs,
+                      stats.renderGraphExecuteCpuMs);
         std::snprintf(frameLine, sizeof(frameLine), "Frame: %.2f ms  UI build %.2f, Scene %.2f, UI draw %.2f",
                       frameStats.frameCpuMs,
                       frameStats.uiBuildCpuMs,
@@ -250,7 +282,7 @@ namespace Physara::Editor
                       frameStats.imgui.vertexCount,
                       frameStats.imgui.indexCount,
                       frameStats.imgui.renderCpuMs);
-        if (m_Context.settings.postProcess.renderPathIndex == 2)
+        if (renderPath == Engine::RenderPath::Deferred)
         {
             std::snprintf(passLine, sizeof(passLine), "Pass: GBuf %.2f, Light %.2f, Fwd %.2f, Trans %.2f, Post %.2f ms",
                           stats.deferredGBufferCpuMs,
@@ -280,7 +312,7 @@ namespace Physara::Editor
                           static_cast<unsigned long long>(stats.forwardTransparentDrawCalls),
                           static_cast<unsigned long long>(stats.postProcessDrawCalls));
         }
-        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, Draw/MDI/Cmd %llu/%llu/%llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, IBuf %llu, Bar %llu",
+        std::snprintf(glLine, sizeof(glLine), "GL: RP %llu, Draw/MDI/Cmd %llu/%llu/%llu, P/VAO/Prim %llu/%llu/%llu, VB/IB %llu/%llu, Set %llu, Tex/Samp %llu/%llu, IBuf %llu, Bar C/E/S %llu/%llu/%llu",
                       static_cast<unsigned long long>(stats.backend.renderPasses),
                       static_cast<unsigned long long>(stats.backend.drawCalls),
                       static_cast<unsigned long long>(stats.backend.indirectDrawCalls),
@@ -294,13 +326,88 @@ namespace Physara::Editor
                       static_cast<unsigned long long>(stats.backend.textureBinds),
                       static_cast<unsigned long long>(stats.backend.samplerBinds),
                       static_cast<unsigned long long>(stats.backend.indirectBufferBinds),
-                      static_cast<unsigned long long>(stats.backend.barriers));
-        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB, chunks %llu  Mesh/Prim/Tex: %u/%u/%u",
+                      static_cast<unsigned long long>(stats.backend.barrierCandidates),
+                      static_cast<unsigned long long>(stats.backend.barriers),
+                      static_cast<unsigned long long>(stats.backend.barriersSuppressed));
+        std::snprintf(
+            submitLine,
+            sizeof(submitLine),
+            "Submit: direct %llu, MDI runs/cmd/avg/max %llu/%llu/%.1f/%llu, breaks M/G/I/S %llu/%llu/%llu/%llu",
+            static_cast<unsigned long long>(stats.directSubmittedCommands),
+            static_cast<unsigned long long>(stats.indirectRuns),
+            static_cast<unsigned long long>(stats.indirectRunCommands),
+            indirectRunAverage,
+            static_cast<unsigned long long>(stats.maxIndirectRunCommands),
+            static_cast<unsigned long long>(stats.indirectMergeBreaks),
+            static_cast<unsigned long long>(stats.indirectGeometryBreaks),
+            static_cast<unsigned long long>(stats.indirectInvalidBreaks),
+            static_cast<unsigned long long>(stats.indirectShortRuns));
+        if (stats.benchmarkEnabled)
+        {
+            std::snprintf(
+                gpuLine,
+                sizeof(gpuLine),
+                "GPU: frame %.2f  Sh/Fwd/Sky/GBuf/Light/Tr/Grid/Post %.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f ms",
+                stats.gpuFrameMs,
+                stats.shadowGpuMs,
+                stats.forwardOpaqueGpuMs,
+                stats.skyboxGpuMs,
+                stats.deferredGBufferGpuMs,
+                stats.deferredLightingGpuMs,
+                stats.forwardTransparentGpuMs,
+                stats.worldGridGpuMs,
+                stats.postProcessGpuMs);
+            std::snprintf(
+                postGpuLine,
+                sizeof(postGpuLine),
+                "Post GPU: prefilter/downsample/upsample/composite %.2f/%.2f/%.2f/%.2f ms",
+                stats.bloomPrefilterGpuMs,
+                stats.bloomDownsampleGpuMs,
+                stats.bloomUpsampleGpuMs,
+                stats.postProcessCompositeGpuMs);
+            if (stats.benchmarkComplete)
+            {
+                std::snprintf(
+                    benchmarkLine,
+                    sizeof(benchmarkLine),
+                    "Benchmark: complete  CPU med/p95 %.2f/%.2f  GPU med/p95 %.2f/%.2f ms",
+                    stats.benchmarkCpuMedianMs,
+                    stats.benchmarkCpuP95Ms,
+                    stats.benchmarkGpuMedianMs,
+                    stats.benchmarkGpuP95Ms);
+            }
+            else if (stats.benchmarkWarmupFrame < stats.benchmarkWarmupFrames)
+            {
+                std::snprintf(
+                    benchmarkLine,
+                    sizeof(benchmarkLine),
+                    "Benchmark: warmup %u/%u",
+                    stats.benchmarkWarmupFrame,
+                    stats.benchmarkWarmupFrames);
+            }
+            else
+            {
+                std::snprintf(
+                    benchmarkLine,
+                    sizeof(benchmarkLine),
+                    "Benchmark: sampling %u/%u",
+                    stats.benchmarkSampleFrame,
+                    stats.benchmarkSampleFrames);
+            }
+        }
+        else
+        {
+            std::snprintf(gpuLine, sizeof(gpuLine), "GPU: timestamp sampling disabled");
+            std::snprintf(postGpuLine, sizeof(postGpuLine), "Post GPU: timestamp sampling disabled");
+            std::snprintf(benchmarkLine, sizeof(benchmarkLine), "Benchmark: off");
+        }
+        std::snprintf(uploadLine, sizeof(uploadLine), "Upload: %.2f MB, chunks %llu  Mesh/Prim/Tex: %u/%u/%u  GBuffer %.2f MB",
                       uploadMegabytes,
                       static_cast<unsigned long long>(stats.bufferUploadChunks),
                       stats.meshUploads,
                       stats.meshPrimitiveUploads,
-                      stats.textureUploads);
+                      stats.textureUploads,
+                      gBufferMegabytes);
         const char *cameraMode = "Orbit";
         if (m_Context.sceneView.playFlyMode)
         {
@@ -316,6 +423,7 @@ namespace Physara::Editor
 
         float maxTextWidth = std::max({ImGui::CalcTextSize(sizeLine).x,
                                        ImGui::CalcTextSize(fpsLine).x,
+                                       ImGui::CalcTextSize(pathLine).x,
                                        ImGui::CalcTextSize(drawLine).x,
                                        ImGui::CalcTextSize(visibleLine).x,
                                        ImGui::CalcTextSize(cpuLine).x,
@@ -324,6 +432,10 @@ namespace Physara::Editor
                                        ImGui::CalcTextSize(passLine).x,
                                        ImGui::CalcTextSize(passDrawLine).x,
                                        ImGui::CalcTextSize(glLine).x,
+                                       ImGui::CalcTextSize(submitLine).x,
+                                       ImGui::CalcTextSize(gpuLine).x,
+                                       ImGui::CalcTextSize(postGpuLine).x,
+                                       ImGui::CalcTextSize(benchmarkLine).x,
                                        ImGui::CalcTextSize(uploadLine).x,
                                        ImGui::CalcTextSize(cameraLine).x,
                                        ImGui::CalcTextSize(hoveredLine).x,
@@ -345,7 +457,7 @@ namespace Physara::Editor
         }
 
         const float overlayWidth = std::min(maxTextWidth + paddingX * 2.f, std::max(width - 24.f, 0.f));
-        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 15.f : 14.f);
+        const float overlayHeight = paddingY * 2.f + lineHeight * (presentation ? 20.f : 19.f);
         if (overlayWidth > 80.f && height > overlayHeight + 24.f)
         {
             const ImVec2 overlayMin(origin.x + width - SceneViewPanelDetail::OverlayPadding - overlayWidth,
@@ -361,6 +473,9 @@ namespace Physara::Editor
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), fpsLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), pathLine);
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), drawLine);
@@ -385,6 +500,18 @@ namespace Physara::Editor
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), glLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), submitLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), gpuLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), postGpuLine);
+            y += lineHeight;
+
+            SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), benchmarkLine);
             y += lineHeight;
 
             SceneViewPanelDetail::AddOverlayText(drawList, ImVec2(x, y), uploadLine);
@@ -688,7 +815,8 @@ namespace Physara::Editor
             return;
         }
 
-        if (SceneViewPanelDetail::IsShadowMapInspector(m_Context))
+        if (SceneViewPanelDetail::IsShadowMapInspector(m_Context) ||
+            m_Context.settings.viewport.pipelineBenchmarkEnabled)
         {
             m_NavigationCaptureActive = false;
             m_Context.sceneView.inputCaptured = false;

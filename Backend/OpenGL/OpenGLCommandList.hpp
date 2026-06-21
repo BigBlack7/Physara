@@ -3,6 +3,9 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <glad/glad.h>
 
@@ -81,6 +84,14 @@ namespace Physara::RHI
 
         void BeginDebugLabel(const char *label) override;
         void EndDebugLabel() override;
+        void SetGPUTimingEnabled(bool enabled) override;
+        void BeginGPUTimingFrame() override;
+        void EndGPUTimingFrame() override;
+        void BeginGPUTimingScope(std::uint32_t scopeIndex) override;
+        void EndGPUTimingScope(std::uint32_t scopeIndex) override;
+        [[nodiscard]] RHIGPUTimingResult GetGPUTimingResult(std::uint32_t scopeIndex) const override;
+        void SetBarrierDebugContext(std::string_view passName, std::string_view resourceName) override;
+        [[nodiscard]] std::vector<RHIBarrierDiagnostic> GetBarrierDiagnostics() const override;
         void InvalidateResourceBindings() override;
         void InvalidateExternalState() override;
         void InvalidateImGuiState();
@@ -98,6 +109,8 @@ namespace Physara::RHI
         static constexpr std::uint32_t kMaxColorAttachments = 4;
         static constexpr std::uint32_t kMaxVertexBindings = 16;
         static constexpr std::uint32_t kPushConstantsSize = 256;
+        static constexpr std::uint32_t kMaxGPUTimingScopes = 16;
+        static constexpr std::uint32_t kGPUTimingFrameCount = 8;
 
         struct GLState
         {
@@ -223,6 +236,15 @@ namespace Physara::RHI
             bool valid{false};
         };
 
+        struct GPUTimingFrame
+        {
+            std::array<GLuint, kMaxGPUTimingScopes> beginQueries{};
+            std::array<GLuint, kMaxGPUTimingScopes> endQueries{};
+            std::array<bool, kMaxGPUTimingScopes> used{};
+            std::uint64_t frameIndex{0};
+            bool pending{false};
+        };
+
         GLState m_State{};
         const RHIRenderPassDesc *m_CurrentPassDesc{nullptr};
         const RHIPipelineStateDesc *m_CurrentPipelineDesc{nullptr};
@@ -248,6 +270,14 @@ namespace Physara::RHI
         ViewportState m_ViewportState{};
         ScissorState m_ScissorState{};
         RHICommandStatistics m_Statistics{};
+        std::array<GPUTimingFrame, kGPUTimingFrameCount> m_GPUTimingFrames{};
+        std::array<RHIGPUTimingResult, kMaxGPUTimingScopes> m_GPUTimingResults{};
+        std::vector<RHIBarrierDiagnostic> m_BarrierDiagnostics{};
+        std::string m_BarrierPassName{};
+        std::string m_BarrierResourceName{};
+        std::uint64_t m_GPUTimingFrameIndex{0};
+        std::uint32_t m_ActiveGPUTimingFrame{kGPUTimingFrameCount};
+        bool m_GPUTimingEnabled{false};
 
         void InvalidateBindingCache();
         void InvalidatePipelineState();
@@ -276,5 +306,7 @@ namespace Physara::RHI
             std::uint32_t offset,
             std::uint32_t size);
         [[nodiscard]] bool BindTextureRange(std::span<const RHITextureBinding> bindings);
+        void CollectCompletedGPUTimingFrames();
+        void RecordBarrierDiagnostic(const RHIResourceBarrier &barrier, GLbitfield bits);
     };
 }

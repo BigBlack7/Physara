@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include <glm/vec4.hpp>
@@ -180,6 +181,22 @@ namespace Physara::RHI
 
         virtual void BeginDebugLabel(const char *label) = 0;
         virtual void EndDebugLabel() = 0;
+        virtual void SetGPUTimingEnabled(bool enabled) { (void)enabled; }
+        virtual void BeginGPUTimingFrame() {}
+        virtual void EndGPUTimingFrame() {}
+        virtual void BeginGPUTimingScope(std::uint32_t scopeIndex) { (void)scopeIndex; }
+        virtual void EndGPUTimingScope(std::uint32_t scopeIndex) { (void)scopeIndex; }
+        [[nodiscard]] virtual RHIGPUTimingResult GetGPUTimingResult(std::uint32_t scopeIndex) const
+        {
+            (void)scopeIndex;
+            return {};
+        }
+        virtual void SetBarrierDebugContext(std::string_view passName, std::string_view resourceName)
+        {
+            (void)passName;
+            (void)resourceName;
+        }
+        [[nodiscard]] virtual std::vector<RHIBarrierDiagnostic> GetBarrierDiagnostics() const { return {}; }
         virtual void InvalidateResourceBindings() {}
         virtual void InvalidateExternalState() {}
 

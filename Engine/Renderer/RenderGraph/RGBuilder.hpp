@@ -28,6 +28,7 @@ namespace Physara::Engine
             RHI::ShaderStageFlags stages,
             RHI::ResourceAccessFlags access);
         RGBuilder &SetSideEffect(bool sideEffect = true);
+        RGBuilder &SetGPUTimingScope(std::uint32_t scope);
         RGBuilder &SetExecute(PassNode::ExecuteCallback callback);
 
     private:

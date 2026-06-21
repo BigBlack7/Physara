@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +50,8 @@ namespace Physara::Engine
         [[nodiscard]] const std::string &GetName() const { return m_Name; }
         [[nodiscard]] const std::vector<RenderGraphResourceAccess> &GetResourceAccesses() const { return m_ResourceAccesses; }
         [[nodiscard]] bool HasSideEffect() const { return m_SideEffect; }
+        [[nodiscard]] bool HasGPUTimingScope() const { return m_GPUTimingScope != InvalidGPUTimingScope; }
+        [[nodiscard]] std::uint32_t GetGPUTimingScope() const { return m_GPUTimingScope; }
 
         void AddRead(RenderGraphResourceHandle resource);
         void AddWrite(RenderGraphResourceHandle resource);
@@ -58,6 +62,7 @@ namespace Physara::Engine
             RHI::ShaderStageFlags stages,
             RHI::ResourceAccessFlags access);
         void SetSideEffect(bool sideEffect);
+        void SetGPUTimingScope(std::uint32_t scope);
         void SetExecuteCallback(ExecuteCallback callback);
         void Execute(RenderGraphContext &context) const;
 
@@ -66,6 +71,8 @@ namespace Physara::Engine
         std::vector<RenderGraphResourceAccess> m_ResourceAccesses{};
         ExecuteCallback m_ExecuteCallback{};
         bool m_SideEffect{false};
+        static constexpr std::uint32_t InvalidGPUTimingScope = std::numeric_limits<std::uint32_t>::max();
+        std::uint32_t m_GPUTimingScope{InvalidGPUTimingScope};
     };
 
     inline PassNode::PassNode(std::string name)
@@ -106,6 +113,11 @@ namespace Physara::Engine
     inline void PassNode::SetSideEffect(bool sideEffect)
     {
         m_SideEffect = sideEffect;
+    }
+
+    inline void PassNode::SetGPUTimingScope(std::uint32_t scope)
+    {
+        m_GPUTimingScope = scope;
     }
 
     inline void PassNode::SetExecuteCallback(ExecuteCallback callback)

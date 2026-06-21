@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <utility>
 #include <vector>
+
+#include <glm/common.hpp>
 
 #include <Engine/Core/Log.hpp>
 #include <Engine/RHI/Command/RHICommandList.hpp>
@@ -25,6 +29,20 @@ namespace Physara::Engine
             const auto end = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration<float, std::milli>(end - start);
             return elapsed.count();
+        }
+
+        float Percentile(std::vector<float> values, float percentile)
+        {
+            if (values.empty())
+            {
+                return 0.f;
+            }
+            std::sort(values.begin(), values.end());
+            const float position = glm::clamp(percentile, 0.f, 1.f) * static_cast<float>(values.size() - 1u);
+            const std::size_t lower = static_cast<std::size_t>(std::floor(position));
+            const std::size_t upper = std::min(lower + 1u, values.size() - 1u);
+            const float fraction = position - static_cast<float>(lower);
+            return values[lower] + (values[upper] - values[lower]) * fraction;
         }
     }
 
@@ -103,6 +121,7 @@ namespace Physara::Engine
         m_PipelineStateCache.SetDevice(nullptr);
         m_ViewportWidth = 0;
         m_ViewportHeight = 0;
+        ResetBenchmark();
         m_Device = nullptr;
         m_AssetManager = nullptr;
     }
@@ -119,6 +138,7 @@ namespace Physara::Engine
 
         m_ViewportWidth = width;
         m_ViewportHeight = height;
+        ResetBenchmark();
         RecreateRenderTarget();
     }
 
@@ -145,10 +165,14 @@ namespace Physara::Engine
         {
             scene.UpdateTransforms();
         }
+        const auto collectionStart = std::chrono::steady_clock::now();
         m_RenderProxy.Build(scene, view, m_FrameData, m_AssetManager);
+        m_FrameData.stats.sceneCollectionCpuMs = RendererDetail::ElapsedMilliseconds(collectionStart);
         if (UsesClusteredLighting(m_RenderPath))
         {
+            const auto clusterStart = std::chrono::steady_clock::now();
             m_ClusteredLightGrid.Build(m_FrameData);
+            m_FrameData.stats.clusterBuildCpuMs = RendererDetail::ElapsedMilliseconds(clusterStart);
         }
         m_FrameData.stats.sceneBuildCpuMs = RendererDetail::ElapsedMilliseconds(buildStart);
         RenderClear();
@@ -169,13 +193,25 @@ namespace Physara::Engine
             return;
         }
 
-        const auto renderStart = std::chrono::steady_clock::now();
         commandList->ResetStatistics();
+        commandList->SetGPUTimingEnabled(m_BenchmarkSettings.enabled);
+        const auto graphBuildStart = std::chrono::steady_clock::now();
         BuildRenderGraph();
+        m_FrameData.stats.renderGraphBuildCpuMs = RendererDetail::ElapsedMilliseconds(graphBuildStart);
+        const auto graphExecuteStart = std::chrono::steady_clock::now();
+        commandList->BeginGPUTimingFrame();
+        commandList->BeginGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::Frame));
         m_RenderGraph.Execute(*commandList, m_Device);
+        commandList->EndGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::Frame));
+        commandList->EndGPUTimingFrame();
         m_Device->SubmitCommandList();
+        m_FrameData.stats.renderGraphExecuteCpuMs = RendererDetail::ElapsedMilliseconds(graphExecuteStart);
         m_FrameData.stats.backend = commandList->GetStatistics();
-        m_FrameData.stats.renderGraphCpuMs = RendererDetail::ElapsedMilliseconds(renderStart);
+        m_FrameData.stats.barrierDiagnostics = commandList->GetBarrierDiagnostics();
+        m_FrameData.stats.renderGraphCpuMs =
+            m_FrameData.stats.renderGraphBuildCpuMs + m_FrameData.stats.renderGraphExecuteCpuMs;
+        PopulateGPUTimings(*commandList);
+        UpdateBenchmark();
     }
 
     CaptureResult Renderer::CaptureCurrentView(const CaptureDesc &desc)
@@ -269,8 +305,25 @@ namespace Physara::Engine
         }
 
         m_RenderPath = path;
+        ResetBenchmark();
         SetPostProcessSettings(m_PostProcessSettings);
         RecreateRenderTarget();
+    }
+
+    void Renderer::SetPipelineBenchmarkSettings(const PipelineBenchmarkSettings &settings)
+    {
+        PipelineBenchmarkSettings sanitized = settings;
+        sanitized.warmupFrames = std::max(sanitized.warmupFrames, 1u);
+        sanitized.sampleFrames = std::max(sanitized.sampleFrames, 1u);
+        if (m_BenchmarkSettings.enabled == sanitized.enabled &&
+            m_BenchmarkSettings.warmupFrames == sanitized.warmupFrames &&
+            m_BenchmarkSettings.sampleFrames == sanitized.sampleFrames &&
+            m_BenchmarkSettings.restartToken == sanitized.restartToken)
+        {
+            return;
+        }
+        m_BenchmarkSettings = sanitized;
+        ResetBenchmark();
     }
 
     bool Renderer::HasValidRenderTarget() const
@@ -490,6 +543,11 @@ namespace Physara::Engine
         RenderGraphResourceHandle gBufferEmissive{};
         if (deferred)
         {
+            constexpr std::uint64_t GBufferBytesPerPixel = 24u;
+            m_FrameData.stats.deferredGBufferBytes =
+                static_cast<std::uint64_t>(m_ViewportWidth) *
+                static_cast<std::uint64_t>(m_ViewportHeight) *
+                GBufferBytesPerPixel;
             gBufferBaseColor = m_RenderGraph.ImportTexture("GBufferBaseColor", *m_DeferredResources.GetBaseColor());
             gBufferNormal = m_RenderGraph.ImportTexture("GBufferNormal", *m_DeferredResources.GetNormal());
             gBufferMaterial = m_RenderGraph.ImportTexture("GBufferMaterial", *m_DeferredResources.GetMaterial());
@@ -540,7 +598,9 @@ namespace Physara::Engine
 
         if (shadowEnabled)
         {
-            RGBuilder shadowPass = m_RenderGraph.AddPass("Shadow").SetSideEffect();
+            RGBuilder shadowPass = m_RenderGraph.AddPass("Shadow")
+                                       .SetSideEffect()
+                                       .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::Shadow));
             if (shadowMap.IsValid())
             {
                 shadowPass.WriteAttachment(shadowMap);
@@ -590,6 +650,7 @@ namespace Physara::Engine
             m_RenderGraph.AddPass("Skybox")
                 .WriteAttachment(renderHDR)
                 .WriteAttachment(renderDepth)
+                .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::Skybox))
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 SkyboxPassContext passContext{};
@@ -620,6 +681,7 @@ namespace Physara::Engine
                 .WriteAttachment(gBufferMaterial)
                 .WriteAttachment(gBufferEmissive)
                 .WriteAttachment(sceneDepth)
+                .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::GBuffer))
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 GBufferPassContext passContext{};
@@ -661,6 +723,8 @@ namespace Physara::Engine
             {
                 deferredLighting.ReadTexture(shadowMap);
             }
+            deferredLighting.SetGPUTimingScope(
+                static_cast<std::uint32_t>(RendererGPUTimingScope::DeferredLighting));
             deferredLighting.SetExecute([this, drawSkybox, gBufferDebug](RenderGraphContext &context)
                                         {
                                             DeferredLightingPassContext passContext{};
@@ -700,6 +764,7 @@ namespace Physara::Engine
                         RHI::ResourceAccess::ColorAttachmentRead)
                     .WriteAttachment(sceneHDR)
                     .WriteAttachment(sceneDepth)
+                    .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::ForwardOpaque))
                     .SetExecute([this](RenderGraphContext &context)
                                 {
                                     ExecuteUnlitForwardPass(context);
@@ -726,6 +791,8 @@ namespace Physara::Engine
                     RHI::ShaderStageBit::Fragment,
                     RHI::ResourceAccess::ColorAttachmentRead);
             }
+            forwardOpaque.SetGPUTimingScope(
+                static_cast<std::uint32_t>(RendererGPUTimingScope::ForwardOpaque));
             forwardOpaque.SetExecute([this](RenderGraphContext &context)
                                      {
                                          ForwardPassContext passContext{};
@@ -773,6 +840,7 @@ namespace Physara::Engine
                     RHI::ShaderStageBit::Fragment,
                     RHI::ResourceAccess::DepthStencilRead)
                 .WriteAttachment(renderHDR)
+                .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::WorldGrid))
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 ExecuteWorldGridPass(context);
@@ -797,6 +865,8 @@ namespace Physara::Engine
             {
                 forwardTransparent.ReadTexture(shadowMap);
             }
+            forwardTransparent.SetGPUTimingScope(
+                static_cast<std::uint32_t>(RendererGPUTimingScope::ForwardTransparent));
             forwardTransparent.SetExecute([this](RenderGraphContext &context)
                                           {
                                               ExecuteTransparentForwardPass(context);
@@ -810,6 +880,7 @@ namespace Physara::Engine
                 .ReadTransfer(renderDepth)
                 .WriteTransfer(sceneHDR)
                 .WriteTransfer(sceneDepth)
+                .SetGPUTimingScope(static_cast<std::uint32_t>(RendererGPUTimingScope::MSAAResolve))
                 .SetExecute([this](RenderGraphContext &context)
                             {
                                 context.commandList.ResolveTexture(m_SceneHDRColorMSAA.get(), m_SceneHDRColor.get());
@@ -825,6 +896,8 @@ namespace Physara::Engine
         {
             postProcess.ReadTexture(shadowMap);
         }
+        postProcess.SetGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::PostProcess));
         postProcess.SetExecute([this](RenderGraphContext &context)
                         {
                             PostProcessPassContext passContext{};
@@ -875,6 +948,87 @@ namespace Physara::Engine
         const auto passStart = std::chrono::steady_clock::now();
         m_ForwardOpaquePass.ExecuteTransparent(passContext);
         m_FrameData.stats.forwardTransparentCpuMs += RendererDetail::ElapsedMilliseconds(passStart);
+    }
+
+    void Renderer::PopulateGPUTimings(RHI::RHICommandList &commandList)
+    {
+        auto milliseconds = [&commandList](RendererGPUTimingScope scope)
+        {
+            const RHI::RHIGPUTimingResult result =
+                commandList.GetGPUTimingResult(static_cast<std::uint32_t>(scope));
+            return result.valid ? result.milliseconds : 0.f;
+        };
+        m_FrameData.stats.gpuFrameMs = milliseconds(RendererGPUTimingScope::Frame);
+        m_FrameData.stats.shadowGpuMs = milliseconds(RendererGPUTimingScope::Shadow);
+        m_FrameData.stats.skyboxGpuMs = milliseconds(RendererGPUTimingScope::Skybox);
+        m_FrameData.stats.deferredGBufferGpuMs = milliseconds(RendererGPUTimingScope::GBuffer);
+        m_FrameData.stats.deferredLightingGpuMs = milliseconds(RendererGPUTimingScope::DeferredLighting);
+        m_FrameData.stats.forwardOpaqueGpuMs = milliseconds(RendererGPUTimingScope::ForwardOpaque);
+        m_FrameData.stats.forwardTransparentGpuMs = milliseconds(RendererGPUTimingScope::ForwardTransparent);
+        m_FrameData.stats.worldGridGpuMs = milliseconds(RendererGPUTimingScope::WorldGrid);
+        m_FrameData.stats.postProcessGpuMs = milliseconds(RendererGPUTimingScope::PostProcess);
+        m_FrameData.stats.bloomPrefilterGpuMs = milliseconds(RendererGPUTimingScope::BloomPrefilter);
+        m_FrameData.stats.bloomDownsampleGpuMs = milliseconds(RendererGPUTimingScope::BloomDownsample);
+        m_FrameData.stats.bloomUpsampleGpuMs = milliseconds(RendererGPUTimingScope::BloomUpsample);
+        m_FrameData.stats.postProcessCompositeGpuMs = milliseconds(RendererGPUTimingScope::PostProcessComposite);
+    }
+
+    void Renderer::ResetBenchmark()
+    {
+        m_BenchmarkState.cpuSamples.clear();
+        m_BenchmarkState.gpuSamples.clear();
+        m_BenchmarkState.warmupFrame = 0u;
+        m_BenchmarkState.lastGpuFrameIndex = 0u;
+        m_BenchmarkState.cpuMedianMs = 0.f;
+        m_BenchmarkState.cpuP95Ms = 0.f;
+        m_BenchmarkState.gpuMedianMs = 0.f;
+        m_BenchmarkState.gpuP95Ms = 0.f;
+        m_BenchmarkState.complete = false;
+    }
+
+    void Renderer::UpdateBenchmark()
+    {
+        FrameStatistics &stats = m_FrameData.stats;
+        stats.benchmarkEnabled = m_BenchmarkSettings.enabled;
+        stats.benchmarkWarmupFrames = m_BenchmarkSettings.warmupFrames;
+        stats.benchmarkSampleFrames = m_BenchmarkSettings.sampleFrames;
+        if (!m_BenchmarkSettings.enabled)
+        {
+            return;
+        }
+
+        if (m_BenchmarkState.warmupFrame < m_BenchmarkSettings.warmupFrames)
+        {
+            ++m_BenchmarkState.warmupFrame;
+        }
+        else if (!m_BenchmarkState.complete)
+        {
+            const RHI::RHIGPUTimingResult gpuResult =
+                m_Device->GetCommandList()->GetGPUTimingResult(
+                    static_cast<std::uint32_t>(RendererGPUTimingScope::Frame));
+            if (gpuResult.valid && gpuResult.frameIndex != m_BenchmarkState.lastGpuFrameIndex)
+            {
+                m_BenchmarkState.lastGpuFrameIndex = gpuResult.frameIndex;
+                m_BenchmarkState.cpuSamples.push_back(stats.sceneBuildCpuMs + stats.renderGraphCpuMs);
+                m_BenchmarkState.gpuSamples.push_back(gpuResult.milliseconds);
+                if (m_BenchmarkState.cpuSamples.size() >= m_BenchmarkSettings.sampleFrames)
+                {
+                    m_BenchmarkState.cpuMedianMs = RendererDetail::Percentile(m_BenchmarkState.cpuSamples, 0.5f);
+                    m_BenchmarkState.cpuP95Ms = RendererDetail::Percentile(m_BenchmarkState.cpuSamples, 0.95f);
+                    m_BenchmarkState.gpuMedianMs = RendererDetail::Percentile(m_BenchmarkState.gpuSamples, 0.5f);
+                    m_BenchmarkState.gpuP95Ms = RendererDetail::Percentile(m_BenchmarkState.gpuSamples, 0.95f);
+                    m_BenchmarkState.complete = true;
+                }
+            }
+        }
+
+        stats.benchmarkComplete = m_BenchmarkState.complete;
+        stats.benchmarkWarmupFrame = m_BenchmarkState.warmupFrame;
+        stats.benchmarkSampleFrame = static_cast<std::uint32_t>(m_BenchmarkState.cpuSamples.size());
+        stats.benchmarkCpuMedianMs = m_BenchmarkState.cpuMedianMs;
+        stats.benchmarkCpuP95Ms = m_BenchmarkState.cpuP95Ms;
+        stats.benchmarkGpuMedianMs = m_BenchmarkState.gpuMedianMs;
+        stats.benchmarkGpuP95Ms = m_BenchmarkState.gpuP95Ms;
     }
 
     void Renderer::ExecuteUnlitForwardPass(RenderGraphContext &context)

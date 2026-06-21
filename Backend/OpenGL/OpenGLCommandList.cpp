@@ -50,14 +50,28 @@ namespace Physara::RHI
         {
             // OpenGL没有Vulkan那种显式layout/state transition; 这里把RHI的资源状态语义
             // 翻译成glMemoryBarrier的可见性bit, 保证前序shader/FBO/copy写入对后续读写可见
-            const bool framebufferWriteToShaderRead =
-                (barrier.before == ResourceState::RenderTarget || barrier.before == ResourceState::DepthWrite) &&
-                barrier.after == ResourceState::ShaderResource &&
-                (barrier.srcAccess & (ResourceAccess::ColorAttachmentWrite | ResourceAccess::DepthStencilWrite)) != 0u &&
-                (barrier.dstAccess & ResourceAccess::ShaderRead) != 0u &&
-                (barrier.srcAccess & (ResourceAccess::ShaderWrite | ResourceAccess::TransferWrite)) == 0u &&
-                (barrier.dstAccess & (ResourceAccess::ShaderWrite | ResourceAccess::TransferWrite)) == 0u;
-            if (framebufferWriteToShaderRead)
+            if (barrier.srcAccess == ResourceAccess::None)
+            {
+                return 0;
+            }
+
+            constexpr ResourceAccessFlags framebufferAccess =
+                ResourceAccess::ColorAttachmentRead |
+                ResourceAccess::ColorAttachmentWrite |
+                ResourceAccess::DepthStencilRead |
+                ResourceAccess::DepthStencilWrite;
+            constexpr ResourceAccessFlags orderedGraphicsReadAccess =
+                framebufferAccess |
+                ResourceAccess::ShaderRead;
+            const bool framebufferOrderedTransition =
+                (barrier.srcAccess & framebufferAccess) != 0u &&
+                (barrier.srcAccess & ~framebufferAccess) == 0u &&
+                (barrier.dstAccess & ~orderedGraphicsReadAccess) == 0u;
+            const bool shaderReadToFramebuffer =
+                (barrier.srcAccess & ~ResourceAccess::ShaderRead) == 0u &&
+                (barrier.dstAccess & framebufferAccess) != 0u &&
+                (barrier.dstAccess & ~framebufferAccess) == 0u;
+            if (framebufferOrderedTransition || shaderReadToFramebuffer)
             {
                 return 0;
             }
@@ -172,6 +186,15 @@ namespace Physara::RHI
 
         glCreateFramebuffers(1, &m_ResolveReadFramebuffer);
         glCreateFramebuffers(1, &m_ResolveDrawFramebuffer);
+        for (GPUTimingFrame &frame : m_GPUTimingFrames)
+        {
+            glGenQueries(
+                static_cast<GLsizei>(frame.beginQueries.size()),
+                frame.beginQueries.data());
+            glGenQueries(
+                static_cast<GLsizei>(frame.endQueries.size()),
+                frame.endQueries.data());
+        }
     }
 
     void OpenGLCommandList::InvalidateBindingCache()
@@ -349,6 +372,17 @@ namespace Physara::RHI
 
     OpenGLCommandList::~OpenGLCommandList()
     {
+        for (GPUTimingFrame &frame : m_GPUTimingFrames)
+        {
+            glDeleteQueries(
+                static_cast<GLsizei>(frame.beginQueries.size()),
+                frame.beginQueries.data());
+            glDeleteQueries(
+                static_cast<GLsizei>(frame.endQueries.size()),
+                frame.endQueries.data());
+            frame.beginQueries.fill(0u);
+            frame.endQueries.fill(0u);
+        }
         if (m_ResolveReadFramebuffer != 0)
         {
             glDeleteFramebuffers(1, &m_ResolveReadFramebuffer);
@@ -369,11 +403,169 @@ namespace Physara::RHI
     void OpenGLCommandList::ResetStatistics()
     {
         m_Statistics.Reset();
+        m_BarrierDiagnostics.clear();
     }
 
     RHICommandStatistics OpenGLCommandList::GetStatistics() const
     {
         return m_Statistics;
+    }
+
+    void OpenGLCommandList::SetGPUTimingEnabled(bool enabled)
+    {
+        m_GPUTimingEnabled = enabled;
+        if (!enabled)
+        {
+            m_ActiveGPUTimingFrame = kGPUTimingFrameCount;
+        }
+    }
+
+    void OpenGLCommandList::CollectCompletedGPUTimingFrames()
+    {
+        for (GPUTimingFrame &frame : m_GPUTimingFrames)
+        {
+            if (!frame.pending)
+            {
+                continue;
+            }
+
+            bool ready = true;
+            for (std::uint32_t scope = 0u; scope < kMaxGPUTimingScopes; ++scope)
+            {
+                if (!frame.used[scope])
+                {
+                    continue;
+                }
+                GLint available = GL_FALSE;
+                glGetQueryObjectiv(frame.endQueries[scope], GL_QUERY_RESULT_AVAILABLE, &available);
+                if (available != GL_TRUE)
+                {
+                    ready = false;
+                    break;
+                }
+            }
+            if (!ready)
+            {
+                continue;
+            }
+
+            for (std::uint32_t scope = 0u; scope < kMaxGPUTimingScopes; ++scope)
+            {
+                RHIGPUTimingResult &result = m_GPUTimingResults[scope];
+                if (frame.frameIndex < result.frameIndex)
+                {
+                    continue;
+                }
+                if (!frame.used[scope])
+                {
+                    result = RHIGPUTimingResult{0.f, frame.frameIndex, false};
+                    continue;
+                }
+                GLuint64 beginTimestamp = 0u;
+                GLuint64 endTimestamp = 0u;
+                glGetQueryObjectui64v(frame.beginQueries[scope], GL_QUERY_RESULT, &beginTimestamp);
+                glGetQueryObjectui64v(frame.endQueries[scope], GL_QUERY_RESULT, &endTimestamp);
+                result.milliseconds =
+                    static_cast<float>(endTimestamp >= beginTimestamp ? endTimestamp - beginTimestamp : 0u) * 0.000001f;
+                result.frameIndex = frame.frameIndex;
+                result.valid = true;
+            }
+            frame.pending = false;
+        }
+    }
+
+    void OpenGLCommandList::BeginGPUTimingFrame()
+    {
+        m_ActiveGPUTimingFrame = kGPUTimingFrameCount;
+        if (!m_GPUTimingEnabled)
+        {
+            return;
+        }
+
+        CollectCompletedGPUTimingFrames();
+        ++m_GPUTimingFrameIndex;
+        for (std::uint32_t slot = 0u; slot < kGPUTimingFrameCount; ++slot)
+        {
+            GPUTimingFrame &frame = m_GPUTimingFrames[slot];
+            if (frame.pending)
+            {
+                continue;
+            }
+            frame.used.fill(false);
+            frame.frameIndex = m_GPUTimingFrameIndex;
+            m_ActiveGPUTimingFrame = slot;
+            break;
+        }
+    }
+
+    void OpenGLCommandList::EndGPUTimingFrame()
+    {
+        if (m_ActiveGPUTimingFrame >= kGPUTimingFrameCount)
+        {
+            return;
+        }
+        GPUTimingFrame &frame = m_GPUTimingFrames[m_ActiveGPUTimingFrame];
+        frame.pending = std::any_of(frame.used.begin(), frame.used.end(), [](bool used)
+                                    { return used; });
+        m_ActiveGPUTimingFrame = kGPUTimingFrameCount;
+    }
+
+    void OpenGLCommandList::BeginGPUTimingScope(std::uint32_t scopeIndex)
+    {
+        if (!m_GPUTimingEnabled ||
+            m_ActiveGPUTimingFrame >= kGPUTimingFrameCount ||
+            scopeIndex >= kMaxGPUTimingScopes)
+        {
+            return;
+        }
+        GPUTimingFrame &frame = m_GPUTimingFrames[m_ActiveGPUTimingFrame];
+        glQueryCounter(frame.beginQueries[scopeIndex], GL_TIMESTAMP);
+        frame.used[scopeIndex] = true;
+    }
+
+    void OpenGLCommandList::EndGPUTimingScope(std::uint32_t scopeIndex)
+    {
+        if (!m_GPUTimingEnabled ||
+            m_ActiveGPUTimingFrame >= kGPUTimingFrameCount ||
+            scopeIndex >= kMaxGPUTimingScopes)
+        {
+            return;
+        }
+        GPUTimingFrame &frame = m_GPUTimingFrames[m_ActiveGPUTimingFrame];
+        if (frame.used[scopeIndex])
+        {
+            glQueryCounter(frame.endQueries[scopeIndex], GL_TIMESTAMP);
+        }
+    }
+
+    RHIGPUTimingResult OpenGLCommandList::GetGPUTimingResult(std::uint32_t scopeIndex) const
+    {
+        return scopeIndex < kMaxGPUTimingScopes ? m_GPUTimingResults[scopeIndex] : RHIGPUTimingResult{};
+    }
+
+    void OpenGLCommandList::SetBarrierDebugContext(std::string_view passName, std::string_view resourceName)
+    {
+        m_BarrierPassName.assign(passName);
+        m_BarrierResourceName.assign(resourceName);
+    }
+
+    std::vector<RHIBarrierDiagnostic> OpenGLCommandList::GetBarrierDiagnostics() const
+    {
+        return m_BarrierDiagnostics;
+    }
+
+    void OpenGLCommandList::RecordBarrierDiagnostic(const RHIResourceBarrier &barrier, GLbitfield bits)
+    {
+        RHIBarrierDiagnostic diagnostic{};
+        diagnostic.passName = m_BarrierPassName;
+        diagnostic.resourceName = m_BarrierResourceName;
+        diagnostic.before = barrier.before;
+        diagnostic.after = barrier.after;
+        diagnostic.srcAccess = barrier.srcAccess;
+        diagnostic.dstAccess = barrier.dstAccess;
+        diagnostic.backendBits = static_cast<std::uint32_t>(bits);
+        diagnostic.emitted = bits != 0u;
+        m_BarrierDiagnostics.push_back(std::move(diagnostic));
     }
 
     void OpenGLCommandList::SetPipelineState(RHIPipelineState *pso)
@@ -1361,10 +1553,16 @@ namespace Physara::RHI
         // 新接口按RHIResourceBarrier映射barrier bits, 后续RenderGraph可直接走这里
         (void)texture;
         const GLbitfield bits = OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier);
+        ++m_Statistics.barrierCandidates;
+        RecordBarrierDiagnostic(barrier, bits);
         if (bits != 0)
         {
             glMemoryBarrier(bits);
             ++m_Statistics.barriers;
+        }
+        else
+        {
+            ++m_Statistics.barriersSuppressed;
         }
     }
 
@@ -1372,10 +1570,16 @@ namespace Physara::RHI
     {
         (void)buffer;
         const GLbitfield bits = OpenGLCommandListDetail::ToGLMemoryBarrierBits(barrier);
+        ++m_Statistics.barrierCandidates;
+        RecordBarrierDiagnostic(barrier, bits);
         if (bits != 0)
         {
             glMemoryBarrier(bits);
             ++m_Statistics.barriers;
+        }
+        else
+        {
+            ++m_Statistics.barriersSuppressed;
         }
     }
 

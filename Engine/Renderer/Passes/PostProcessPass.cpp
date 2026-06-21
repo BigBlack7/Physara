@@ -134,6 +134,8 @@ namespace Physara::Engine
         }
 
         PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "PostProcessComposite");
+        context.commandList->BeginGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::PostProcessComposite));
         const std::array<glm::vec4, 1> clearColors{glm::vec4(0.f, 0.f, 0.f, 1.f)};
         context.commandList->BeginRenderPass(context.framebuffer, *context.renderPassDesc, clearColors);
         context.commandList->SetViewport(
@@ -164,6 +166,8 @@ namespace Physara::Engine
             ++context.stats->triangles;
         }
         context.commandList->EndRenderPass();
+        context.commandList->EndGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::PostProcessComposite));
     }
 
     void PostProcessPass::EnsureResources(const PostProcessPassContext &context)
@@ -347,6 +351,8 @@ namespace Physara::Engine
             return;
         }
 
+        context.commandList->BeginGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomPrefilter));
         {
             PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomPrefilter");
             ExecuteFullscreenPass(
@@ -360,7 +366,12 @@ namespace Physara::Engine
                 context.sceneHDR,
                 m_BlackTexture.get());
         }
+        context.commandList->EndGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomPrefilter));
 
+        context.commandList->BeginGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomDownsample));
+        context.commandList->SetBarrierDebugContext("PostProcess", "BloomDownsample");
         for (std::size_t i = 1u; i < m_BloomMips.size(); ++i)
         {
             context.commandList->TextureBarrier(m_BloomMips[i - 1u].downTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
@@ -376,8 +387,13 @@ namespace Physara::Engine
                 m_BloomMips[i - 1u].downTexture.get(),
                 m_BlackTexture.get());
         }
+        context.commandList->EndGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomDownsample));
 
         const std::size_t last = m_BloomMips.size() - 1u;
+        context.commandList->BeginGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomUpsample));
+        context.commandList->SetBarrierDebugContext("PostProcess", "BloomUpsample");
         context.commandList->TextureBarrier(m_BloomMips[last].downTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
         {
             PostProcessPassDetail::ScopedDebugLabel label(context.commandList, "BloomCopy");
@@ -412,6 +428,8 @@ namespace Physara::Engine
         }
 
         context.commandList->TextureBarrier(m_BloomMips.front().upTexture.get(), RHI::ResourceBarrier::ColorAttachmentWriteToFragmentRead());
+        context.commandList->EndGPUTimingScope(
+            static_cast<std::uint32_t>(RendererGPUTimingScope::BloomUpsample));
     }
 
     void PostProcessPass::ExecuteFullscreenPass(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace Physara::RHI
 {
@@ -29,7 +30,9 @@ namespace Physara::RHI
         std::uint64_t resourceSetBinds{0};
         std::uint64_t textureBinds{0};
         std::uint64_t samplerBinds{0};
+        std::uint64_t barrierCandidates{0};
         std::uint64_t barriers{0};
+        std::uint64_t barriersSuppressed{0};
         std::uint64_t resolves{0};
         std::uint64_t mipmapGenerates{0};
         std::uint64_t readbacks{0};
@@ -38,6 +41,13 @@ namespace Physara::RHI
         {
             *this = {};
         }
+    };
+
+    struct RHIGPUTimingResult
+    {
+        float milliseconds{0.f};
+        std::uint64_t frameIndex{0};
+        bool valid{false};
     };
 
     namespace TextureUsage
@@ -175,6 +185,18 @@ namespace Physara::RHI
         constexpr ResourceAccessFlags MemoryRead = 1u << 14;
         constexpr ResourceAccessFlags MemoryWrite = 1u << 15;
     }
+
+    struct RHIBarrierDiagnostic
+    {
+        std::string passName{};
+        std::string resourceName{};
+        ResourceState before{ResourceState::Undefined};
+        ResourceState after{ResourceState::Common};
+        ResourceAccessFlags srcAccess{ResourceAccess::None};
+        ResourceAccessFlags dstAccess{ResourceAccess::None};
+        std::uint32_t backendBits{0};
+        bool emitted{false};
+    };
 
     enum class CullMode : std::uint8_t
     {

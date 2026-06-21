@@ -8,7 +8,6 @@
 #include <glm/vec4.hpp>
 
 #include <Engine/Renderer/FrameData.hpp>
-#include <Engine/Renderer/FrustumPartition.hpp>
 
 namespace Physara::Engine
 {
@@ -51,40 +50,65 @@ namespace Physara::Engine
         }
     }
 
-    void ClusteredLightGrid::Build(FrameData &frameData) const
+    void ClusteredLightGrid::Build(FrameData &frameData)
     {
         const std::uint32_t width = std::max(frameData.view.viewport.width, 1u);
         const std::uint32_t height = std::max(frameData.view.viewport.height, 1u);
         const float nearDistance = std::max(frameData.view.nearClipMeters, 0.001f);
         const float farDistance = std::max(frameData.view.farClipMeters, nearDistance + 0.001f);
         const std::uint32_t tileSize = ClusteredLightGridDetail::BuildTileSize(width, height);
-        const std::uint32_t clusterCountX = ClusteredLightGridDetail::DivideRoundUp(width, tileSize);
-        const std::uint32_t clusterCountY = ClusteredLightGridDetail::DivideRoundUp(height, tileSize);
-        const std::uint32_t clusterCount = clusterCountX * clusterCountY * ClusteredLightGridDetail::SliceCount;
-        const LogarithmicDepthPartition depthPartition = FrustumPartition::BuildLogarithmicDepthPartition(
-            nearDistance,
-            farDistance,
-            ClusteredLightGridDetail::SliceCount);
+        const bool topologyChanged =
+            width != m_CachedWidth ||
+            height != m_CachedHeight ||
+            tileSize != m_CachedTileSize ||
+            nearDistance != m_CachedNearDistance ||
+            farDistance != m_CachedFarDistance;
+        if (topologyChanged)
+        {
+            m_CachedWidth = width;
+            m_CachedHeight = height;
+            m_CachedTileSize = tileSize;
+            m_CachedNearDistance = nearDistance;
+            m_CachedFarDistance = farDistance;
+            m_CachedClusterCountX = ClusteredLightGridDetail::DivideRoundUp(width, tileSize);
+            m_CachedClusterCountY = ClusteredLightGridDetail::DivideRoundUp(height, tileSize);
+            m_DepthPartition = FrustumPartition::BuildLogarithmicDepthPartition(
+                nearDistance,
+                farDistance,
+                ClusteredLightGridDetail::SliceCount);
+        }
 
+        const std::uint32_t clusterCount =
+            m_CachedClusterCountX * m_CachedClusterCountY * ClusteredLightGridDetail::SliceCount;
         frameData.clusterGrid.dimensions = glm::uvec4(
-            clusterCountX,
-            clusterCountY,
+            m_CachedClusterCountX,
+            m_CachedClusterCountY,
             ClusteredLightGridDetail::SliceCount,
             tileSize);
         frameData.clusterGrid.depthParams = glm::vec4(
             nearDistance,
             farDistance,
-            depthPartition.sliceScale,
-            depthPartition.sliceBias);
+            m_DepthPartition.sliceScale,
+            m_DepthPartition.sliceBias);
         frameData.clusterGrid.counts = glm::uvec4(clusterCount, 0u, 0u, 0u);
-        frameData.clusterEntries.assign(clusterCount, {});
+        frameData.clusterEntries.resize(clusterCount);
         frameData.clusterLightIndices.clear();
+        frameData.stats.clusterCount = clusterCount;
+        frameData.stats.clusterLightReferences = 0u;
+        frameData.stats.maxLightsPerCluster = 0u;
+        frameData.stats.localLightCount = 0u;
+        frameData.stats.clusterOverflowedLightReferences = 0u;
         if (clusterCount == 0u)
         {
             return;
         }
 
-        std::vector<std::vector<std::uint32_t>> clusterLists(clusterCount);
+        m_ClusterCounts.assign(clusterCount, 0u);
+        m_ClusterOffsets.resize(clusterCount + 1u);
+        m_ClusterFillCursors.resize(clusterCount);
+        m_LightBounds.clear();
+        m_LightBounds.reserve(frameData.lights.size());
+
         const glm::mat4 &view = frameData.view.view;
         const glm::mat4 &projection = frameData.view.projection;
         for (std::uint32_t lightIndex = 0u; lightIndex < static_cast<std::uint32_t>(frameData.lights.size()); ++lightIndex)
@@ -94,6 +118,7 @@ namespace Physara::Engine
             {
                 continue;
             }
+            ++frameData.stats.localLightCount;
 
             const glm::vec3 viewPosition = glm::vec3(view * glm::vec4(glm::vec3(light.positionRange), 1.f));
             const float radius = std::max(light.positionRange.w, 0.001f);
@@ -120,45 +145,80 @@ namespace Physara::Engine
                 (ndcCenter + ndcRadius) * 0.5f + 0.5f,
                 glm::vec2(0.f),
                 glm::vec2(1.f)) * glm::vec2(width, height);
-            const std::uint32_t minX = std::min(static_cast<std::uint32_t>(pixelMin.x) / tileSize, clusterCountX - 1u);
-            const std::uint32_t maxX = std::min(static_cast<std::uint32_t>(pixelMax.x) / tileSize, clusterCountX - 1u);
-            const std::uint32_t minY = std::min(static_cast<std::uint32_t>(pixelMin.y) / tileSize, clusterCountY - 1u);
-            const std::uint32_t maxY = std::min(static_cast<std::uint32_t>(pixelMax.y) / tileSize, clusterCountY - 1u);
-            const std::uint32_t minZ = depthPartition.GetSlice(minDepth);
-            const std::uint32_t maxZ = depthPartition.GetSlice(maxDepth);
+            LightClusterBounds bounds{};
+            bounds.lightIndex = lightIndex;
+            bounds.minX = std::min(static_cast<std::uint32_t>(pixelMin.x) / tileSize, m_CachedClusterCountX - 1u);
+            bounds.maxX = std::min(static_cast<std::uint32_t>(pixelMax.x) / tileSize, m_CachedClusterCountX - 1u);
+            bounds.minY = std::min(static_cast<std::uint32_t>(pixelMin.y) / tileSize, m_CachedClusterCountY - 1u);
+            bounds.maxY = std::min(static_cast<std::uint32_t>(pixelMax.y) / tileSize, m_CachedClusterCountY - 1u);
+            bounds.minZ = m_DepthPartition.GetSlice(minDepth);
+            bounds.maxZ = m_DepthPartition.GetSlice(maxDepth);
+            m_LightBounds.push_back(bounds);
 
-            for (std::uint32_t z = minZ; z <= maxZ; ++z)
+            for (std::uint32_t z = bounds.minZ; z <= bounds.maxZ; ++z)
             {
-                for (std::uint32_t y = minY; y <= maxY; ++y)
+                for (std::uint32_t y = bounds.minY; y <= bounds.maxY; ++y)
                 {
-                    for (std::uint32_t x = minX; x <= maxX; ++x)
+                    for (std::uint32_t x = bounds.minX; x <= bounds.maxX; ++x)
                     {
-                        const std::uint32_t clusterIndex = x + clusterCountX * (y + clusterCountY * z);
-                        std::vector<std::uint32_t> &indices = clusterLists[clusterIndex];
-                        if (indices.size() < ClusteredLightGridDetail::MaxLightsPerCluster)
+                        const std::uint32_t clusterIndex =
+                            x + m_CachedClusterCountX * (y + m_CachedClusterCountY * z);
+                        if (m_ClusterCounts[clusterIndex] < ClusteredLightGridDetail::MaxLightsPerCluster)
                         {
-                            indices.push_back(lightIndex);
+                            ++m_ClusterCounts[clusterIndex];
+                        }
+                        else
+                        {
+                            ++frameData.stats.clusterOverflowedLightReferences;
                         }
                     }
                 }
             }
         }
 
+        if (m_LightBounds.empty())
+        {
+            return;
+        }
+
+        m_ClusterOffsets[0] = 0u;
         std::uint32_t maxLightsInCluster = 0u;
         for (std::uint32_t clusterIndex = 0u; clusterIndex < clusterCount; ++clusterIndex)
         {
-            const std::vector<std::uint32_t> &indices = clusterLists[clusterIndex];
+            m_ClusterOffsets[clusterIndex + 1u] =
+                m_ClusterOffsets[clusterIndex] + m_ClusterCounts[clusterIndex];
+            m_ClusterFillCursors[clusterIndex] = m_ClusterOffsets[clusterIndex];
             ClusterEntryGPU &entry = frameData.clusterEntries[clusterIndex];
-            entry.offset = static_cast<std::uint32_t>(frameData.clusterLightIndices.size());
-            entry.count = static_cast<std::uint32_t>(indices.size());
+            entry.offset = m_ClusterOffsets[clusterIndex];
+            entry.count = m_ClusterCounts[clusterIndex];
             maxLightsInCluster = std::max(maxLightsInCluster, entry.count);
-            frameData.clusterLightIndices.insert(frameData.clusterLightIndices.end(), indices.begin(), indices.end());
         }
+
+        frameData.clusterLightIndices.resize(m_ClusterOffsets[clusterCount]);
+        for (const LightClusterBounds &bounds : m_LightBounds)
+        {
+            for (std::uint32_t z = bounds.minZ; z <= bounds.maxZ; ++z)
+            {
+                for (std::uint32_t y = bounds.minY; y <= bounds.maxY; ++y)
+                {
+                    for (std::uint32_t x = bounds.minX; x <= bounds.maxX; ++x)
+                    {
+                        const std::uint32_t clusterIndex =
+                            x + m_CachedClusterCountX * (y + m_CachedClusterCountY * z);
+                        std::uint32_t &cursor = m_ClusterFillCursors[clusterIndex];
+                        const std::uint32_t end = m_ClusterOffsets[clusterIndex + 1u];
+                        if (cursor < end)
+                        {
+                            frameData.clusterLightIndices[cursor++] = bounds.lightIndex;
+                        }
+                    }
+                }
+            }
+        }
+
         frameData.clusterGrid.counts.y = static_cast<std::uint32_t>(frameData.clusterLightIndices.size());
         frameData.clusterGrid.counts.z = maxLightsInCluster;
-        frameData.stats.clusterCount = clusterCount;
         frameData.stats.clusterLightReferences = frameData.clusterGrid.counts.y;
         frameData.stats.maxLightsPerCluster = maxLightsInCluster;
     }
-
 }

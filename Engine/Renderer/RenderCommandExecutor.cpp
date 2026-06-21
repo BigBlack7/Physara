@@ -1,5 +1,7 @@
 #include "RenderCommandExecutor.hpp"
 
+#include <algorithm>
+
 #include <Engine/Renderer/FrameData.hpp>
 #include <Engine/Renderer/MeshGPUCache.hpp>
 #include <Engine/Renderer/RenderProxy.hpp>
@@ -92,17 +94,39 @@ namespace Physara::Engine
             MeshGPUPrimitive *firstPrimitive = m_CommandPrimitiveScratch[commandIndex];
             if (firstPrimitive == nullptr || firstPrimitive->indexCount == 0)
             {
+                if (context.stats != nullptr)
+                {
+                    ++context.stats->indirectInvalidBreaks;
+                }
                 ++commandIndex;
                 continue;
             }
 
             std::uint32_t runCommandCount = 1u;
-            while (commandIndex + runCommandCount < static_cast<std::uint32_t>(commands.size()) &&
-                   mergeCallback(callbacks.userData, firstCommand, commands[commandIndex + runCommandCount]))
+            while (commandIndex + runCommandCount < static_cast<std::uint32_t>(commands.size()))
             {
+                if (!mergeCallback(callbacks.userData, firstCommand, commands[commandIndex + runCommandCount]))
+                {
+                    if (context.stats != nullptr)
+                    {
+                        ++context.stats->indirectMergeBreaks;
+                    }
+                    break;
+                }
                 MeshGPUPrimitive *nextPrimitive = m_CommandPrimitiveScratch[commandIndex + runCommandCount];
                 if (nextPrimitive == nullptr || nextPrimitive->indexCount == 0 || !CanUseIndirectRun(*firstPrimitive, *nextPrimitive))
                 {
+                    if (context.stats != nullptr)
+                    {
+                        if (nextPrimitive == nullptr || nextPrimitive->indexCount == 0)
+                        {
+                            ++context.stats->indirectInvalidBreaks;
+                        }
+                        else
+                        {
+                            ++context.stats->indirectGeometryBreaks;
+                        }
+                    }
                     break;
                 }
                 ++runCommandCount;
@@ -110,6 +134,10 @@ namespace Physara::Engine
 
             if (runCommandCount < RenderCommandExecutorDetail::MinIndirectRunCommandCount)
             {
+                if (context.stats != nullptr)
+                {
+                    ++context.stats->indirectShortRuns;
+                }
                 commandIndex += runCommandCount;
                 continue;
             }
@@ -247,6 +275,10 @@ namespace Physara::Engine
             primitive->firstIndex,
             primitive->vertexOffset,
             commands[commandIndex].firstInstanceIndex);
+        if (context.stats != nullptr)
+        {
+            ++context.stats->directSubmittedCommands;
+        }
         RecordCommand(callbacks, commands[commandIndex], *primitive, RenderCommandSubmitMode::Direct);
     }
 
@@ -274,6 +306,13 @@ namespace Physara::Engine
             run.commandCount,
             static_cast<std::uint32_t>(sizeof(RHI::RHIDrawIndexedIndirectCommand)),
             run.indirectCommandOffset);
+        if (context.stats != nullptr)
+        {
+            ++context.stats->indirectRuns;
+            context.stats->indirectRunCommands += run.commandCount;
+            context.stats->maxIndirectRunCommands =
+                std::max<std::uint64_t>(context.stats->maxIndirectRunCommands, run.commandCount);
+        }
 
         for (std::uint32_t i = 0; i < run.commandCount; ++i)
         {

@@ -163,6 +163,7 @@ namespace Physara::Editor
         m_Input = input;
         m_Window = window;
         m_VSyncSettingApplied = false;
+        m_PipelineBenchmarkActive = false;
         ApplyRuntimeSettings();
         m_Renderer = std::make_unique<Engine::Renderer>(m_Device);
         m_Renderer->SetAssetManager(&m_AssetManager);
@@ -234,6 +235,7 @@ namespace Physara::Editor
         m_Input = nullptr;
         m_Window = nullptr;
         m_VSyncSettingApplied = false;
+        m_PipelineBenchmarkActive = false;
     }
 
     void EditorApp::OnUIRender()
@@ -485,6 +487,20 @@ namespace Physara::Editor
         Engine::RenderView view = m_EditorCamera.BuildRenderView(m_Context.activeScene);
         view.viewport.width = width;
         view.viewport.height = height;
+        const bool benchmarkEnabled = m_Context.settings.viewport.pipelineBenchmarkEnabled;
+        if (benchmarkEnabled)
+        {
+            if (!m_PipelineBenchmarkActive)
+            {
+                m_PipelineBenchmarkView = view;
+                m_PipelineBenchmarkActive = true;
+            }
+            view = m_PipelineBenchmarkView;
+        }
+        else
+        {
+            m_PipelineBenchmarkActive = false;
+        }
         m_Context.sceneView.lastRenderView = view;
         const std::filesystem::path environmentPath =
             !m_Context.settings.environment.skyboxPath.empty()
@@ -495,13 +511,21 @@ namespace Physara::Editor
             EditorAppDetail::EnvironmentIntensityToEV(m_Context.settings.environment.skyboxIntensity, view.ev100));
         m_Renderer->SetEnvironmentMapPath(environmentPath);
         Engine::WorldGridSettings gridSettings{};
-        gridSettings.enabled = m_Context.settings.viewport.worldGridEnabled;
+        gridSettings.enabled = m_Context.settings.viewport.worldGridEnabled && !benchmarkEnabled;
         gridSettings.minorSpacingMeters = m_Context.settings.viewport.gridSpacingMeters;
         gridSettings.majorLineInterval =
             static_cast<std::uint32_t>(std::max(m_Context.settings.viewport.gridMajorLineInterval, 2));
         gridSettings.fadeStartMeters = m_Context.settings.viewport.gridFadeStartMeters;
         gridSettings.fadeEndMeters = m_Context.settings.viewport.gridFadeEndMeters;
         m_Renderer->SetWorldGridSettings(gridSettings);
+        Engine::PipelineBenchmarkSettings benchmarkSettings{};
+        benchmarkSettings.enabled = benchmarkEnabled;
+        benchmarkSettings.warmupFrames = static_cast<std::uint32_t>(
+            std::max(m_Context.settings.viewport.pipelineBenchmarkWarmupFrames, 1));
+        benchmarkSettings.sampleFrames = static_cast<std::uint32_t>(
+            std::max(m_Context.settings.viewport.pipelineBenchmarkSampleFrames, 1));
+        benchmarkSettings.restartToken = m_Context.settings.viewport.pipelineBenchmarkRestartToken;
+        m_Renderer->SetPipelineBenchmarkSettings(benchmarkSettings);
         Engine::PostProcessSettings postProcessSettings{};
         m_Renderer->SetRenderPath(static_cast<Engine::RenderPath>(
             std::clamp(m_Context.settings.postProcess.renderPathIndex, 0, 2)));
@@ -833,6 +857,10 @@ namespace Physara::Editor
     {
         m_SceneViewPanel.SetViewportResizeCallback([this](std::uint32_t width, std::uint32_t height)
                                                    {
+                                                       if (m_Context.settings.viewport.pipelineBenchmarkEnabled)
+                                                       {
+                                                           return;
+                                                       }
                                                        m_EditorCamera.SetViewportSize(width, height);
                                                        if (m_Renderer != nullptr)
                                                        {

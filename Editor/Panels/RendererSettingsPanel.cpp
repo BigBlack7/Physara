@@ -88,12 +88,74 @@ namespace Physara::Editor
     {
         ImGui::Begin(RendererSettingsPanelDetail::PanelName);
 
+        DrawBenchmarkSection();
+        ImGui::BeginDisabled(m_Context.settings.viewport.pipelineBenchmarkEnabled);
         DrawViewportSection();
         DrawPostProcessSection();
         DrawShadowSection();
         DrawEnvironmentSection();
+        ImGui::EndDisabled();
 
         ImGui::End();
+    }
+
+    void RendererSettingsPanel::DrawBenchmarkSection()
+    {
+        if (!ImGui::CollapsingHeader("Pipeline Benchmark", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            return;
+        }
+
+        ImGui::Checkbox("Enabled", &m_Context.settings.viewport.pipelineBenchmarkEnabled);
+        ImGui::InputInt(
+            "Warmup Frames",
+            &m_Context.settings.viewport.pipelineBenchmarkWarmupFrames,
+            10,
+            60);
+        ImGui::InputInt(
+            "Sample Frames",
+            &m_Context.settings.viewport.pipelineBenchmarkSampleFrames,
+            50,
+            100);
+        m_Context.settings.viewport.pipelineBenchmarkWarmupFrames =
+            std::max(m_Context.settings.viewport.pipelineBenchmarkWarmupFrames, 1);
+        m_Context.settings.viewport.pipelineBenchmarkSampleFrames =
+            std::max(m_Context.settings.viewport.pipelineBenchmarkSampleFrames, 1);
+        if (ImGui::Button("Restart Benchmark"))
+        {
+            ++m_Context.settings.viewport.pipelineBenchmarkRestartToken;
+        }
+
+        const Engine::FrameStatistics &stats = m_Context.sceneView.rendererStats;
+        if (stats.benchmarkEnabled)
+        {
+            if (stats.benchmarkWarmupFrame < stats.benchmarkWarmupFrames)
+            {
+                ImGui::Text(
+                    "Warmup: %u / %u",
+                    stats.benchmarkWarmupFrame,
+                    stats.benchmarkWarmupFrames);
+            }
+            else if (!stats.benchmarkComplete)
+            {
+                ImGui::Text(
+                    "Sampling: %u / %u",
+                    stats.benchmarkSampleFrame,
+                    stats.benchmarkSampleFrames);
+            }
+            else
+            {
+                ImGui::Text(
+                    "CPU median/p95: %.2f / %.2f ms",
+                    stats.benchmarkCpuMedianMs,
+                    stats.benchmarkCpuP95Ms);
+                ImGui::Text(
+                    "GPU median/p95: %.2f / %.2f ms",
+                    stats.benchmarkGpuMedianMs,
+                    stats.benchmarkGpuP95Ms);
+            }
+        }
+        ImGui::TextDisabled("Freezes the current view and hides editor overlays while sampling.");
     }
 
     void RendererSettingsPanel::DrawViewportSection()

@@ -430,6 +430,7 @@ namespace Physara::Engine
                 const RHI::RHIResourceBarrier barrier = MakeBarrier(access, state);
                 if (NeedsBarrier(state, barrier, access.write))
                 {
+                    commandList.SetBarrierDebugContext(pass.GetName(), resource.GetName());
                     commandList.TextureBarrier(texture, barrier);
                 }
 
@@ -440,7 +441,15 @@ namespace Physara::Engine
             }
 
             commandList.BeginDebugLabel(pass.GetName().c_str());
+            if (pass.HasGPUTimingScope())
+            {
+                commandList.BeginGPUTimingScope(pass.GetGPUTimingScope());
+            }
             pass.Execute(context);
+            if (pass.HasGPUTimingScope())
+            {
+                commandList.EndGPUTimingScope(pass.GetGPUTimingScope());
+            }
             commandList.EndDebugLabel();
 
             for (std::uint32_t resourceIndex = 0; resourceIndex < m_Resources.size(); ++resourceIndex)

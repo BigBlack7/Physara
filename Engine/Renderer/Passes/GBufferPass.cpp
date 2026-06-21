@@ -39,18 +39,6 @@ namespace Physara::Engine
             return;
         }
 
-        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back);
-        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None);
-        const FrameUploadAllocation &frameUniforms = context.gpuScene->GetFrameUniformBuffer();
-        const FrameUploadAllocation &objects = context.gpuScene->GetObjectBuffer();
-        const FrameUploadAllocation &instances = context.gpuScene->GetForwardInstanceObjectIndexBuffer();
-        if (singleSidedPipeline == nullptr || doubleSidedPipeline == nullptr ||
-            !frameUniforms.IsValid() || !objects.IsValid() || !instances.IsValid() ||
-            context.gpuScene->GetMaterialBuffer() == nullptr)
-        {
-            return;
-        }
-
         const std::array<glm::vec4, 4> clearColors{
             glm::vec4(0.f),
             glm::vec4(0.5f, 0.5f, 0.f, 0.f),
@@ -63,6 +51,27 @@ namespace Physara::Engine
             static_cast<float>(context.frameData->view.viewport.width),
             static_cast<float>(context.frameData->view.viewport.height));
         context.commandList->SetScissor(0, 0, context.frameData->view.viewport.width, context.frameData->view.viewport.height);
+
+        const RenderCommandBuckets &commands = context.renderProxy->GetCommands();
+        if (commands.opaque.singleSided.empty() && commands.opaque.doubleSided.empty())
+        {
+            context.commandList->EndRenderPass();
+            return;
+        }
+
+        RHI::RHIPipelineState *singleSidedPipeline = GetPipeline(context, RHI::CullMode::Back);
+        RHI::RHIPipelineState *doubleSidedPipeline = GetPipeline(context, RHI::CullMode::None);
+        const FrameUploadAllocation &frameUniforms = context.gpuScene->GetFrameUniformBuffer();
+        const FrameUploadAllocation &objects = context.gpuScene->GetObjectBuffer();
+        const FrameUploadAllocation &instances = context.gpuScene->GetForwardInstanceObjectIndexBuffer();
+        if (singleSidedPipeline == nullptr || doubleSidedPipeline == nullptr ||
+            !frameUniforms.IsValid() || !objects.IsValid() || !instances.IsValid() ||
+            context.gpuScene->GetMaterialBuffer() == nullptr)
+        {
+            context.commandList->EndRenderPass();
+            return;
+        }
+
         context.commandList->SetUniformBuffer(
             GBufferPassDetail::FrameUniformsBinding,
             frameUniforms.buffer,
@@ -91,7 +100,6 @@ namespace Physara::Engine
 
         m_CommandExecutor.BeginFrame();
         m_BoundMaterialTextureSetId = 0u;
-        const RenderCommandBuckets &commands = context.renderProxy->GetCommands();
         context.commandList->SetPipelineState(singleSidedPipeline);
         DrawCommands(context, commands.opaque.singleSided);
         context.commandList->SetPipelineState(doubleSidedPipeline);

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <glm/vec4.hpp>
 
@@ -42,6 +43,14 @@ namespace Physara::Engine
     class AssetManager;
     class Scene;
 
+    struct PipelineBenchmarkSettings
+    {
+        bool enabled{false};
+        std::uint32_t warmupFrames{120};
+        std::uint32_t sampleFrames{300};
+        std::uint64_t restartToken{0};
+    };
+
     class Renderer final
     {
     public:
@@ -74,6 +83,7 @@ namespace Physara::Engine
         void SetWorldGridSettings(const WorldGridSettings &settings);
         void SetMSAASamples(std::uint32_t samples);
         void SetRenderPath(RenderPath path);
+        void SetPipelineBenchmarkSettings(const PipelineBenchmarkSettings &settings);
         [[nodiscard]] const std::filesystem::path &GetEnvironmentMapPath() const { return m_EnvironmentMapPath; }
 
         [[nodiscard]] RHI::RHITexture *GetSceneColorTexture() const { return m_SceneColor.get(); }
@@ -92,6 +102,9 @@ namespace Physara::Engine
         void ExecuteUnlitForwardPass(RenderGraphContext &context);
         void ExecuteWorldGridPass(RenderGraphContext &context);
         void ProcessPendingCapture();
+        void PopulateGPUTimings(RHI::RHICommandList &commandList);
+        void UpdateBenchmark();
+        void ResetBenchmark();
 
     private:
         RHI::RHIDevice *m_Device{nullptr};
@@ -138,5 +151,19 @@ namespace Physara::Engine
         std::uint32_t m_ViewportHeight{0};
         std::uint32_t m_MSAASamples{1};
         RenderPath m_RenderPath{RenderPath::ForwardPlus};
+        PipelineBenchmarkSettings m_BenchmarkSettings{};
+        struct PipelineBenchmarkState
+        {
+            std::vector<float> cpuSamples{};
+            std::vector<float> gpuSamples{};
+            std::uint32_t warmupFrame{0};
+            std::uint64_t lastGpuFrameIndex{0};
+            float cpuMedianMs{0.f};
+            float cpuP95Ms{0.f};
+            float gpuMedianMs{0.f};
+            float gpuP95Ms{0.f};
+            bool complete{false};
+        };
+        PipelineBenchmarkState m_BenchmarkState{};
     };
 }

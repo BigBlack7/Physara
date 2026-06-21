@@ -93,6 +93,8 @@ namespace Physara::Editor
         bool m_OpenSaveScenePopup{false};
         bool m_VSyncSettingApplied{false};
         bool m_AppliedVSync{false};
+        bool m_PipelineBenchmarkActive{false};
+        Engine::RenderView m_PipelineBenchmarkView{};
         Platform::CursorMode m_CurrentCursorMode{Platform::CursorMode::Normal};
         std::uint32_t m_DockspaceId{0};
         std::array<char, 128> m_SaveSceneName{};
