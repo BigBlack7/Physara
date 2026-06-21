@@ -25,7 +25,7 @@ namespace Physara::Engine
     {
         constexpr float Pi = 3.14159265358979323846f;
         constexpr float InvPi = 0.31830988618379067154f;
-        constexpr std::uint32_t CacheVersion = 9u;
+        constexpr std::uint32_t CacheVersion = 10u;
 
         struct CacheHeader
         {
@@ -349,6 +349,12 @@ namespace Physara::Engine
             return glm::vec2(static_cast<float>(i) / static_cast<float>(count), RadicalInverseVdC(i));
         }
 
+        [[nodiscard]] float Pow5(float value)
+        {
+            const float valueSquared = value * value;
+            return valueSquared * valueSquared * value;
+        }
+
         [[nodiscard]] glm::vec3 ImportanceSampleGGX(glm::vec2 xi, glm::vec3 normal, float perceptualRoughness)
         {
             const float a = std::max(perceptualRoughness * perceptualRoughness, 0.001f);
@@ -361,6 +367,19 @@ namespace Physara::Engine
             const glm::vec3 tangent = glm::normalize(glm::cross(up, normal));
             const glm::vec3 bitangent = glm::cross(normal, tangent);
             return glm::normalize(tangent * h.x + bitangent * h.y + normal * h.z);
+        }
+
+        [[nodiscard]] glm::vec3 ImportanceSampleDFGGGX(glm::vec2 xi, float linearRoughness)
+        {
+            const float phi = 2.f * Pi * xi.x;
+            const float denominator = 1.f + (linearRoughness + 1.f) * (linearRoughness - 1.f) * xi.y;
+            const float cosThetaSquared = std::clamp(
+                (1.f - xi.y) / std::max(denominator, std::numeric_limits<float>::min()),
+                0.f,
+                1.f);
+            const float cosTheta = std::sqrt(cosThetaSquared);
+            const float sinTheta = std::sqrt(std::max(1.f - cosThetaSquared, 0.f));
+            return glm::vec3(std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta);
         }
 
         [[nodiscard]] float DistributionGGX(float NoH, float perceptualRoughness)
@@ -422,42 +441,36 @@ namespace Physara::Engine
             return faces;
         }
 
-        [[nodiscard]] float GeometryDFG(float NoV, float NoL, float roughness)
+        [[nodiscard]] float VisibilityDFG(float NoV, float NoL, float linearRoughness)
         {
-            const float a2 = roughness * roughness;
-            const float ggxL = NoV * std::sqrt(std::max((1.f - a2) * NoL * NoL + a2, 0.f));
-            const float ggxV = NoL * std::sqrt(std::max((1.f - a2) * NoV * NoV + a2, 0.f));
-            return (2.f * NoL) / std::max(ggxV + ggxL, 0.001f);
+            const float roughnessSquared = linearRoughness * linearRoughness;
+            const float ggxL = NoV * std::sqrt(std::max((NoL - NoL * roughnessSquared) * NoL + roughnessSquared, 0.f));
+            const float ggxV = NoL * std::sqrt(std::max((NoV - NoV * roughnessSquared) * NoV + roughnessSquared, 0.f));
+            return 0.5f / std::max(ggxV + ggxL, std::numeric_limits<float>::min());
         }
 
         [[nodiscard]] glm::vec2 IntegrateBRDF(float NoV, float perceptualRoughness, std::uint32_t sampleCount)
         {
-            const glm::vec2 smoothLimit(std::pow(1.f - NoV, 5.f), 1.f);
             const glm::vec3 view(std::sqrt(std::max(1.f - NoV * NoV, 0.f)), 0.f, NoV);
-            const glm::vec3 normal(0.f, 0.f, 1.f);
-            float a = 0.f;
-            float b = 0.f;
+            const float linearRoughness = perceptualRoughness * perceptualRoughness;
+            glm::vec2 integrated(0.f);
             for (std::uint32_t i = 0; i < sampleCount; ++i)
             {
-                const glm::vec3 halfVector = ImportanceSampleGGX(Hammersley(i, sampleCount), normal, perceptualRoughness);
-                const glm::vec3 light = glm::normalize(2.f * glm::dot(view, halfVector) * halfVector - view);
+                const glm::vec3 halfVector = ImportanceSampleDFGGGX(Hammersley(i, sampleCount), linearRoughness);
+                const glm::vec3 light = 2.f * glm::dot(view, halfVector) * halfVector - view;
                 const float NoL = std::max(light.z, 0.f);
                 const float NoH = std::max(halfVector.z, 0.f);
                 const float VoH = std::max(glm::dot(view, halfVector), 0.f);
                 if (NoL > 0.f && NoH > 0.f)
                 {
-                    const float roughness = perceptualRoughness * perceptualRoughness;
-                    const float g = GeometryDFG(NoV, NoL, roughness);
-                    const float gVis = (g * VoH) / std::max(NoH, 0.001f);
-                    const float fc = std::pow(1.f - VoH, 5.f);
-                    a += fc * gVis;
-                    b += gVis;
+                    const float visibility = VisibilityDFG(NoV, NoL, linearRoughness);
+                    const float visibilityWeight = visibility * NoL * VoH / NoH;
+                    const float fc = Pow5(1.f - VoH);
+                    integrated.x += visibilityWeight * fc;
+                    integrated.y += visibilityWeight;
                 }
             }
-            glm::vec2 integrated = glm::vec2(a, b) / static_cast<float>(sampleCount);
-            integrated = glm::clamp(integrated, glm::vec2(0.f), glm::vec2(1.f));
-            const float smoothBlend = std::clamp((perceptualRoughness - 0.045f) / 0.055f, 0.f, 1.f);
-            return glm::mix(smoothLimit, integrated, smoothBlend);
+            return integrated * (4.f / static_cast<float>(sampleCount));
         }
 
         [[nodiscard]] std::vector<float> BuildBRDFLut(std::uint32_t size, std::uint32_t sampleCount)
@@ -622,7 +635,17 @@ namespace Physara::Engine
             return true;
         }
 
-        void WriteBRDFLutEXR(const std::filesystem::path &path, const std::vector<float> &rg, std::uint32_t size)
+        enum class BRDFLutDebugEncoding : std::uint8_t
+        {
+            MultiscatterRuntime,
+            ClassicSplitSum
+        };
+
+        void WriteBRDFLutEXR(
+            const std::filesystem::path &path,
+            const std::vector<float> &rg,
+            std::uint32_t size,
+            BRDFLutDebugEncoding encoding)
         {
             if (rg.empty() || size == 0u)
             {
@@ -637,8 +660,18 @@ namespace Physara::Engine
                 {
                     const std::size_t source = (static_cast<std::size_t>(sourceY) * size + x) * 2u;
                     const std::size_t destination = (static_cast<std::size_t>(y) * size + x) * 4u;
-                    rgba[destination + 0u] = rg[source + 0u];
-                    rgba[destination + 1u] = rg[source + 1u];
+                    const float fresnelContribution = rg[source + 0u];
+                    const float totalContribution = rg[source + 1u];
+                    if (encoding == BRDFLutDebugEncoding::ClassicSplitSum)
+                    {
+                        rgba[destination + 0u] = std::max(totalContribution - fresnelContribution, 0.f);
+                        rgba[destination + 1u] = fresnelContribution;
+                    }
+                    else
+                    {
+                        rgba[destination + 0u] = fresnelContribution;
+                        rgba[destination + 1u] = totalContribution;
+                    }
                     rgba[destination + 3u] = 1.f;
                 }
             }
@@ -711,7 +744,16 @@ namespace Physara::Engine
 
             WriteSHText(cacheDirectory / "irradiance_sh.txt", result.irradianceSH);
             WriteIrradianceSHCubemap(cacheDirectory, result.irradianceSH);
-            WriteBRDFLutEXR(cacheDirectory / "brdf_integrate.exr", result.brdfLutRG32F, result.brdfLutSize);
+            WriteBRDFLutEXR(
+                cacheDirectory / "brdf_integrate.exr",
+                result.brdfLutRG32F,
+                result.brdfLutSize,
+                BRDFLutDebugEncoding::ClassicSplitSum);
+            WriteBRDFLutEXR(
+                cacheDirectory / "brdf_multiscatter_runtime.exr",
+                result.brdfLutRG32F,
+                result.brdfLutSize,
+                BRDFLutDebugEncoding::MultiscatterRuntime);
             std::uint32_t specularCount = 0u;
             std::uint32_t cubeCount = 0u;
             for (std::uint32_t mip = 0; mip < result.specularMipCount; ++mip)
@@ -740,7 +782,7 @@ namespace Physara::Engine
                     }
                 }
             }
-            PHYSARA_CORE_INFO("Wrote IBL debug EXR outputs into '{}': cubeFaces={}, specularFaces={}, brdf=1.",
+            PHYSARA_CORE_INFO("Wrote IBL debug EXR outputs into '{}': cubeFaces={}, specularFaces={}, brdf=2.",
                               cacheDirectory.string(),
                               cubeCount,
                               specularCount);
@@ -773,7 +815,7 @@ namespace Physara::Engine
             settings.writeDebugOutputs};
         const IBLPrecomputeDetail::CacheHeader expectedHeader = IBLPrecomputeDetail::BuildHeader(environmentPath, clampedSettings);
         const std::filesystem::path cacheDirectory = GetCacheDirectory(environmentPath);
-        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v9.bin";
+        const std::filesystem::path cachePath = cacheDirectory / "physara_ibl_cache_v10.bin";
 
         if (clampedSettings.useCache)
         {
