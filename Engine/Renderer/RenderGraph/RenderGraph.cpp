@@ -21,7 +21,7 @@ namespace Physara::Engine::RenderGraphDetail
         bool used{false};
     };
 
-    struct CombinedAccess
+    struct CombinedAccess // 用于合并同一个资源在同一个Pass中可能存在的多次访问，记录该资源在该Pass中的综合访问信息
     {
         RenderGraphResourceHandle resource{};
         bool read{false};
@@ -37,7 +37,7 @@ namespace Physara::Engine::RenderGraphDetail
         std::vector<ResourceLifetime> lifetimes{};
     };
 
-    struct TrackedState
+    struct TrackedState // 用来跟踪资源在渲染图执行过程中的状态的结构体
     {
         RHI::ResourceState state{RHI::ResourceState::Undefined};
         RHI::ShaderStageFlags stages{RHI::ShaderStageBit::None};
