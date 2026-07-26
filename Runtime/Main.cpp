@@ -29,7 +29,7 @@ int main()
 
         constexpr auto graphicsBackend = Physara::RHI::GraphicsBackend::OpenGL;
         window = Physara::RHI::CreateRuntimeWindow(graphicsBackend);
-        if (!window->Create("Physara", 1960, 1080))
+        if (!window->Create("Physara", 1900, 1000))
         {
             throw std::runtime_error("Failed to create window.");
         }

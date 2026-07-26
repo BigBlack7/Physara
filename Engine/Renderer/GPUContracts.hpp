@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <glm/mat4x4.hpp>
@@ -205,13 +206,72 @@ namespace Physara::Engine
         glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
     };
 
-    static_assert(sizeof(CameraData) % 16 == 0);
-    static_assert(sizeof(ObjectData) % 16 == 0);
-    static_assert(sizeof(MaterialGPUData) % 16 == 0);
-    static_assert(sizeof(LightData) % 16 == 0);
-    static_assert(sizeof(ShadowData) % 16 == 0);
-    static_assert(sizeof(IBLData) % 16 == 0);
-    static_assert(sizeof(ClusterGridData) % 16 == 0);
+    // CPU↔GPU 契约:布局编译期锁定(见 change pre-refactor-validation-guards / P.4)。
+    // 锁定每个 GPU 结构的 sizeof 与逐字段 offsetof:字段被重排/改型/增删即编译失败,
+    // 阻止 CPU↔GLSL 布局静默漂移。有意重设计布局时须同步更新以下常量。
+    static_assert(sizeof(CameraData) == 448);
+    static_assert(offsetof(CameraData, view) == 0);
+    static_assert(offsetof(CameraData, projection) == 64);
+    static_assert(offsetof(CameraData, viewProjection) == 128);
+    static_assert(offsetof(CameraData, inverseView) == 192);
+    static_assert(offsetof(CameraData, inverseProjection) == 256);
+    static_assert(offsetof(CameraData, inverseViewProjection) == 320);
+    static_assert(offsetof(CameraData, cameraPositionEV100) == 384);
+    static_assert(offsetof(CameraData, exposure) == 400);
+    static_assert(offsetof(CameraData, viewportRect) == 416);
+    static_assert(offsetof(CameraData, clipPlanes) == 432);
+
+    static_assert(sizeof(ObjectData) == 160);
+    static_assert(offsetof(ObjectData, model) == 0);
+    static_assert(offsetof(ObjectData, inverseTransposeModel) == 64);
+    static_assert(offsetof(ObjectData, boundsCenterRadius) == 128);
+    static_assert(offsetof(ObjectData, objectId) == 144);
+    static_assert(offsetof(ObjectData, meshIndex) == 148);
+    static_assert(offsetof(ObjectData, materialIndex) == 152);
+    static_assert(offsetof(ObjectData, flags) == 156);
+
+    static_assert(sizeof(MaterialGPUData) == 128);
+    static_assert(offsetof(MaterialGPUData, baseColor) == 0);
+    static_assert(offsetof(MaterialGPUData, emissiveColorLuminance) == 16);
+    static_assert(offsetof(MaterialGPUData, metallicRoughnessReflectanceAO) == 32);
+    static_assert(offsetof(MaterialGPUData, alphaNormalFlags) == 48);
+    static_assert(offsetof(MaterialGPUData, textureFlags) == 64);
+    static_assert(offsetof(MaterialGPUData, textureCoordSets) == 80);
+    static_assert(offsetof(MaterialGPUData, materialFlags) == 96);
+    static_assert(offsetof(MaterialGPUData, textureInfluences) == 112);
+
+    static_assert(sizeof(LightData) == 80);
+    static_assert(offsetof(LightData, positionRange) == 0);
+    static_assert(offsetof(LightData, directionType) == 16);
+    static_assert(offsetof(LightData, colorIntensity) == 32);
+    static_assert(offsetof(LightData, spotAngles) == 48);
+    static_assert(offsetof(LightData, shadowParams) == 64);
+
+    static_assert(sizeof(ShadowData) == 336);
+    static_assert(offsetof(ShadowData, lightViewProjection) == 0);
+    static_assert(offsetof(ShadowData, cascadeSplits) == 256);
+    static_assert(offsetof(ShadowData, cascadeTexelWorldSize) == 272);
+    static_assert(offsetof(ShadowData, params) == 288);
+    static_assert(offsetof(ShadowData, controls) == 304);
+    static_assert(offsetof(ShadowData, samplingParams) == 320);
+
+    static_assert(sizeof(IBLData) == 160);
+    static_assert(offsetof(IBLData, irradianceSH) == 0);
+    static_assert(offsetof(IBLData, params) == 144);
+
+    static_assert(sizeof(ClusterGridData) == 48);
+    static_assert(offsetof(ClusterGridData, dimensions) == 0);
+    static_assert(offsetof(ClusterGridData, depthParams) == 16);
+    static_assert(offsetof(ClusterGridData, counts) == 32);
+
     static_assert(sizeof(ClusterEntryGPU) == 8);
-    static_assert(sizeof(FrameUniforms) % 16 == 0);
+    static_assert(offsetof(ClusterEntryGPU, offset) == 0);
+    static_assert(offsetof(ClusterEntryGPU, count) == 4);
+
+    static_assert(sizeof(FrameUniforms) == 1008);
+    static_assert(offsetof(FrameUniforms, camera) == 0);
+    static_assert(offsetof(FrameUniforms, shadow) == 448);
+    static_assert(offsetof(FrameUniforms, ibl) == 784);
+    static_assert(offsetof(FrameUniforms, clusterGrid) == 944);
+    static_assert(offsetof(FrameUniforms, debugParams) == 992);
 }
