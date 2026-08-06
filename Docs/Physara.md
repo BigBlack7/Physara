@@ -1,5 +1,7 @@
 # Engine Architecture
 
+> 下列目录树聚焦运行时核心源码、主要工程文件与开发文档；`openspec/` 等过程记录目录不在此逐文件展开。描述以当前源码职责为准，不表示计划中的功能已经实现。
+
 ```text
 Physara/
 ├── CMakeLists.txt                                      // 配置 C++20、统一输出目录并装配各工程模块
@@ -9,7 +11,7 @@ Physara/
 │   ├── Icons/                                          // 编辑器窗口、资源类型与视口控件图标
 │   ├── Models/                                         // glTF 模型、几何缓冲及其配套纹理资源
 │   ├── Scenes/                                         // 示例场景序列化数据
-│   ├── Shaders/                                        // 运行时加载并生成 Variant 的 GLSL 源码
+│   ├── Shaders/                                        // 支持 include/Variant 缓存的 GLSL；材质 feature 尚未全面接入 Pass
 │   │   ├── Includes/                                   // 跨渲染 Pass 复用的公共 GLSL 模块
 │   │   │   ├── BRDF.glsl                               // GGX、Smith、Fresnel 与能量补偿 BRDF 实现
 │   │   │   ├── ClusteredLighting.glsl                  // Cluster 索引换算、灯光列表读取与调试着色
@@ -35,14 +37,14 @@ Physara/
 │   │       │   ├── BloomDownsample.frag                // 对高亮图像执行抗闪烁降采样
 │   │       │   ├── BloomPrefilter.frag                 // 按曝光、阈值和 soft-knee 提取高亮
 │   │       │   ├── BloomUpsample.frag                  // 逐层上采样并累加低分辨率 Bloom
-│   │       │   ├── Composite.frag                      // 合成 HDR、Bloom、调色、AA 与 DebugView
+│   │       │   ├── Composite.frag                      // 合成 HDR/Bloom，执行曝光调整、Tone Mapping、AA 与 DebugView
 │   │       │   └── Composite.vert                      // 生成后处理全屏三角形及纹理坐标
 │   │       ├── Shadow/
-│   │       │   ├── Shadow.frag                         // 阴影深度阶段的最小片元入口
+│   │       │   ├── Shadow.frag                         // 空片元入口；当前尚未处理 Alpha-mask discard
 │   │       │   └── Shadow.vert                         // 按级联光源矩阵绘制实例化阴影投射物
 │   │       ├── Skybox/
 │   │       │   ├── Skybox.frag                         // 采样等距柱状 HDR 环境并输出预曝光天空
-│   │       │   └── Skybox.vert                         // 生成全屏天空方向而不依赖天空盒网格
+│   │       │   └── Skybox.vert                         // 变换天空球网格并输出环境采样方向
 │   │       └── WorldGrid/
 │   │           ├── WorldGrid.frag                      // 绘制带主轴、主网格和距离淡出的 XZ 网格
 │   │           └── WorldGrid.vert                      // 用逆 VP 反投影生成网格射线端点
@@ -60,9 +62,9 @@ Physara/
 │       ├── OpenGLDevice.hpp                            // 定义 RHIDevice 的 OpenGL 实现
 │       ├── OpenGLFramebuffer.cpp                       // 创建和校验 OpenGL FBO 附件组合
 │       ├── OpenGLFramebuffer.hpp                       // 定义 RHIFramebuffer 的 OpenGL 实现
-│       ├── OpenGLImGuiBackend.cpp                      // 将 ImGui DrawData 转换为 RHI/OpenGL 绘制命令
+│       ├── OpenGLImGuiBackend.cpp                      // 直接用 OpenGL 创建 UI 资源并提交 ImDrawData，尚未走通用 RHI 绘制
 │       ├── OpenGLImGuiBackend.hpp                      // 定义与编辑器隔离的 ImGui OpenGL 后端
-│       ├── OpenGLPipeline.cpp                          // 链接 Shader Program 并应用固定功能 PSO 状态
+│       ├── OpenGLPipeline.cpp                          // 链接 Shader Program 并构建 VAO 布局；固定状态由 CommandList 应用
 │       ├── OpenGLPipeline.hpp                          // 定义 RHIPipelineState 的 OpenGL 实现
 │       ├── OpenGLSampler.cpp                           // 创建并配置 OpenGL Sampler Object
 │       ├── OpenGLSampler.hpp                           // 定义 RHISampler 的 OpenGL 实现
@@ -72,9 +74,11 @@ Physara/
 │       ├── OpenGLTexture.hpp                           // 定义 RHITexture 的 OpenGL 实现
 │       └── OpenGLTypeMapping.hpp                       // 集中转换 RHI 枚举与 OpenGL 类型
 ├── Docs/                                               // 架构、实现细节与参考资料
+│   ├── Development.md                                  // 重构、纠错与功能拓展任务主清单
 │   ├── FilamentAppSide.md                              // Filament 应用程序侧架构整理
 │   ├── FilamentRenderSide.md                           // Filament 渲染器侧技术整理
-│   └── Physara.md                                      // 当前工程目录与模块职责说明
+│   ├── Physara.md                                      // 当前工程目录与模块职责说明
+│   └── TaskDetail.md                                   // 与 Development 编号对应的方案、实验和验收存档
 ├── Editor/                                             // ImGui 场景编辑器与交互工具
 │   ├── CMakeLists.txt                                  // 构建 Editor 静态库并链接 Engine 与 Platform
 │   ├── Camera/
@@ -138,7 +142,7 @@ Physara/
 │   │   ├── GPUScene.hpp                                 // 集中持有当前帧 GPU Buffer Allocation
 │   │   ├── IBLResources.cpp                             // 异步预计算并上传 SH、预滤波 Cubemap 和 BRDF LUT
 │   │   ├── IBLResources.hpp                             // 管理环境路径、预览结果与 IBL GPU 生命周期
-│   │   ├── MaterialInstance.hpp                         // 定义稳定材质实例 ID 与实例数据
+│   │   ├── MaterialInstance.hpp                         // 仅定义稳定材质实例 ID 类型
 │   │   ├── MaterialInstanceRegistry.cpp                 // 去重并生成当前帧材质实例表
 │   │   ├── MaterialInstanceRegistry.hpp                 // 定义材质实例注册和索引查询
 │   │   ├── MaterialSignature.cpp                        // 计算材质状态与资源引用的稳定签名
@@ -197,8 +201,8 @@ Physara/
 │   │   ├── ShaderLibrary.cpp                           // 加载、编译、缓存并热重载 Shader Variant
 │   │   ├── ShaderLibrary.hpp                           // 定义 Shader Program 描述和 Variant 库
 │   │   ├── Loaders/
-│   │   │   ├── GLTFLoader.cpp                          // 解析 glTF 并导入实体、网格、材质和纹理
-│   │   │   ├── GLTFLoader.hpp                          // 定义 glTF 场景导入接口
+│   │   │   ├── GLTFLoader.cpp                          // 实现 glTF 资源注册与场景实体导入两条入口
+│   │   │   ├── GLTFLoader.hpp                          // 声明资源加载和场景导入接口
 │   │   │   ├── ShaderLoader.cpp                        // 展开 GLSL include 并注入 Feature/Stage Define
 │   │   │   ├── ShaderLoader.hpp                        // 定义 Shader 源码加载描述
 │   │   │   ├── TextureLoader.cpp                       // 解码 LDR、HDR 与 EXR 纹理数据
@@ -208,7 +212,7 @@ Physara/
 │   │       ├── Mesh.hpp                                // 定义 CPU 顶点、Primitive、AABB 和网格资源
 │   │       ├── Shader.cpp                              // 实现 Shader Feature Mask 与 Variant 有效性
 │   │       ├── Shader.hpp                              // 定义 Shader Feature、源码和编译后 Variant
-│   │       └── Texture.hpp                             // 定义纹理像素、格式、色彩空间和尺寸元数据
+│   │       └── Texture.hpp                             // 定义纹理像素、源格式、透明度和尺寸元数据
 │   ├── RHI/                                            // 后端无关的渲染硬件接口
 │   │   ├── RHIDefinitions.hpp                          // 定义格式、状态、Barrier、统计和渲染基础枚举
 │   │   ├── Command/
@@ -242,15 +246,15 @@ Physara/
 │       ├── SceneSerializer.hpp                         // 定义场景文件保存与加载接口
 │       ├── Components/
 │       │   ├── CameraComponent.hpp                     // 定义透视/正交物理相机及手动曝光参数
-│       │   ├── LightComponent.hpp                      // 定义平行光、点光和聚光灯物理参数
+│       │   ├── LightComponent.hpp                      // 定义方向/点/聚光参数及尚未接入 GPU 的 Area/IES 脚手架
 │       │   ├── MaterialComponent.hpp                   // 定义 PBR、Unlit、透明模式和纹理槽
 │       │   ├── MeshComponent.hpp                       // 定义 Mesh Primitive 引用、材质槽和局部包围盒
 │       │   ├── RelationshipComponent.hpp               // 定义父子实体关系
 │       │   ├── TagComponent.hpp                        // 保存实体可读名称
-│       │   ├── TransformComponent.cpp                  // 计算并缓存 Local/World 变换及父子换算
+│       │   ├── TransformComponent.cpp                  // 组合/分解 Local TRS 并维护 Local/World 矩阵缓存
 │       │   └── TransformComponent.hpp                  // 定义世界位置语义和变换脏标记
 │       └── Systems/
-│           ├── LightSystem.cpp                         // 收集可见灯光并转换为 GPU LightData
+│           ├── LightSystem.cpp                         // 收集 Directional/Point/Spot 并转 GPU LightData；当前跳过 Area
 │           ├── LightSystem.hpp                         // 定义灯光收集系统接口
 │           ├── RenderSystem.cpp                        // 收集 Mesh/Material/Transform 为渲染提交项
 │           ├── RenderSystem.hpp                        // 定义场景渲染提交结构和可复用 Scratch
@@ -272,12 +276,12 @@ Physara/
 │       ├── GLFWWindowOpenGL.hpp                         // 定义 OpenGL GLFW 窗口实现
 │       └── IWindow.hpp                                 // 抽象窗口生命周期、尺寸、事件和垂直同步
 ├── Runtime/                                            // 可执行程序入口与模块装配
-│   ├── CMakeLists.txt                                  // 构建 Physara 可执行文件并链接核心模块
+│   ├── CMakeLists.txt                                  // 构建当前 Editor 可执行程序并固定链接 Engine/Backend/Editor
 │   └── Main.cpp                                        // 创建后端和 EditorAppHost 并运行主循环
 ├── ThirdParty/                                         // 由 CMake 管理的外部依赖，内部源码不在此展开
 │   ├── entt/                                           // ECS Registry 与 View
 │   ├── glad/                                           // OpenGL 函数加载器
-│   ├── glfw/                                           // 窗口、上下文与输入
+│   ├── glfw/                                           // GLFW 头文件及当前 Windows 预编译 glfw3.lib
 │   ├── glm/                                            // 图形数学库
 │   ├── imgui/                                          // ImGui、ImGuizmo 与编辑器 UI
 │   ├── nlohmann/                                       // JSON 解析与场景序列化
@@ -286,5 +290,6 @@ Physara/
 │   ├── tinyexr/                                        // EXR 环境图读取
 │   └── tinygltf/                                       // glTF 2.0 解析
 └── Tools/
-    └── verify_gpu_contracts.py                          // 校验 C++ 与 GLSL 的 Binding 和结构布局契约
+    ├── compare_golden.py                               // 容差比较截图并显式刷新 golden（依赖 Pillow/numpy）
+    └── verify_gpu_contracts.py                         // 校验 Binding/布局；逐字段语义校验仍待 P.4 完成
 ```
