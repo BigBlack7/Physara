@@ -44,7 +44,7 @@
 - [ ] 0.4 评估资源脏槽与资源集惰性绑定，减少无变化的绑定提交。
 - [ ] 0.5 评估 shader variant 异步编译与 program binary 缓存的可行架构。
 - [ ] 0.6 拆分 `OpenGLCommandList`，分离状态缓存、管线应用、资源绑定、barrier、计时与 ImGui 互操作职责。
-- [ ] 0.7 收敛纯枚举到 OpenGL 类型的映射来源，消除重复转换逻辑。
+- [ ] 0.7 收敛纯枚举到 OpenGL 类型的映射来源，消除重复转换逻辑，并补全 storage image 对 2D array 等维度的 layered 绑定语义。
 - [ ] 0.8 按职责拆分 `RHIDefinitions.hpp`，降低公共头耦合。
 - [ ] 0.9 使 ImGui 后端通过 RHI 提交，减少直接 OpenGL 调用与状态耦合。
 - [ ] 0.10 加固 `PipelineStateCache` 与 `MeshGPUCache`，处理哈希碰撞、资源身份及失效生命周期。
@@ -98,7 +98,7 @@
 
 - [ ] 3.1 收敛各类 bucket 的公共容器行为，保留领域数据与职责边界。
 - [ ] 3.2 整理现有实例合并、direct/indirect 提交与去重统计能力。
-- [ ] 3.3 基于 P.1 数据评估 opaque 排序、透明排序和实例合并策略。
+- [ ] 3.3 基于 P.1 数据评估 opaque 排序、透明排序和实例合并策略；同时审计排序键位宽、截断碰撞和完整材质身份比较，保证正确性优先于局部性优化。
 
 ### 模块 4 — Material 数据层与扩展策略
 
@@ -116,7 +116,7 @@
 
 ### 模块 6 — GBuffer / Deferred / Forward
 
-- [ ] 6.1 统一方向光、局部光、发光、IBL、Skybox 与后处理的曝光职责。
+- [ ] 6.1 统一方向光、局部光、发光、IBL、Skybox 与后处理的曝光职责；明确 pre-exposure 只在 CPU 或 GPU 的单一归属层应用，定义 `ev100` 与 exposure compensation 的组合公式，消除路径间隐式常量偏移。
 - [ ] 6.2 依据测量评估 Deferred 无效像素区域的优化必要性。
 - [ ] 6.3 审计 BRDF 路径的一致性，决定 f90 与 Lambert/Burley 的使用策略。
 

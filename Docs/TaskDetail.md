@@ -44,7 +44,7 @@
 按职责拆分过大的命令列表实现。
 
 #### 0.7 枚举到 GL 映射收敛
-统一纯类型映射的来源。
+统一纯类型映射的来源，并补全 storage image 对 2D array 等维度的 layered 绑定语义。
 
 #### 0.8 拆分 RHIDefinitions
 按职责拆分 RHI 公共定义。
@@ -163,7 +163,7 @@
 整理既有实例合并和 direct/indirect 提交能力。
 
 #### 3.3 Draw 排序与合并率
-依据实测评估排序正确性、overdraw 与实例合并。
+依据实测评估排序正确性、overdraw 与实例合并；审计排序键位宽、截断碰撞和完整材质身份比较，保证正确性优先于局部性优化。
 
 ### 模块 4 — Material 数据层与扩展策略
 
@@ -196,7 +196,7 @@
 ### 模块 6 — GBuffer / Deferred / Forward
 
 #### 6.1 曝光职责统一
-统一各 radiance 来源与后处理的曝光链路。
+统一各 radiance 来源与后处理的曝光链路；明确 pre-exposure 只在 CPU 或 GPU 的单一归属层应用，定义 `ev100` 与 exposure compensation 的组合公式，消除路径间隐式常量偏移。
 
 #### 6.2 Deferred 无效区域优化
 依据测量决定是否优化 Deferred 背景区域。
