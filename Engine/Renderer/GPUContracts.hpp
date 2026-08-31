@@ -206,7 +206,7 @@ namespace Physara::Engine
         glm::vec4 debugParams{0.f, 0.f, 0.f, 0.f};
     };
 
-    // CPU↔GPU 契约:布局编译期锁定(见 change pre-refactor-validation-guards / P.4)。
+    // CPU↔GPU 契约:布局编译期锁定。
     // 锁定每个 GPU 结构的 sizeof 与逐字段 offsetof:字段被重排/改型/增删即编译失败,
     // 阻止 CPU↔GLSL 布局静默漂移。有意重设计布局时须同步更新以下常量。
     static_assert(sizeof(CameraData) == 448);

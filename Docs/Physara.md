@@ -290,6 +290,5 @@ Physara/
 │   ├── tinyexr/                                        // EXR 环境图读取
 │   └── tinygltf/                                       // glTF 2.0 解析
 └── Tools/
-    ├── compare_golden.py                               // 容差比较截图并显式刷新 golden（依赖 Pillow/numpy）
-    └── verify_gpu_contracts.py                         // 校验 Binding/布局；逐字段语义校验仍待 P.4 完成
+    └── verify_gpu_contracts.py                         // 校验 Binding、结构字段序列、字节布局与 UBO/SSBO 前缀
 ```

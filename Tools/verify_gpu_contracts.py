@@ -62,9 +62,9 @@ def require_equal(label, cpp_value, glsl_value):
         raise AssertionError(f"{label}: C++={cpp_value}, GLSL={glsl_value}")
 
 
-# ── 结构体布局比对(P.4)─────────────────────────────────────────────
+# ── 结构体布局比对 ─────────────────────────────────────────────
 # 按 std140/std430 语义对当前受检类型集(mat4/vecN/uvec4/标量)计算字节尺寸,
-# 逐字段名不比对(因 C++ 4×uint32 与 GLSL uvec4 是有意等价),改比对字节布局尺寸。
+# 并比对规范化后的成员类型序列。C++ 连续 4×uint32 与 GLSL uvec4 视为等价。
 
 BASE_SIZE_ALIGN = {
     "mat4": (64, 16), "mat3": (48, 16),
@@ -153,6 +153,48 @@ def resolve_dim(token, consts):
     raise ValueError(f"unresolved array dimension: {token}")
 
 
+SCALAR_TO_VEC4 = {"uint": "uvec4", "int": "ivec4", "float": "vec4"}
+
+
+def normalize_member_sequence(members):
+    # C++ 连续 4 个同型标量与 GLSL vec4/uvec4/ivec4 视为同一槽位。
+    normalized = []
+    index = 0
+    while index < len(members):
+        member_type, dim = members[index]
+        if dim is None and member_type in SCALAR_TO_VEC4:
+            run = 1
+            while (
+                index + run < len(members)
+                and run < 4
+                and members[index + run][0] == member_type
+                and members[index + run][1] is None
+            ):
+                run += 1
+            if run == 4:
+                normalized.append((SCALAR_TO_VEC4[member_type], None))
+                index += 4
+                continue
+        normalized.append((member_type, dim))
+        index += 1
+    return normalized
+
+
+def canonical_members(members, consts):
+    canonical = []
+    for member_type, dim in normalize_member_sequence(members):
+        count = None if dim is None else resolve_dim(dim, consts)
+        canonical.append((member_type, count))
+    return canonical
+
+
+def require_member_sequence(label, cpp_members, glsl_members, cpp_consts, glsl_consts):
+    cpp_seq = canonical_members(cpp_members, cpp_consts)
+    glsl_seq = canonical_members(glsl_members, glsl_consts)
+    if cpp_seq != glsl_seq:
+        raise AssertionError(f"{label}: C++={cpp_seq}, GLSL={glsl_seq}")
+
+
 def struct_size(name, structs, consts, cache):
     if name in cache:
         return cache[name]
@@ -224,9 +266,70 @@ def verify_struct_layouts(cpp, glsl_common, glsl_material):
     ]
     cpp_cache, glsl_cache = {}, {}
     for cpp_name, glsl_name in pairs:
+        require_member_sequence(
+            f"fields {cpp_name}<->{glsl_name}",
+            cpp_structs[cpp_name],
+            glsl_structs[glsl_name],
+            cpp_consts,
+            glsl_consts,
+        )
         cpp_bytes = struct_size(cpp_name, cpp_structs, cpp_consts, cpp_cache)
         glsl_bytes = struct_size(glsl_name, glsl_structs, glsl_consts, glsl_cache)
         require_equal(f"layout {cpp_name}<->{glsl_name} (bytes)", cpp_bytes, glsl_bytes)
+
+
+LAYOUT_PREFIX_RULES = (
+    ("PHYSARA_BINDING_FRAME_UNIFORMS", "std140", "uniform"),
+    ("PHYSARA_BINDING_CAMERA", "std140", "uniform"),
+    ("PHYSARA_BINDING_POST_PROCESS_SETTINGS", "std140", "uniform"),
+    ("PHYSARA_BINDING_SKYBOX_SETTINGS", "std140", "uniform"),
+    ("PHYSARA_BINDING_WORLD_GRID_SETTINGS", "std140", "uniform"),
+    ("PHYSARA_BINDING_OBJECTS", "std430", "buffer"),
+    ("PHYSARA_BINDING_MATERIALS", "std430", "buffer"),
+    ("PHYSARA_BINDING_LIGHTS", "std430", "buffer"),
+    ("PHYSARA_BINDING_INSTANCE_INDICES", "std430", "buffer"),
+    ("PHYSARA_BINDING_MATERIAL_TEXTURE_INDICES", "std430", "buffer"),
+    ("PHYSARA_BINDING_BINDLESS_TEXTURE_HANDLES", "std430", "buffer"),
+    ("PHYSARA_BINDING_CLUSTER_ENTRIES", "std430", "buffer"),
+    ("PHYSARA_BINDING_CLUSTER_LIGHT_INDICES", "std430", "buffer"),
+)
+
+LAYOUT_DECL_PATTERN = re.compile(
+    r"layout\s*\((?P<qualifiers>[^)]*)\)\s*(?P<storage>readonly\s+|writeonly\s+|restrict\s+)*"
+    r"(?P<kind>uniform|buffer)\b",
+    re.MULTILINE,
+)
+
+
+def iter_shader_sources():
+    for path in SHADER_DIR.rglob("*"):
+        if path.suffix in (".glsl", ".vert", ".frag", ".comp"):
+            yield path, path.read_text(encoding="utf-8", errors="ignore")
+
+
+def verify_layout_prefixes():
+    declarations = {macro: [] for macro, _prefix, _kind in LAYOUT_PREFIX_RULES}
+    for path, text in iter_shader_sources():
+        for match in LAYOUT_DECL_PATTERN.finditer(text):
+            qualifiers = match.group("qualifiers")
+            kind = match.group("kind")
+            for macro in declarations:
+                if re.search(rf"\bbinding\s*=\s*{macro}\b", qualifiers):
+                    declarations[macro].append((path, qualifiers, kind))
+
+    for macro, expected_prefix, expected_kind in LAYOUT_PREFIX_RULES:
+        found = declarations[macro]
+        if not found:
+            raise AssertionError(f"layout prefix {macro}: no {expected_kind} declaration found")
+        for path, qualifiers, kind in found:
+            if kind != expected_kind:
+                raise AssertionError(
+                    f"layout prefix {macro}: {path} declared as {kind}, expected {expected_kind}"
+                )
+            if expected_prefix not in re.split(r"\s*,\s*", qualifiers):
+                raise AssertionError(
+                    f"layout prefix {macro}: {path} uses ({qualifiers}), expected {expected_prefix}"
+                )
 
 
 def report_binding_hygiene(buffer_bindings, buffer_define_names):
@@ -334,8 +437,11 @@ def verify():
     require_equal("ObjectFlags::Transparent", flags["Transparent"], defines["PHYSARA_OBJECT_TRANSPARENT"])
     require_equal("ObjectFlags::Unlit", flags["Unlit"], defines["PHYSARA_OBJECT_UNLIT"])
 
-    # 结构体字节布局比对(CPU<->GLSL)。
+    # 结构体字段序列与字节布局比对(CPU<->GLSL)。
     verify_struct_layouts(cpp, glsl, glsl_material)
+
+    # 已知 UBO/SSBO 的 std140/std430 前缀。
+    verify_layout_prefixes()
 
     # binding 卫生报告(死枚举/重载),软告警。
     report_binding_hygiene(buffer_bindings, buffer_define_names)
