@@ -132,6 +132,34 @@
 
 轮次 0 已于 2026-08-25/28 完成采集：三管线面板 + benchmark 数据（Deferred 的 benchmark 于 8-28 补测）、三份 rdc 全部分析完毕。硬件：i7-7700 / GTX 1060 6G / 驱动 580 / 32G RAM。视觉：三条管线均正常。Scene View 锁定 889x611。偏差：World Grid 采样期间 UI 勾选为开，但 benchmark 采样时强制隐藏，grid GPU 实测 0.00，不影响数据。
 
+##### RDC 二次深分析（2026-08-31，RHI×Vulkan 视角）
+
+方法：renderdoc MCP `execute_python` 直接统计结构化 chunk 流（不止 action 列表），逐 pass 归因真实 GL 调用构成；结论供模块 0/2/3/5/8 任务吸收。
+
+**抓帧包组成（解读约束）**：两 capture 总 chunk 5812(F)/13655(F+)，首个 debug marker 前的 5249/13090 个 chunk 是 RenderDoc 抓帧序列化（含对 GPUScene buffer 的 3293 次 `glBindBuffer` 分块回读）与首帧初始化（124 纹理创建、107 纹理上传、18 shader 编译、20 FBO 创建），**非应用帧代码**；应用帧本体 ≈ 563-565 次 GL 调用。timing 离群值（首个 MDI 593ms、单 draw 111ms/27ms）为重放首用开销，剔除。
+
+**帧内 GL 调用画像**（Forward；Forward+ 仅主 pass +2 `glBindBufferRange`、shader 变体不同，其余逐项一致）：
+
+| Pass | GL 调用 | 构成 |
+|---|---|---|
+| Shadow | 245 / 8 MDI | 9×NamedBufferSubData；8×(UseProgram+BindVertexArray+VertexArrayVertexBuffer+ElementBuffer+BindBuffer)；6×BindBufferRange；4×(BindFramebuffer+Clear) |
+| ForwardOpaque | 100 / 39 draw | 39 draw + 38×glBindTextures（批量）+ ~10 setup；无 program/VAO 切换 |
+| PostProcess | 115 / 15 draw | 15×BindFramebuffer + 22×BindTextureUnit + 14×Viewport + 5×UseProgram |
+| EditorUI | 75 / 30 draw | 直写 GL（17 tex + 13 scissor），绕 RHI |
+| GPUSceneUpload | 0 有效调用 | 静态场景+静态相机下哈希门控跳过重传，门控生效实证 |
+
+**新结论：**
+
+1. GL 调用数很瘦（~563/帧）→ B 机 `graph exec 18.7ms` 的开销主体是引擎提交机器（命令构建/哈希/去重/span 拷贝/上传 staging），非 GL 调用数；0.3/0.6 需 CPU profiler 定位，RDC 只能给调用构成。
+2. Shadow 逐 run 全量状态重设：单/双面 caster 分组各做一次完整 SetPipelineState+SetRenderPrimitive（program/VAO/VBO/EBO 重绑 ×2/cascade），状态缓存未去重；indirect 命令按 run 独立上传、独立 buffer（capture 中 8 个小 indirect buffer：2304B/3840B ×4 对），应合并为单 buffer + 偏移。
+3. 级联 UBO 走 `BindBufferRange(同 buffer, 逐 cascade 偏移)`：GL 动态偏移模拟，语义可平移 Vulkan dynamic offset，但 RHI 无 dynamic offset 概念。
+4. GPUScene 单 arena：ObjectBuffer/MaterialBuffer/ClusterEntry/ClusterLightIndex 均为同一 3MB buffer 的 range bind；创建参数 `GL_DYNAMIC_STORAGE_BIT|GL_MAP_WRITE_BIT`；全帧 0 次 Map、0 次 fence/sync——上传全靠 SubData + 哈希门控，无 frames-in-flight 概念。
+5. 显存实测 5.6-6.4GB 纹理（84 张 4096² RGBA8 全 mip 链 ×89.5MB），默认场景即顶到 6GB 卡上限，靠驱动分页掩盖；无压缩/预算/流送。Bloom 7 级 ping-pong 14 张半浮点纹理 + 15 FBO（889×611 下过剩的实锤）。
+6. FBO 仅 init 建 20 个，帧内 21 次 FBO 切换 ≈ 21 个潜在 `vkCmdBeginRenderPass`；Composite 常绑 shadow map/scene depth 待命 debug view。
+7. RHI×Vulkan 差距（代码审计 + RDC 互证）：绑定模型为即时槽位式，`SetResourceSet` 展开 span 且丢弃 setIndex（OpenGLCommandList.cpp:910）；`SubmitCommandList` 空操作（OpenGLDevice.cpp:181-184）；`TextureBarrier`/`BufferBarrier` 丢弃资源参数（OpenGLCommandList.cpp:1527/1554）并经 `FirstStage()` 折叠多 stage（RHICommandList.hpp:167-172,207）；`PushConstants` 丢弃 stage 参数（OpenGLCommandList.cpp:1255）；`RHIPipelineStateDesc.renderPassDesc` 为 OpenGL 不消费的悬空指针。GL 零 barrier 是 GL 语义红利，Vulkan 下 RenderGraph 的状态推导须接上真 per-resource layout transition。
+
+**Deferred 补充（同日，`8-25-B-Deffered.rdc`）**：307 actions / 239 draws / 11 clears；GBuffer 101 次 GL 调用 / 39 draw（38 次批量 glBindTextures + 4 次 Clearfv，与 Forward 同样瘦）→ Deferred 面板 CPU 30.5ms 的开销同样在引擎提交机器（CanMerge 逐 item 判定、纹理表上传），不在 GL 调用数。DeferredLighting（event 370）实测绑定：4 张 GBuffer RT + D24S8 深度 + shadow 阵列 + cluster 两表（arena range bind）+ LightBuffer，单次全屏三角形写 SceneHDR；SceneHDR 先 Clear 再全屏覆盖，冗余 clear 实证。存疑：GBuffer RT3 文档记 RGBA16F，本 capture 绑定清单只见 1 张 RGBA16F + 2 张 RGBA8，RT3 实际格式待核对（文档过期或绑定缺失）。本 capture 无 ClusterDebug marker（8-28 记录中有 1 个空 marker），差异源于抓帧时 debug 设置，非图剔除证据。
+
 #### P.2 GPU CPU↔GPU 契约检查
 
 **现状核验：** `Tools/verify_gpu_contracts.py` 原先只比对常量、绑定/枚举值和结构字节尺寸；注释仍写已失效的 `P.4`。`ObjectData` 在 C++ 为 4×`uint32`，GLSL 为 `uvec4`，属有意等价。
@@ -184,21 +212,26 @@ GPU contract verification passed.
 
 #### 0.1 命令录制/回放层
 明确可选命令录制和回放的生命周期、数据所有权与提交语义。
+**现状核验（2026-08-31 RDC+代码）：** `GetCommandList()` 返回单例、`SubmitCommandList()` 空操作（OpenGLDevice.cpp:181-184）、`WaitIdle` 即 `glFinish`（OpenGLDevice.cpp:186-190）；两份 capture 全帧 0 次 fence/sync/map，无 frames-in-flight 概念。本任务是 Vulkan 后端前置：per-frame command buffer、队列提交、fence/semaphore 均依赖本层语义先成立，优先级应上调。
 
 #### 0.2 OpenGL 状态缓存
-完善状态缓存失效与外部状态互操作。
+完善状态缓存失效与外部状态失效模型。
+**现状核验（2026-08-31 RDC）：** Shadow 单/双面 run 边界出现同一 program/VAO/VBO/EBO 全量重绑（每 cascade ×2），状态缓存未去重（见 P.1 二次分析第 2 条）。
 
 #### 0.3 提交热循环去重
 整理既有去重逻辑并保留必要统计。
+**现状核验（2026-08-31 RDC）：** 帧内 GL 调用 ≈563 次，已很瘦；B 机 graph exec 18.7ms 主体是引擎提交机器而非 GL 调用数。先做 CPU profiler 定位（RenderProxy/CommandExecutor/上传 staging），再定去重目标。
 
 #### 0.4 Descriptor 惰性绑定
 评估仅提交发生变化资源槽位的绑定策略。
+**现状核验（2026-08-31 代码）：** 当前为即时槽位绑定模型，`SetResourceSet` 仅展开 textures span 且丢弃 setIndex（OpenGLCommandList.cpp:910）；与 Vulkan descriptor set 语义差距大，需连同 0.11 一并设计。
 
 #### 0.5 PSO 编译与 program binary 缓存
 评估异步编译和磁盘缓存的架构、失效与回退策略。
 
 #### 0.6 拆分 OpenGLCommandList
 按职责拆分过大的命令列表实现。
+**现状核验（2026-08-31 RDC）：** 同 0.3——GL 调用数非瓶颈，拆分的价值在可维护性与 Vulkan 对齐（状态缓存/管线应用/绑定/barrier/计时分离），不在 GL 调用减少。
 
 #### 0.7 枚举到 GL 映射收敛
 统一纯类型映射的来源，并补全 storage image 对 2D array 等维度的 layered 绑定语义。
@@ -208,27 +241,37 @@ GPU contract verification passed.
 
 #### 0.9 ImGui 后端走 RHI
 将 ImGui 资源和绘制提交迁入 RHI 边界。
+**现状核验（2026-08-31 RDC）：** EditorUI 30 draw 直写 GL（17 次纹理绑定 + 13 次 scissor），绕开 RHI 状态缓存，是外部状态失效的主要来源。
 
 #### 0.10 缓存碰撞与失效
 加固管线和网格缓存的身份比较与生命周期失效。
 
 #### 0.11 描述符模型统一
 统一资源集与 GPU set index 的真实语义。
+**现状核验（2026-08-31 代码）：** `RHIResourceSet` 仅含 textures span、无 buffer/offset 成员；`RHIPipelineStateDesc.renderPassDesc` 为 OpenGL 不消费的悬空指针。目标形态应接近 Vulkan：descriptor set layout + 按频分级（GPUResourceSetIndex 已是雏形）+ 批量更新 + dynamic offset。
 
 #### 0.12 精确 barrier
 建立精确资源访问同步和 RenderGraph 依赖规则。
+**现状核验（2026-08-31 RDC）：** 全帧 0 `glMemoryBarrier` 是 GL FBO 语义红利，不代表问题不存在——Vulkan 下每处附件写→读都需显式 layout transition。当前 `TextureBarrier`/`BufferBarrier` 丢弃资源参数（OpenGLCommandList.cpp:1527/1554）、`FirstStage()` 折叠多 stage（RHICommandList.hpp:167-172,207）。任务重心从"GL 优化"转为"为 Vulkan 接上 per-resource stage/access/layout 语义"，RenderGraph 的 TrackedState 推导可直接复用。
 
 #### 0.13 bindless 纹理驻留
 管理 bindless handle 驻留、预算和延迟回收。
+**现状核验（2026-08-31 RDC）：** 默认场景纹理显存实测 5.6-6.4GB（84 张 4096² RGBA8 无压缩全 mip 链），6GB 卡靠驱动分页硬扛。预算是硬需求不是优化项。
 
 #### 0.14 上传同步优化
 基于实际测量评估上传路径与 fence 优化。
+**现状核验（2026-08-31 RDC）：** 帧内仅 14 次 `glNamedBufferSubData`，0 次 map/fence/sync；GPUScene 走单 3MB arena（`GL_DYNAMIC_STORAGE_BIT|GL_MAP_WRITE_BIT`）+ 哈希门控跳过重传（静态帧 GPUSceneUpload 零调用）。现状对单线程 GL 已合理；fence/frames-in-flight 是 Vulkan 语义下的新需求，与 0.1/0.17 联动。
 
 #### 0.15 GL 调试回调治理
 聚合、限频并保留高严重度调试消息。
 
 #### 0.16 Reverse-Z RHI 前置
 建立 Reverse-Z 所需 depth compare、clear 与 clip-depth 能力，并统一 Depth24Stencil8、Depth32F 等深度格式的附件识别与映射。
+**现状核验（2026-08-31 代码）：** OpenGL 后端未调 `glClipControl`，默认左下原点 + [-1,1] 深度（`SetViewport` 注释明写）。建议引擎统一 Vulkan 约定（左上原点 + [0,1] 深度），GL 后端用 `glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE)` 适配，避免跨后端投影矩阵特判。
+
+#### 0.17 Swapchain 与 frames-in-flight
+分离窗口与呈现，建立 acquire/present 与帧同步语义。
+**现状核验（2026-08-31 代码）：** `IWindow` 为窗口级抽象（PollEvents/SwapBuffers），无 swapchain 对象；RHI 无 fence/semaphore/frames-in-flight。Filament 的 FSwapChain（平台层只管 context/swapchain/present）为参照。与 0.1 配套构成 Vulkan 后端的地基。
 
 ### 模块 1 — 公共基础设施收敛
 
@@ -245,15 +288,18 @@ GPU contract verification passed.
 
 #### 2.1 拆分 BuildRenderGraph
 按渲染职责拆分 RenderGraph pass 注册。
+**现状核验（2026-08-31 代码）：** `BuildRenderGraph()` 每帧 `Reset()` 后全量重建 pass/lambda（Renderer.cpp:516）；`RenderGraph::CreateTexture` 瞬态路径零调用（RenderGraph.cpp:179），所有纹理预分配后 Import，图实为线性链（拓扑序==声明序），瞬态池与剔除机制空转；GPUSceneUpload 等 side-effect 上传 pass 与渲染 pass 无资源边，排序安全纯靠声明顺序（图未来引入重排/并行即 use-before-upload 竞态）。另：Forward/Forward+ 实为同一 pass 同一 shader 仅 cluster define 之差（ForwardOpaquePass.cpp:310-319），"三条管线"实为两条半，拆分时应按渲染职责而非按枚举分支重组。
 
 #### 2.2 PassContext 收敛
 消除各 pass 的重复帧级上下文填充。
+**现状核验（2026-08-31 代码）：** `ForwardPassContext` 同构字段在 Renderer.cpp:798-826 / 924-951 / 1034-1059 三处手拼；各 pass 经 context 拿十余个共享指针并自行 flush/EnsureResources，pass 边界无约束。
 
 #### 2.3 辅助职责剥离
 从 Renderer 剥离 benchmark、capture 等辅助职责。
 
 #### 2.4 Resize 重建收敛
 处理高频 resize、最小化和恢复的资源重建，并保证导入纹理的描述完整保留颜色空间等资源语义。
+**现状核验（2026-08-31 代码）：** 资源所有权三套并存——Renderer 直接持有 SceneRT（Renderer.hpp:115-121）、DeferredResources 持 GBuffer 且存 SceneHDR/Depth 裸指针（DeferredResources.hpp）、Shadow/PostProcess 自管 RT（ShadowPass.cpp:339-387、PostProcessPass.cpp:232-309）；`RecreateRenderTarget` 手动逐一 reset（Renderer.cpp:370-382），漏一个即悬垂；Bloom 不在 resize 路径而靠尺寸比对惰性重建。统一资源池是根治方向。
 
 #### 2.5 Renderer 生命周期
 补齐 shutdown、重初始化和 GPU 资源释放。
@@ -280,6 +326,7 @@ GPU contract verification passed.
 
 #### H2.6 纹理颜色空间模型
 分离源图数据与采样用途/视图的颜色空间解释。
+**现状核验（2026-08-31 代码）：** `ToGLTextureFormat` 仅对 RGBA8 特判 sRGB，其余格式忽略 colorSpace（OpenGLTypeMapping.hpp:69-76）；纹理对象上还另设 727 次 `glTextureParameteri`（init 期），与采样器对象双源并存。Vulkan 下 sRGB 是格式属性（VK_FORMAT_*_SRGB），颜色空间模型需前移到格式枚举。
 
 #### H2.7 文件系统与构建边界
 收敛路径安全、字体资产路径、平台支持和构建可移植性。
@@ -297,6 +344,7 @@ GPU contract verification passed.
 
 #### H1.3 绘制阶段分离
 分离场景更新、渲染、UI 构建和呈现阶段，并统一 Editor、Renderer 与引擎 `Time` 的 delta time 来源。
+**现状核验（2026-08-31 代码）：** delta time 双源实证——`RenderSceneView` 用 `ImGui::GetIO().DeltaTime` 传给 `Renderer::RenderScene`（EditorApp.cpp:587、873），与引擎 `Time::Tick()`（Main.cpp:70）并存；且渲染帧循环被吞并进 `EditorApp::OnUIRender`（EditorApp.cpp:241-289），无独立 beginFrame/render/endFrame 边界。
 
 #### H1.4 编辑器源码收敛
 迁移 inline 实现并拆分过长 UI 函数。
@@ -318,12 +366,14 @@ GPU contract verification passed.
 
 #### 3.2 实例与提交去重整理
 整理既有实例合并和 direct/indirect 提交能力。
+**现状核验（2026-08-31 RDC）：** indirect 命令按 run 独立上传并各占一个 buffer（capture 中 8 个小 indirect buffer：2304B/3840B ×4 对，对应 4 cascade × 2 run）；应合并为单 dynamic indirect buffer + 偏移，一次上传多次绘制。Shadow 逐 run 全量状态重设见 5.1。
 
 #### 3.3 Draw 排序与合并率
 依据实测评估排序正确性、overdraw 与实例合并；审计排序键位宽、截断碰撞和完整材质身份比较，保证正确性优先于局部性优化。
 
 #### 3.4 MDI 合并条件不一致修复
 **现状核验（P.1 轮次 0 实测）：** `GBufferPass::CanMerge` 的 bindless 分支要求 `meshKey` 相等（`GBufferPass.cpp:195-197`），而 `ForwardOpaquePass::CanMergeIndirectRun` 的 bindless 分支直接放行（`ForwardOpaquePass.cpp:422-425`）。Deferred 面板实测：direct 37 / MDI 9 runs 155 cmd / breaks M/G/I/S 35/0/0/36；Forward 面板：direct 1 / MDI 10 runs 191 cmd / breaks 0/0/0/0。GBuffer pass 开头 5 次独立 `glClearNamedFramebuffer*`（4 色 + 1 深度）。
+**补充（2026-08-31 RDC chunk 级）：** GBuffer 帧内 101 次 GL 调用 / 39 draw（38 次批量 glBindTextures + 4 次 Clearfv），与 Forward 同瘦——Deferred CPU 30.5ms 在引擎提交机器（逐 item CanMerge 判定、纹理表上传、break 后 per-item 路径），不在 GL 调用数；修 bindless 分支 meshKey 条件即可恢复 MDI，GL 层无需改动。5 次独立 clear 在 Vulkan 下应并为 render pass loadOp。存疑：GBuffer RT3 文档记 RGBA16F，Deferred capture 的 DeferredLighting 绑定清单只见 1 张 RGBA16F + 2 张 RGBA8，RT3 实际格式待核对。
 **方案选型：** 实施时先判断 GBuffer 的 meshKey 条件是否有正确性理由（如 per-draw 网格相关绑定）；若无，对齐到 Forward 的 bindless 合并语义。clear 合并到 pass 入口的 FBO 绑定处一次完成。
 **涉及文件：** `Engine/Renderer/Passes/GBufferPass.cpp`、`Engine/Renderer/Passes/ForwardOpaquePass.cpp`（对齐参考）。
 **验证：** Deferred 面板 Submit 行 breaks M 显著下降、direct 提交数接近 Forward 量级；`python Tools/verify_gpu_contracts.py` 不受影响；视觉回归人工观察。
@@ -341,11 +391,13 @@ GPU contract verification passed.
 
 #### 4.4 材质数据流收敛
 移除 GPU 打包链中的不必要组件副本和跳数。
+**现状核验（2026-08-31 代码）：** 材质数据 5 跳（Collect→Registry→Repack→GPUScene→TextureCache），`frameData.materials` 拷贝整份 MaterialComponent；存在两套独立哈希（MaterialSignature::Build 与 UploadHasher 的 HashMaterialTable）；上传链每帧回查 AssetManager（GPUScene.cpp:52、MaterialTextureCache.cpp:487+）。
 
 ### 模块 5 — ShadowPass
 
 #### 5.1 CSM 成本拆解
 根据性能基线分析级联、裁剪、分辨率和提交成本。
+**现状核验（2026-08-31 RDC 逐 chunk 序列）：** 每 cascade = BindFramebuffer+Clear → BindBufferRange（级联 UBO 偏移）→ UseProgram+BindVertexArray+Enable(CullFace) → indirect 上传 → VBO/EBO 重挂 → MDI#1（双面组）→ UseProgram/BindVertexArray 再次 → Disable(CullFace) → indirect 上传 → VBO/EBO 重挂 → MDI#2（单面组）。4 cascade 共 8 次 program/VAO/VBO/EBO 重绑、9 次 buffer 上传。成本分解除级联裁剪外，应计入 per-run 状态重设与 indirect 上传开销（单/双面分组导致的双 run 结构）。
 
 #### 5.2 Bias 常量治理
 统一阴影 bias、padding、clamp 与参数单位。
@@ -363,6 +415,7 @@ GPU contract verification passed.
 
 #### 6.2 Deferred 无效区域优化
 依据测量决定是否优化 Deferred 背景区域。
+**现状核验（2026-08-31 RDC）：** DeferredLighting 为单次全屏三角形，写 SceneHDR 前先 `glClearNamedFramebufferfv` 再全屏覆盖——冗余 clear 实证（Vulkan loadOp 语义下应直接 DontCare）。GBuffer RT3 格式存疑见 3.4。
 
 #### 6.3 BRDF 一致性审计
 审计 f90、漫反射和镜面 BRDF 的模型选择。
@@ -382,6 +435,7 @@ GPU contract verification passed.
 
 #### 8.1 Bloom mip 收敛
 评估 Bloom mip 数、pass 数和资源布局。
+**现状核验（2026-08-31 RDC）：** 889×611 下实测 7 级 ping-pong 共 14 张 R16G16B16A16F 纹理 + 15 个 FBO（每级独立 FBO）；PostProcess 全链 115 次 GL 调用中 15 次 BindFramebuffer、22 次 BindTextureUnit、14 次 Viewport——per-mip pass 的结构开销主导。
 
 #### 8.2 Bloom pass 合并
 评估 prefilter、downsample 和资源通道合并。

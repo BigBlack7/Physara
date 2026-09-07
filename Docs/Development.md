@@ -54,6 +54,7 @@
 - [ ] 0.14 在测量确认后优化上传同步路径，评估 persistent mapping 与 fence 方案。
 - [ ] 0.15 聚合并限频 OpenGL 调试回调，保留关键错误与诊断信息。
 - [ ] 0.16 为 Reverse-Z 建立 RHI depth compare、clear depth 与 clip-depth 基础能力，并统一 Depth24Stencil8、Depth32F 等深度格式的附件识别与映射。
+- [ ] 0.17 建立 Swapchain 抽象与 frames-in-flight 同步模型（acquire/present、fence/semaphore），分离窗口与呈现，为 Vulkan 后端铺平提交路径。
 
 ### 模块 1 — 公共基础设施收敛
 
