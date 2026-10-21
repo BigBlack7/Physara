@@ -1,23 +1,8 @@
 # Physara
 
-- Build it by MSVC with C++20.
 - A Physically Based Renderer.
-- Refer to Filament, UE5, Unity...
+- Build it by MSVC with C++20.
+- Refer to Filament, UE5, NVRHI...
 
 # Gallery
-
-![Renderer](Assets/Gallery/Physara_Capture00.png)
-![Renderer](Assets/Gallery/Physara_Capture01.png)
-![Renderer](Assets/Gallery/Physara_Capture02.png)
-
-# Engine Architecture
-
-    Physara
-    ├── Assets
-    ├── Backend
-    ├── Editor
-    ├── Engine
-    ├── Platform
-    ├── Runtime
-    ├── ThirdParty
-    └── Tools
+> Coming soon😋...
