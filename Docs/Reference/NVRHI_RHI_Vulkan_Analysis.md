@@ -1,6 +1,7 @@
 # NVRHI：顶层架构与 Vulkan 执行链技术分析
 
 > 分析基线：[NVIDIA-RTX/NVRHI @ 6b96fb03e07539f08327aea76c56d55f1de9d906](https://github.com/NVIDIA-RTX/NVRHI/tree/6b96fb03e07539f08327aea76c56d55f1de9d906)。
+> 源码许可：MIT；本地 ThirdParty/nvrhi 是纯参考快照，不加入 CMake 或当前链接。
 >
 > 本文先建立 RHI 的对象、状态和生存期架构，再沿 Vulkan 的“创建 → 绑定 → 记录 → 同步 → 提交 → 回收”展开。伪代码用于还原程序逻辑，省略模板、错误传播和部分扩展条件；概念辅助函数不代表实际 API。接口和行为以本固定版本源码为准。
 >
@@ -660,7 +661,9 @@ bindBindingSets(...) {
 }
 ```
 
-原子 CAS 防止多个 CPU 记录线程抢到同一版本。maxVersions 不足时报告错误，不能静默覆盖 GPU 在途或尚未提交的内容。Set 未变但常量刚被写入时仍需更新动态偏移，这是 setGraphicsState/setComputeState 绑定条件中 volatile-write 标志存在的原因。[N09] [N14]
+原子 CAS 防止多个 CPU 记录线程认领同一版本，但这个保证只覆盖槽位认领。固定源码的 Buffer::versionSearchStart 是普通 uint32_t，writeVolatileBuffer 在不同 CommandList 间无共同锁地读取、更新该游标；上游同时声明支持并行列表写同一 VCB，因此该条件下仍有 C++ 数据竞争，不能据 CAS 推断整个共享 Buffer 写路径线程安全。单记录线程不触发这一条件；并行移植应采用线程独立 VCB，或使搜索游标原子化并继续审查其余共享字段。[N14] [N30]
+
+maxVersions 不足时报告错误，不能静默覆盖 GPU 在途或尚未提交的内容。Set 未变但常量刚被写入时仍需更新动态偏移，这是 setGraphicsState/setComputeState 绑定条件中 volatile-write 标志存在的原因。[N09] [N14]
 
 关闭命令列表时，flushVolatileBufferWrites 对每个常量缓冲的最小到最大写入版本范围调用 flushMappedMemoryRanges，避免非 coherent 映射的数据不可见。提交时仅将匹配本 recordingID 的版本 CAS 成 submitted token，不会把其他线程占用的版本一起改写。[N06] [N14]
 
@@ -674,7 +677,11 @@ cpuPixels -> uploadSlice -> vkCmdCopyBufferToImage -> texture
 texture   -> vkCmdCopyImageToBuffer -> stagingBuffer -> mapTexture(rowPitch)
 ```
 
-mapBuffer 会等待该 staging buffer 记录的最后使用队列/提交 ID，但“GPU 完成”与“Host cache 可见”是两层问题。当前通用 map/unmap 实现仍有 Host barrier TODO，且不能从 HOST_VISIBLE 推断 HOST_COHERENT；也不能把 Volatile 路径的显式 flush 泛化为所有上传/映射路径都做了同样处理。对非 coherent 内存的完整 flush/invalidate 行为须逐路径核实。[N14] [N15] [N17] [N21]
+mapBuffer 会等待该 staging buffer 记录的最后使用队列/提交 ID，但“GPU 完成”与“Host cache 可见”是两层问题。固定源码为 Read 请求 HOST_VISIBLE|HOST_CACHED，为 Write 请求 HOST_VISIBLE；均不保证 HOST_COHERENT。普通 map/unmap 没有 invalidate/flush，且保留 Host barrier TODO；UploadChunk 也使用这一普通映射路径，不能把 Volatile 的显式 flush 泛化为所有上传/映射都完整。[N14] [N15] [N17] [N21]
+
+在实际选中非 coherent 内存时，上传须在设备消费前 flush CPU 写入；读回须建立设备写入到 Host 读取的内存依赖，等待对应工作完成，再 invalidate 后读取。范围按 nonCoherentAtomSize 和分配边界合法对齐，分配共享 atom 时还须避免另一在途区段被误触。coherent 内存可省缓存维护调用，不能省访问顺序与寿命协议。Vulkan 规范明确 map/unmap 不隐式替代这些操作；这是移植需要修补的条件性缺口，而不是所有设备必现的故障。[VK01] [VK02]
+
+复制命令还有独立的原生 scope 条件：固定 copyBuffer 只调用 commitBarriers，后者在无 pending barrier 时直接返回。若 A/B 已处于复制状态，之后对另一目标开始 rendering，再复制 A→B，可能在 rendering 内记录 vkCmdCopyBuffer。该命令必须在 render pass instance 外；后端应在复制入口独立结束 rendering，同类复制路径逐一核对，不能依赖“恰好有 barrier”退出。[N12] [N14] [VK03]
 
 至此，命令缓冲有了，资源内容也有上传方案。下一步要解决这些写入与后续 Shader/附件访问之间的实际依赖。
 
@@ -989,6 +996,8 @@ Queue::submit(lists) {
 
 使用 synchronization2 发 barrier，不代表 submit 也使用 vkQueueSubmit2；该版本 Queue 的提交结构仍是上面这条路径。[N07]
 
+以上伪代码概括正常路径，返回编号不是成功保证。固定 Queue::submit 在原生提交前分配 submissionID 并登记在途引用；捕获 vk::DeviceLostError 后只发 MessageSeverity::Error，仍返回该编号，Device 随后仍调用 executed。移植时应在明确设备失效的位置传播既有 Fatal 诊断并锁存设备失败状态；宿主先确认提交有效，才发布历史和正常完成状态。已失效设备的退出不能无限等待这次编号，也不能把资源当作正常未提交槽直接复用。[N04] [N06] [N07]
+
 ### 9.2 提交动作怎样传回上传与状态模块
 
 ```cpp
@@ -1022,7 +1031,7 @@ queueWaitForCommandList 将 Copy 队列的 tracking semaphore 和值加入 Graph
 
 ### 9.4 多线程边界：独立记录与共享提交状态
 
-多个逻辑 CommandList 可各自 open/record，Queue 在获取/回收物理命令缓冲和 submit 时用锁保护自己的成员。Volatile version 的 CAS 解决跨记录线程的存储竞争。可选外部 LifetimeTracker 支持按线程/队列分担在途管理。[N04] [N07] [N14]
+多个逻辑 CommandList 可各自 open/record，Queue 在获取/回收物理命令缓冲和 submit 时用锁保护自己的成员。Volatile version 的 CAS 只保证版本槽位认领，不保护普通 versionSearchStart 搜索游标；共享 VCB 并发写的限制见 6.5。可选外部 LifetimeTracker 支持按线程/队列分担在途管理，不能替代资源本身共享字段的同步。[N04] [N07] [N14] [N30]
 
 待提交 semaphore 列表却是 Queue 的共享可变状态。源码明确指出，queueWaitForSemaphore/queueSignalSemaphore 与同一 Queue 上多线程提交的组合并不理想：submit 内部有锁，也不自动把“设置等待 + 提交某一批列表”变成一个调用者可识别的原子事务。若不同 Queue 包装实际指向同一 VkQueue，独立包装上的锁也不能替代对同一原生 Queue 的整体外部同步。这一后者是从锁的归属得到的架构推论。[N07] [N30]
 
@@ -1374,6 +1383,9 @@ Barrier 决定“这个访问如何看见前一个访问”；Timeline 决定“
 | [N28] | `src/vulkan/vulkan-raytracing.cpp` | AS、RT、SBT 和高级几何 |
 | [N29] | `include/nvrhi/nvrhi.h` | 高级功能公共接口 |
 | [N30] | `src/vulkan/vulkan-backend.h` | Vulkan 内部类、引用、Queue 与命令列表数据结构 |
+| [VK01] | Vulkan 规范：vkFlushMappedMemoryRanges | 非 coherent CPU 写入与 atom 范围 |
+| [VK02] | Vulkan 规范：vkInvalidateMappedMemoryRanges | GPU 到 Host 的依赖、完成与缓存可见性 |
+| [VK03] | Vulkan 规范：vkCmdCopyBuffer | 复制必须位于 render pass instance 外 |
 
 [N01]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/README.md#L5
 [N02]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/doc/ProgrammingGuide.md#L7
@@ -1405,3 +1417,6 @@ Barrier 决定“这个访问如何看见前一个访问”；Timeline 决定“
 [N28]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/src/vulkan/vulkan-raytracing.cpp#L341
 [N29]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/include/nvrhi/nvrhi.h#L3038
 [N30]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/src/vulkan/vulkan-backend.h#L195
+[VK01]: https://docs.vulkan.org/refpages/latest/refpages/source/vkFlushMappedMemoryRanges.html
+[VK02]: https://docs.vulkan.org/refpages/latest/refpages/source/vkInvalidateMappedMemoryRanges.html
+[VK03]: https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdCopyBuffer.html

@@ -20,12 +20,12 @@
   - [2.4 视口输入、相机/Gizmo 与拾取请求](#viewport-input)
 - [3. 导入、校验并发布标准资产](#stage-3)
   - [3.1 AssetManager 与标准数据合同](#asset-types)
-  - [3.2 glTF 解码与独立资产校验工具](#asset-import)
+  - [3.2 glTF 解码与资产校验](#asset-import)
   - [3.3 纹理、环境与编辑器资源的语义](#asset-images)
-  - [3.4 场景实例化、重导入与保存](#asset-persistence)
+  - [3.4 JSON 场景、模型实例与文件读写](#asset-persistence)
 - [4. 更新场景与物理参数](#stage-4)
   - [4.1 Scene、层级与增量变换](#scene)
-  - [4.2 动画、Skin 与 Morph 的 CPU 前态](#animation)
+  - [4.2 静态内容版本与编辑失效](#static-content)
   - [4.3 相机投影、物理镜头与曝光输入](#camera)
   - [4.4 材质、灯光与环境的物理创作参数](#physical-inputs)
 - [5. 冻结场景并形成 CPU 渲染工作集](#stage-5)
@@ -52,7 +52,7 @@
   - [7.8 同一合同下的 Vulkan 接入位置](#vulkan)
 - [8. GPU 执行几何、表面与物理光照](#stage-8)
   - [8.1 GLSL 模块架构与薄 Pass 入口](#shader-runtime)
-  - [8.2 顶点变形、Depth/Normal/Motion 与 GBuffer](#geometry)
+  - [8.2 静态几何与 Depth/Normal/GBuffer](#geometry)
   - [8.3 生成阴影并形成可查询可见性](#shadows)
   - [8.4 AO、接触阴影与前帧辐亮度 SSR](#surface-effects)
   - [8.5 MaterialInputs 到 PixelParams 的统一物理模型](#materials)
@@ -60,7 +60,7 @@
   - [8.7 Forward、Forward+ 与 Deferred 如何消费同一模型](#opaque-shading)
   - [8.8 天空背景、透明覆盖与物理透射](#transparency)
 - [9. 完成时域、镜头与显示变换](#stage-9)
-  - [9.1 运动、曝光与历史有效性](#temporal-contract)
+  - [9.1 相机重投影、曝光与历史有效性](#temporal-contract)
   - [9.2 TAA 重投影、裁剪与累积](#taa)
   - [9.3 DoF、Bloom 与镜头效果](#lens-effects)
   - [9.4 ToneMap、ColorGrading、FXAA 与 ViewOutput](#display-output)
@@ -70,13 +70,13 @@
   - [10.3 Platform 末端复制、提交与窗口呈现](#present)
 - [11. 消费完成结果、退休资源并退出](#stage-11)
   - [11.1 RHI 在途引用与原生删除](#retirement)
-  - [11.2 FrameSlot 复用、历史轮转与前态提交](#history-commit)
+  - [11.2 FrameSlot 复用与 View 历史提交](#history-commit)
   - [11.3 Event/Timer、截图与异步拾取](#readbacks)
   - [11.4 统计快照、缓存预算与诊断面板](#diagnostics)
   - [11.5 取消、失败与完整关闭](#shutdown)
 - [12. 验证、测量与变更闭环](#stage-12)
-  - [12.1 Tests 与固定数据的覆盖](#tests)
-  - [12.2 Benchmark 与性能报告时机](#benchmark)
+  - [12.1 按合同验证行为](#tests)
+  - [12.2 运行时测量与性能报告](#benchmark)
   - [12.3 Docs、Reference 与 OpenSpec 的唯一归属](#project-docs)
   - [12.4 新增能力仍保持一条完整链](#feature-closure)
 - [固定源码与官方规范](#sources)
@@ -84,7 +84,7 @@
 <a id="overview"></a>
 ## 0. 整体架构、数据流与工程覆盖
 
-Physara 是轻量、现代、基于物理渲染的桌面渲染器，运行时直接启动带编辑器的完整程序。模型仅采用标准 glTF 2.0；同时存在 Forward、Forward+、Deferred 三条可切换路径。项目不建设游戏逻辑、脚本平台、任意材质图或自研窗口/UI 工具包。
+Physara 是轻量、现代、带场景编辑器的物理渲染器，目标是以清楚可验证的渲染算法表现真实的静态风景、物体和光照。运行时直接启动带编辑器的完整程序。模型资产采用标准 glTF 2.0 / GLB，保存在 Assets/Models；编辑器场景使用 Assets/Scenes 下的 JSON 文件，引用模型并保存实体、层级、实例覆盖和场景配置。同时存在 Forward、Forward+、Deferred 三条可切换路径。项目不实现动画播放、骨骼、Morph、动态物体或顶点变形系统，也不建设游戏逻辑、脚本平台、任意材质图或自研窗口/UI 工具包。编辑器可以修改静态物体和相机；内容编辑后的时域历史处理见 [4.2](#static-content)，不因此引入动态对象运动管线。
 
 RHI 采用 NVRHI 的公共接口、Common/Validation、绑定、状态与提交寿命模型，进行 Physara 命名移植；OpenGL 是初始实现，Vulkan 按同一谱系接入。Renderer 采用 Filament 的长期资源/帧编排/View、CPU 准备、FrameGraph 与物理着色思路。OpenGL 适配和三路径子图是本项目设计，不能描述成上游已有实现。[N01] [N02] [F01] [F02]
 
@@ -95,6 +95,7 @@ flowchart TD
     B["构建：依赖 / Shader 包"] --> H["Runtime 创建宿主与编辑器"]
     H --> I["窗口事件 / UI 编辑意图"]
     I --> S["事务应用 / 场景更新"]
+    O["JSON 场景读取 / 校验"] --> J
     A["glTF / 图像 / 环境导入"] --> J["CPU 作业完成发布"]
     J --> S
     S --> F["只读 SceneFrame"]
@@ -118,7 +119,7 @@ UI 有两个不同位置：帧开始时生成编辑意图与布局，帧末端�
 |---|---|---|---|
 | WindowState、HostFrameInput | Platform::DeviceHost | 原生事件 → Editor/Runtime | 每次 poll 封存；事件视图不跨下一次 poll |
 | CPU 资产/内容版本 | AssetManager | 导入作业 → Scene/RenderEngine | 不可变发布，handle 与内容 revision 分离 |
-| Scene/编辑事务 | Scene / EditorSession | 控件/动画 → SceneFrame | 事务统一应用，不含 RHI 对象 |
+| Scene/编辑事务 | Scene / EditorSession | 控件/领域命令 → SceneFrame | 静态内容事务统一应用，不含 RHI 对象 |
 | RenderEngine | Runtime 组合入口 | 资产版本 → GPU 驻留、Shader/PSO/资源池 | 长期渲染资源；不拥有 UI 状态 |
 | Renderer | Runtime 组合入口 | PreparedView → 全帧图 | 负责编排，不再保存全局目标副本 |
 | View | 渲染侧 View registry | 相机/请求 → PreparedView/输出/历史 | 每个视口独立 requested/effective 配置 |
@@ -131,7 +132,7 @@ UI 有两个不同位置：帧开始时生成编辑意图与布局，帧末端�
 
 ### 0.3 工程组织
 
-下列列出需要实现的职责目录，不预建空功能。生成物只写 build 树。Runtime 只有一个产品入口 Main.cpp，直接启动带编辑器的渲染器；Tests/Tools 可有独立测试或工具可执行程序，但不是第二个产品运行入口。
+下列列出需要实现的职责目录，不预建空功能。生成物只写 build 树。Runtime 只有一个产品入口 Main.cpp，直接启动带编辑器的渲染器。Shader 处理、资产校验和测量归入实际消费这些能力的模块，不设置独立 Tools 模块。
 
 ```text
 Physara/
@@ -179,17 +180,11 @@ Physara/
     Shaders/
         Common/, Geometry/, Material/, BRDF/, Lighting/, Shadow/
         ScreenSpace/, PostProcess/, UI/, Passes/
-    Tests/
-        CMakeLists.txt
-        Core/, Platform/, Asset/, Scene/, RHI/, RenderGraph/, Rendering/, Editor/, Data/
-    Tools/
-        CMakeLists.txt
-        ShaderCompiler/, AssetValidation/, Benchmark/
     ThirdParty/
         CMakeLists.txt
-        Dependencies.cmake
     Docs/
         Architecture.md
+        Developments.md
         Reference/
     openspec/
         config.yaml
@@ -203,19 +198,19 @@ Physara/
 
 | 工程职责 | 主要流程位置 | 设计与实现合同 |
 |---|---|---|
-| 根/各模块 CMakeLists、ThirdParty | [1.1](#build) | 单向 target、工具生成依赖、锁定与许可 |
+| 根/各模块 CMakeLists、ThirdParty | [1.1](#build) | 单向 target、必要生成依赖、固定版本与许可 |
 | Engine/Core | [1.2](#core)、[11.4](#diagnostics) | identity、arena、作业发布、文件/计时/诊断基础 |
-| Engine/Shader/Interface、Tools/ShaderCompiler | [1.3](#shader-build) | 生成 ABI、编译包、反射与依赖 |
+| Engine/Shader/Interface、Engine/Shader | [1.3](#shader-build) | 生成 ABI、编译包、反射与依赖 |
 | Runtime/Main.cpp | [1.4](#runtime)、[0.6](#frame-flow)、[11.5](#shutdown) | 唯一组合入口、主循环与关闭顺序 |
 | Platform/DeviceHost、GlfwWindow | [1.5](#platform-start)、[2.1](#input)、[10.3](#present)、[11.5](#shutdown) | 创建、输入、呈现与原生资源退出 |
 | Platform/Input、GlfwAccess | [2.1](#input)、[2.2](#editor-input) | 只读事件及受限 GLFW/ImGui 互操作 |
 | Editor/Session、Panels | [2.2](#editor-input) | 只读展示、布局与领域请求 |
 | Editor/Commands | [2.3](#edits) | 编辑事务、Undo/Redo、版本与脏标记 |
 | Editor/Viewport | [2.4](#viewport-input)、[10.1](#editor-output)、[11.3](#readbacks) | 相机/Gizmo、输出、异步拾取 |
-| Engine/Asset、Tools/AssetValidation | [3.1—3.4](#stage-3) | glTF/图像/环境的校验、发布与保存 |
-| Assets/Scenes、Models | [3.1](#asset-types)、[3.4](#asset-persistence) | 标准 glTF 数据和合法引用 |
+| Engine/Asset | [3.1—3.3](#stage-3) | glTF/图像/环境的校验和 CPU 资产发布 |
+| Assets/Models、Scenes；Engine/Scene、Editor/Session | [3.1](#asset-types)、[3.4](#asset-persistence) | 标准模型资产、JSON 场景与实例读写 |
 | Assets/Textures、Environments、Editor | [3.3](#asset-images) | 纹理语义、HDR 校准、图标冷路径 |
-| Engine/Scene | [4.1—4.4](#stage-4) | 层级、动画、物理创作参数和稳定 revision |
+| Engine/Scene | [4.1—4.4](#stage-4) | 静态层级、物理创作参数、文档/内容版本 |
 | Engine/Renderer/Prepare | [5.1—5.4](#stage-5) | 场景快照、View、可见性、阴影/灯列表 |
 | Engine/Renderer/Materials | [5.5](#gpu-residency)、[5.6](#draws) | GPU 材质驻留、绑定和路由；不复制 BRDF |
 | Engine/Renderer/Lighting | [5.4](#light-preparation)、[8.3](#shadows)、[8.6](#lighting) | CPU 灯/阴影视图与 GPU 求值合同 |
@@ -232,8 +227,8 @@ Physara/
 | Shaders/PostProcess | [9](#stage-9) | 时域、镜头、色彩与显示 |
 | Shaders/UI、Passes；Editor/ImGui | [8.1](#shader-runtime)、[10.2](#imgui-renderer) | 薄入口、UI Shader、RHI 绘制与纹理协议 |
 | Editor/Diagnostics | [11.4](#diagnostics) | CPU/GPU/图/资源只读快照与节流展示 |
-| Tests 全部子目录、Data | [12.1](#tests) | 对应模块性质、固定输入与原生集成 |
-| Tools/Benchmark | [12.2](#benchmark) | 固定场景/特性测量与可复现报告 |
+| 各功能模块的验证 | [12.1](#tests) | 按实际合同选择行为、原生读回与图像检查 |
+| Runtime、Renderer/Core 统计接口 | [12.2](#benchmark) | 同一渲染流程内的固定输入测量 |
 | Docs、Reference、openspec | [12.3](#project-docs) | 当前架构、参考依据、行为与决策历史 |
 
 ### 0.5 依赖与全局约定
@@ -244,10 +239,11 @@ Physara/
 | PhysaraRHI | 标准库、上游 Common/Validation | Core 业务类型、Platform、Engine、Editor |
 | PhysaraOpenGL | RHI、GL loader、SPIRV-Cross GLSL | Platform、Scene、Editor |
 | PhysaraPlatform | Core、RHI；GLFW/所选后端为私有依赖 | Renderer、Scene、ImGui、主循环 |
-| PhysaraAsset / PhysaraScene | Core、解码库 / Core、Asset、entt | RHI、Platform、Editor |
-| PhysaraShader / RenderGraph | Core、RHI、已编译包 | Platform、Editor、资产导入器 |
+| PhysaraAsset / PhysaraScene | Core、解码库 / Core、Asset、entt | RHI、Platform、Renderer、Editor |
+| PhysaraShader | Core、RHI、编译/反射库、已编译包 | Platform、Editor、资产导入器 |
+| RenderGraph | Core、RHI | Platform、Editor、资产导入器 |
 | PhysaraRenderer | Scene、Asset、Shader、RenderGraph、RHI | Platform、GLFW、Editor |
-| PhysaraEditor | Renderer、Platform 的值/窄入口、ImGui/ImGuizmo | 原生 GL/Vulkan、RHI 后端实现 |
+| PhysaraEditor | Scene、Asset、Renderer、Platform 的值/窄入口、JSON、ImGui/ImGuizmo | 原生 GL/Vulkan、RHI 后端实现 |
 | Physara（Runtime） | Platform、Renderer、Editor | 另写一份渲染算法 |
 
 所有 Engine targets 均不依赖 Platform。Editor 仅私有 GLFW 平台适配文件可包含 GLFW 与 GlfwAccess。原生设备/呈现实现可以使用 RHI 后端工厂，但公共 RHI 不创建窗口/Input/ImGui。Core 的日志/文件/作业是基础机制，不成为任意服务指针注册表。
@@ -306,7 +302,7 @@ ResolvedFramePlan 保留 requested/effective 配置和原因。基础路径不�
 int main()
 {
     InitializeApplication();                         // 阶段 1；完整所有权见 1.4
-    while (running)
+    while (running && !host.HasFatalGraphicsError())
     {
         auto input = host.PollEvents();              // 2：同时更新 UI 平台 backend 的输入
         PublishCompletedCpuJobs();                  // 3：检查身份/版本后发布
@@ -319,7 +315,9 @@ int main()
             continue;
         }
 
-        FrameSlot& slot = frameSlots.AcquireAvailableSlot();
+        auto acquiredSlot = frameSlots.AcquireAvailableSlot();
+        if (!acquiredSlot.Ready()) break;            // 完成查询失败不得重置仍在途的槽
+        FrameSlot& slot = acquiredSlot.TakeSlot();
         auto acquired = host.BeginPresentation(slot.Index);
         if (!acquired.Ready())
         {
@@ -333,21 +331,43 @@ int main()
         editor.BuildPanelsAndViewportRequests();
         editor.FinalizeDrawData();                  // ImGui::Render；稳定逻辑 token
         ApplyEditorTransactions();                  // 4：修改权威状态
-        AdvanceAnimationsAndDirtyTransforms();
+        scene.UpdateDirtyTransforms();              // 静态场景只在编辑后更新
         auto sceneFrame = ExtractSceneFrame(scene, slot);
         auto viewWork = PrepareViewWork(sceneFrame, requests, slot);
         auto assetEvents = assets.TakePublishedChanges();
+        host.BeginPreparationGraphicsDiagnostics();
         auto gpuScene = PrepareGpuResidencyAndUploadBatch(sceneFrame, assetEvents, slot);
         auto prepared = BuildDrawListsAndResolvePrograms(viewWork, gpuScene, slot);
+        auto sceneUploads = NoSceneUploads();
+        if (prepared.Valid())
+        {
+            AppendViewInstanceAndIndirectUploads(prepared, gpuScene.uploads, slot);
+            sceneUploads = SealOwnedSceneUploadBatch(gpuScene.uploads);
+        }
+        if (!prepared.Valid() || !sceneUploads.Valid() || !host.PreparationGraphicsSucceeded())
+        {
+            prepared = NoSceneWorkWithDiagnostic();  // 保留脏数据，UI 可显示准备失败/Pending
+            sceneUploads = NoSceneUploads();
+        }
+        if (host.HasFatalGraphicsError())
+        {
+            AbandonActiveFrameForFatal(presentation, slot);
+            break;
+        }
 
         RenderGraph graph(slot.Arena);
         auto target = graph.ImportTexture(presentation.target.texture,
             {presentation.target.entryState, presentation.target.finalState});
-        AddUploadPasses(graph, gpuScene.uploads);     // 5→6：数据与访问都可见
+        AddUploadPasses(graph, sceneUploads);        // 场景生产者完成后才封存；UI 独立声明上传
         auto outputs = renderer.BuildFrame(graph, prepared);
         editor.BindFrameOutputs(outputs);           // 当前图的绑定，不保存到跨帧 token 中
-        editor.AddOverlayAndUiPasses(graph, outputs, target);
+        target = editor.AddOverlayAndUiPasses(graph, outputs, target); // 返回写入后的图版本
         AddRequestedReadbackPasses(graph, outputs, target);
+        if (host.HasFatalGraphicsError())
+        {
+            AbandonActiveFrameForFatal(presentation, slot);
+            break;                                  // UI/读回准备也可能创建资源并报告 Fatal
+        }
         graph.MarkOutput(target);
         auto compiled = graph.Compile();
         if (!compiled.Valid())
@@ -355,6 +375,11 @@ int main()
             ReportGraphErrorForNextUi();
             compiled = BuildSafeUiOnlyFrameUsingLastValidOutputs(editor, presentation, slot);
             outputs = NoSceneOutputs();             // 原场景图未执行，不提交其历史
+            if (host.HasFatalGraphicsError())
+            {
+                AbandonActiveFrameForFatal(presentation, slot);
+                break;                              // 不在失败的原生环境上继续打开列表
+            }
             if (!compiled.Valid())
             {
                 host.CancelPresentation(presentation);
@@ -363,13 +388,40 @@ int main()
             }
         }
 
+        host.BeginExecutionGraphicsDiagnostics();    // 执行作用域不能清除准备阶段的结果
         commandList.Open();
-        compiled.Execute(commandList);              // 7：发命令；8/9/10：GPU 的执行合同
+        bool graphSucceeded = compiled.Execute(commandList); // first-use 创建也可能失败
         commandList.Close();
-        host.PrepareSubmission(presentation);       // GL 窗口复制必须在 fence 之前
+        if (host.HasFatalGraphicsError())
+        {
+            AbandonActiveFrameForFatal(presentation, slot);
+            break;
+        }
+        bool frameSucceeded = graphSucceeded && host.FrameGraphicsSucceeded();
+        host.PrepareSubmission(presentation, frameSucceeded); // 失败目标只走取消，不复制无效颜色
+        if (host.HasFatalGraphicsError())
+        {
+            AbandonActiveFrameForFatal(presentation, slot);
+            break;
+        }
         auto ticket = device.ExecuteCommandList(commandList);
-        frameSlots.MarkSubmitted(slot, ticket);
-        CommitRenderedPreviousStateAndHistory(outputs, ticket);
+        if (host.HasFatalGraphicsError() || !ticket)
+        {
+            AbandonActiveFrameForFatal(presentation, slot);
+            break;                                  // 不发布历史，不把失败编号记作完成票据
+        }
+        frameSlots.MarkSubmitted(slot, ticket);     // 已发工作无论画面有效性都必须保活
+        frameSucceeded = frameSucceeded && host.FrameGraphicsSucceeded();
+        if (!frameSucceeded)
+        {
+            FailReadbacksFromThisExecution();
+            outputs = NoSceneOutputs();             // 普通 Error 不冒充本次场景渲染成功
+        }
+        else
+        {
+            CommitExecutedUploadBatches(compiled, ticket); // 只确认实际执行并有效提交的上传
+        }
+        CommitViewHistories(outputs, ticket);
         HandlePresentationStatus(host.Present(presentation, ticket));
         host.ApplyDeferredRequests(editor.TakeHostRequests());
         device.RunGarbageCollection();
@@ -379,7 +431,9 @@ int main()
 }
 ```
 
-上例只在编图失败且尚未发原生命令时直接释放未提交帧槽。即时 GL 已发出部分工作时必须形成完成票据再退休；Vulkan 已 acquire 的 image 也不能丢 token。详细取消/失败协议见 [11.5](#shutdown)。等待帧槽与驱动 PresentWait 单独计量，普通 Pass、统计、拾取不主动阻塞 GPU。
+Platform 拥有的既有 RHI MessageCallback 适配器在设备存活期间有效：Fatal 锁存“停止新渲染”，普通 Error 在对应准备/执行作用域标记失败，不能靠日志字符串判断。Fatal 严重度不等于设备已经丢失；后端在掌握原生结果的边界另行记录 context/device 是否仍可用，供退出适配使用，不新增公共 RHI 错误接口。准备失败不发布计划，之后开始执行诊断也不能将它清除为成功；未就绪的 View 按已有合同保留旧输出或明确 Pending。执行失败即使已取得真实 ticket，也只用它保护在途资源，不推进该次 Scene/View 历史、上传完成版本或成功读回。普通 Error 不一概升级为 Fatal。
+
+上例只在编图失败且尚未发原生命令时直接释放未提交帧槽。即时 GL 已发出部分工作时必须形成完成票据再退休；若 fence 本身失败，则保留未获票据的全部引用，进入受控退出，不能直接 ReleaseUnsubmitted。Vulkan 已 acquire 的 image 也不能丢 token。PrepareSubmission/Present 对失败帧走宿主取消协议，不读取未生成的 PresentColor；详细协议见 [11.5](#shutdown)。等待帧槽与驱动 PresentWait 单独计量，普通 Pass、统计、拾取不主动阻塞 GPU。
 
 <a id="stage-1"></a>
 ## 1. 构建资源并启动运行环境
@@ -391,51 +445,46 @@ int main()
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 第一方源码、依赖锁、Shader/schema 输入 | 产品程序、工具、生成 ABI 与 Shader 包 | 根/各模块 CMakeLists；ThirdParty/Dependencies.cmake | Runtime / ShaderLibrary |
+| 第一方源码、固定第三方源码、Shader/schema 输入 | 产品程序、生成 ABI 与 Shader 包 | 根/各模块 CMakeLists.txt | Runtime / ShaderLibrary |
 
-项目使用 C++20 与 target 级 CMake。根 CMakeLists 声明产品选项和子目录；各模块文件管理自己的源、公开依赖与私有实现。使用普通 configure/build/test 命令，不增加另一套配置入口。
+项目使用 C++20 与 target 级 CMake。构建逻辑只写在根与模块 CMakeLists.txt 中：根文件声明产品选项和子目录，各模块文件管理自己的源码、公开依赖与私有实现。使用普通 configure/build 命令，不增加独立配置脚本、依赖校验层或开发工具安装入口。文件中的中文注释解释 target 职责、依赖可见性及必要的特殊处理。
 
 | 依赖 | 所属用途 | 不向外泄漏的内容 |
 |---|---|---|
 | GLFW、GL loader | Platform、RHI/OpenGL | Engine 的公开头 |
 | entt、glm、日志库 | Scene / Core | ECS registry 不直接交给 UI 控件 |
 | glTF/图像解码、MikkTSpace | Asset | 解码器内部对象 |
-| glslang、SPIRV-Tools、SPIRV-Cross | ShaderCompiler / GL lowering | UI 与 Scene |
+| JSON 库 | Editor/Session 的场景文件读写 | 不成为领域组件或 Renderer 的公开数据类型 |
+| glslang、SPIRV-Tools、SPIRV-Cross | Engine/Shader 编译 / GL lowering | UI 与 Scene |
 | Dear ImGui docking、ImGuizmo | Editor | Engine、公共 RHI |
 | NVRHI 参考快照 | 公共层移植与将来的 Vulkan 来源 | 不同时链接一份原版和重命名版 RHI |
 
-Dependencies.cmake 仅登记版本/commit、来源、许可和必要 patch；第三方 CMake 包装在 ThirdParty/CMakeLists 内组织。生成工具先独立构建，再生成 ABI/Shader，消费方最后编译，防止工具依赖其自己尚未生成的引擎库。
+ThirdParty 保留实际需要的上游源码、头文件和许可证。头文件库直接提供 include 路径，需要编译的源码随工程配置生成库，输出放在 build 树。版本/commit、来源、许可和必要裁剪说明统一记录在 [ThirdParty/README.md](../ThirdParty/README.md)，不另设配置清单或逐文件哈希清单。GLAD 使用固定版本生成的 loader 源码，普通构建不运行生成器。NVRHI 仅供源码参考，不加入 CMake target、include 或链接。新依赖在实际使用它的模块落地时引入。
 
 ```cmake
 add_subdirectory(ThirdParty)
-add_subdirectory(Tools)       # ShaderCompiler 不链接依赖生成结果的 Renderer
 add_subdirectory(RHI)
 add_subdirectory(Platform)
 add_subdirectory(Engine)
 add_subdirectory(Editor)
 add_subdirectory(Runtime)
-if(PHYSARA_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(Tests)
-endif()
 ```
 
-子目录加入顺序不替代真实 target 依赖。Shader 生成使用 OUTPUT/DEPENDS，include 变化也进入依赖；所有输出进入 build/Generated 与 build/ShaderCache。普通入口示意：
+子目录加入顺序不替代真实 target 依赖。Engine/Shader 的必要生成步骤使用 OUTPUT/DEPENDS，include 变化也进入依赖；所有输出进入 build/Generated 与 build/ShaderCache。普通入口示意：
 
 ```sh
 cmake -S . -B build
 cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
 cmake --build build --config Release
 ```
 
-上例适用于多配置生成器。使用单配置生成器时，为 Debug/Release 分别配置 build/debug、build/release 并指定 CMAKE_BUILD_TYPE，然后运行对应 build/test；不能以单配置 build 目录的两次 --config 调用冒充两种构建均已验证。
+上例适用于多配置生成器。使用单配置生成器时，为 Debug/Release 分别配置 build/debug、build/release 并指定 CMAKE_BUILD_TYPE，然后运行对应构建；不能以单配置 build 目录的两次 --config 调用冒充两种构建均已验证。
 
 **实现规范**
 
 - 第一方警告与诊断选项只施加在第一方 target；Debug/Release 和诊断开关独立。
 - 不编译机器绝对资产路径作为唯一根；Runtime 从启动配置/可执行资源目录解析。
-- Tests 与工具可选构建；产品入口始终是 Runtime/Main.cpp，不以额外产品程序演示不同路径。
+- 产品入口始终是 Runtime/Main.cpp，不以额外程序演示不同路径或重复资产、Shader 和渲染逻辑。
 
 <a id="core"></a>
 ### 1.2 Core：后续阶段共同使用的最小机制
@@ -462,13 +511,9 @@ PublishCompletedJob(result)
     PublishAtFrameBoundary(result); // Scene/资产/GPU 侧的具体发布由对应 owner 执行
 }
 
-ReuseFrameSlot(slot)
-{
-    Require(device.IsComplete(slot.lastSubmission));
-    slot.arena.Reset();
-    slot.reusableArrays.ClearKeepingCapacity();
-}
 ```
+
+FrameSlot 的完成检查归 Runtime/Renderer：在 RHI 确认其最后提交完成后才调用 Core arena 的 Reset。Core 只提供内存机制，不调用 Device，也不保存图形完成票据。
 
 字符串、文件路径和错误详情停留在冷路径；帧内引用使用 handle、数值标签与连续数组。共享基础算法只保留一份，但不建立一个收集全部数学和业务杂项的 Utils 大文件。
 
@@ -483,7 +528,7 @@ ReuseFrameSlot(slot)
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| Engine/Shader/Interface、Shaders、合法变体 | C++/GLSL ABI、反射、SPIR-V 包、源映射 | Tools/ShaderCompiler；Engine/Shader 消费包 | Pipeline 准备 / RHI lowering |
+| Engine/Shader/Interface、Shaders、合法变体 | C++/GLSL ABI、反射、SPIR-V 包、源映射 | Engine/Shader 及其 CMake 生成步骤 | Pipeline 准备 / RHI lowering |
 
 ```cpp
 // 结构化示意，不规定最终采用 YAML 还是受限声明文件。
@@ -507,7 +552,7 @@ BindingSet("PerView", set = 0)
 | set | 内容 | 更新 |
 |---:|---|---|
 | 0 PerView | Camera、灯、Froxel、阴影、IBL | View/帧 |
-| 1 PerRenderable | Object/Instance/Deformation tables | 帧/场景变化 |
+| 1 PerRenderable | 静态 Object/Instance tables | 场景编辑变化 |
 | 2 PerMaterial | Material table、材质 Texture/Sampler | 材质或绑定变化 |
 | 3 PerPass | SSAO/SSR/GBuffer/后处理输入、私有常量 | Pass |
 
@@ -527,15 +572,15 @@ ShaderPackage BuildShader(program, variant, interfaceSchema)
 
 Shader package cache key 包含所有 include 内容、schema、合法 variant、编译器/选项和 target profile。GL native program binary cache 另外包括 vendor/renderer/driver、native binding plan 与源 hash；失效时重编译，不跨驱动盲用。
 
-Canonical IR 的基础 profile 限于可 lowering 到 GL 4.6 的公共子集；subpass input、descriptor indexing 等 Vulkan 专属能力不在基础 Shader 中暗用。编译 flags、clip/instance builtin lowering 与布局规则固定在工具配置，禁止临时文本替换 SPIR-V/GLSL 来掩盖不兼容。
+Canonical IR 的基础 profile 限于可 lowering 到 GL 4.6 的公共子集；subpass input、descriptor indexing 等 Vulkan 专属能力不在基础 Shader 中暗用。编译 flags、clip/instance builtin lowering 与布局规则固定在 Engine/Shader 的编译配置，禁止临时文本替换 SPIR-V/GLSL 来掩盖不兼容。
 
-ShaderCompiler 是工具 target；热重载可以后台调用其能力，不把重型 glslang 编译器塞进每个 UI 面板。GL 的 SPIRV-Cross lowering 与 Program link 留在明确的 backend Pipeline 创建阶段。
+Shader 编译与反射由 Engine/Shader 集中实现；构建时需要的 ABI/资源生成由该模块的 CMake 声明输入、输出和依赖，热重载复用同一套编译规则。生成步骤不链接依赖其输出的 Renderer，避免循环依赖；不为这些步骤建立独立 Tools 模块或第二套业务入口。GL 的 SPIRV-Cross lowering 与 Program link 留在明确的 backend Pipeline 创建阶段。
 
 **实现规范**
 
-- ShaderCompiler 独立工具不链接依赖其输出的 Renderer；重型编译器不进入面板。
+- 编译与生成由 Engine/Shader 管理，重型编译器不进入面板，生成步骤不反向依赖 Renderer。
 - C++ offset/size、SPIR-V 反射、stage IO 与 binding 同时核对；生成物不手改、不提交源码副本。
-- 工具只生成 canonical IR；GL program link/绑定合并在后端准备 Pipeline 时完成，见 7.3。
+- Shader 编译阶段只生成 canonical IR；GL program link/绑定合并在后端准备 Pipeline 时完成，见 7.3。
 
 <a id="runtime"></a>
 ### 1.4 Runtime 单入口与长期对象装配
@@ -564,7 +609,9 @@ InitializeApplication()
 }
 ```
 
-启动时可以加载空场景并展示编辑器；资产/Shader 准备状态作为 Pending/失败可见。不要同步阻塞主循环等待用户文件导入完成，也不把“首帧没准备好”伪装为已加载。
+启动时直接创建空的内存 Scene 并展示编辑器。主 View 默认使用导航相机，不为了空场景自动创建 Camera 实体或加载空 glTF。UI Program、字体与基本合成资源必须先初始化成功；失败属于启动失败。场景 Shader、模型和环境的准备则显示 Pending/失败，不能阻止已就绪的编辑器操作。没有上一有效 ViewOutput 时，Viewport 清屏并显示明确的空场景/准备状态，不伪造 1×1 场景输出。
+
+指定 *.scene.json 时通过 EditorSession 的场景打开流程恢复。不要同步阻塞主循环等待用户文件导入完成，也不把“首帧没准备好”伪装为已加载。
 
 **实现规范**
 
@@ -734,7 +781,7 @@ UI 平台适配使用官方 ImGui GLFW backend 的 callback chaining：先安装
 | 面板 | 功能 | 性能组织 |
 |---|---|---|
 | Hierarchy | 选择、层级、创建/删除、重命名 | revision 驱动树数据、列表裁剪 |
-| Inspector | TRS、标准材质、灯、相机、动画 | 注册的组件编辑函数；修改发事务 |
+| Inspector | TRS、实例材质/纹理覆盖、灯、相机 | 注册的组件编辑函数；修改发事务 |
 | Viewport | 输出、相机、Gizmo、网格、拾取 | 每 View 控制器，无整 Scene 副本 |
 | Renderer | requested/effective 路径、AA、阴影、效果 | 只改权威设置/请求，显示能力原因 |
 | Content Browser | glTF/纹理/环境、缩略图、加载状态 | 异步目录快照、节流刷新 |
@@ -742,13 +789,13 @@ UI 平台适配使用官方 ImGui GLFW backend 的 callback chaining：先安装
 | Stats / GPU | CPU/GPU、draw/batch、上传、灯/Froxel | 读不可变环形快照，不阻塞 query |
 | RenderGraph | Pass、裁剪、资源版本、Use/生存期 | 请求时生成 debug snapshot |
 | Resources | 预算、驻留估计、view 预览 | 有界 registry，明确估计口径 |
-| Benchmark | 场景/路径/画质固定的采样 | 独立会话和可复现导出 |
+| 统计面板中的测量操作 | 场景/路径/画质固定的采样 | 复用 Runtime/Renderer 流程和统计快照 |
 
 隐藏/折叠面板不构建不可见行、不访问文件系统、不格式化全部日志。文本统计可 4 Hz 刷新，曲线读固定环；GPU 结果可能落后，标明对应帧，不把过期时间标为“本帧”。
 
 菜单/快捷键统一注册为 ActionId，附带适用输入范围、enabled 条件和领域命令；不由每个面板各监听一遍全局按键。文本编辑、Gizmo、相机捕获的优先级集中判定。
 
-最小操作集包括新建/打开/保存 glTF 场景、资源导入/取消、Undo/Redo、复制/删除/聚焦实体、相机模式、布局恢复、截图、benchmark 和 debug view。内置图元使用标准 glTF 资源，或通过明确的标准导出器生成，不建立另一套常驻私有模型格式。
+最小操作集包括新建/打开/保存 JSON 场景、导入 glTF 模型及取消导入、Undo/Redo、复制/删除/聚焦实体、相机模式、布局恢复、截图和 debug view。新建场景直接创建空的内存 Scene，首次保存才产生 *.scene.json。内置图元使用标准 glTF 模型资源，不建立另一套常驻私有模型格式。需要性能比较时，在现有统计面板或 Runtime 启动参数中增加固定输入的测量操作。
 
 资源预览若需要显示 depth、整数、array/cubemap 的子资源，先添加类型化 Preview pass 转换为 UI 可采样颜色，并保留它的图依赖。截图请求明确 SceneHDR、ViewOutput 或含 UI 的 FrameOutput；对应 Copy 节点位于正确生产者之后。
 
@@ -786,11 +833,11 @@ FinalizeDrawData()
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 控件/快捷键/Gizmo 产生的领域意图 | 命令事务、Undo 数据、版本/脏标记 | Editor/Commands；Scene/Asset/View 各自执行修改 | 阶段 4 场景更新 |
+| 控件/快捷键/Gizmo 产生的领域意图 | 命令事务、Undo 数据、版本/脏标记 | Editor/Commands；Scene/View 执行创作修改，Asset 保持只读 | 阶段 4 场景更新 |
 
 ```cpp
 SetTransformCommand = {EntityHandle, beforeLocal, afterLocal};
-SetMaterialFactorCommand = {MaterialHandle, field, beforeValue, afterValue};
+SetMaterialOverrideCommand = {EntityHandle, primitiveSlot, field, beforeValue, afterValue};
 ChangeViewSettingCommand = {ViewId, field, beforeValue, afterValue};
 
 ApplyEdit(command)
@@ -799,13 +846,13 @@ ApplyEdit(command)
     SaveUndoData(command);
     MutateAuthoritativeObject(command);
     IncrementRelevantRevision();
-    EnqueueDirtyRootOrAssetUpdate();
+    EnqueueDirtyRootOrInstanceOverrideUpdate();
 }
 ```
 
 拖拽过程可合并为一次 undo 事务，每帧发布最新值；不让每个控件维护一份可与 Scene 分叉的完整对象。Entity generation、Scene identity 和 request ID 保证删除后迟到的拾取/加载结果不会指向复用槽位。
 
-保存场景时重新生成合法 glTF 引用/索引；项目文件只引用 glTF 与设置。源文件重新导入可能改变节点索引，SourceRef 必须带源版本；无法可靠匹配时报告失效，不假设名称永远唯一。
+保存场景将实体稳定 ID、层级、实例状态和模型引用写入 JSON，具体合同见 [3.4](#asset-persistence)。运行期 EntityHandle 与文件中的 EntityId 分开；SourceRef 的源节点索引只对其对应模型版本有效，不能在重新导入后按名称或旧索引自动绑定。
 
 一个 UI 操作可以涉及多个 owner，但其事务边界明确：例如删除实体时同时取消该实体拾取请求、更新选择，再通过 Scene 命令删除。面板不直接销毁 GPU 驻留对象，资产/场景 revision 在后续准备阶段驱动退休。
 
@@ -857,17 +904,16 @@ BuildPickRequest(mouseLogical, viewRect, effectiveExtent)
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 标准 glTF、图片/HDR 文件及源身份 | 不可变 CPU AssetRecord、状态与 revision | Engine/Asset；Assets/Scenes、Models | Scene 实例化 / GPU residency |
+| 标准 glTF、图片/HDR 文件及源身份 | 不可变 CPU AssetRecord、状态与 revision | Engine/Asset；Assets/Models、Textures、Environments | Scene 实例化 / GPU residency |
 
-模型、层级、材质、动画和导出使用 glTF 2.0 / GLB。HDR/EXR 环境、标准图片和 glTF 引用纹理仍可作为辅助资源；项目设置保存渲染与编辑器状态，不另造模型/材质格式。
+模型的静态网格、标准材质和源节点层级使用只读 glTF 2.0 / GLB，统一放在 Assets/Models。JSON 场景保存在 Assets/Scenes，只组合这些标准模型资产与场景实体、实例覆盖和配置，不编码另一套网格或完整材质资源。HDR/EXR 环境、标准图片和 glTF 引用纹理仍可作为辅助资源。
 
 | CPU 资产 | 保存的语义 |
 |---|---|
-| GltfDocument | 源文件、标准扩展、节点/场景/动画、源版本 |
-| MeshAsset | canonical 顶点/索引、Primitive、材质引用、bounds、skin/morph 元数据 |
+| GltfDocument | 源文件、标准扩展、静态节点/所选 scene、源版本与支持报告 |
+| MeshAsset | canonical 静态顶点/索引、Primitive、材质引用、bounds |
 | TextureAsset | 图像数据与用途解释、format/mips、sampler 引用 |
 | MaterialAsset | 标准因子、纹理槽、UV/transform、alpha、doubleSided、已支持扩展 |
-| Animation/Skin | 通道、采样、joint/逆绑定矩阵、morph weights |
 | EnvironmentAsset | HDR 输入、朝向、预计算结果与缓存 key |
 
 AssetManager 管路径和加载状态，热路径只用 handle。资产 identity 与内容版本分离；相同像素图被当成 sRGB 与线性数据使用时，GPU view/cache key 必须区分解释，不能只按文件路径去重。
@@ -891,16 +937,16 @@ PublishAsset(result)
 
 **实现规范**
 
-- 模型与场景只采用标准 glTF/GLB，不在 Scene 中建立另一套专有网格/材质序列化。
+- 模型资产采用标准 glTF/GLB；编辑器场景采用 JSON 引用模型，不在 Scene 文件中内嵌网格、纹理字节或完整 MaterialAsset。
 - 存储位置与资源身份区分；热路径用 handle，不解析路径。
 - CPU Asset 不持 Device、TextureHandle 或 UI 句柄；GPU 状态归 RenderEngine。
 
 <a id="asset-import"></a>
-### 3.2 glTF 解码与独立资产校验工具
+### 3.2 glTF 解码与资产校验
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 容器、URI、buffer/accessor、扩展声明 | Primitive/材质/节点/动画/skin CPU 描述与报告 | Engine/Asset；Tools/AssetValidation | Asset 发布 / Scene 实例化 |
+| 容器、URI、buffer/accessor、扩展声明 | 静态 Primitive/材质/节点 CPU 描述与支持报告 | Engine/Asset | Asset 发布 / Scene 实例化 |
 
 ```cpp
 ImportGltf(source)
@@ -912,16 +958,20 @@ ImportGltf(source)
     CanonicalizePrimitiveTopologyAndIndices();
     PreserveOrGenerateNormalsAndTangentsWhenRequired();
     BuildStandardMaterialRecords(); // 默认值、通道、sampler、UV transform
-    BuildNodeSkinAnimationDescription();
+    ValidateStaticSceneProfileAndBuildNodes();
     PublishImmutableCpuAssetsAtFrameBoundary();
 }
 ```
 
-glTF 的可选 Primitive topology 不是默认全部三角形；基线支持范围必须报告，能无损转三角形者转换，不能正确解释者拒绝。切线缺失且存在 normal texture 时使用明确的 MikkTSpace 兼容生成路径；已有 tangent 的 w 不随意丢弃。
+静态表面基线支持 TRIANGLES，并将 TRIANGLE_STRIP/TRIANGLE_FAN 保持绕序地转为三角形索引；POINTS、LINES、LINE_LOOP、LINE_STRIP 明确报告不支持，不把它们当三角形解释。RHI 的原生拓扑能力与资产 profile 是两件事。
+
+缺少 NORMAL 时按 glTF 生成逐面 flat normals，并忽略随源提供的 TANGENT，不能擅自平滑。切线缺失且材质需要 normal/coat-normal 的切线框架时，以对应 UV 集走 MikkTSpace。其结果按面角点返回，硬边、镜像 UV 或不同切线的角点需要拆顶点并重建索引；不能写回原共享索引后平均或覆盖。保留合法 tangent.w，并核对 anisotropy 的标准切线空间前提。基线公开 UV0/UV1；所用纹理槽缺少对应 UV、要求其它 UV 集或缺少合法切线空间时报告具体不支持项，不用零 UV/任意切线伪造成功。[K01] [K17] [K25]
 
 metallic-roughness 的 roughness=G、metallic=B，occlusion=R；baseColor/emissive texture 以 sRGB 解码，因子在线性域相乘；glTF normal 使用标准切线空间约定，不引入默认 flipNormalY。alphaMode、alphaCutoff 和双面背面法线在所有路径共用。[K01]
 
-Tools/AssetValidation 复用同一解析与语义校验入口，可在不创建设备、不启动 UI 的情况下验证输入；它不另写一份 glTF 规则。检查 accessor stride/offset/总字节、索引范围、sparse、normalized、skin joint、拓扑、扩展依赖及数据尺寸预算。
+静态支持判断针对所选 glTF scene 可达内容：动画曲线不执行，按节点初始 TRS 导入并报告“不播放动画”；实际使用 Skin 或 Morph target 的节点明确拒绝，不丢弃变形数据后冒充完整模型。未实例化的其他 scene/资源不因此否定已验证的静态内容，不建立动画运行期类型或 GPU ABI。
+
+资产校验是 Engine/Asset 导入入口的一部分，属于不依赖设备或 UI 的 CPU 逻辑。检查 accessor stride/offset/总字节、索引范围、sparse、normalized、静态节点引用、拓扑、扩展依赖及数据尺寸预算；加载和重新导入复用同一入口，不另设资产校验程序。
 
 **实现规范**
 
@@ -941,7 +991,7 @@ Tools/AssetValidation 复用同一解析与语义校验入口，可在不创建�
 | Textures | 图像像素、mip/压缩元数据、源身份 | color/data、线性/sRGB、通道、尺寸、sampler 与 UV |
 | Environments | HDR 辐亮度图、朝向、校准/强度说明 | IBL 预滤波模型、DFG 版本、绝对亮度是否已校准 |
 | Editor | 图标/字体等展示资源 | sRGB 颜色与覆盖率 alpha；不作为场景照明 |
-| Scenes / Models 的内嵌图像 | 标准 glTF image/texture/sampler 引用 | 同像素可被多种语义解释，GPU view/cache key 区分 |
+| Models 的内嵌图像 | 标准 glTF image/texture/sampler 引用 | 同像素可被多种语义解释，GPU view/cache key 区分 |
 
 CPU 解码不任意翻转法线 Y、不对 ORM/normal 做 gamma。环境图没有绝对测光信息时标记相对标定；用户环境缩放属于显式场景环境配置，不伪装成 glTF punctual intensity。
 
@@ -955,75 +1005,116 @@ MakeTextureRequest(image, usage, sampler)
 
 采样器、纹理存储和材质纹理槽分别记录。相同图像的 sRGB/线性 view、UV set/transform 和 sampler 不能仅由一个文件路径 key 抹平。窗口图标由 Runtime 冷路径准备像素交给 Platform，Platform 不扫描 Assets。
 
+上传/生成 mip 必须形成完整可采样的有效层级，并将有效 mip range 与 sampler 的 LOD 约束配套；不能用未初始化层参与三线性采样。颜色 mip 在线性颜色域过滤，normal/ORM 等维持各自数据语义，normal 在消费时按同一切线框架解码并归一化。几何/着色法线的 specular AA 与纹理 mip 分开，alpha-mask 基线不承诺远景覆盖率守恒；专用覆盖率保持或压缩 profile 引入时须连同材质阈值和纹理缓存版本一起验证，不能暗改源 alpha。[K01] [K06]
+
 **实现规范**
 
-- IBL 预计算缓存 key 包含输入 hash、朝向、模型/工具版本、分辨率与粗糙度约定。
+- IBL 预计算缓存 key 包含输入 hash、实际烘焙设置、模型/工具版本、分辨率与粗糙度约定；查询朝向/强度单独更新。
 - 资源浏览/缩略图解码有队列、容量与取消预算；隐藏面板不无条件全目录扫描。
 - 非 glTF 的 HDR/字体/UI 图像是支持资源，不产生另一套模型/材质格式。
 
 <a id="asset-persistence"></a>
-### 3.4 场景实例化、重导入与保存
+### 3.4 单文件 JSON 场景、只读模型与编辑保存
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| CpuReady 场景描述、导入目标、保存意图 | Scene 中的标准资产实例、合法 glTF 引用、编辑器工作区设置 | Engine/Asset、Scene；Editor 文件操作 | 阶段 4 / 下一次加载 |
+| *.scene.json、CpuReady 资产、编辑/文件意图 | 已校验的静态场景、实例覆盖和可恢复配置 | Scene、Asset；EditorSession 串行组合文件操作 | 阶段 4 / 下次打开 |
 
-导入分成“解析资产”和“实例化 Scene”两步。只有 CpuReady 描述才按父子关系创建实体，登记 SourceRef 与共享资产 handle；失败时撤销该次创建，不留下半棵层级。
+**一个场景文件与领域所有权**
 
-```cpp
-InstantiateGltf(scene, asset, request)
-{
-    ValidateTargetSceneAndRequest(request);
-    transaction = scene.BeginCreationTransaction();
-    mapping = transaction.CreateEntitiesForNodes(asset.nodes);
-    transaction.AttachParentsMeshesCamerasLightsSkins(asset, mapping);
-    transaction.CommitAndMarkDirtyRoots();
-}
-SaveScene(scene, destination)
-{
-    snapshot = CaptureSerializableCpuScene(scene);
-    gltf = BuildValidGltfIndicesAndReferences(snapshot);
-    WriteAtomically(destination, gltf);
-}
-```
+Assets/Scenes/<名称>.scene.json 是一个可继续编辑的场景文件：记录该场景使用了 Assets 下哪些模型、纹理和环境，记录静态实体/物品参数、层级、实例覆盖和主 View 的渲染设置。打开时加载引用资产并恢复参数，编辑后保存同一个 JSON；新建直接产生空内存 Scene，首次保存才创建文件。glTF/GLB 源模型始终只读，不作为整个编辑器场景的保存格式。
 
-重新导入通过 source identity+revision 通知相关实例。节点身份不能依赖可重复名称；源拓扑无法可靠匹配时报告冲突，不把新节点错误绑定到旧实体。Scene 保存为标准 glTF/GLB；工作区只保存布局、选中项与渲染/View 设置，不能夹带私有网格/材质正文。
+| 归属 | 负责内容 |
+|---|---|
+| Engine/Asset | glTF/图像解码、标准语义、不可变 CPU 内容版本、源变化报告 |
+| Engine/Scene | 稳定实体身份、静态组件/层级、实例覆盖、快照与候选校验 |
+| Editor/Session | 当前文档路径、未保存提示、串行新建/打开/保存、JSON 编解码与 Scene/View 装配 |
+| Renderer/View | 权威 requested 设置、导航/实体相机请求及类型化恢复入口 |
+| Core IO、Runtime | 受控资源根、安全文件替换；主线程帧边界发布 |
+
+JSON 库仅在 EditorSession 的文件边界使用。Scene/View 提供类型化 CPU 快照与恢复入口，不持有 JSON 对象；Renderer 不解析文件，不序列化 GPU 对象。文件记录只是运行期状态的持久化表示，不成为第二份可独立编辑的 Scene 或设置镜像。
+
+**文档内容与稳定引用**
+
+| 字段 | 保存的语义与约束 |
+|---|---|
+| version | 场景格式整数版本，从 1 开始；不按 glTF asset.version 解释 |
+| entities | 稳定 id、name、可空 parent、local TRS、可见性及已支持静态组件 |
+| 模型实例 | 模型 path、所选 glTF scene、sourceVersion；同一模型可有多个独立实例 |
+| 模型节点来源 | instanceEntityId、源 node 和 Primitive 槽定位；仅对已确认 sourceVersion 有效 |
+| 实例材质/纹理覆盖 | 以实体和 Primitive 槽为目标，仅保存修改的标准字段；纹理覆盖保存 Assets 路径、用途、sampler、UV 集与变换 |
+| environment | 环境资源引用、朝向、强度/标定说明、雾等静态场景配置 |
+| mainView | 可选 cameraEntityId、导航 cameraPose、投影/physicalLens、曝光及路径/AA/效果等 requested 设置 |
+
+EntityId 为创建时分配且随文件保存的非空稳定字符串，在文档内唯一；不等于 entt 值、数组下标、名称或地址。复制子树为其所有实体分配新 ID，并重映射内部 parent/相机/实例引用。加载后建立 EntityId → EntityHandle 映射，热路径只用带 generation 的运行期 handle。
+
+所有 JSON 数字必须有限，不写 Inf/NaN。仅对 schema 明确允许无限的数值字段（例如 volume attenuationDistance、透视相机 far）规定 null 表示无限；字段未出现仍表示无实例覆盖/使用源值或该字段的标准缺省，二者不同。其他字段按自身类型与可空合同校验，不把 null 泛化为任意默认值。
+
+实例根及其源节点实体显式保存在 entities，同一实例内一个源 node 只能映射到一个实体。打开按记录恢复用户保存的层级和删除结果，不重复生成一棵节点树覆盖 ID。实例仅保存创作 TRS、组件与覆盖，网格、共享 MaterialAsset 和图像正文仍来自引用资产。Inspector 只修改选中实例的标准字段/纹理覆盖；删除覆盖后恢复源值，不提供修改共享模型材质或写回 glTF/GLB 的操作。
+
+资源 path 统一相对 Runtime 提供的项目资源根，例如 Assets/Models/Example/Example.gltf；规范化后必须位于允许的 Assets 目录，不随场景文件子目录改变解释，拒绝根逃逸。glTF 内部 buffer/image URI 仍按模型目录解析。项目外文件通过明确导入操作选择 Assets 落点，不把机器绝对路径写入共享场景。
+
+mainView 只持久化主视口。cameraEntityId 为空时使用保存的导航相机，因此空 Scene 也能导航；引用实体时从该实体解析相机。额外 View 的相机、设置和布局为当前会话状态，不序列化运行期 ViewId。选择、面板展开、Undo 和停靠布局不进入场景正文；布局复用 ImGui 自身保存能力。
+
+**导入、源版本与重新加载**
+
+模型 CpuReady 后，在一个 Scene 事务中创建实例根与所选 scene 的静态节点，全部组件/父子引用有效才发布。sourceVersion 是模型及其相关输入的内容身份，不是进程内递增计数。源 node/Primitive 下标只对该版本有意义，名称不能充当跨版本身份。
+
+AssetManager 区分新候选版本与实例当前使用的不可变 CPU 版本；Scene 实例明确固定 activeSourceVersion，GPU cache 从该有效 CPU 版本派生，不能只保活旧 GPU 数据却让节点/材质解析转向新版。源变化先准备候选，显式确认后核对节点、Primitive 与材质槽映射，兼容时在帧边界整体切换并增加内容版本，保留实体 ID、创作参数和实例覆盖。结构不兼容则保留旧有效实例并报告冲突，由用户重新绑定或重新实例化，不按名称/旧下标猜测。
+
+仅保留当前运行所需的旧有效内容和候选引用，不建设磁盘资产历史仓库。源文件已覆盖且冲突未解决时，普通保存被阻止并指出冲突资产，避免写出依赖内存旧版本、下次无法打开的场景。打开已有文档遇到 sourceVersion 不匹配，保留当前活动场景，要求明确重载并重新确认映射，不自动覆盖已保存意图。
+
+**串行打开与候选发布**
+
+EditorSession 同时只执行一个新建/打开/保存/另存为操作。Open 前先处理当前未保存修改；读取期间冻结 Scene 与可持久化主 View 的编辑，保持 UI、进度、取消与非文档操作可用，不允许再启动另一个文件操作。这以明确的单文档状态代替多文档并行提交框架。
+
+后台按 JSON 解析 → version/字段/有限数值检查 → ID 与引用/层级无环校验 → 必要资产解析 → 候选 Scene 和 mainView 形成独立拥有的数据。未知版本/字段/组件、重复 ID、非法 TRS、缺失引用或不支持内容均定位到文件/字段；缺省值仅用于当前版本明确允许的可选项。
+
+成功后主线程在帧边界确认操作仍属于当前会话且未取消，再整体替换 Scene/mainView、更新路径与文档 identity、清理旧选择/Undo，并按正常寿命退休旧驻留引用。取消、源冲突、CpuReady 失败或候选校验失败均释放候选并恢复编辑，原活动 Scene、路径、选择和设置保持有效。CpuReady 不冒充 GPU Ready；发布后场景驻留和 Shader 准备继续显示 Pending。
+
+**快照保存与失败**
+
+Save/Save As 在编辑边界捕获独立只读快照，包含文档 identity、Scene.DocumentRevision、实体/资源记录及主 View 可持久化配置 revision。后台只编码快照，不遍历变化中的 ECS；保存期间允许继续编辑。写入目标同目录临时文件，检查编码、写入、关闭成功，再由 Core IO 安全替换；失败保留原文件并报告。
+
+成功只记录该快照中各 owner 的已保存 revision；若之后又有编辑，文档继续显示未保存。Save As 仅在当前有效文件操作成功后更新文档路径；取消、失败或关闭会话后的迟到结果不能更新路径或清除 dirty。关闭先取消/收拢活动文件作业，再销毁其发布目标。文件操作串行且取消结果不发布，不能向后台作业借出 Scene/View/UI 裸指针。
 
 **实现规范**
 
-- 资产与 Scene 的版本发布都是完整事务；未完成导入不污染当前有效场景。
-- 保存捕获只读 CPU 快照后后台编码，不能读正在修改的 ECS 或 GPU 结构。
-- Runtime 资源根、项目引用与用户外部文件的解析规则统一由 Core IO/Asset 合同管理。
+- 一个 JSON 保存 Assets 引用与编辑参数；模型源只读，不复制几何/图像正文。
+- 稳定身份、受控相对路径和标准实例覆盖贯穿打开、编辑、保存。
+- 候选整体发布、安全替换文件；失败不清空当前有效场景，不标记虚假保存成功。
+- 不建立通用反射序列化、资产历史仓库、额外项目文件体系或独立工具程序。
 
 <a id="stage-4"></a>
 ## 4. 更新场景与物理参数
 
-本阶段应用领域命令、动画和脏变换，产生本帧一致的可变场景终态。它仍是 CPU 领域层：没有 RHI 纹理、路径私有 GBuffer 或 ImGui 控件。
+本阶段应用领域命令和脏变换，产生本帧一致的可变场景终态。它仍是 CPU 领域层：没有 RHI 纹理、路径私有 GBuffer 或 ImGui 控件。
 
 <a id="scene"></a>
 ### 4.1 Scene、层级与增量变换
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 事务、CPU Asset handle、实体创建/删除 | 稳定 Scene revision、world transform、脏对象集合 | Engine/Scene | SceneFrame 提取 |
+| 事务、有效 CPU Asset 版本、实体创建/删除 | Document/RenderContentRevision、world transform、脏对象集合 | Engine/Scene | SceneFrame 提取 |
 
 | 组件/状态 | 内容 |
 |---|---|
-| Transform | local TRS、worldFromLocal、上一帧 world、dirty revision |
+| EntityId | 跨保存/加载稳定的字符串身份；运行期 EntityHandle 单独管理 generation |
+| Transform | local TRS、worldFromLocal、dirty revision；不保存对象运动前态 |
 | Hierarchy | parent、children 链接/索引与拓扑不变量 |
 | MeshRenderer | MeshAsset handle、Primitive 材质覆盖 handle、可见/投影标志 |
 | Light | 标准灯类型、线性色、物理强度、范围、锥角 |
-| Camera | glTF 投影描述与物理 View 参数引用 |
-| Skin/Morph/Animation | 资产引用、当前姿态/权重和前态 |
-| Name / SourceRef | 编辑名称、源文件与节点定位，仅事件/编辑路径使用 |
+| Camera | perspective/orthographic 投影参数，可由 glTF 导入或编辑器创建；物理 View 参数单独管理 |
+| Name / SourceRef | 编辑名称、模型实例身份与对应源版本中的节点定位，仅事件/编辑路径使用 |
 
-Scene 不持 RHI object，不把完整 MaterialComponent 塞进每个 Renderable。多个实例共享 MaterialAsset；修改共享材质和修改实例覆盖是不同编辑操作。
+Scene 不持 RHI object，不把完整 MaterialComponent 塞进每个 Renderable。多个实例共享只读 MaterialAsset，Scene 只保存每个实例实际修改的标准字段/纹理覆盖，MaterialSystem 派生有效 GPU 材质。
 
 脏变换由修改入口登记根，去掉已被其他脏祖先覆盖的节点，按父先子后更新受影响子树。没有修改时 O(1) 检查 revision/队列，不先全场扫描一遍寻找 dirty。
 
 ```cpp
 UpdateDirtyTransforms()
 {
+    if (dirtyRoots.Empty()) return;
     roots = RemoveNodesCoveredByDirtyAncestors(dirtyRoots);
     for (root : roots)
         TraverseParentBeforeChild(root, UpdateWorldFromLocal);
@@ -1036,50 +1127,47 @@ UpdateDirtyTransforms()
 
 - 父子关系无环；重挂接明确是否保持 world pose，不能直接写 parent index 后留下失配。
 - 无修改时只检查队列/revision，不全场扫描寻找 dirty。
-- 上一渲染状态只在成功提交后更新，不能在输入或动画开始时提前轮转。
+- 文档、静态内容与相机版本按 4.2 分开；不为静态物体维护上一渲染变换。
 
-<a id="animation"></a>
-### 4.2 动画、Skin 与 Morph 的 CPU 前态
+<a id="static-content"></a>
+### 4.2 静态内容版本与编辑失效
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 动画时间、channel/sampler、当前层级 | TRS/权重、mesh-local joint matrices、前态引用 | Engine/Scene；资产定义只读 | 对象表 / 几何 Shader |
+| 静态实体/材质/灯/环境编辑、有效资产切换、相机请求 | 文档未保存状态、内容版本、CameraRevision | Scene / View；EditorSession 比较持久化 revision | SceneFrame / TAA 与 SSR 有效性 |
 
-动画按标准插值解释 translation/rotation/scale 与 weights，处理 STEP/LINEAR/CUBICSPLINE 的支持范围。旋转插值与四元数规范化按规范执行；未支持的情况明确报告。
+Physara 不运行时间线、骨骼、Morph、物体运动或顶点变形。静态实体可以在编辑器中调整 TRS、材质、纹理和可见性；这些编辑改变当前静态场景，不要求为移动中的物体维持运动矢量和历史几何。
 
-```cpp
-AdvanceAnimation(scene, timeSeconds)
-{
-    for (channel : activeAnimation.channels)
-        ApplySampleToAuthoritativeLocalState(channel, SampleChannel(channel, timeSeconds));
-    scene.UpdateDirtyTransforms();
-    for (skinInstance : changedSkins)
-        BuildMeshLocalJointMatrices(skinInstance); // inverse(meshWorld) * jointWorld * inverseBind
-    MarkDeformationRevision();
-}
-```
+| 版本 | 何时变化 | 消费者 |
+|---|---|---|
+| DocumentRevision | 需要保存的实体/层级/名称/参数变化 | 场景保存与未保存提示 |
+| RenderContentRevision | 影响像素的非相机内容变化：物体变换/可见性、材质/纹理覆盖、灯/环境、有效资产内容 | 使引用该 Scene 的各 View 的 TaaHdr/ReflectionHdr 失效 |
+| CameraRevision | 视角/镜头请求变化 | 相机准备、重投影或明确 camera cut |
+| mainView 设置 revision | 可持久化主 View 参数变化 | 保存；计划兼容性与相应历史失效 |
 
-Morph → Skin → world 是统一几何顺序；具体顶点函数在 [8.2](#geometry) 共用。当前姿态与最近成功渲染姿态分别保存，用于 motion，不用上一 CPU tick 冒充上一渲染帧。
+这些版本表达不同事实，不复制场景状态。重命名不重置时域历史；纯相机位姿变化可重投影，不因 DocumentRevision 递增而无条件清空历史。相机实体如果同时带有可渲染/灯组件，或其层级修改影响渲染子树，对应非相机内容仍增加 RenderContentRevision。主导航相机由 View 请求拥有，不必创建 Scene 实体。
+
+内容发生变化时基线保守地重置该 Scene 的各 View 时域历史。连续 Gizmo/材质拖拽会持续重新收敛，这是静态编辑场景的明确取舍；结束编辑后重新积累。不为避免这次收敛引入逐对象前态、motion 附件或变形框架。相机移动使用 [9.1](#temporal-contract) 的静态深度重投影；只有成功提交的 View 才发布新相机/深度/颜色历史。
 
 **实现规范**
 
-- joint/weight 索引、归一化和资产依赖在导入/实例化边界校验。
-- 未变化的姿态不重复打包；多个 View 共享同一份当前/前态 deformation 数据。
-- shadow/depth/ID/color 不各自实现不同的动画几何。
+- 所有内容修改走同一事务入口，资产有效版本变化也触发内容失效。
+- 相机平移/旋转不冒充物体运动；相机 cut、投影/计划不兼容有明确重置。
+- 不逐帧全量扫描比较场景；由编辑和资产发布入口更新版本。
 
 <a id="camera"></a>
 ### 4.3 相机投影、物理镜头与曝光输入
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| glTF Camera、编辑 pose、View 尺寸与镜头设置 | CameraSnapshot 请求、曝光/镜头参数 | Engine/Scene Camera；View 保存显示相关参数 | PrepareView / 后处理 |
+| 导入或编辑创建的 Camera、编辑 pose、View 尺寸与镜头设置 | CameraSnapshot 请求、曝光/镜头参数 | Engine/Scene Camera；View 保存显示相关参数 | PrepareView / 后处理 |
 
-glTF 相机提供 perspective/orthographic 投影参数。光圈、快门、ISO、传感器和对焦距离属于渲染 View 的物理参数，保存在项目/拍摄设置中；不能声称 core glTF 已标准化这些字段。
+glTF 相机导入 perspective/orthographic 投影参数；编辑器也可创建使用同一投影合同的相机实体。光圈、快门、ISO、传感器和对焦距离属于渲染 View 的物理参数，与相机引用一起保存到 JSON 场景的 mainView，加载后恢复为 View 请求；不能声称 core glTF 已标准化这些字段。
 
 | 数据 | 用途 |
 |---|---|
 | 稳定有限 projection | CPU culling、CSM、空间范围 |
-| 当前 jittered projection | 本帧颜色/motion 采样 |
+| 当前 jittered projection | 本帧颜色/深度采样；与稳定相机分开记录 |
 | 上一成功渲染 projection | 重投影 |
 | 焦距、sensor height | FOV、CoC |
 | 光圈 N、快门 t、ISO S | EV100 与 preExposure |
@@ -1087,6 +1175,10 @@ glTF 相机提供 perspective/orthographic 投影参数。光圈、快门、ISO�
 | viewport / render resolution / output resolution | sampling、jitter 与输出映射 |
 
 透视镜头关系 `fovY=2*atan(sensorHeight/(2*focalLength))`。有显式 glTF yfov 时保持其 FOV；按传感器反推显示焦距，而不是强行覆盖模型相机。
+
+glTF 给出 aspectRatio 时保持该投影比例，View 在面板内容内按比例呈现；未指定时才从有效 View extent 推导。留边不进入可拾取图像矩形。透视的观察方向逐点从相机位置求取；正交的观察方向为相机固定视线，BRDF 与各屏幕位置重建共用该区别。光圈、快门、ISO、传感器与焦距必须有限且为正；透视薄透镜 DoF 还要求对焦距离大于焦距，不能把零分母交给 Shader。
+
+基线投影 profile 明确采用：透视 0<yfov<π、near>0、far>near 或标准无限远；正交 xmag/ymag>0、0≤near<far 且 far 有限。非法区间不能进入矩阵求逆。glTF 未硬性禁止的负正交 magnification 在本 profile 报告不支持，不静默取绝对值，也不误报成整个源格式无效。[K01]
 
 $$
 EV_{100}=\log_2\!\left(\frac{N^2}{t}\frac{100}{S}\right),\qquad
@@ -1133,9 +1225,9 @@ $$
 
 HDR/EXR 环境像素不一定带绝对辐亮度标定。EnvironmentAsset 记录输入的单位/标定来源与转换比例；未知时显示相对标定状态，不把一个随意 exposure slider 宣称为测得的照度。标准 emissiveStrength 是无量纲乘数，不能再额外发明一套与 glTF 不一致的材质发射强度语义。[K12]
 
-材质创作字段由标准定义，实例覆盖与修改共享资产是不同事务。MaterialSystem 只派生 GPU 编码、绑定与 feature profile，不拥有第二份可独立编辑的物理参数。
+材质创作字段由标准定义，Inspector 只写实例覆盖，共享 glTF MaterialAsset 保持只读。MaterialSystem 只派生 GPU 编码、绑定与 feature profile，不拥有第二份可独立编辑的物理参数。
 
-场景环境、雾和物理曝光等非 glTF 核心的渲染配置保存在显式 View/环境设置中；需要标准扩展的输入遵守扩展语义。所有未标定的环境绝对强度、截断和屏幕近似均可见，不用任意倍率修补错误颜色。
+场景环境、雾和物理曝光等创作配置保存在 JSON 场景的 environment/mainView，运行期分别恢复到 Scene 环境状态与 View 请求；glTF 导入仍遵守核心与已支持扩展的语义。所有未标定的环境绝对强度、截断和屏幕近似均可见，不用任意倍率修补错误颜色。
 
 **实现规范**
 
@@ -1160,7 +1252,7 @@ HDR/EXR 环境像素不一定带绝对辐亮度标定。EnvironmentAsset 记录�
 | RenderEngine | ShaderLibrary、GPU Geometry/Material/Environment cache、PSO/Binding cache、资源池 | 面板与编辑事务 |
 | Renderer | 准备/构图算法入口、路径策略、Pass 组装 | 第二套 SceneColor/全局相机/物理设置 |
 | View | 相机请求、requested/effective 配置、输出/历史、活动与待切换计划 | Scene 材质副本 |
-| FrameSlot | arena、连续数组、上传 CPU payload、暂存统计与 lastSubmission | 永久资产数据库 |
+| FrameSlot | arena、可复用的场景提取数组、每 View 工作集、上传 CPU payload、暂存统计与 lastSubmission | 永久资产数据库 |
 
 FrameSlot 有固定上限，初始目标为 3；真正容量由延迟与内存预算确定。AcquireAvailableSlot 只在它的提交已完成时复用，否则在此承受有度量的背压。
 
@@ -1191,17 +1283,17 @@ ResolveFramePlan(viewRequests, caps)
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| Scene revision、已解析 Asset handle、当前/前态姿态 | SceneFrame 与对象/Primitive/灯/姿态索引 | Engine/Renderer/Prepare；FrameSlot | 所有 View 的 CPU 准备 |
+| RenderContentRevision、已解析有效 Asset 版本、静态世界变换 | SceneFrame 与对象/Primitive/灯索引 | Engine/Renderer/Prepare；FrameSlot | 所有 View 的 CPU 准备 |
 
 下表是从 CPU 状态到 GPU 的准备全链路：本阶段形成工作集与上传包，实际内容写入由图内 Upload Pass 经 7.4 发出，不在 Extract 中直接改 GPU 资源。
 
 | 阶段 | 输入 | 输出 | 发生的语义变化 |
 |---|---|---|---|
-| Publish/Transform | 编辑事务、资产事件、动画采样 | 稳定 Scene revision、世界/前态变换 | 可变业务状态变为本帧一致状态 |
-| ExtractSceneFrame | Scene、已解析资产 handle | 连续 Primitive/对象/灯/姿态数据 | 从 ECS 访问变为批处理布局 |
+| Publish/Transform | 编辑事务、资产有效版本事件 | 稳定内容 revision、静态世界变换 | 可变业务状态变为本帧一致状态 |
+| ExtractSceneFrame | Scene、已解析资产 handle | 连续 Primitive/静态对象/灯数据 | 从 ECS 访问变为批处理布局 |
 | PrepareView | SceneFrame、CameraSnapshot、设置 | 可见范围、阴影视图、Froxel、Uniform | 从场景全集变为某个观察的工作集 |
 | BuildDrawLists | 可见 Primitive、材质路由 | 排序 DrawRecord、Batch、实例索引 | 从对象描述变为执行记录 |
-| Upload | 打包数组、脏材质、姿态 | GPU Buffer range / BindingSet | 形成 GPU ABI |
+| Upload | 静态对象/实例数组、脏材质 | GPU Buffer range / BindingSet | 形成 GPU ABI |
 | BuildGraph | PreparedView、Batch、效果输入 | Pass 与资源版本 | 声明实际执行依赖 |
 
 同一 SceneFrame 供多个 View 使用；主相机和阴影视图只保存自己的可见索引，不反复复制 Mesh/Material/Transform 组件。
@@ -1209,24 +1301,23 @@ ResolveFramePlan(viewRequests, caps)
 ```cpp
 struct SceneFrame
 {
-    Span<ObjectTransform> objects;     // 一个实体的变换保存一次
-    Span<PrimitiveRef> primitives;     // geometry、objectIndex、materialIndex、bounds、flags
-    Span<LightRecord> lights;
-    Span<SkinPose> poses;
-    Span<MorphWeights> morphs;
-    SceneRevision revision;
+    Span<const ObjectTransform> objects; // 一个实体的变换保存一次，只读发布
+    Span<const PrimitiveRef> primitives; // geometry、objectIndex、materialIndex、bounds、flags
+    Span<const LightRecord> lights;
+    RenderContentRevision contentRevision;
 };
 
 struct DrawInstanceData
 {
     uint objectIndex;
     uint materialIndex;
-    uint deformationIndex;
     uint flags;
 };
 ```
 
 Primitive 的 CPU culling 数据和 GPU object/instance 结构属于不同消费布局，允许一次明确打包；不再经历“完整材质组件 → submission 副本 → proxy 副本 → 材质签名副本”。
+
+SceneFrame 借用当前 FrameSlot 自有的连续提取数组。数组保留场景 identity、结构代与已提取 revision，不随每帧 arena reset 清空；取得已完成的槽后，Prepare 才能修改它们并再次只读发布。编辑/资产发布将受影响索引合并到各槽的有界脏集合，未变化的场景直接复用数组，稀疏字段/变换修改只更新对应范围。实体增删、Primitive 布局变化或场景替换使结构代失效，在该槽下次可用时重建数组、索引映射和对应上传；不保留无界修改日志。每 View 的裁剪/排序工作集仍按实际相机和配置准备，不把全量可见性计算与静态资产重新编码混为一项。
 
 几何与材质 GPU 缓存由资产版本驱动；每帧不靠重新计算路径/整材质 hash 判断变化。原生 Buffer/Texture 创建与上传由 RenderEngine 的资源系统处理，AssetManager 只发布 CPU 资产。
 
@@ -1234,7 +1325,7 @@ Primitive 的 CPU culling 数据和 GPU object/instance 结构属于不同消费
 flowchart TD
     S["SceneFrame"] --> C["相机与主可见集"]
     S --> L["灯 / 阴影视图 / Froxel"]
-    S --> D["几何 / 材质 / 姿态驻留"]
+    S --> D["静态几何 / 材质驻留"]
     C --> B["路由 / DrawRecord / Batch"]
     L --> B
     D --> B
@@ -1274,7 +1365,7 @@ PreparedView PrepareView(SceneFrame S, View V)
 }
 ```
 
-稳定有限投影用于 culling/阴影 fitting，抖动渲染投影用于本帧颜色采样。viewport、动态分辨率、jitter、guard band 和输出尺寸明确区分，不让 UI 面板尺寸直接混进深度重建公式。
+稳定有限投影用于 culling/阴影 fitting，抖动渲染投影用于本帧颜色采样。可见性视锥按当前 profile 的最大 jitter 位移与采样核边界扩展 guard band，不能把稳定视锥外、仍可能落入边缘采样的几何提前剔除；扩展量固定到采样 profile，不随每帧 jitter 来回改变可见集。viewport、动态分辨率、jitter、guard band 和输出尺寸明确区分，不让 UI 面板尺寸直接混进深度重建公式。
 
 对于标准无限远透视，可用 `z=n/d`、`d=n/z` 解释 Reverse-Z。生产 Shader 优先使用统一矩阵逆变换，区分 perspective/orthographic、有限/无限和 jitter；不能用无限远公式处理所有相机。
 
@@ -1284,7 +1375,7 @@ Hi-Z 为 Reverse-Z 按算法需求保存最近/最远界，具体 reduction 写�
 
 - 稳定有限 frustum 做 culling/shadow fitting；抖动/无限远 Reverse-Z 投影只用于相应渲染合同。
 - caster 不局限于主相机可见集；屏幕外物体也可能向屏内投影。
-- 输出包含明确的前态有效性、尺寸、jitter 与 preExposure，不让 Pass 临时猜测。
+- 输出包含本 View 的历史有效性、尺寸、相机/jitter 与 preExposure，不让 Pass 临时猜测。
 
 <a id="light-preparation"></a>
 ### 5.4 灯列表、阴影计划与环境准备
@@ -1295,7 +1386,7 @@ Hi-Z 为 Reverse-Z 按算法需求保存最近/最远界，具体 reduction 写�
 
 方向光独立于局部灯列表。Forward 逐一评估本 View 的局部灯；Forward+ 和 Deferred 使用同一 Froxel 编码/灯数据，可见性与材质求值保持一致。
 
-Froxel 初始采用 Filament 式 CPU 构造，XY tile × 对数 Z 分层，输出 Header(offset,count,overflow) 和压缩灯索引。保留 32 位语义，不照搬与项目预算无关的 8 位容量。[F03]
+Froxel 初始采用 Filament 式 CPU 构造，XY tile × Z 分层，输出 Header(offset,count,overflow) 和压缩灯索引。透视在有限稳定区间 [n,f]、n>0 上采用对数分层；正交采用线性分层，允许标准相机 n=0，不能将零带入 log。各 cell 的边界由对应投影生成，CPU 相交与 Shader 的 XY/Z 查询共用 projectionMode、near/far 和分层参数。保留 32 位语义，不照搬与项目预算无关的 8 位容量。[F03]
 
 ```cpp
 for (light : visibleFiniteRangeLights)
@@ -1346,33 +1437,38 @@ BuildShadowPlan(sceneFrame, camera, settings)
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| CPU 资产版本、场景/姿态脏数据、GPU cache 状态 | GeometryRef、MaterialGpuIndex、BindingSet、UploadBatch | Engine/Renderer/Materials、Lighting、Prepare；RenderEngine 缓存 | Draw / 上传 Pass / RHI |
+| 有效 CPU 资产版本、静态场景脏数据、GPU cache 状态 | GeometryRef、MaterialGpuIndex、BindingSet、UploadBatch | Engine/Renderer/Materials、Lighting、Prepare；RenderEngine 缓存 | Draw / 上传 Pass / RHI |
 
 | GPU 系统 | key/数据 | 变化处理 |
 |---|---|---|
 | GeometryCache | asset+revision+vertex layout；vertex/index pages | 新版建立新 range，旧版最后 ticket 后回收 |
 | TextureCache | image+revision+usage/color/view/sampler 合同 | CPU Ready 后分配存储，按预算上传/生成 mip |
-| MaterialSystem | 标准参数→GPU table、feature profile、纹理绑定 | 仅脏材质行更新，不逐 Draw 重算签名 |
-| Deformation tables | 当前/前态骨骼与 Morph、对象索引 | 一个实体打包一次，多 View 共享 |
+| MaterialSystem | 有效资产版本+实例覆盖 identity/revision→GPU table、feature profile、纹理绑定 | 仅脏有效材质行更新，不逐 Draw 重算签名 |
 | EnvironmentCache | 环境 hash+预滤波/DFG 版本 | 冷路径预计算或图内 GPU 任务 |
 
 ```cpp
 PrepareGpuResidencyAndUploadBatch(sceneFrame, assetEvents, slot)
 {
-    for (asset : changedAssets)
+    for (asset : ReferencedActiveAssetVersions(sceneFrame, assetEvents))
         PrepareStorageAndNewRevisionWithoutReplacingInFlightObjects(asset);
-    for (material : dirtyMaterials)
+    for (material : dirtyEffectiveMaterials)
         slot.uploads.Add(MaterialTableRange(material), EncodeStandardMaterial(material));
-    slot.uploads.Add(ObjectAndInstanceRanges(), PackOnce(sceneFrame));
-    slot.uploads.Add(ChangedDeformationRanges(), PackChangedPoses(sceneFrame));
+    for (range : ChangedObjectRanges(sceneFrame))
+        slot.uploads.AddOwned(range.destination, PackChangedObjects(range));
     return GpuScenePreparation{geometryRefs, materialGpuIndices, bindings,
-                               FinalizeOwnedUploadBatch(slot)};
+                               slot.uploads}; // 仍可追加，尚未封存
 }
 ```
 
+MaterialSystem 以只读 MaterialAsset 版本和 Scene 实例覆盖身份/revision 解析有效标准参数；修改某实例只更新其有效材质行与纹理绑定，不覆盖其他实例或源资产。Draw 只保留 MaterialGpuIndex，不复制整份参数；覆盖纹理声明的 UV 集/用途必须与静态几何和格式能力匹配，否则报告具体字段而不是静默换槽。
+
 AssetManager 只发布 CPU 数据；GPU 驻留由 RenderEngine 的系统创建。分配和创建发生在明确准备入口，内容写入由图中的 Upload Pass 执行。UploadBatch 包含目标、byte range、数据 owner、最终消费者；不能在声明图之外偷改将被采样的纹理。
 
-几何页支持增长但有上限；布局包含 position/normal/tangent/UV0/UV1/color，skin/morph 按实际需要存在。纹理/材质表更新不覆盖在途命令正在读取的版本；volatile 具体实现见 [7.4](#uploads)。
+资源/绑定创建失败或上传容量不足以结果状态返回，不把未就绪句柄放入有效 Draw。PreparedFrame 的 Valid 必须包含所引用驻留、Pipeline 与上传描述均有效；允许消费本图尚待执行的上传，但每个范围有真实生产者和依赖。准备诊断覆盖所有生产者，追加 View/indirect 数据后仍须检查，开始执行时不能擦掉准备失败。
+
+驻留准备先提供 Draw 所需的资源身份，Draw 构建再产生每 View 常量、实例表和 indirect 参数；这些生产者全部追加完毕后，才封存只读的场景上传包并声明 Upload Pass。UI 顶点/字体上传独立声明，不能向已封存的场景包追加。未变化的静态对象/材质不重复编码上传；本帧相机与实际变化的 Draw 数据仍按各自频率更新。图裁掉的上传或执行/提交失败不推进对应内容的已上传版本，保留脏状态和重试所需的拥有数据。
+
+几何页支持增长但有上限；布局包含 position/normal/tangent/UV0/UV1/color，不包含形变流或对象运动前态。纹理/材质表更新不覆盖在途命令正在读取的版本；volatile 具体实现见 [7.4](#uploads)。
 
 **实现规范**
 
@@ -1413,7 +1509,9 @@ batches = GroupAdjacentCompatibleRecords(records);
 instances = PackDrawInstanceData(batches);
 indirect = PackIndexedIndirectArguments(batches, instances);
 
-UploadOnceOrInCoalescedRanges(instances, indirect);
+pendingUploads.AddOwnedRanges(instances, indirect); // 准备阶段只排入上传包
+
+// 以下由对应图 Pass 在执行阶段调用，不能在 Draw 构建时发原生命令。
 for (batch : batches)
 {
     cmd.SetGraphicsState(batch.State);
@@ -1423,7 +1521,7 @@ for (batch : batches)
 
 可用紧凑排序 key 加快比较，但必须证明 bit 宽足够并处理碰撞/溢出；全 key 的语义优先于“必须 64 位”。pipeline、layout、binding 预解析，不在 execute 临时查路径或编译 Shader。
 
-路由在 CPU 明确给出 CoreDeferred、OpaqueForwardExtension、Masked、Unlit、AlphaBlend/Transmission 等集合。相同材质在 depth/shadow/ID/motion/color 中使用同一几何和 alpha 合同，不能单纯按材质名字分支。
+路由在 CPU 明确给出 CoreDeferred、OpaqueForwardExtension、Masked、Unlit、AlphaBlend/Transmission 等集合。相同材质在 depth/shadow/ID/color 中使用同一几何和 alpha 合同，不能单纯按材质名字分支。
 
 **实现规范**
 
@@ -1440,7 +1538,7 @@ for (batch : batches)
 
 | 用变体的差异 | 用数据的差异 |
 |---|---|
-| skin/morph 输入、alpha mask、资源布局 | baseColor、roughness、metallic |
+| 静态顶点布局、alpha mask、资源布局 | baseColor、roughness、metallic |
 | Material feature profile、Froxel/全灯循环 | 灯数量、强度、相机曝光 |
 | depth/shadow/GBuffer/forward entry | 过滤半径、DoF 距离、Bloom 强度 |
 | 明确的大算法选择与 debug program | 普通 UI 开关、连续调参 |
@@ -1475,7 +1573,7 @@ CommitPathSwitchAtFrameBoundary(view)
 
 Deferred+MSAA 若实现，必须独立设计逐样本/边缘分类光照、深度/法线 resolve、透明和内存成本；其 capability 在完成前为 false。请求不兼容配置时，ResolvedFramePlan 返回不支持原因，或依据用户明确选择的 quality policy 给出可见 effective 配置，禁止静默关闭 AA。
 
-因此常规三路径切换在基础配置内即时完成；可选 AA profile 的切换有明确兼容合同，而不是各处散落 sampleCount 条件。
+因此常规三路径切换在兼容资源/Pipeline 已就绪后于帧边界完成；未就绪时保留当前有效计划并显示 Pending。可选 AA profile 的切换有明确兼容合同，而不是各处散落 sampleCount 条件。
 
 CPU 预处理/编译可在 worker 执行；GL lowering 后的 native link/Pipeline 创建只在 context 线程，按准备预算分批推进，停顿单独统计。未就绪视图显示 Pending/上一有效输出，不为保证菜单立刻变化在 Draw 内隐式编译。
 
@@ -1503,14 +1601,12 @@ struct OpaqueOutput
     TextureId hdrColor;
     TextureId depth;
     Optional<TextureId> normals;
-    Optional<TextureId> motion;
 };
 
 struct SurfaceOutput
 {
     Optional<TextureId> earlyDepth;
     Optional<TextureId> earlyNormals;
-    Optional<MotionOutput> motion; // vectors + validity
     Optional<GBufferOutput> gbuffer;
 };
 
@@ -1518,7 +1614,6 @@ struct CompositeOutput
 {
     TextureId hdrColor;
     TextureId depth;
-    Optional<MotionOutput> motion;
     Optional<TextureId> reactiveMask;
 };
 
@@ -1531,7 +1626,7 @@ PathStrategy strategies[] =
 };
 ```
 
-策略是固定枚举到两个组装函数的映射，不创建三份 Scene、Renderer、MaterialSystem 或完整后处理。DrawLists、SurfaceOutput、LightingInputs、OpaqueOutput 是真实数据合同，供上下游共享。Prepare 阶段按 ViewResourceNeeds 决定是否提前产深度/normal/motion；没有前置依赖时 Forward 可以省略 prepass，在 Shade 阶段直接生成深度。
+策略是固定枚举到两个组装函数的映射，不创建三份 Scene、Renderer、MaterialSystem 或完整后处理。DrawLists、SurfaceOutput、LightingInputs、OpaqueOutput 是真实数据合同，供上下游共享。Prepare 阶段按 ViewResourceNeeds 决定是否提前产深度/normal；没有前置依赖时 Forward 可以省略 prepass，在 Shade 阶段直接生成深度。
 
 | 阶段 | Forward | Forward+ | Deferred |
 |---|---|---|---|
@@ -1559,9 +1654,9 @@ BuildViewGraph(...)
     opaque = selectedPath.ShadeOpaque(graph, preparedView, draws, surface, lighting);
     opaque = AddOpaqueForwardExtensions(graph, opaque, draws.Extensions, lighting);
     opaque = AddSky(graph, opaque, ...);
-    composite = AddRefractionAndSortedTransparency(graph, opaque, surface.motion, ...);
+    composite = AddRefractionAndSortedTransparency(graph, opaque, ...);
     output = AddSharedPostProcess(graph, composite, history, settings);
-    return AddEditorOverlayIfRequested(graph, output, composite.depth);
+    return {output, composite.depth, preparedView.Camera}; // 物理输出；Editor 随后独立组装叠加
 }
 ```
 
@@ -1569,7 +1664,7 @@ BuildViewGraph(...)
 
 ```mermaid
 flowchart TD
-    U["Upload / 环境预计算"] --> S["Surface：Depth / Normal / Motion / GBuffer"]
+    U["Upload / 环境预计算"] --> S["Surface：Depth / Normal / GBuffer"]
     U --> H["Shadow maps"]
     S --> A["AO / Contact / SSR 准备"]
     S --> L["Opaque lighting：所选路径"]
@@ -1697,15 +1792,15 @@ Compile()
 }
 ```
 
-图遇到环不降级执行。资源分配失败、超预算或所需格式不支持，也不让一个 Pass 继续接收空 Texture。可保留上一帧有效输出并显示错误，但必须明确本帧场景未更新。
+图遇到环不降级执行。Compile 验证描述、能力与资源预算并产生物理分配计划；首次使用才创建原生资源，因此原生分配、view/FBO 或 binding 创建仍可能在 Execute 中失败。两类失败都不能让 Pass 接收空 Texture；Execute 明确返回失败并停止后续 Pass，已发命令及引用按真实提交/退出协议收拢，不假称编译已排除所有原生失败。
 
 拓扑顺序在同等依赖下稳定，便于图像/性能复现。所有“外部副作用”有明确类型：readback、外部导出或呈现；不能把每个 Upload/Pass 都随手标为 side effect 来绕过活性分析。
 
-场景图编译失败后，主循环可以构建一张独立的安全 UI 图：清空本帧 UI 绑定，显式 import 上次有效 View 输出，使用已经验证的 UI 程序合成错误/诊断界面。它不包含失败场景子图，不导出其历史。只有这张图也失败才取消呈现；不能把半份场景计划与 UI 拼起来继续执行。
+场景图编译失败且尚未执行时，主循环可以构建一张独立的安全 UI 图：清空本帧 UI 绑定，显式 import 上次有效 View 输出，使用已经验证的 UI 程序合成错误/诊断界面。它不包含失败场景子图，不导出其历史，自己的编译或执行失败则取消呈现。执行中途失败不在半份场景命令后拼接 UI 兜底图；保留的旧输出也必须是独立有效的资源版本，不能已被失败帧覆写。
 
 **实现规范**
 
-- 环、未初始化读、非法 feedback、资源/能力不足都拒绝编译，不退回声明顺序。
+- 环、未初始化读、非法 feedback、描述/能力和计划预算不足都拒绝编译；首次物化失败由执行结果报告，不退回声明顺序。
 - Clear/Discard 与 Load 的内容依赖分别表达，不能为消除边随意改 Load。
 - 副作用有明确类型，不能把所有 Pass 都标为不可裁剪来掩盖错误依赖。
 
@@ -1750,7 +1845,9 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 |---|---|---|---|
 | 固定上游头/Common/Validation、命名规则 | Physara::RHI 的同谱系公共契约 | RHI 公共头、Common、Validation | 所有 GPU 消费者 |
 
-公共 API、common、validation 的基线固定为 NVRHI commit `6b96fb03e07539f08327aea76c56d55f1de9d906`。不依据其文件夹名称自由重写另一套接口。保留完整公共契约，包括 GL 暂不支持的扩展类型和方法，避免 Vulkan 接入时补回被删虚函数和描述字段。[N01] [N02]
+公共 API、Common、Validation 的基线固定为 NVRHI commit `6b96fb03e07539f08327aea76c56d55f1de9d906`。不依据其文件夹名称自由重写另一套接口。保留完整公共契约，包括 GL 暂不支持的扩展类型和方法，避免 Vulkan 接入时补回被删虚函数和描述字段。[N01] [N02]
+
+完整契约不等于当前实现所有能力或编译所有后端。公共声明保持完整，Common/Validation 保持同版本谱系并按真实通用依赖组织；GL 对未支持能力显式返回 false/不支持，实际调用被拒绝并报告。只为声明存在而引入 Vulkan SDK、Vulkan-Hpp、RTXMU、RT、Mesh Shader、多队列或其他无消费者依赖是禁止的。当前 ThirdParty/nvrhi 仍仅为参考快照；实际 Physara RHI 在自身目录移植，不 include/链接整份参考源码。
 
 | 上游 | Physara 目标位置 |
 |---|---|
@@ -1957,18 +2054,22 @@ Upload Pass 在本帧使用该范围的 Draw/Dispatch 前执行，向图声明�
 
 GraphManaged 执行时关闭 automatic inference，按编译后的 Use 请求 SetTextureState/SetBufferState 并 CommitBarriers。Pass 内需要多次互相依赖的 dispatch 时，拆成多个 Pass 或显式声明内部 UAV barrier；普通 draw 不被假设能自动补所有依赖。
 
-图结束后由调用者恢复 Automatic 并 ClearState；同一命令缓冲内不让图和自动机制分别发一份原生 barrier。资源状态跟踪并未因此被禁用，只是用途的来源改变了。
+图执行器在正常和失败退出时恢复 Automatic 并 ClearState；同一命令缓冲内不让图和自动机制分别发一份原生 barrier。资源状态跟踪并未因此被禁用，只是用途的来源改变了。设备已经不可用时仅做合法的 CPU 清理，不借状态恢复调用失效 context。
 
 持久资源采用明确的 initialState/keepInitialState 协议；新纹理的首次 Common/Undefined、外部导入的 entry state、图输出的 final state和 close 的恢复必须一致。不能调用 BeginTracking 冒充真正的 GPU 转换。[N03]
 
 ```cpp
 Execute(cmd)
 {
+    bool succeeded = true;
     cmd.SetEnableAutomaticBarriers(false);
     for (pass : order)
     {
-        MaterializeResourcesAtFirstUse(pass);
-        ResolveFramebufferAndBindingRecipes(pass);
+        if (!MaterializeResourcesAtFirstUse(pass) || !ResolveFramebufferAndBindingRecipes(pass))
+        {
+            succeeded = false;
+            break;
+        }
         for (clear : pass.ClearOperations)
         {
             RequestRhiStates(cmd, clear.RequiredStates);
@@ -1985,12 +2086,18 @@ Execute(cmd)
 
         RetireLogicalReferencesAtLastUse(pass);
     }
-    RequestDeclaredImportExportFinalStates(cmd);
-    cmd.CommitBarriers();
+    if (succeeded)
+    {
+        RequestDeclaredImportExportFinalStates(cmd);
+        cmd.CommitBarriers();
+    }
     cmd.ClearState();
     cmd.SetEnableAutomaticBarriers(true);
+    return succeeded;
 }
 ```
+
+上例的 bool 报告图执行器能直接识别的物化/recipe 失败；RHI void 命令报告的执行错误仍由当前诊断作用域捕获，二者共同决定帧是否有效。失败不谎报 export final state 已完成；即时命令的资源、上传区段和未到 last-use 的逻辑引用继续保活到提交完成或合法退出。
 
 clear/copy 等操作也有自己的使用状态，不能先把资源设为 RenderTarget 再偷偷以 Transfer clear 改写。编译器把 clear 作为显式步骤，在实际 draw 用途前完成所需转换。
 
@@ -1998,7 +2105,14 @@ Use→ResourceStates 的适配集中定义：颜色采样为 ShaderResource，�
 
 Graph 的 Load/Store 是内容有效性契约。NVRHI 的 Framebuffer 不因此获得新 BeginRenderPass API：Clear 用公共 clear，Load 用已保留内容，StoreDontCare 先用于活性/内容分析；原生 discard 优化是后续有证据的后端改进，不让它成为正确性前提。
 
-普通附件/复制的有序访问与 Shader image/SSBO 的非一致写入分开处理。RHI tracker 保存前态与 pending shader-write，提交用途变化时按**后继访问**合并 barrier bits。[K06]
+普通附件/复制的有序访问与 Shader image/SSBO 的非一致访问分开处理。RHI tracker 保存资源/子资源或 byte range 的前后访问域、读写性质及尚未满足的依赖；GraphManaged 和 Automatic 共享这一个实现。同态 image/SSBO 用途也必须登记，不能只在 ResourceStates 枚举改变时生成 pending use。[K06]
+
+| 重叠访问 | GL 依赖规则 |
+|---|---|
+| Shader 写 → 后继读/写（RAW/WAW） | 按后继消费域建立可见性，合并下表 barrier bits |
+| 先前读/写 → 后继 image store（WAR/WAW） | SHADER_IMAGE_ACCESS 使后继写等待相关先前访问完成 |
+| 先前读/写 → 后继 SSBO 写（WAR/WAW） | SHADER_STORAGE 使后继写等待相关先前访问完成 |
+| 不重叠范围、只读 → 只读 | 无新增依赖；不能因为“同一对象”一律全局 barrier |
 
 | Shader 写后的消费者 | 主要 GL barrier bit |
 |---|---|
@@ -2016,20 +2130,23 @@ Graph 的 Load/Store 是内容有效性契约。NVRHI 的 Framebuffer 不因此�
 CommitBarriers()
 {
     bits = 0;
-    for (transition : pendingUses)
+    for (use : pendingUses) // 包括状态未变的重叠访问
     {
-        if (HasUnsynchronizedShaderWrite(transition.Resource))
-            bits |= BitsForFollowingAccess(transition.After);
-        ValidateLayoutLikeAndFeedbackInvariants(transition);
+        if (HasShaderWriteNotVisibleTo(use.ResourceRange, use.After))
+            bits |= BitsForFollowingAccess(use.After);
+        if (NeedsPriorAccessToFollowingShaderWriteDependency(use))
+            bits |= ShaderWriteDomainBit(use.After); // image 或 SSBO，覆盖 WAR/WAW
+        ValidateLayoutLikeAndFeedbackInvariants(use);
     }
     if (bits != 0) glMemoryBarrier(bits);
-    UpdateResourceUseTracking();
+    UpdateVisibilityAndExecutionEpochs(bits);
+    RecordActualResourceAccesses();
 }
 ```
 
-UAV→UAV 同态也可能需要依赖。SetEnableUavBarriers(false) 只在调用者证明访问独立的区段使用，不把所有重复 dispatch 都自动解释成无依赖。
+可见性与执行次序是两个事实，不能用一个 pendingShaderWrite bool 代替。实现可用每 range 的 lastShaderWriteEpoch、各消费域 visibleEpoch 和未满足的先前访问序列；发出 TEXTURE_FETCH 仅推进该域，不代表旧写对 COMMAND/BUFFER_UPDATE 已可见，也不代表之后的 Shader 写已等待先前所有读完成。原生 barrier 本身可能作用于更广范围，tracker 仍保留准确逻辑依赖以避免错误跳过。
 
-可见性必须按消费域保留：第一次 TEXTURE_FETCH 同步不意味着旧写入也已对 COMMAND/BUFFER_UPDATE 可见。实现可用每资源 lastShaderWriteEpoch 和每消费域 visibleEpoch；发出某个 barrier bit 后只推进该域的可见 epoch，新写入再递增写 epoch。这避免一个 pending bool 被清空后漏掉后续另一类访问。
+UAV→UAV 同态也可能需要依赖。SetEnableUavBarriers(false) 仅限调用者证明访问独立的区段；不能把重复 dispatch 或从采样读改成 Shader 写自动解释成无依赖。RenderGraph 的拓扑顺序不会替代后端所需 GPU 内存/执行依赖。
 
 同一子资源同时采样和写附件的 feedback 默认拒绝，使用显式 copy/ping-pong。glTextureBarrier 有限定适用条件，不能用 GL_ALL_BARRIER_BITS 把任意 feedback 变成合法算法。[K07]
 
@@ -2037,7 +2154,7 @@ UAV→UAV 同态也可能需要依赖。SetEnableUavBarriers(false) 只在调用
 
 - 资源在 first use 物化；Framebuffer/Binding recipes 在资源存在后解析，不能编译时取尚未分配的 native view。
 - 自动推导与 GraphManaged 选择用途来源，原生发射始终只有一个 tracker/backend。
-- 同一 shader write 对不同消费域的可见性分别跟踪，不能一次 barrier 后清空所有域。
+- RAW/WAR/WAW 与同态访问均进入 tracker；Shader 写对不同消费域的可见性分别跟踪，不能一次 barrier 后清空所有域。
 
 <a id="command-execution"></a>
 ### 7.6 即时 CommandList、状态缓存与真实 Draw
@@ -2085,15 +2202,20 @@ SetGraphicsState(state)
 
 ExecuteCommandList(closedList)
 {
-    SubmissionId id = ++device.LastSubmittedId;
     GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (fence == nullptr)
+    {
+        LatchStopAndRetainUnfencedWork(closedList); // 已发命令不能按“未提交”释放
+        return 0;                                // 沿上游失败值和消息回调报告
+    }
+    SubmissionId id = ++device.LastSubmittedId;
     glFlush(); // 推进已发出的工作，不等待 GPU
     MoveReferencedObjectsAndUploadVersionsToInFlight(closedList, id, fence);
     return id;
 }
 ```
 
-录制前完成图校验、资源预算和必要 Pipeline 准备，减少即时执行到一半才发现设计错误的情况。若已发出部分原生命令，失败处理必须仍为这批工作建立退出/回收条件，不能假装取消函数能撤回 GL 命令。
+录制前完成图校验、资源预算和必要 Pipeline 准备，减少即时执行到一半才发现设计错误的情况。glFenceSync 可以返回零；失败时不产生有效提交票据，也不转为普通 Pending。后端保留 closedList、上传区段与窗口复制的所有引用并停止新渲染，按 11.5 收拢无 fence 工作；不能假装取消函数能撤回 GL 命令。[K06]
 
 ContextState 缓存 Program、VAO、读/写 FBO、UBO/SSBO range、texture/sampler/image、viewport/scissor、深度/模板、blend/write mask、raster、pixel-store。每项通过唯一入口 compare-then-set，不在多个类各维护一份“当前绑定”。
 
@@ -2168,7 +2290,20 @@ clear/copy/present 如果改变原生状态，更新同一 ContextState；后续
 | Queue / queries | 提交 ID、timeline、event/timer、在途退休 | FrameSlot、readback 与寿命判断 |
 | Platform acquire/present | surface/swapchain、wait/signal、重建与呈现完成 | Renderer 仍只看到普通导入纹理 |
 
-移植时先对照固定上游 commit 的真实扩展/feature 要求构建设备 profile，再引入对应源文件与测试，不把复制文件等同于后端完成。native surface/swapchain 对象归 Platform，Vulkan RHI 不拥有窗口。图的资源 aliasing/多队列不是接入 Vulkan 的先决条件。
+移植时先对照固定上游 commit 的真实扩展/feature 要求构建设备 profile，再引入对应源文件与测试，不把复制文件等同于后端完成。首个 Vulkan profile 使用单 Graphics 队列并明确实际启用能力；完整公共接口不要求一次启用所有扩展。
+
+固定源码中以下路径不能机械沿用，迁入时须完成明确适配：
+
+| 位置/问题 | Physara 接入合同与验证 |
+|---|---|
+| 普通 upload/readback 的 map/unmap | 记录实际 memory flags；非 coherent 写入/读回分别按 nonCoherentAtomSize 与 allocation 边界实现 flush/invalidate，并建立 Host 与设备访问顺序。coherent 仅省去缓存维护，不省顺序或寿命保护；验证两类内存的上传/读回内容 |
+| copyBuffer 等复制入口 | 显式结束不允许复制的 rendering scope，不依赖 commitBarriers 恰好有 pending barrier；验证“已设状态 → draw → 无状态变化 copy”合法执行 |
+| Queue device-lost catch | 通过现有 MessageSeverity::Fatal 传播到宿主，禁止把仍非零的提交编号认作成功；失败不发布历史、不等待失败编号 |
+| 共享 volatile constant buffer 的并发写 | 槽位 CAS 只保护槽声明，不能保护非原子搜索游标。并行录制前使用每线程 VCB 或明确的原子游标协议，并审查相关共享状态；当前单线程 GL 不为此预建并发框架 |
+
+这些是固定快照的必要修补，不改变公共资源/提交形状。[N08] [N09] [K20] [K21]
+
+native surface/swapchain 对象归 Platform，Vulkan RHI 不拥有窗口。图的资源 aliasing/多队列不是接入 Vulkan 的先决条件。
 
 **实现规范**
 
@@ -2192,19 +2327,19 @@ clear/copy/present 如果改变原生状态，更新同一 ContextState；后续
 |---|---|---|
 | Common | 数学、采样、颜色、packing | 场景资源、材质、Pass |
 | Generated Interface | Buffer struct、绑定、偏移、入口 I/O | 手写算法 |
-| Geometry | vertex fetch、Morph、Skin、实例、motion | 具体 BRDF |
+| Geometry | 静态 vertex fetch、实例、表面坐标框架 | 具体 BRDF |
 | Material | glTF 纹理/因子 → MaterialInputs → PixelParams | 路径私有 GBuffer 资源 |
 | BRDF | GGX/Smith/Schlick、Charlie、层响应 | Scene/Light 遍历 |
 | Lighting / Shadow | 直接光、Froxel、IBL、可见性 | 编辑器、后处理输出 |
 | ScreenSpace / PostProcess | 深度算法、时域/镜头/显示 | ECS 或资产路径 |
 | Passes | 组合上述模块并声明入口 | 再实现一套物理公式 |
 
-Canonical Shader 使用 Vulkan GLSL 的逻辑 set/binding 和实例语义，由工具编译为 SPIR-V；GL 后端 lowering 生成可读 GLSL 460。源码 include 由 ShaderCompiler 展开，不依赖 GL_ARB_shading_language_include。
+Canonical Shader 使用 Vulkan GLSL 的逻辑 set/binding 和实例语义，由 Engine/Shader 编译为 SPIR-V；GL 后端 lowering 生成可读 GLSL 460。源码 include 由 Engine/Shader 的统一预处理入口展开，不依赖 GL_ARB_shading_language_include。
 
 | Shader 目录 | 典型内容 | 实现边界 |
 |---|---|---|
 | Common | Sampling、Math、Color、Packing、Depth | 不遍历业务资源，不声明场景绑定 |
-| Geometry | VertexFetch、MorphSkin、SurfaceFrame、Motion | 所有几何 Pass 共用 |
+| Geometry | VertexFetch、SurfaceFrame、静态实例变换 | 所有几何 Pass 共用 |
 | Material / BRDF | 标准输入转换 / 波瓣数学与能量项 | 材质纹理处理与灯循环分离 |
 | Lighting / Shadow | 单灯、Froxel、IBL / 阴影查询 | 返回明确颜色域，不拥有显示变换 |
 | ScreenSpace | 深度层级、SAO、SSR、contact | 输入输出、历史与近似范围明确 |
@@ -2221,25 +2356,15 @@ Canonical Shader 使用 Vulkan GLSL 的逻辑 set/binding 和实例语义，由�
 - 编译/资源变体在准备阶段选择，运行入口保持短小、明确。
 
 <a id="geometry"></a>
-### 8.2 顶点变形、Depth/Normal/Motion 与 GBuffer
+### 8.2 静态几何与 Depth/Normal/GBuffer
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| Draw/实例/当前与前态 geometry、Material profile | SurfaceOutput、Depth、Normal、Motion、核心 GBuffer | Shaders/Geometry、Material、Passes；Renderer/Passes | AO/SSR / 阴影 / 不透明光照 |
+| Draw/静态实例 geometry、Material profile | SurfaceOutput、Depth、Normal、核心 GBuffer | Shaders/Geometry、Material、Passes；Renderer/Passes | AO/SSR / 阴影 / 不透明光照 |
 
 GeometryCache 按顶点布局将网格放入可增长的 vertex/index 页，GeometryRef 包含 page、index range、baseVertex、layoutId；页和空闲块有预算及回收规则。
 
-基础顶点流包含 glTF 需要的 position、normal、tangent、UV0/UV1、vertex color；skin 额外流和 Morph target 数据按实际需要存在。不为每种无用组合建立一套完全独立网格；也不无条件上传全部可能属性。
-
-```cpp
-// joint matrix 的输出空间明确为 mesh-local。
-deformMeshFromBindMesh[j] = inverse(meshWorld) * jointWorld[j] * inverseBind[j];
-morphedPosition = basePosition + Sum(weight[t] * targetDelta[t]);
-skinnedPosition = WeightedSkin(morphedPosition, joints, weights);
-worldPosition = meshWorld * skinnedPosition;
-```
-
-顺序是 Morph → Skin → world transform。normal/tangent 使用兼容变换及 handedness；depth、shadow、velocity、color、ID pass 共用几何函数。上一帧骨骼/Morph 输入用于动画 motion，不只保存相机矩阵。
+基础顶点流包含所用 glTF 属性 position、normal、tangent、UV0/UV1、vertex color，按实际材质需求选择布局，不无条件上传全部属性。统一 VertexFetch 与静态实例变换产生 world position；normal 使用 inverse-transpose，tangent 重新正交化并保留源 tangent.w 与变换 determinant 的 handedness。depth、shadow、color 和 ID pass 共用几何与 alpha 求值，不存在另一套变形顶点路径。
 
 目标是核心 metallic-roughness，默认四个附件：
 
@@ -2250,11 +2375,10 @@ worldPosition = meshWorld * skinnedPosition;
 | G2 | R11G11B10_FLOAT | 预曝光 emissive RGB | 4 |
 | G3 | R16_UINT | material/object lighting flags | 2 |
 | Depth | D32_FLOAT | Reverse-Z | 4 |
-| Motion（按需） | RG16_FLOAT | 当前到前帧 UV motion | 4 |
 
-基础 GBuffer 18 B/像素，深度另 4；motion 在启用时另 4。1920×1080 的四个 GBuffer 附件约 35.6 MiB，尚不含深度、历史和在途多份；这只是格式计算，不是设备驻留测量。
+基础 GBuffer 18 B/像素，深度另 4；静态相机重投影不增加对象 motion 附件。1920×1080 的四个 GBuffer 附件约 35.6 MiB，尚不含深度、历史和在途多份；这只是格式计算，不是设备驻留测量。
 
-MotionOutput 的 validity 在 Deferred 可复用 G3 flag，在 Forward 的 motion 辅助输出使用 R8_UINT mask；新对象/缺少前态不能写一个零向量后冒充有效历史。透明/折射需要时再输出 reactive mask，不无条件占用基础 GBuffer。
+透明/折射需要时再输出 reactive mask，不无条件占用基础 GBuffer。相机重投影使用当前深度与对应 View 矩阵，成对历史深度按 9.1 管理。
 
 G0 alpha 不是透明覆盖率；Masked 的覆盖已由 discard/样本覆盖处理。法线解码、粗糙度量化和 flags 布局由接口生成并测试；不是每个 Pass 手写一份 unpack。
 
@@ -2278,17 +2402,19 @@ DeferredLightingFragment()
 }
 ```
 
-默认介质 F0=0.04 等核心参数可重建，不需要完整 MaterialAsset ID。IOR/specular/clearcoat/sheen/anisotropy/iridescence 等超出核心合同的材质明确路由到 ForwardExtension；它们仍属于同一 Deferred 帧，并正确参与深度、motion、透明排序和屏幕效果。
+默认介质 F0=0.04 等核心参数可重建，不需要完整 MaterialAsset ID。IOR/specular/clearcoat/sheen/anisotropy/iridescence 等超出核心合同的材质明确路由到 ForwardExtension；它们仍属于同一 Deferred 帧，并正确参与深度、透明排序和屏幕效果。
 
-Deferred 的 PrepareSurface 先绘核心 GBuffer；不透明扩展/Unlit 的 SurfaceAux 随后对通过深度测试的表面写 depth、G1 的 normal/roughness、motion，并将 G3 的 deferred-eligible 位清零。它不写扩展 BRDF 所需的大量参数。DeferredLighting 只处理该位为真的像素；ForwardExtension 之后按相同深度覆盖其颜色。这样 AO/SSR 的前置表面包含扩展物体，不会先用“只有核心物体的深度”计算效果，也避免强制扩大全部 GBuffer。
+Deferred 的 PrepareSurface 先绘核心 GBuffer；不透明扩展/Unlit 的 SurfaceAux 随后对通过深度测试的表面写 depth、G1 的 normal/roughness，并将 G3 的 deferred-eligible 位清零。它不写扩展 BRDF 所需的大量参数。DeferredLighting 只处理该位为真的像素；ForwardExtension 之后按相同深度覆盖其颜色。这样 AO/SSR 的前置表面包含扩展物体，不会先用“只有核心物体的深度”计算效果，也避免强制扩大全部 GBuffer。
 
-SurfaceOutput 是屏幕可见表面的合同：depth、法线/粗糙度、motion validity 必须来自实际遮挡关系。Forward 仅在后继需要这些数据时前置绘制；Deferred 产生 GBuffer，并为扩展/Unlit 写辅助表面，随后屏幕效果才读取。
+SurfaceOutput 是屏幕可见表面的合同：depth、法线/粗糙度必须来自实际遮挡关系。Forward 仅在后继需要这些数据时前置绘制；Deferred 产生 GBuffer，并为扩展/Unlit 写辅助表面，随后屏幕效果才读取。
+
+屏幕 SSR 的基线只跟踪各向同性基底 GGX 波瓣。SurfaceOutput 在 SSR 启用时还提供 eligibility：Deferred 复用 flags，Forward 仅按需求提供紧凑标记；Unlit、各向异性基底和不属于该屏幕表面的透明/折射输出不冒充可用反射样本。清漆的独立法线/粗糙度不覆盖基底表面合同；其反射与 sheen 等其他波瓣继续使用对应环境近似，见 8.4/8.6。
 
 **实现规范**
 
 - 核心 GBuffer 仅编码核心工作流；超出合同的扩展路由到共享 forward，不能增加任意附件吞下全部模型。
 - G3 清除为非 DeferredEligible；Aux 覆盖处清该位，防止扩展物体重复被 deferred 照明。
-- depth/shadow/pick/motion/color 共用 Morph/Skin/alpha，不能出现轮廓和运动不一致。
+- depth/shadow/pick/color 共用静态几何和 alpha，不能出现轮廓或覆盖不一致。
 
 <a id="shadows"></a>
 ### 8.3 生成阴影并形成可查询可见性
@@ -2304,11 +2430,17 @@ SurfaceOutput 是屏幕可见表面的合同：depth、法线/粗糙度、motion
 | Point | 六面视图、统一分配 | 六面 array/atlas，按方向选择 |
 | 额外方向光 | 按能力预算 | 无阴影或明确分配的独立 shadow views |
 
-CSM split policy、最大距离、稳定 fitting、transition 都属于 ShadowSettings；不是光照 Shader 随便插入一段魔数。caster 集合含主相机外可能影响接收者的几何，alpha mask、skin/morph 与顶点变形共用 Geometry/Material 覆盖逻辑。[F07]
+CSM split policy、最大距离、稳定 fitting、transition 都属于 ShadowSettings；不是光照 Shader 随便插入一段魔数。caster 集合含主相机外可能影响接收者的几何，静态几何与 alpha mask 共用 Geometry/Material 覆盖逻辑。[F07]
 
 CPU 的拟合/分配/可见 caster 计划由 [5.4](#light-preparation) 统一产生；这里消费 ShadowView 执行绘制并定义查询。
 
 默认深度比较方案支持 Hard / PCF；Poisson 表示采样模式，不是另一种物理阴影。PCSS 是 blocker 搜索→半影估计→过滤半径。EVSM/EVSSM 为可选不同存储/过滤方案，若引入必须同时改变图资源格式、moments 生成和采样，不能只把 PCSS 菜单改名便声称与最新 Filament 实现相同。
+
+基线的稳定 CSM 在有限相机区间 [n,f] 内取 N 个分段：透视采用线性与对数 split 的参数化混合，正交采用线性 split；切换距离用稳定相机的线性 view depth 判断。每段用完整 receiver 视锥的包围球固定 light-space XY 尺度，再按实际内部分辨率的世界 texel 尺寸吸附中心，Z 范围包含沿光线可能遮挡 receiver 的画外 caster。不能每帧按可见 caster 的紧包围盒缩放 XY，造成阴影游动。投影/灯方向或质量变化重新计算；级联交界在声明的过渡带同时查询两段并混合 visibility。[F07]
+
+Spot 使用 outer cone 构造有限透视视锥；Point 的六面使用同一 near/far、面顺序和朝向。未指定 light range 时仍需独立的有限 shadowDistance，它只限制阴影覆盖，不截断灯光。比较值由该 ShadowView 的同一投影生成，不能将径向米距离与透视非线性 z 比较。有效阴影范围外或未分配区域返回中性 visibility=1；不采未初始化 region。
+
+Hard/PCF 对比较结果采样并归一化权重，不先平均 raw depth 再比较。atlas 的 guard band、有效 UV 矩形与最大过滤核配套，point 面边界按相邻面/扩展视锥边界处理，不能将 tap 夹入相邻灯的 region。bias 由同一 ShadowDepthConvention 与 texel 世界尺度换算，生成和查询共享矩阵、层/region、near/far 与过滤参数。
 
 normal/receiver/slope bias 与世界 texel 尺度相关；主 Reverse-Z 的符号不能直接复制到常规 shadow depth。Atlas 预算不足按明确优先级降低分辨率/取消某灯阴影并显示原因，不能关闭灯光本身。
 
@@ -2319,55 +2451,56 @@ normal/receiver/slope bias 与世界 texel 尺度相关；主 Reverse-Z 的符�
 - Atlas 超预算降低/取消的是明确阴影请求，不能把灯光本身丢掉。
 
 <a id="surface-effects"></a>
-### 8.4 AO、接触阴影与前帧辐亮度 SSR
+### 8.4 AO、接触阴影与粗糙 SSR
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 完整 SurfaceOutput、Camera、前帧 HDR/曝光/运动 | AO、contact visibility、SSR 入射量与 confidence | Shaders/ScreenSpace；Renderer 屏幕 Pass | 不透明光照/IBL |
+| 完整 SurfaceOutput、相机、对应前帧 HDR/深度/曝光 | AO、contact visibility、SSR 预乘入射量与 confidence mip | Shaders/ScreenSpace；Renderer 屏幕 Pass | 不透明光照/IBL |
 
 | 模块 | 输入与算法 | 输出与限制 |
 |---|---|---|
-| AO | Depth/normal，Filament 式 SAO 遮蔽近似，depth-aware filter | AO、可选 bent normal；主要作用间接光 |
-| Contact shadow | 屏幕深度短射线 | 补充直接光可见性；屏幕外不可见 |
-| SSR | 当前几何反射方向、深度步进/层级查询、前帧 HDR | 反射入射量+confidence；无命中回退环境 |
-| 背景折射 | 本帧背景 mip、厚度/IOR/absorption | 粗糙透射近似；不拥有完整场景背面 |
+| AO | Depth/normal，Filament 式 SAO 遮蔽近似、depth-aware filter | 主要作用间接光的 AO，可选 bent normal |
+| Contact shadow | 当前屏幕深度短射线 | 补充直接可见性，屏幕外不可见 |
+| SSR | 当前反射射线、投影 DDA、前帧 ReflectionHdr/对应深度 | confidence 预乘的反射入射量，经 Gaussian mip 提供粗糙度过滤，无命中回退 IBL |
+| 背景折射 | 本帧背景 mip、世界厚度/IOR/absorption | 粗糙透射近似，不拥有完整场景背面 |
 
-每个算法的步进、厚度、步数、最大距离、边缘置信度与 temporal validity 进入明确设置。基础实现采用一种可核对的步进法；如果改成 Hi-Z 跳跃，单独定义深度界及穿越逻辑，不能仅因已有 mip 就称为层级 ray tracing。[F11]
+基线 AO 沿 Filament SAO：深度金字塔/位置重建 → 按世界半径投影的 spiral 采样 → 有界 obscurance → 深度/法线感知过滤。透视的屏幕半径随正 view depth 缩放；正交使用固定的像素/世界长度比，例如竖向 H/(2×ymag)，不能再除 view depth。世界半径、bias、强度、分辨率和有限质量 profile 显式设置，不在所有画质下使用最大步数。[F11]
 
-SSR 合成位置在间接镜面响应中；RGB 是入射量还是已乘 BRDF 的量必须固定，避免重复 DFG/Fresnel。没有历史的首帧输出 confidence=0，保持环境反射。
-
-基线 AO 采用 Filament 式 SAO 路线：深度金字塔/重建位置 → 按投影半径分布采样遮蔽 → 法线/深度感知过滤。参数包含世界半径、bias、强度与分辨率；采样质量是有限 profile，不在所有画质下运行最大步数。
+SSR 采用固定 Filament 的投影 DDA 与反射过滤链。[F06] [F14] 从当前实际采样深度重建 view-space 表面和反射方向，近面裁剪后在屏幕主轴步进，以透视校正 Q/k 生成每段 view-Z 区间，与当前深度重建的 view-Z 及厚度容差相交。stride、maxSteps、最大距离、起点 bias、厚度、边缘/距离/背面 fade 进入同一质量 profile；不把 Reverse-Z raw depth 直接当线性距离比较。
 
 ```cpp
-EvaluateAo(pixel)
-{
-    P = ReconstructViewPosition(depth, pixel);
-    N = LoadViewNormal(pixel);
-    obscurance = 0;
-    for (sample : ProjectedSpiralSamples(P.z, radiusMeters, quality))
-        obscurance += EvaluateBoundedObscurance(P, N, ReconstructSamplePosition(sample));
-    return FilterDepthNormalAware(ClampAo(1 - NormalizeObscurance(obscurance)));
-}
-
 PrepareScreenReflection(pixel)
 {
-    ray = BuildViewReflectionRay(depth, normal, pixel);
-    hit = MarchProjectedDepthWithThicknessBounds(ray, stepBudget);
-    if (!hit.valid || !history.Valid) return NoScreenReflection;
-    previousUv = hit.uv - motionAtHit;
-    if (!MotionAndHistoryValid(previousUv)) return NoScreenReflection;
-    radiance = SamplePreviousHdr(previousUv) * (currentPreExposure / previousPreExposure);
-    return {radiance, HitAndEdgeConfidence(hit)}; // 当前预曝光域的入射量，未乘当前表面 BRDF
+    if (!history.ReflectionValid) return Float4(0);
+    ray = BuildViewReflectionRay(currentDepth, currentNormal, pixel);
+    hit = TraceProjectedDdaWithViewZThickness(ray, quality);
+    if (!hit.valid) return Float4(0);
+
+    worldHit = worldFromCurrentView * hit.viewPosition;
+    previous = Project(history.ReflectionProducerClipFromWorld, worldHit);
+    if (!InBounds(previous.uv) || !MatchesReflectionHistoryDepth(previous))
+        return Float4(0);
+    incident = SampleReflectionHdr(previous.uv)
+             * (currentPreExposure / history.ReflectionPreExposure);
+    confidence = HitEdgeDistanceAndFacingConfidence(hit);
+    return Float4(incident * confidence, confidence);
 }
 ```
 
-SSR 初始使用可核对的投影深度步进；若升级为 Hi-Z 穿越，单独定义深度界和跨层逻辑。前帧命中坐标按 motion/历史合同重投影，无命中或失效返回环境反射。其“入射量”仍是屏幕可见辐亮度近似，不保证真实方向相关遮挡和屏幕外反射。
+ReflectionHdr 采样使用其真正生产时的矩阵、jitter、栅格与配对深度；相机可移动，但 Scene.RenderContentRevision 必须匹配。这里是静态命中点的相机重投影，不产生或读取逐对象 motion，也不复用 TAA stable 栅格的 UV 公式。
+
+SSRTrace 输出 RGBA=(预曝光入射量×confidence, confidence)。对这份预乘 RGBA 生成配套 Gaussian mip 链，颜色与置信度一起过滤；仅给历史 HDR 做普通 box mip 或只乘 DFG 都不能替代粗糙反射过滤。在光照中按 perceptual roughness、表面距离和投影视场选择 reflection LOD，采用固定 Filament 的映射与 Gaussian 宽度校准；LOD 的推导常量属于同一 profile，不独立随意调整。基线沿用 p<sqrt(0.5) 的有效范围并平滑回退环境，高粗糙度使用 IBL；该阈值是实时质量选择，不是 glTF 标准。
+
+该基线 SSR profile 限透视相机：其 Gaussian LOD 依赖透视视场与相机距离。正交 View 的 SSR capability 为 false，请求显示不支持原因并保留环境反射，不用虚构 FOV 套该校准。正交相机仍支持三路径 PBR、阴影、AO/接触阴影、TAA 与正常显示；正交 SSR 需要独立定义过滤 footprint 和验证后才能启用。这是本项目的范围选择，不声称上游规范禁止正交 SSR。[F06] [F11]
+
+过滤后 SSR.rgb 已含 confidence，合成见 [8.6](#lighting)，不能再乘一次 alpha。只对 eligibility 合法的基底使用该结果；其他波瓣使用自身 IBL，不把一条基底射线重复当作独立清漆/各向异性反射。SSR 只近似屏幕可见辐亮度，不能恢复屏幕外反射、完整方向相关遮挡或多次光线传输。首帧/历史失效输出全零 RGBA，保留环境反射。升级 Hi-Z 穿越时另行定义深度界与跨层算法，不因已有 mip 就宣称实现层级 tracing。
 
 **实现规范**
 
-- 屏幕输入必须包含不透明扩展/Unlit 的正确表面，不能只用核心 GBuffer。
-- SSR 只在间接镜面项中合成，BRDF/DFG 与 preExposure 各应用一次，不把 SSR 再乘环境强度。
-- AO 主要调制间接光；接触阴影单独调制直接可见性，不把同一遮蔽重复乘所有项。
+- 屏幕输入包含不透明扩展/Unlit 的真实遮挡表面。
+- SSR 的预乘 confidence、Gaussian mip、roughness/距离 LOD 和 IBL 回退成套实现。
+- BRDF/DFG、preExposure 各一次，SSR 不再乘 environmentIntensity。
+- AO 主要调制间接光，contact shadow 单独调制直接可见性，避免重复遮蔽。
 
 <a id="materials"></a>
 ### 8.5 MaterialInputs 到 PixelParams 的统一物理模型
@@ -2382,15 +2515,15 @@ SurfaceGeometry G = PrepareGeometry(interpolants, M.normal, doubleSided);
 PixelParams P = BuildPixelParams(M, G, dfg);
 
 vec3 hdr = EvaluateLighting(P, G, lightingInputs);
-hdr += EvaluateEmissive(M, preExposure);
+hdr += EvaluateLayeredEmission(P, G, M.emissive) * preExposure;
 return ApplyDeclaredCoverageAndBlendConvention(hdr, M);
 ```
 
-MaterialInputs 保留 glTF 参数，SurfaceGeometry 保留位置/N/T/B/V 等几何状态，PixelParams 保存 F0、diffuseColor、微表面粗糙度、DFG 与扩展波瓣参数。它们按上述边界组织；不把摄像机、灯列表、所有贴图都塞进 PixelParams。
+只读 MaterialAsset 和场景实例覆盖保留原始 glTF 字段；CPU 合成有效标准参数后编码，MaterialInputs 执行标准纹理取样与字段求值。SurfaceGeometry 保留位置/N/T/B/V 等几何状态，PixelParams 只保存派生的 F0/F90、diffuseColor、微表面粗糙度、DFG 与扩展波瓣参数。它们按上述边界组织；不把摄像机、灯列表、所有贴图都塞进 PixelParams。
 
 GBuffer 保存已完成贴图求值、normal 处理与粗糙度过滤后的核心参数；Deferred decode 后完成 view-dependent DFG 等准备，不重新执行一次 normal-map 或 specular AA。
 
-采用 Filament 路线：GGX NDF、Smith 高度相关 visibility、Schlick Fresnel、Lambert 漫反射、预积分 DFG 与多散射补偿。标准 glTF 的介质 F0=0.04，金属 F0 来自 baseColor：
+算法结构采用固定 Filament 的 GGX NDF、Smith 高度相关 visibility、Schlick Fresnel、Lambert 漫反射、预积分 DFG 与多散射补偿。标准字段语义以 Khronos 为准；同名 Filament 参数只有映射验证后才能使用，不让上游内部参数回写标准源值。标准 glTF 的介质 F0=0.04，金属 F0 来自 baseColor：
 
 $$
 c_d=(1-m)c_{\mathrm{base}},\quad
@@ -2409,6 +2542,30 @@ V 的约定包含微表面分母，不在调用侧重复除 4NoVNoL。roughness 
 
 多次散射补偿、漫反射能量分配与 layered lobes 是同一模型的组成；采用一个固定参考实现并记录近似，不把数个教程公式随意拼接。白炉、方向反照率、粗糙度极限和不同 IOR 的数值积分作为模型验收。Filament 的某些直接光层组合本身存在实时近似，不能仅凭名称保证任意扩展组合严格守恒。
 
+**标准输入到共享波瓣的映射**
+
+| 标准输入 | MaterialInputs → PixelParams / 求值约束 |
+|---|---|
+| 核心 metallic-roughness | p=roughnessFactor×texture.G；m=metallicFactor×texture.B；baseColor=sRGB 解码 texture×线性 factor×vertexColor。alpha=p²；核心无扩展时介质 F0=0.04、F90=1，metallic 只混合介质与金属响应 |
+| IOR / specular | 先求 specularWeight=factor×specularTexture.A，specularColor=线性 factor×sRGB 解码 colorTexture.RGB；介质 F0=min(((ior-1)/(ior+1))²×specularColor,1)×weight、F90=weight，再与金属 baseColor/1 按 metallic 混合。specular 不衰减金属项；IOR 缺省 1.5。IOR=0 按标准兼容模式单独分支，不进入普通除法/Snell 路径 |
+| Normal / double sided | normal 纹理为线性向量数据，scale 只作用 XY 后规范化；使用源 tangent.w、UV 变换及实例 handedness 构造表面框架，背面翻转规则各 Pass 一致 |
+| Clearcoat | factor×texture.R、roughnessFactor×texture.G、独立 coatNormal；缺省 coatNormal 使用几何法线，不能借用 base normal map。coat 的 IOR=1.5，与基底 IOR 独立，不套用上游可选 coat-to-base F0 改写 |
+| Sheen | sRGB 解码 sheenColorTexture.RGB×线性 colorFactor；roughnessFactor×roughnessTexture.A。Charlie NDF、选定 visibility 与配套 DFG.z；不切换到 Filament Cloth 整体材质 |
+| Anisotropy | s=strength×texture.B；纹理 RG 映射 [-1,1] 的切线方向，再应用 rotation。从 alpha=p² 派生 alphaT=mix(alpha,1,s²)、alphaB=alpha，送入共享 anisotropic GGX D/V；不能直接用 Filament alpha×(1±a) 解释标准 s |
+| Iridescence | factor×texture.R；薄膜 IOR 缺省 1.3。厚度=lerp(min,max,texture.G)，无厚度纹理取 max，默认范围 100/400 nm；允许 min 大于 max，不错误排序。固定 spectral sensitivity 近似求薄膜等效 Fresnel，再进入同一 lobe，不把薄膜色乘到最终 HDR |
+| Transmission | factor×texture.R 是光学透射分量，不是覆盖 alpha。反射保留，基底漫反射与透射按标准系数组合；逐灯 BTDF 与背景/IBL 透射均有对应路径 |
+| Volume | thicknessFactor×texture.G 保留 mesh-space 长度；结合当前实例变换得到世界路径，attenuationDistance 保持 world-space 单位；attenuationColor 在线性域求 Beer-Lambert，不随实例缩放修改共享材质 |
+| Dispersion | 原始 dispersion=20/Abbe、缺省 0；基线采用 Khronos 非规范示例的 RGB 三采样，halfSpread=(ior-1)×0.025×dispersion，IORs=(ior-halfSpread,ior,ior+halfSpread)，红通道极值按示例限制至不低于 1。各通道独立折射/采样并使用对应体积路径与吸收；不把该近似称为标准强制公式或 Filament 四波长实现 |
+| Emissive | sRGB 解码 texture×线性 factor×emissiveStrength，预曝光一次。自发光属于基底出射项；存在 clearcoat 时受 coat 出射透过率衰减，不能绕过层合成无条件加到 HDR |
+
+IOR=0 按标准兼容模式令基底 Fresnel 恒为 1，再组合该模式的 specular/color；不代入普通折射函数，也不能用任意 epsilon 把它改成另一个 IOR。[K10] [K19]
+
+Iridescence 的有限阶光谱响应与 dispersion 的 RGB 三采样都是明确的实时质量选择，原始标准字段不变；直接透射、背景/IBL 透射与体积吸收共享所选波段/IOR 约定，扩展组合和极值纳入参考图，不另建离线光谱工具链。[K23] [K24]
+
+KHR anisotropy 的 alphaT/alphaB 适配后复用 Filament 的各向异性 NDF/visibility；IBL 使用固定 Filament 的 bent-reflection 近似并检查方向、粗糙度极限和白炉。原始 strength/方向不改写成其不同参数化的内部 a。[K17] [F04]
+
+共享层合成明确基底反射/透射、sheen、clearcoat 的顺序及能量预算。clearcoat 衰减整个底层响应，包括 emissive，底层 IOR/specular 与 coat Fresnel 互不冒充；EvaluateLayeredEmission 使用同一 coat view transmission。Sheen 可采用规范允许的 NoV-only albedo scaling：1-max(sheenColor)×E_sheen(NoV)，直接光和 IBL 共同使用匹配 LUT，登记为实时近似，不声称任意组合严格守恒。[K08] [K11]
+
 下表是目标支持 profile，不是当前实现完成度。新增 profile 需同时完成 importer、GPU schema、forward lighting、IBL 和验证。
 
 | 标准扩展/特性 | 技术方案 | 默认 Deferred 路由 |
@@ -2422,8 +2579,8 @@ V 的约定包含微表面分母，不在调用侧重复除 4NoVNoL。roughness 
 | KHR_materials_sheen | Charlie/Neubelt、sheen 色/粗糙度与配套 IBL | ForwardExtension |
 | KHR_materials_anisotropy | 切线/副切线粗糙度，方向纹理 | ForwardExtension |
 | KHR_materials_iridescence | 薄膜光程与等效 Fresnel 的实时近似 | ForwardExtension |
-| KHR_materials_transmission | 反射与透射分量分开，读取背景/环境 | Refractive |
-| KHR_materials_volume | thickness、attenuationColor/Distance→吸收 | Refractive |
+| KHR_materials_transmission | 逐灯 BTDF、背景/环境透射与反射分开 | Refractive |
+| KHR_materials_volume | mesh-space thickness→实例世界路径，world-space 吸收 | Refractive |
 | KHR_materials_dispersion | 多波段 IOR/折射采样，明确性能 profile | Refractive |
 
 标准扩展间的排斥/叠层顺序依规范核对，不将 Filament 独立 Cloth/Subsurface 模型私自塞进 glTF 核心。Sheen 可表示布料响应；完整 BSSRDF、面积发光几何和自定义皮肤模型不是这个格式 profile 的隐含能力。[K08] [K09] [K10] [K11]
@@ -2436,7 +2593,7 @@ BuildPixelParams(M, G)
     ApplyThinFilmFresnelIfPresent(M, G, P);
     PrepareSheenAndClearcoat(M, G, P);
     FilterAndClampLobeRoughness(M, G, P);
-    PrepareAnisotropy(M, G, P);
+    MapGltfAnisotropyToAlphaTAndAlphaB(M, G, P);
     PrepareDfgAndEnergyTerms(P, G.NoV);
     return P;
 }
@@ -2446,7 +2603,7 @@ BuildPixelParams(M, G)
 
 **实现规范**
 
-- 扩展完成包含 importer、ABI、直接光、IBL、路由、覆盖/运动/拾取和参考图，不是只加一个高光。
+- 扩展完成包含 importer、ABI、直接光、IBL、路由、覆盖/拾取和参考图，不是只加一个高光。
 - Deferred decode 不重复 normal map/specular AA，view-dependent DFG 等在正确位置重建。
 - 白炉、粗糙度极限、反照率和 IOR 检查必须能揭示能量错误；实时近似不宣称任意组合严格守恒。
 
@@ -2463,7 +2620,7 @@ EvaluateLighting(P, G, inputs)
     color = EvaluateIBL(P, G, inputs.Environment, inputs.AO, inputs.SSR);
 
     for (light : inputs.Directionals)
-        color += EvaluateDirect(P, G, light) * QueryShadow(light, G);
+        color += EvaluateDirect(P, G, light, inputs.Shadows);
 
     if (inputs.LocalMode == WholeList)
         indices = inputs.AllVisibleLocalLights;
@@ -2478,15 +2635,17 @@ EvaluateLighting(P, G, inputs)
     for (index : indices)
     {
         L = DecodeLocalLight(index);
-        color += EvaluateDirect(P, G, L) * QueryShadow(L, G);
+        color += EvaluateDirect(P, G, L, inputs.Shadows);
     }
     return color; // 统一的预曝光线性 HDR
 }
 ```
 
-所有路径共享这段含义；差异只在 local indices 的来源与表面参数来自几何片元还是 GBuffer。
+所有路径共享这段含义；差异只在 local indices 的来源与表面参数来自几何片元还是 GBuffer。EvaluateDirect 在内部按反射/透射分支确定采样位置与对应 shadow visibility，再组合贡献；不把两者相加后统一乘一个以表面位置查询的阴影值。
 
-EnvironmentAsset 经 cmgen/Filament 思路生成环境立方图、GGX 预滤波层级、SH9 漫反射及 LUT。key 包含输入 hash、旋转/处理设置、卷积算法和工具版本；环境旋转在查询空间处理，不必每次重烘焙。[F08]
+EnvironmentAsset 经 cmgen/Filament 思路生成环境立方图、GGX 预滤波层级、SH9 漫反射及 LUT。烘焙 key 包含输入 hash、实际烘焙处理设置、分辨率、卷积算法和工具版本。环境朝向与照明强度在查询空间应用，不进入烘焙 key；修改它们更新场景内容/照明数据与相关时域历史，不重新卷积同一图像。[F08]
+
+下列 IBL 伪代码展示合法各向同性基底与 SSR 的加权；各向异性基底完全保留其环境近似。sheen/coat/薄膜等按 8.5 的共享层预算在同一 EvaluateIBL 内组合，基底 SSR 与基底环境一起接受上层衰减，清漆/Sheen 等独立环境项不乘基底 SSR 的剩余权重。不能先将所有波瓣相加再用一份 SSR confidence 整体替换，也不各自复制第二份环境照明。
 
 采用 Filament DFG 编码时：R=B、G=A+B、B=cloth/sheen 项，运行时 `E=mix(R,G,F0)`；不能上传常见 (A,B) 两通道表却沿用这个 mix。粗糙度到 mip 的映射也与预滤波配套。[F09]
 
@@ -2496,14 +2655,17 @@ envSpecular = PrefilteredEnvironment(reflectionDirection, RoughnessToLod(p))
             * environmentIntensity * preExposure;
 diffuse = EvaluateSH(diffuseNormal) * P.diffuseColor * DiffuseEnergyBudget(P)
         * environmentIntensity * preExposure;
-screenSpecular = SSR.preExposedIncident * SpecularDfg(P, NoV) * EnergyCompensation(P);
-specular = MixByConfidence(envSpecular, screenSpecular, SSR.confidence);
+screenSpecular = SSR.premultipliedPreExposedIncident
+               * SpecularDfg(P, NoV) * EnergyCompensation(P);
+specular = envSpecular * (1 - SSR.confidence) + screenSpecular;
 return ApplySpecularAO(specular) + ApplyDiffuseAndMultiBounceAO(diffuse);
 ```
 
+上述 screenSpecular 使用已预乘 confidence 的过滤结果，不再 mix 或重复乘 alpha。共同 DFG/能量项按本项目 profile 作用于 SSR 和环境，SSR 不乘 environmentIntensity。
+
 SH 包含哪些卷积/1π 系数须写入接口，避免多乘或漏乘。Sheen/clearcoat/anisotropy 对应 IBL 近似单独验证；不能把普通 box mip 当成 GGX 卷积。Skybox 显示与 IndirectLight 照明是两个资源角色，可使用同一输入但不互相隐式创建。
 
-基础标准灯 profile 为 Directional/Point/Spot。面积光、IES、局部 probe、体积多次散射与真实发光表面照明不是“支持 PBR”自动附带的功能。增加时必须有标准资产/项目设置来源、积分模型、资源与成本合同；不先在 LightType 加枚举再留一个近似 Point 分支。
+基础标准灯 profile 为 Directional/Point/Spot。面积光、IES、局部 probe、体积多次散射与真实发光表面照明不是“支持 PBR”自动附带的功能。增加时必须有标准资产或明确的 JSON 场景配置来源、积分模型、资源与成本合同；不先在 LightType 加枚举再留一个近似 Point 分支。
 
 **实现规范**
 
@@ -2516,7 +2678,7 @@ SH 包含哪些卷积/1π 系数须写入接口，避免多乘或漏乘。Sheen/
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| SurfaceOutput、DrawLists、统一 LightingInputs | OpaqueOutput HDR/depth/motion | Shaders/Passes；Renderer/Paths | 扩展/天空/透明 |
+| SurfaceOutput、DrawLists、统一 LightingInputs | OpaqueOutput HDR/depth | Shaders/Passes；Renderer/Paths | 扩展/天空/透明 |
 
 ```cpp
 ForwardFragment()
@@ -2526,7 +2688,7 @@ ForwardFragment()
     G = PrepareSurfaceGeometry(...);
     P = BuildPixelParams(M, G);
     return EvaluateLighting(P, G, WholeVisibleLightList)
-         + M.emissive * preExposure;
+         + EvaluateLayeredEmission(P, G, M.emissive) * preExposure;
 }
 ForwardPlusFragment()
 {
@@ -2535,7 +2697,7 @@ ForwardPlusFragment()
     G = PrepareSurfaceGeometry(...);
     P = BuildPixelParams(M, G);
     return EvaluateLighting(P, G, FroxelCandidatesWithOverflowFallback)
-         + M.emissive * preExposure;
+         + EvaluateLayeredEmission(P, G, M.emissive) * preExposure;
 }
 DeferredLightingFragment()
 {
@@ -2571,13 +2733,17 @@ T(d)=\exp(-\sigma_a d),\qquad
 \sigma_a=-\ln(c_{\mathrm{attenuation}})/d_{\mathrm{attenuation}}.
 $$
 
+厚度与吸收距离不处在同一空间。先由 mesh-space thickness 和实例变换求 world-space transmission ray，其长度 d 才进入吸收公式；attenuationDistance 不随实例 scale 再缩放。基线参考 Khronos Sample Renderer 的 modelScale（模型矩阵列长）与折射 ray 缩放近似：uniform scale 行为明确，nonuniform scale 登记为实时路径近似；有效 world 变换含 shear 时报告该 volume profile 不支持，不能静默套一个无单位厚度。该限制不影响无 volume 的静态网格渲染。[K18] [K22]
+
 attenuationDistance 无穷对应不吸收；颜色接近 0 的数值处理统一。反射部分保留 Fresnel，漫反射随 transmission 减少，不能直接把最终 HDR 整体乘 1-transmission。
+
+逐灯透射在共享 EvaluateDirect 中提供 microfacet BTDF 与背面入射分量，采用 Khronos Sample Renderer 的 punctual transmission 组织，并与相同 IOR、粗糙度、吸收路径一致。反射和透射的入射/法线朝向、透射出口位置及阴影采样偏移分别明确；既有 opaque shadow map 只能提供有限可见性，不宣称支持有色透明阴影或焦散。背景/IBL 透射估计环境辐亮度，不能再把同一 punctual 灯贡献重复加一次。[K09] [K22]
 
 屏幕背景仅包含已渲染可见内容，球体/薄层厚度是假设几何，不是完整相交；多层嵌套玻璃、屏幕外内容、焦散不保证准确。近似与测试场景明确登记，而不是用光学名称掩盖限制。[F06] [K09]
 
-天空只填充背景像素，不改变表面材质响应；它的显示环境与照明环境是两个角色。需要时天空运动使用相机旋转的前后关系，不用有限物体位置套入平移运动。
+天空只填充背景像素，不改变表面材质响应；它的显示环境与照明环境是两个角色。需要时天空重投影只使用相机前后旋转关系，不用有限物体位置套入平移。
 
-折射先创建明确版本的不透明+天空背景与 mip，再绘制 refractive，最后按策略处理 Alpha Blend。读写同一颜色的非法采样 feedback 用 copy/ping-pong 分开。透明 reactive mask 告诉 TAA 哪些像素不能完全依赖单层不透明 motion。
+折射先创建明确版本的不透明+天空背景与 mip，再绘制 refractive，最后按策略处理 Alpha Blend。读写同一颜色的非法采样 feedback 用 copy/ping-pong 分开。透明 reactive mask 告诉 TAA 哪些像素不能完全依赖单层不透明深度重投影。
 
 SSR 的 ReflectionHdr 历史导出自不透明+扩展+天空之后、透明/DoF/Bloom/ToneMap 之前的预曝光辐亮度，记录该版本的 preExposure。它与 TAA 的 TaaHdr 历史是不同资源角色；不能为了复用一张历史纹理把镜头/UI 结果再次当入射照明。
 
@@ -2593,68 +2759,77 @@ SSR 的 ReflectionHdr 历史导出自不透明+扩展+天空之后、透明/DoF/
 本阶段从 CompositeOutput 的预曝光 HDR 开始，先完成需要参与历史的 HDR 处理，再处理时域与镜头，最终得到 display-linear ViewOutput。编辑叠加与 UI 在显示变换后合成；输出编码遵循格式与窗口边界，只发生在定义的位置。
 
 <a id="temporal-contract"></a>
-### 9.1 运动、曝光与历史有效性
+### 9.1 相机重投影、曝光与历史有效性
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| CompositeOutput、当前/上一成功渲染状态、View 历史 | MotionOutput/validity、历史使用条件与曝光重标定 | View；Geometry/后处理共享 ABI | TAA / SSR / 后续帧 |
+| 当前 HDR/depth、View 相机、内容版本及成功提交历史 | 静态相机重投影、成对颜色/深度历史、曝光重标定 | View；Renderer/PostProcess 共享 ABI | TAA / SSR / 后续帧 |
 
-```cpp
-currentClip = currentClipFromWorld * currentDeformedWorldPosition;
-previousClip = previousClipFromWorld * previousDeformedWorldPosition;
-motionUv = Uv(currentClip) - Uv(previousClip); // 方向约定由 Interface 固定
-historyUv = currentUv - motionUv;
-historyColor *= currentPreExposure / previousPreExposure;
-```
+场景几何在两次内容编辑之间静止，重投影只需要当前深度和前后相机。Scene.RenderContentRevision 改变就保守失效引用该 Scene 的 TAA/SSR；纯相机平移/旋转保持历史，通过深度重建和相机矩阵求前帧位置。不保存逐对象 world 前态、Skin/Morph 前态、motion attachment 或对象速度。
 
-previousDeformedWorldPosition 同时考虑物体、skin、Morph 和相机前态。遮挡显露/新对象/无可靠历史设 invalid；不能只算相机 motion 却宣称动态模型 TAA 正确。
+每个历史角色明确保存颜色栅格、配对 raw depth、实际生产矩阵、stable/jittered clipFromWorld、sampleJitterPixels、preExposure、内容版本和 ticket。TaaHdr 是重建后的 stable 输出栅格，其配对 raw depth 来自该次 jittered 场景栅格；ReflectionHdr 是不透明+扩展+天空的实际场景颜色栅格，必须记录真正生产它的矩阵，而非假定等于 TAA stable 相机。两种角色不能混用 UV、颜色阶段或深度版本；同帧且兼容的 raw depth 可共享只读存储。
 
-历史 key 包含 View identity、输出/渲染尺寸、projection mode、path/ABI、camera cut 和输入资源 generation。曝光变化可按比例重标定，投影/路径不兼容则重置。View 历史和场景前态仅在成功提交对应渲染后推进；暂停渲染、构图失败、多个 View 不能重复轮转同一前态。
+TAA 采用 [9.2](#taa) 的固定 Filament 重建合同；SSR 从确定的 view-space 命中位置变回 world，再投影到 ReflectionHdr 的实际生产矩阵。所有 UvToClip、Y 方向、零一深度和 jitterPixels→projection 的转换由统一接口定义，不能直接复制上游某一 API 专用翻转或再补一遍 jitter。
 
-图中的历史是外部持久输入，记录 ViewId、尺寸/格式、相机/计划代、preExposure 与最后提交 ticket。首帧、cut、路径/分辨率变化和缺少前态有明确失效；历史发布与物理资源轮转在提交后处理，不在构图失败时提前推进。
+历史有效性 key 包含 View identity、Scene identity/RenderContentRevision、渲染/输出尺寸、投影模式、路径/ABI、相机 cut 和输入资源 generation。曝光变化只做 currentPreExposure/previousPreExposure 重标定，不因曝光自动清空；投影/计划不兼容、首帧、尺寸改变和没有合法成对历史时重置。
 
-基线对象前态在同一 SceneFrame 序列上共享。View 若暂停/隐藏后跳过了场景渲染帧，恢复时其 LastRenderedSceneFrameId 与对象前态序列不匹配，必须使 temporal history/motion validity 失效；不能拿另一视口刚渲染的对象前态与自己的旧相机混合。保持每 View 独立对象历史属于后续明确能力，不隐式增加全量副本。
+View 设置按各历史角色的实际生产内容失效：例如 AO/SSR/阴影质量等在导出点之前改变辐亮度的参数，即使不改变 ABI 或资源 generation，也须使受影响的 ReflectionHdr/TaaHdr 失效。曝光仍只重标定；导出点之后的 DoF/Bloom/ToneMap 不必清空上游历史。此规则比较生产设置版本，不把物理池轮转或每帧相机派生数据误当内容改变。
 
-TaaHdr 在 TAA resolve 后、DoF/Bloom/ToneMap 前导出；ReflectionHdr 的位置见 8.8。高度雾若启用，按指数密度视线积分近似 C=T*Csurface+(1-T)*Cscatter，在 TAA 前合成以参与历史。单层代表深度不能精确还原多层透明/折射，限制与 reactive 权重明确记录；不宣称完整体积多散射。
+View 只在本次渲染有效且提交成功后发布历史，图编译失败、普通执行 Error 或 Fatal 均不推进。各 View 独立保存自己的最近成功渲染相机/深度/颜色，不依赖另一个 View 的场景前态；隐藏后恢复按其自身内容版本和兼容性检查，不需要复制每 View 对象历史。资源版本发布可沿单队列顺序消费，不等于允许覆写仍在途存储。
+
+TaaHdr 在 TAA resolve 后、DoF/Bloom/ToneMap 前导出；ReflectionHdr 在透明前导出。高度雾若启用，按指数密度视线积分近似 C=T*Csurface+(1-T)*Cscatter，在 TAA 前合成；该近似不宣称完整体积多散射。
 
 **实现规范**
 
-- motion 是否含 jitter 差由 ABI 固定，不能 Resolve 再补一遍。
-- 曝光比例采用 currentPreExposure/previousPreExposure；scene-linear 截图则去当前预曝光。
-- 透明/折射以 reactive mask 降低历史权重，不把单层 motion 描述成完整多层运动。
+- 静态内容失效和相机变化是不同版本，不用 DocumentRevision 代替时域有效性。
+- 历史颜色、深度、曝光、相机/jitter 和内容版本属于同次成功渲染。
+- 透明/折射采用 reactive mask 降低历史权重；单层深度无法精确描述多层光学路径。
 
 <a id="taa"></a>
-### 9.2 TAA 重投影、裁剪与累积
+### 9.2 Filament 静态 TAA 重投影、裁剪与累积
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 当前 HDR、depth、motion/validity/reactive、前帧 HDR | 稳定 HDR 与下一帧 history 输出 | Renderer/PostProcess；Shaders/PostProcess | 镜头/HDR 效果 |
+| 当前 HDR/raw depth、stable 相机/jitter、前次 TaaHdr/raw depth、reactive | stable HDR 与成对下一帧历史 | Renderer/PostProcess；Shaders/PostProcess | 镜头/HDR 效果 |
+
+基线采用固定 Filament 的 1:1 TAA 路线，不引入超分辨率或动态物体速度管线。[F13] 保留稳定投影，使用 Halton(2,3) 的 16 样本序列在像素域产生 jitter，光栅化才使用 jittered projection。sampleJitterPixels 先转为项目统一的纹理 UV 约定，不能把 OpenGL/Vulkan 的 Y 差异泄漏到滤波中。
+
+当前颜色在 stable 输出像素中心用 jitter-aware 的 3×3 Lanczos-2 权重重建。history 的颜色为前次 stable TaaHdr，基础采用 bilinear 采样；5-tap Catmull-Rom 是可选质量 profile。相机重投影矩阵 R=previousStableClipFromWorld×inverse(currentStableClipFromWorld)×UvToClip，将当前 stable UV/raw depth 映射到历史 stable UV，透视除法、背景深度和边界检查完整。该组合采用固定来源的取样/重建近似，不把 raw 深度单个样本、stable 输出像素和 jittered 栅格当成同一个空间。
 
 ```cpp
-TaaResolve(current, motion, depth, previous)
+TaaResolve(stableUv, current, history)
 {
-    uvPrev = currentUv - motionUv;
-    valid = previous.Valid && motion.Valid && InBounds(uvPrev)
-         && PassDepthDisocclusionTest(...);
+    curr = ReconstructLanczos2Current3x3(current, currentSampleJitterPixels);
+    if (!history.Valid) return curr; // 首帧/失效先退出，不访问无效历史矩阵或深度
+    depth = LoadCurrentRawDepth(stableUv);
+    previous = ProjectStableDepth(reprojectionMatrix, stableUv, depth);
+    previousDepthUv = previous.uv
+        + (currentSampleJitterPixels - history.sampleJitterPixels) / renderExtent;
+    valid = history.Valid && InBounds(previous.uv) && InBounds(previousDepthUv)
+         && RawReverseZDepthConsistent(previous.depth,
+              PointSample(history.rawDepth, previousDepthUv), LocalDepthSpread3x3());
 
-    hist = valid
-        ? SampleHistory(uvPrev) * (currentPreExposure / previousPreExposure)
-        : CurrentSample();
-    stats = EvaluateCurrentNeighborhood();
-    hist = VarianceClipOrClamp(hist, stats);
-    return ReconstructAndBlendCurrentWithHistory(hist, valid, quality);
+    hist = valid ? SampleHistory(history.color, previous.uv)
+                      * (currentPreExposure / history.preExposure) : curr;
+    curr = ToReversibleHdrWorkDomain(curr);
+    hist = ToReversibleHdrWorkDomain(hist);
+    hist = ClipHistoryToCurrentNeighborhoodAndVariance(hist);
+    return FromReversibleHdrWorkDomain(
+        BlendWithReactiveAndHistoryValidity(curr, hist, reactive, valid));
 }
 ```
 
-motion 是否含 jitter 差值由 schema 固定；含有时不能再加一次 jitter delta。处理 camera cut、快速编辑、skin/Morph、透明和 disocclusion；无历史不采未初始化纹理。时域累积不是把两个颜色简单 0.9/0.1 混合。
+Physara 基线启用深度 disocclusion 拒绝。expected previous raw Reverse-Z depth 来自上述相机重投影，与 point-sampled 配对历史深度比较；3×3 局部深度 spread 提供 jitter 轮廓容差，阈值/精度由同一 profile 的近远与轮廓检查确定，不盲用线性米单位比较 raw depth。上游此拒绝为可选项，启用是本项目的明确选择。
 
-Alpha Blend 混合多个深度/速度，无法由一个不透明 motion 精确表达；透明/折射阶段输出 reactive mask，降低这些像素的历史权重。该方案是明确的稳定性近似，不宣称已解决完整多层时域重投影。
+邻域范围与方差裁剪在同一可逆 HDR 工作域执行，可采用 Filament c/(1+maxRGB(c)) 压缩；当前颜色与曝光重标定后的历史都先进入该域，混合后逆变换并处理极点、NaN/Inf。这是 TAA 内部数值处理，不是显示 ToneMap。当前重建、history filter、裁剪强度、有效样本权重和 reactive 处理属于同一质量 profile，不等同于固定 0.9/0.1 混色。
+
+Alpha Blend/折射无法由单个不透明深度准确重投影；对应阶段输出 reactive mask 降低历史权重。屏幕边缘、显露、背景、无历史及静态编辑后回退当前重建结果，不读取未初始化纹理。TAA 关闭不分配其专属历史；SSR 若开启仍只保留自己需要的 ReflectionHdr/深度。
 
 **实现规范**
 
-- 无有效历史不采未初始化资源，遮挡显露/越界/缺失前态退回当前帧。
-- neighborhood/clamp、当前重建和 reactive 权重共享质量 profile，不能只用固定 0.9/0.1 混色。
-- TAA 关闭则图中不分配其专属历史；输入 depth/motion 不因某效果关闭而仍无条件产生。
+- 颜色 stable 栅格、raw depth 栅格及 jitter 差明确一次，不能混用两种公式重复补偿。
+- 先核对固定相机、纯相机平移/旋转、深度轮廓、静态编辑、曝光和透明 reactive，再确认 profile。
+- 内容编辑保守失效；不以缺少对象速度输入宣称支持动态模型 TAA。
 
 <a id="lens-effects"></a>
 ### 9.3 DoF、Bloom 与镜头效果
@@ -2673,6 +2848,8 @@ A=f/N,\quad
 $$
 
 tile 膨胀使大前景散景覆盖邻域，不能只以中心深度决定采样半径。DoF 与 TAA 的顺序和高亮稳定性作为同一效果 profile 验证，基础采用 TAA 后 DoF。[F11]
+
+上述薄透镜 CoC 仅用于透视相机。正交相机的基线 DoF capability 为 false；请求时显示不支持原因，不代入该公式或静默切换投影。正交深度重建、照明、TAA 和不启用 DoF 的输出仍受支持。
 
 Bloom 是 HDR 高亮的多尺度过滤/重建，threshold 的曝光域明确；曝光变化不应因误用了绝对/预曝光阈值导致突跳。Bloom 不创建 Light。镜头 flare 为可选图像效果，不计入表面光能积分。
 
@@ -2714,7 +2891,7 @@ ACES 算子按其 Rec.2020 输入输出约定适配：linear Rec.709 → Rec.202
 <a id="stage-10"></a>
 ## 10. 合成编辑器画面并提交窗口呈现
 
-阶段 2 已经形成 UI 几何与稳定逻辑纹理身份，阶段 9 已经产生 ViewOutput。这里把二者在同一图中连接，随后 RHI 形成提交票据，Platform 才交换窗口。编辑器是帧末消费者，仍不进入 Engine 或直接调用原生图形 API。
+阶段 2 已经形成 UI 几何与稳定逻辑纹理身份，阶段 9 已经产生 ViewOutput。这里由 Editor 唯一组装 Overlay/Preview/UI 消费节点，再交给 RHI 执行和 Platform 呈现。Renderer 返回物理 ViewOutput、对应深度和 CameraSnapshot，不再次组装编辑叠加；Engine 不依赖 Editor，编辑器也不直接调用原生图形 API。
 
 <a id="editor-output"></a>
 ### 10.1 编辑叠加、视口输出与本帧纹理解析
@@ -2765,7 +2942,7 @@ PrepareUiGraph(drawData)
     ResolveAllDrawTextureTokensAndCollectGraphReads();
     PrepareReusableVertexIndexStorage();
     AddUiUploadPass(drawData);
-    AddUiRasterPass(backBuffer, collectedReads);
+    return AddUiRasterPass(backBuffer, collectedReads); // 返回UI写入后的资源版本
 }
 
 ExecuteUiRaster(cmd, drawData, resources)
@@ -2775,7 +2952,11 @@ ExecuteUiRaster(cmd, drawData, resources)
     {
         for (draw : list.Commands)
         {
-            HandleSupportedResetOrUserCallback(draw);
+            if (draw.UserCallback)
+            {
+                HandleSupportedResetOrUserCallback(draw);
+                continue; // 回调命令替代三角形绘制，不继续获取纹理或 DrawIndexed
+            }
             Rect clip = TransformAndClampClipRect(
                 draw.ClipRect, drawData.DisplayPos, drawData.FramebufferScale);
             if (clip.Empty()) continue;
@@ -2797,11 +2978,11 @@ ExecuteUiRaster(cmd, drawData, resources)
 
 UI VB/IB 按容量增长、稳态复用，事件时扩容有高水位。BindingSet cache 有上限且保留依赖；font/icon/viewport 的纹理格式与采样器分开解释。
 
-对于 1.92+ 协议，WantCreate/WantUpdates 建立资源/有效绑定并保证上传先于 UI 消费后才能标 OK；WantDestroy 的实际资源释放要等待最后 ticket，不能用 UnusedFrames 恰好大于某常数替代 GPU 生存期。[U03] [U04]
+对于 1.92+ 协议，WantCreate/WantUpdates 在准备时建立 TexID/有效绑定并复制像素及更新矩形到拥有型上传包，不能仅因 AddUiUploadPass 已声明就标 OK。只在该上传实际执行并随有效 ticket 提交后确认状态；编图取消、Pass 被裁掉、执行或提交失败时保留请求与 CPU 数据，供安全 UI 图或下一帧重试。TexID 有效与 Status=OK 分开，实际上传先于本图 UI 采样。WantDestroy 的实际资源释放要等待最后 ticket，不能用 UnusedFrames 恰好大于某常数替代 GPU 生存期。[U03] [U04]
 
 基础 UI 使用 straight-alpha 合成：颜色 SrcAlpha/OneMinusSrcAlpha，alpha One/OneMinusSrcAlpha；字体 alpha 是覆盖率。顶点配色按 sRGB 创作值转线性，再与颜色纹理的线性采样相乘；sRGB 附件负责存储编码。Depth 关闭、scissor 开启、cull 关闭，全部通过 RHI Pipeline/GraphicsState 描述。
 
-CPU NewFrame 前不能覆写仍被当前 UI 消费的数据。VB/IB 与纹理上传使用帧内拥有的数据及 RHI 在途协议；Texture Status=OK 表示资源/绑定有效且上传依赖已保证先于绘制，不表示 CPU 阻塞等待 GPU 完成。
+CPU NewFrame 前不能覆写仍被当前 UI 消费的数据；不能只保留随后可能被 ImGui 修改的像素指针。VB/IB 与纹理上传使用帧内拥有的数据及 RHI 在途协议；Texture Status=OK 表示资源/绑定有效且上传依赖已保证先于绘制，不表示 CPU 阻塞等待 GPU 完成。中途失败后可保守重传，不能丢掉未确认更新。
 
 **实现规范**
 
@@ -2837,19 +3018,24 @@ token 带窗口/呈现代与取得身份，只由 Runtime/DeviceHost 使用。Be
 GL 默认 framebuffer 不作为普通纹理暴露。DeviceHost 按帧槽持有全窗口 PresentColor 纹理；全帧图把 Scene/UI 写入该纹理，导出 ShaderResource 状态。新目标内容无效，首个写入必须 clear/完整覆盖。PresentColor 不是 ViewOutput：多个离屏 View 可被 UI 合成到同一窗口目标。
 
 ```cpp
-// GL 的列表是即时执行，Close 后这里已经有完整的 PresentColor。
-PrepareSubmission(frame)
+// frameSucceeded 同时包含图执行结果和当前原生诊断，不能复制失败目标。
+PrepareSubmission(frame, frameSucceeded)
 {
     ValidateActivePresentationToken(frame.token);
+    if (!frameSucceeded)
+    {
+        PreparePresentationCancellation(frame); // GL 不复制/交换；Vulkan 消耗 acquire
+        return;
+    }
     RHI::OpenGL::PrepareWindowPresentation(device, frame.target.texture);
     // 后端专用入口：执行最终窗口复制，并维护/失效唯一 ContextState 缓存。
 }
 
 submissionId = device.ExecuteCommandList(commandList); // 窗口复制之后才插入 tracking fence
-deviceHost.Present(frame, submissionId);               // 登记源保活后 glfwSwapBuffers
+deviceHost.Present(frame, submissionId);               // 有效颜色才交换，否则完成取消协议
 ```
 
-该 OpenGL 专用互操作入口位于后端边界，不给 NVRHI 公共 Device 添加窗口虚函数。原生复制使用与后端同一状态管理器；如果修改了 program、FBO、VAO、viewport/scissor、sRGB 等状态，就精确更新或失效相应缓存，禁止下一帧沿用已失真的缓存。
+该 OpenGL 专用互操作入口位于后端边界，不给 NVRHI 公共 Device 添加窗口虚函数。原生复制使用与后端同一状态管理器；如果修改了 program、FBO、VAO、viewport/scissor、sRGB 等状态，就精确更新或失效相应缓存，禁止下一帧沿用已失真的缓存。复制本身发生 Error/Fatal 时也标记 token 不可交换；取消帧的 ticket 只保护已发工作，不使失败目标变为有效。
 
 PresentColor、它的原生 view/FBO 及相关 generation 至少保留到该 submissionId 完成。因为最后复制不在已关闭列表中，DeviceHost 必须显式登记这次源访问，不能假设列表 tracker 已为它保活。源纹理不会仅按帧号覆盖复用。
 
@@ -2882,17 +3068,26 @@ GL 自身也有原生对象删除语义，但不能依赖它解决 CPU wrapper�
 ```cpp
 RunGarbageCollection()
 {
-    while (oldestBatch && PollFenceZeroTimeout(oldestBatch.Fence))
+    while (oldestBatch)
     {
+        auto status = PollFenceZeroTimeout(oldestBatch.Fence);
+        if (status == Pending) break;
+        if (status == Failed)
+        {
+            LatchStopAndKeepInFlightReferences();
+            break;
+        }
         completedId = oldestBatch.Id;
         ReleaseCompletedUploadVersions(oldestBatch);
         oldestBatch.References.Clear();
         DeleteFence(oldestBatch.Fence);
         PopOldestBatch();
     }
-    DrainNativeDeletionQueueOnContextThread();
+    if (NativeDeviceUsable()) DrainNativeDeletionQueueOnContextThread();
 }
 ```
+
+GL poll 将 ALREADY_SIGNALED/CONDITION_SATISFIED 映射为 Complete，TIMEOUT_EXPIRED 为 Pending，WAIT_FAILED 为 Failed。只有 Complete 推进 completedId 并释放引用；Failed 停止新渲染、保留在途区段并进入受控退出，不能当作无限 Pending 或成功。零 fence 同样不是已完成。[K06]
 
 资源析构若发生在别的线程，只投递原生删除记录。真正删除前使 ContextState 中对应记录失效，防止 GLuint 重用导致缓存误判。资源保持 Device 有效的前提由 shutdown 协议保证。
 
@@ -2903,76 +3098,81 @@ RunGarbageCollection()
 - 回收时 context/device 仍有效；跨线程析构只排入删除队列。
 
 <a id="history-commit"></a>
-### 11.2 FrameSlot 复用、历史轮转与前态提交
+### 11.2 FrameSlot 复用与 View 历史提交
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 提交成功的 outputs/ticket、Scene/View 当前状态 | 已渲染前态、历史 generation、可复用 FrameSlot | View / Scene 前态 owner；Runtime frameSlots | 下帧 Motion/SSR/TAA / CPU arena |
+| 有效渲染的 outputs 与真实提交 ticket | View 历史版本、可复用 FrameSlot | View；Runtime frameSlots | 下帧 SSR/TAA / CPU arena |
 
-历史有两个动作：提交时发布“下一次可以按队列顺序读取的已生成版本”，完成时回收不再引用的旧版本。不能为了发布历史等待整个 GPU，也不能把历史发布误解为立即可覆写全部存储。
+提交时发布“可沿队列顺序读取的已生成版本”，完成时回收不再引用的存储。这两步不同；不能为了发布历史等待整个 GPU，也不能发布后立刻覆写仍被使用的资源。
 
 ```cpp
-CommitRenderedPreviousStateAndHistory(outputs, ticket)
+CommitViewHistories(outputs, ticket)
 {
-    for (viewOutput : outputs)
+    Require(SubmissionSucceededAndNoFatal(ticket));
+    for (viewOutput : outputs.SuccessfullyRenderedViews())
     {
-        view.PublishHistoryVersion(viewOutput, ticket);
-        view.CommitRenderedCameraExposureAndPlan();
+        view.PublishPairedColorDepthHistory(viewOutput, ticket);
+        view.CommitRenderedCameraExposureContentAndPlan(viewOutput);
     }
-    if (outputs.ContainsRenderedSceneFrame())
-        scene.CommitRenderedObjectAndDeformationState();
 }
 AcquireAvailableSlot()
 {
     slot = SelectBoundedFrameSlot();
-    WaitOnlyIfItsLastSubmissionIsStillInFlight(slot);
-    slot.ResetCpuArenaAndReusableArrays();
-    return slot;
+    if (!WaitForValidSlotCompletionOrVerifyUnused(slot)) return Failure;
+    slot.ResetTransientCpuData(); // 清 arena/本帧工作集；保留带版本的场景提取数组
+    return Ready(slot);
 }
 ```
 
-构图失败或根本没提交的 View 不轮转历史。提交成功后 present out-of-date 仍然不撤销已执行的 Scene/View 工作；宿主单独处理窗口重建。多 View 每个 View 有自己的相机/尺寸/曝光历史，Scene 对象前态按明确渲染帧推进，不随面板是否显示随意复制。
+构图失败、普通执行 Error、未提交或 Fatal 的 View 不轮转历史。普通执行 Error 之前已发出的合法 GPU 工作仍要关闭并形成真实完成票据，保护其资源；该票据不证明画面有效。提交有效但 present 才报告 out-of-date，不撤销已执行的 View 历史，宿主独立处理重建。
+
+每个 View 保存自己的相机、jitter、曝光、内容版本及对应颜色/深度，不维护 Scene 对象前态。FrameSlot 完成检查由 Runtime/Renderer 消费 RHI 完成值，Core arena 只在确认安全后 Reset。
 
 **实现规范**
 
-- motion 使用最近成功渲染状态而非上一 CPU tick。
-- 帧槽复用按真实 ticket；历史资源复用按引用/队列顺序和完成规则。
-- 路径/cut/resize 的失效条件与 9.1 相同，不由面板临时重置全部历史。
+- 最近历史来自本 View 最近一次有效成功提交，不取上一 CPU tick 或其他 View 相机。
+- 帧槽复用按真实 ticket，历史存储复用按引用/队列顺序和完成协议。
+- 内容/cut/resize/路径失效统一按 9.1，不由面板随意推进历史。
 
 <a id="readbacks"></a>
 ### 11.3 Event/Timer、截图与异步拾取
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 图中 Copy/计时输出、request identity、完成票据 | Ready/Pending/Stale 结果、像素/图像/耗时快照 | RHI Queries/Readback；Editor/Viewport 消费 | 下一帧 UI、截图编码与统计 |
+| 图中 Copy/计时输出、request identity、完成票据 | Ready/NoHit/Pending/Stale/Failed、像素/图像/耗时快照 | RHI Queries/Readback；Editor/Viewport 消费 | 下一帧 UI、截图编码与统计 |
 
 EventQuery 捕获设置时的最后已提交 ID；Readback 顺序必须是复制 → 关闭/提交 → set query → 后续帧 poll → ready 后 map。TimerQuery 轮转并只读取 available 结果。StagingTexture 返回真实 row pitch，支持块格式/行对齐的用例。[N04]
 
 ```cpp
 PickRequest = {
     requestId, sceneIdentity, viewGeneration,
-    sceneRevision, pixelCoordinate, cameraSnapshot
+    renderContentRevision, cameraRevision, extentPixels, pixelCoordinate, cameraSnapshot
 };
 
 AddPickPass(request)
 {
-    // 共用 Geometry、alpha mask、deformation；按请求 scissor。
-    DrawPickIndicesToR32Uint();
+    // 共用静态 Geometry 和 alpha mask；按请求 scissor。
+    ClearPickTargetToZeroAndDrawIndicesFromOneToN();
     CopyRequestedPixelToStaging();
     PreserveIndexToEntityHandleTableForThisRequest();
 }
 
 PollPickResult()
 {
+    if (request.Failed) return Failed; // 未获有效提交/复制失败不能永远停在 Pending
     if (!TicketComplete()) return Pending;
+    if (!RequestStillMatchesSceneViewCameraAndLatestSelection()) return Stale;
     index = MapReadyPixel();
-    handle = capturedLookup[index];
+    if (index == 0) return NoHit;
+    if (index > capturedLookup.Count()) return Failed; // 先检查范围，再以 index-1 查表
+    handle = capturedLookup[index - 1];
     if (!SceneViewAndEntityGenerationStillMatch(handle)) return Stale;
     return handle;
 }
 ```
 
-像素值是本请求的 pick index，不能只存一个可被 ECS 重用的 entity slot。透明选择策略明确为最近可选表面或指定 alpha 阈值，不把不透明深度拾取默认宣称为完整透明 picking。CPU 灯图标命中可以共存，但必须有明确的优先级与坐标协议。
+像素值是本请求的 pick index：0 保留为背景，1..N 对应捕获表，构表前检查 R32_UINT 的非零身份容量。NoHit 按选择意图清除或保留选择；非法索引报告失败，不越界或任意选中。请求匹配包含场景身份/内容版本、View 代、相机版本、目标尺寸和最新选择 requestId，随后再验证 EntityHandle generation，迟到点击不能覆盖更新选择；层级树等其他选择入口同样使旧拾取请求失效。不能只存一个可被 ECS 重用的 entity slot。透明选择策略明确为最近可选表面或指定 alpha 阈值，不把不透明深度拾取默认宣称为完整透明 picking。CPU 灯图标命中可以共存，但必须有明确的优先级与坐标协议。
 
 截图分 SceneHDR、ViewOutput 和含 UI 的窗口目标：分别在相应生产者之后 Copy 到 staging。Ready 后由 CPU 编码作业保存，EXR 去预曝光并标明 scene-linear，PNG 输出显示编码。Staging 返回真实 row pitch/格式，不能假定 width×pixelSize 总成立。
 
@@ -2989,7 +3189,7 @@ PollPickResult()
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| Core CPU scope、Renderer/RHI 真实计数、已就绪 GPU timer | 只读 StatsSnapshot、Graph/资源快照、预算/高水位 | Core/各事实 owner；Editor/Diagnostics 展示 | 面板与 Benchmark |
+| Core CPU scope、Renderer/RHI 真实计数、已就绪 GPU timer | 只读 StatsSnapshot、Graph/资源快照、预算/高水位 | Core/各事实 owner；Editor/Diagnostics 展示 | 面板与运行时测量 |
 
 | 系统 | 必须可见的预算/指标 | 失效/退休事件 |
 |---|---|---|
@@ -3045,25 +3245,35 @@ DrawDiagnosticsPanel(snapshot)
 | resize / out-of-date | 标记待重建，在帧边界应用；普通 View resize 不触发 swapchain 重建 |
 | 已 acquire，但图编译失败或用户取消 | 消耗或正确退还 acquire；GL 不交换，Vulkan 以合法空/清屏提交等待 acquire、建立所需状态并完成呈现协议 |
 | 即时 GL 已发出部分命令后失败 | 关闭并形成完成票据，保活已经访问的资源；不能按“无 GPU 工作”回收上传槽 |
+| fence 创建或完成查询失败，context 仍可用 | 停止新渲染，保留全部未证明完成的引用；仅在受控退出收拢，不能发布假票据/假完成 |
 | 提交成功，present 才报告重建 | 已提交的 Scene/View 历史仍按提交结果处理；呈现系统独立重建 |
-| device lost / context 失效 | 进入明确 Fatal 状态，停止新工作并走受控退出；初版不假装透明恢复 |
+| device lost / context 失效 | 原生结果记录设备不可用并通过既有回调锁存停止；按失效后端协议退出，不等待失败票据，初版不透明恢复 |
 
 取消不能只丢弃 token。Vulkan 取消提交必须消费 acquire semaphore，安全处理旧/未初始化图像并管理 signal/present semaphore；若实现选择其他释放协议，必须验证其扩展与生命周期条件。普通渲染 timeline 完成仍不代表呈现引擎已释放 swapchain；退休规则见 [Vulkan 接入](#vulkan)。
 
 ```cpp
 StopNewRequests();
 CancelAndJoinCpuJobs();
-FinishOrCancelActivePresentation();
-WaitForSubmittedGpuWorkAtShutdown();
+if (host.NativeDeviceUsable())
+{
+    FinishOrCancelActivePresentation();
+    DrainSubmittedAndUnfencedGpuWorkAtShutdown();
+}
+else
+{
+    StopSubmissionAndReleaseLostDeviceOwnedState(); // 不等待失败 ticket 或失效 context
+}
 editor.Shutdown();                  // 先恢复 GLFW 回调、释放 UI 与 View 引用
 renderer.Shutdown();
 renderEngine.Shutdown();
 deviceHost.Shutdown();              // 清理呈现在途与原生队列 → RHI Device → context/window → GLFW
 ```
 
-GL 删除队列必须在 context 仍有效且 current 时排空；Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初始化与终止由它成对负责；不在每个 Window 析构中调用全局 glfwTerminate。Shutdown 必须幂等并支持初始化中途失败的逆序清理。
+Fatal 只决定停止新工作，不能用它推断 device lost 并跳过 GPU 收拢。可用 GL context 上优先等待有效 fence；若 fence 创建/查询失败导致工作没有可靠完成票据，仅在退出边界允许 glFinish 收拢。只有确认完成后才释放这些上传区段和引用、排空删除队列。无法确认原生设备仍可用或收拢再次失败时转后端失效退出，不虚构 completedId。设备/context 已失效则停止后续原生调用，走规定的丢失设备销毁路径，不等待永远不会完成的编号；GL_OUT_OF_MEMORY 等结果也不能靠严重度或字符串猜测上下文健康。[K06]
 
-图编译失败时的宿主取消工作只使用宿主自己保活的原生目标/同步对象，不再引用已取消 FrameSlot 的 CPU arena。若场景即时命令已发出，则先关闭/提交形成票据、关联全部受影响资源，再退休，不能复用尚被访问的上传内存。
+Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初始化与终止由它成对负责；不在每个 Window 析构中调用全局 glfwTerminate。Shutdown 必须幂等并支持初始化中途失败的逆序清理。
+
+图编译失败时的宿主取消工作只使用宿主自己保活的原生目标/同步对象，不再引用已取消 FrameSlot 的 CPU arena。若场景即时命令已发出，则先关闭/提交形成票据、关联全部受影响资源，再退休；AbandonActiveFrameForFatal 也必须保留尚无 fence 的工作直到上述收拢或失效退出，不能复用尚被访问的上传内存。
 
 关闭在已有未保存编辑时由 Editor/Runtime 解释意图；DeviceHost 只发布 closeRequested，不直接删除窗口。关闭顺序必须先停止发布目标，再 join 作业，防止退出中重新创建对象。
 
@@ -3076,70 +3286,58 @@ GL 删除队列必须在 context 仍有效且 current 时排空；Vulkan 还要�
 <a id="stage-12"></a>
 ## 12. 验证、测量与变更闭环
 
-Tests/Tools/Docs/OpenSpec 服务于前述真实流程：验证合同、追踪选择并比较同口径结果。它们不重新实现另一套渲染器，不新增与原生 OpenSpec 重复的审批/文档步骤。
+验证和测量随实际模块与变更需要开展，文档记录当前合同、选择与真实结果。不预设测试目录结构、自动化平台或独立工具程序，不重新实现另一套渲染器，也不新增与原生 OpenSpec 重复的审批/文档步骤。
 
 <a id="tests"></a>
-### 12.1 Tests 与固定数据的覆盖
+### 12.1 按合同验证行为
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 各阶段合同、正常/边界/失败输入 | CTest 用例、原生读回/图像证据、未覆盖说明 | Tests 各目录 / Data | OpenSpec verify / CI |
+| 各阶段合同、正常/边界/失败输入 | 实际运行、原生读回/图像结果、失败与未覆盖说明 | 当前变更涉及的模块 | OpenSpec verify / 后续审查 |
 
-| 测试目录 | 需要证明的性质 |
+| 影响范围 | 需要证明的性质 |
 |---|---|
+| 构建与依赖 | 第三方源码/头/链接、第一方编译诊断和受影响配置；不宣称 GPU 能力 |
 | Core | handle generation、arena 对齐/复用、取消/迟到作业、字节溢出 |
 | Platform | 创建失败清理、输入 press+release、Unicode/UI chaining、DPI/零尺寸、呈现状态与退出 |
-| Asset | accessor/sparse/拓扑、颜色/通道、默认值、标准扩展与错误报告、重导入/保存 |
-| Scene | 层级无环、脏根传播、动画/姿态、事务撤销和 generation |
+| Asset | accessor/sparse/拓扑、颜色/通道、默认值、标准扩展、错误报告和重导入 |
+| Scene 与场景文件 | JSON 保存/加载后实例与设置一致、版本/坏引用/保存失败处理、层级无环、静态内容/相机版本、身份和实例覆盖 |
 | RHI | 同 slot 不同 set、texture/sampler 组合、volatile/push、barrier、在途引用/native name 重用 |
 | RenderGraph | RAW/WAR/WAW、未初始化读、版本覆盖、循环、活性、first-use 与 budget |
 | Rendering | 三路径同口径 HDR、白炉/粗糙度/IOR、阴影、屏幕近似、透明、时域/切换 |
 | Editor | 命令/Undo、视口映射、UI clip/offset/font、迟到拾取、只读统计 |
-| Data | 最小标准 glTF、已知纹理/颜色、固定相机、许可与输入 hash |
 
-```cpp
-NativeRhiConformanceCase()
-{
-    host.Create(HiddenRealOpenGlContext);
-    device = host.GetDevice();
-    RunPublicContractScenario(device);
-    SubmitAndReadBackOnlyAfterCompletion();
-    CheckObservableResultAndRetirement();
-    DestroyConsumersBeforeHost();
-}
-```
-
-隐藏真实 GL 窗口不等于无窗口系统环境也可用；无显示服务器支持作为独立能力。公共 RHI 的 CPU 替身可测试调用逻辑，但不能替代 native conformance。所有测试程序注册 CTest，公共合同变更扩大到实际消费者。
+使用固定输入时记录来源、许可和必要的内容标识，不为未来功能预先创建模型或空场景。隐藏真实 GL 窗口不等于无窗口系统环境也可用；无显示服务器支持作为独立能力。公共 RHI 的 CPU 替身可以检查调用逻辑，但不能替代真实 backend/context/device 上的语义验证。公共合同变更需要覆盖实际消费者。
 
 **实现规范**
 
 - 同步/生命周期必须读回或检查真实退出，不只检验“调用过某函数”。
 - 不为文档改名/格式写镜像测试；根据影响面执行有意义的检查。
-- 不通过删除测试、关闭验证或把失败改成警告来满足完成定义。
+- 记录实际失败和未覆盖范围，不把未运行或未满足的检查标记为通过。
 
 <a id="benchmark"></a>
-### 12.2 Benchmark 与性能报告时机
+### 12.2 运行时测量与性能报告
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 固定场景/相机/构建/设备、功能配置与测量目标 | CPU/GPU 分布、质量/误差、可复现比较 | Tools/Benchmark；Renderer/Core 统计接口 | 特性决策 / 优化 spec |
+| 固定场景/相机/构建/设备、功能配置与测量目标 | CPU/GPU 分布、质量/误差、可复现比较 | Runtime；Renderer/Core 统计接口 | 特性决策 / 优化 spec |
 
 统计能力属于模块设计，性能报告属于实际测量产物。两者不要求同时出现，也不要求等到渲染器全部完成后才测量。
 
 | 具备的条件 | 需要做的事 | 文档去向 |
 |---|---|---|
-| 模块初次实现 | 加入有明确成本的必要计数/计时入口和预算边界；优先验证行为 | OpenSpec tasks、测试/CI 输出；不生成空报告 |
+| 模块初次实现 | 加入有明确成本的必要计数/计时入口和预算边界；优先验证行为 | OpenSpec tasks、实际检查输出；不生成空报告 |
 | 独立模块可运行且有性能问题/设计比较 | 用固定输入测上传、绑定、图编译等具体成本 | 在 change 引用测试输出或 benchmark 结果 |
 | 新渲染特性可运行 | 对比开/关或替代算法，固定画质、输入与误差口径 | 需要长期复用时写入 Docs/Performance/，否则留在该 change 的既有结果中 |
 | 主渲染链稳定或进入集中优化 | 建立代表场景基准，分析 CPU/GPU 瓶颈并做前后对比 | 按需建立 Docs/Performance/，保存基准与可复现报告 |
 
-不预建性能目录、长期占位台账或一份每个任务都必须更新的报告。某份测量需要被多个 change 比较时，才将其整理为稳定报告；change 引用该报告而不抄录全部结果。测试脚本与数据属于 Tests/Tools，自动生成的临时输出进入 build/artifacts，只有需要留存比较的结论和必要数据进入文档。
+不预建性能目录、长期占位台账或一份每个任务都必须更新的报告。某份测量需要被多个 change 比较时，才将其整理为稳定报告；change 引用该报告而不抄录全部结果。测量入口归当前模块和 Runtime 的实际流程，自动生成的临时输出进入 build/artifacts，只有需要留存比较的结论和必要数据进入文档。
 
 一次记录固定场景 hash、相机、构建/commit、设备/驱动、分辨率、路径、扩展材质比例、光源、效果、VSync、预热与采样数量。CPU 与 GPU 分开，包含 median/p95 和分配/上传/绑定量。
 
 对比三路径时输入和效果一致，标注 ForwardExtension 占比及 Froxel fallback。不能把 Deferred 跳过某类扩展造成的低成本当成架构收益。
 
-Benchmark 复用相同 Scene/Renderer/Graph 与宿主，不写另一份光照路径。可通过 Runtime 启动选项或独立工具驱动固定输入；它不是面向使用者的第二个渲染器入口。性能工具可以关闭 UI 干扰用于隔离测量，但产品正常启动仍是带编辑器的程序。
+固定输入测量通过现有 Runtime 启动选项或统计面板触发，复用相同 Scene/Renderer/Graph 与宿主，不设置独立 Benchmark 模块或可执行程序，不写另一份光照路径。测量模式可以关闭 UI 绘制以隔离成本，但产品正常启动仍是带编辑器的程序。
 
 **实现规范**
 
@@ -3157,20 +3355,21 @@ Benchmark 复用相同 Scene/Renderer/Graph 与宿主，不写另一份光照路
 | 内容 | 权威位置 | 更新方式 |
 |---|---|---|
 | 通用行为/C++/图形准则 | 根 AGENTS.md | 不写 Physara 专用模块方案 |
-| 当前 Physara 路线与各单元实现约束 | Docs/Architecture.md | 改变长期合同的 change 同步更新 |
+| 当前 Physara 路线与各单元实现约束 | Docs/Architecture.md | 中层架构：结合 Reference 与维护者定位采纳合同，长期变化同步更新 |
+| 全流程阶段、依赖与工作包验收 | Docs/Developments.md | 根据 AGENTS/Architecture 制定顺序，完成后据证据勾选，不另立架构真相 |
 | 已采纳可观察行为 | openspec/specs | 通过原生 delta/sync 工作流维护 |
 | 技术理由、备选方案、任务 | openspec/changes/<id> | 原生 design/tasks，完成后归档 |
-| Filament/NVRHI 等参考分析 | Docs/Reference/ | 提供解释与来源，不覆盖项目选择 |
+| Filament/NVRHI 等参考分析 | Docs/Reference/ | 底层技术依据：固定来源、真实行为、限制与适用范围，不覆盖项目选择 |
 | 长期基准/特性比较 | 按需 Docs/Performance/ | 有真实复用需求才建立，change 引用 |
 
 遵循锁定版本的 OpenSpec 原生 propose/apply/verify/sync/archive 工作流和 schema；工具的可用命令/产物依赖以安装版本为准，不新增必交验证文件或独立 ADR 体系。[S01] [S02]
 
-OpenSpec 中的 spec 定义结果，design 定义当次如何做，本文维护当前架构。不要把通用编码标准复制进每个模块，也不要把当前 Physara 的路径、OpenGL 限制和未来移植任务塞回 AGENTS。
+文档按三层阅读：Reference 提供底层依据；AGENTS 与本文分别规定开发行为和当前架构；Developments 承接为全流程任务，OpenSpec 经讨论/调查细化每次落地行为、方案和小任务。OpenSpec 中 spec 定义可观察结果，design 定义当次如何做，本文维护当前架构。不要把通用编码标准复制进每个模块，也不要把当前 Physara 的路径、OpenGL 限制和未来移植任务塞回 AGENTS。
 
 **实现规范**
 
 - 架构中模块职责、技术合同与实现规范一起更新，工程新增目录必须补入覆盖表和相应阶段。
-- 开发里程碑和具体任务以后进入 change，流水线阶段不能被误当“当前已完成阶段”。
+- Developments 维护全流程任务顺序，当前工作的细化与实施进入 change；本文的流水线阶段不能被误当当前已完成里程碑。
 - 历史理由引用已归档 change，不回写历史或建立镜像决策记录。
 
 <a id="feature-closure"></a>
@@ -3182,7 +3381,7 @@ OpenSpec 中的 spec 定义结果，design 定义当次如何做，本文维护�
 
 | 新增内容 | 同一变更必须穿透的链 |
 |---|---|
-| Material extension | 标准解析 → schema → 路由 → BRDF/IBL → depth/motion/pick → UI → 图像验证 |
+| Material extension | 标准解析 → schema → 路由 → BRDF/IBL → depth/pick → UI → 图像验证 |
 | Light | 标准/项目来源 → 单位 → culling/list → GPU 编码 → 求值/阴影 → 预算 |
 | PostProcess | ColorDomain → 输入/输出资源 → 图依赖 → 历史 → 设置/统计 → 截图 |
 | RHI capability | 上游接口映射 → capability → backend → Validation → native 行为测试 |
@@ -3202,7 +3401,7 @@ OpenSpec 中的 spec 定义结果，design 定义当次如何做，本文维护�
 <a id="sources"></a>
 ## 附录：固定源码与官方规范
 
-源码入口固定到已读取快照，用于说明技术依据；它们不是生产依赖浮动跟踪规则。生产构建选定并锁住实际采用的版本，ImGui 研究快照为 1.93.1 WIP，不能直接当稳定发布版本。官方规范查阅日期为 2026-10-20。
+源码入口固定到已读取快照，用于说明技术依据；它们不是生产依赖浮动跟踪规则。生产构建选定并锁住实际采用的版本，ImGui 研究快照为 1.93.1 WIP，不能直接当稳定发布版本。官方规范查阅日期为 2026-10-22。
 
 | 项目 | 研究快照 | 设计采用范围 |
 |---|---|---|
@@ -3256,6 +3455,19 @@ OpenSpec 中的 spec 定义结果，design 定义当次如何做，本文维护�
 | [K14] | 官方规范/官方仓库 | 窗口逻辑尺寸、framebuffer 像素与 content scale |
 | [K15] | 官方规范/官方仓库 | 输入事件、字符与事件等待 |
 | [K16] | 官方规范/官方仓库 | context current、加载入口与无 context 窗口 |
+| [F13] | TAA camera jitter、taa.mat/taa.md | stable 重建、历史裁剪与配对深度 |
+| [F14] | surface_light_reflections.fs、Gaussian mip | 投影 DDA、命中重投影、预乘 SSR 与过滤 |
+| [N08] | src/vulkan/vulkan-buffer.cpp、vulkan-allocator.cpp | map/unmap、复制 scope 与 staging 可见性 |
+| [N09] | src/vulkan/vulkan-backend.h、vulkan-buffer.cpp | volatile 槽 CAS 与搜索游标的不同并发合同 |
+| [K17] | KHR_materials_anisotropy | 标准强度/方向与 alphaT/alphaB |
+| [K18] | KHR_materials_volume | mesh-space 厚度与 world-space 吸收 |
+| [K19] | KHR_materials_specular | 介质 F0/F90、纹理通道与金属边界 |
+| [K20] | Vulkan flush/invalidate 规范 | 非 coherent 映射可见性 |
+| [K21] | Vulkan vkCmdCopyBuffer 规范 | 复制必须在 rendering scope 外 |
+| [K22] | Khronos Sample Renderer punctual.glsl | 逐灯 BTDF 与 volume ray 实时近似 |
+| [K23] | KHR_materials_iridescence | 薄膜因子、IOR、nm 厚度与允许的反向范围 |
+| [K24] | KHR_materials_dispersion | dispersion 输入与非规范 RGB IOR 近似 |
+| [K25] | MikkTSpace 接口 | 逐面角点切线与重建索引要求 |
 
 [F01]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/details/Renderer.cpp#L771
 [F02]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/details/View.cpp#L717
@@ -3284,18 +3496,32 @@ OpenSpec 中的 spec 定义结果，design 定义当次如何做，本文维护�
 [S02]: https://github.com/Fission-AI/OpenSpec/blob/c794978f4f8845ce59693373c9dd882ee776588c/docs/cli.md#L538
 [F12]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/ToneMapper.cpp#L379
 [K01]: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
-[K02]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md
+[K02]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_lights_punctual/README.md
 [K03]: https://registry.khronos.org/OpenGL/extensions/ARB/ARB_clip_control.txt
 [K04]: https://github.com/KhronosGroup/SPIRV-Cross/blob/main/README.md
 [K05]: https://registry.khronos.org/OpenGL/extensions/ARB/ARB_buffer_storage.txt
-[K06]: https://registry.khronos.org/OpenGL/extensions/ARB/ARB_shader_image_load_store.txt
+[K06]: https://registry.khronos.org/OpenGL/specs/gl/glspec46.core.pdf
 [K07]: https://registry.khronos.org/OpenGL/extensions/ARB/ARB_texture_barrier.txt
-[K08]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_clearcoat/README.md
-[K09]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_transmission/README.md
-[K10]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_ior/README.md
-[K11]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_sheen/README.md
-[K12]: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_emissive_strength/README.md
+[K08]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_clearcoat/README.md
+[K09]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_transmission/README.md
+[K10]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_ior/README.md
+[K11]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_sheen/README.md
+[K12]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_emissive_strength/README.md
 [K13]: https://www.glfw.org/docs/latest/intro_guide.html
 [K14]: https://www.glfw.org/docs/latest/window_guide.html
 [K15]: https://www.glfw.org/docs/latest/input_guide.html
 [K16]: https://www.glfw.org/docs/latest/context_guide.html
+
+[F13]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/materials/antiAliasing/taa/taa.mat#L421
+[F14]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/shaders/src/surface_light_reflections.fs#L203
+[N08]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/src/vulkan/vulkan-buffer.cpp#L225
+[N09]: https://github.com/NVIDIA-RTX/NVRHI/blob/6b96fb03e07539f08327aea76c56d55f1de9d906/src/vulkan/vulkan-backend.h#L575
+[K17]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_anisotropy/README.md#anisotropy
+[K18]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_volume/README.md#thickness-texture
+[K19]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_specular/README.md#implementation
+[K20]: https://docs.vulkan.org/refpages/latest/refpages/source/vkInvalidateMappedMemoryRanges.html
+[K21]: https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdCopyBuffer.html
+[K22]: https://github.com/KhronosGroup/glTF-Sample-Renderer/blob/5650e2c8958801445ac0b38937a83984e3a6b278/source/Renderer/shaders/punctual.glsl#L82
+[K23]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_iridescence/README.md#L62
+[K24]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_dispersion/README.md#L113
+[K25]: https://github.com/mmikk/MikkTSpace/blob/3e895b49d05ea07e4c2133156cfa94369e19e409/mikktspace.h#L80

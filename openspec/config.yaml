@@ -1,32 +1,22 @@
 schema: spec-driven
-
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
-
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
-
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+context: |
+  Physara is a C++20 physically based renderer with an editor for static scenes.
+  Reference explains verified upstream behavior; Architecture selects the project contracts; Developments orders implementation. AGENTS defines general development rules.
+  There is no animation playback, skeletal animation, skinning, morphing or dynamic deformation. Static render-content edits invalidate temporal histories; camera movement uses static depth reprojection.
+  The current build uses Windows x64/MSVC and plain root/module CMakeLists.txt files.
+  ThirdParty contains fixed, curated upstream sources and licenses; records live in ThirdParty/README.md.
+  Configuration does not download dependencies. ThirdParty/nvrhi is reference-only and never enters CMake.
+  Keep the complete NVRHI public contract while implementing only verified backend capabilities. OpenGL 4.6 comes first; Vulkan native dependencies arrive with that backend.
+  Model assets are read-only glTF/GLB in Assets/Models. Each editable scene is one JSON file in Assets/Scenes.
+  Scene JSON stores Assets references, static entities and transforms, object/light parameters, instance material/texture overrides, and mainView camera plus requested render settings; it does not duplicate model bytes or rewrite sources.
+  Scene owns typed entity/override state; View owns requested/effective settings. EditorSession serially handles JSON file operations and their combined restoration; JSON types stay at the file boundary.
+  Open freezes document edits until a validated candidate is published or cancelled. Save captures a snapshot and allows further editing; only the matching saved version and successful Save As update the save state/path.
+  Do not claim unimplemented runtime or GPU validation. Introduce queues, arenas and file watchers only with their real consumers.
+  Use the official OpenSpec 1.13.2 CLI and its bundled spec-driven schema independently of the C++ build.
+  Keep initialization lightweight. Do not add CI, tool-install targets, formatting gates or a test framework.
+  The maintainer will define test organization separately; perform checks appropriate to the actual change.
+rules:
+  proposal:
+    - Reference the relevant Dxx-Txx work packages and state the change scope.
+  tasks:
+    - Include verification in each task and check boxes only after the specified behavior is verified.

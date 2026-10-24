@@ -1,10 +1,13 @@
 # Filament 渲染管线：架构、数据流与执行逻辑
 
 > 分析基线：[google/filament @ b4dfdb073d5543d8569d37e0ee26f79cf794db14](https://github.com/google/filament/tree/b4dfdb073d5543d8569d37e0ee26f79cf794db14)。
+> 源码许可：Apache-2.0；分析/伪代码不改变上游版权与移植时的来源保留要求。
 >
 > 本文按“资源进入引擎 → 一帧 CPU 准备 → Pass 与绘制命令组织 → 后端执行 → GPU 着色 → 输出与帧间复用”分析现有实现。伪代码保留依赖关系与关键分支，省略错误处理、模板和平台条件；标注“概念”的记录或辅助函数只用于解释代码，不是项目新增接口。
 >
 > 配套文档：[NVRHI_RHI_Vulkan_Analysis.md](NVRHI_RHI_Vulkan_Analysis.md)。两份文档分别研究渲染前端和 RHI 执行层的工作。Filament 使用自己的 backend，并不调用 NVRHI；对应关系在第 8、15 节明确说明。
+>
+> 本文保留上游的动画、Skin、Morph 等能力分析，不表示 Physara 采用这些功能。Physara 的静态场景范围、标准资产映射和时域采纳合同以 [Architecture.md](../Architecture.md) 为准；下文单独标出的适配边界用于解释技术依据，不替代项目架构。
 
 ## 目录
 
@@ -1048,7 +1051,7 @@ Contact Shadow 同样沿屏幕深度短距离检查遮挡，补充细小接触�
 
 ### 9.5 SSR：在主颜色之前获取反射补充
 
-当前 SSR 用特殊 Surface variant 重绘符合条件的表面，并从前帧颜色历史取得命中辐亮度。[F34] [F36] [F61]
+当前 SSR 用特殊 Surface variant 重绘符合条件的表面，并从前帧颜色历史取得命中辐亮度。它先生成反射结果，再为结果生成 Gaussian mip，主颜色阶段按粗糙度和相机距离选择 LOD，不是只对历史颜色做普通 box mip。[F34] [F36] [F61]
 
 ```cpp
 if previousFrame.ssrColor does not exist:
@@ -1062,18 +1065,23 @@ else:
             thickness, stride, maxSteps, maxDistance)
 
         if hit.valid:
-            uvHistory = reprojectHitToPreviousColor(hit)
+            uvHistory = projectCurrentViewHitToPreviousColor(hit)
             radiance = sample(previousFrame.ssrColor, uvHistory)
-            confidence = computeScreenEdgeAndHitValidity(...)
+            confidence = fadeScreenEdgesDistanceAndBackface(...)
         else:
             radiance = 0
             confidence = 0
 
-        reflections = {radiance, confidence}
-    buildReflectionMipChain()
+        // RGB 已乘 confidence，RGBA 必须一起过滤，避免无命中区域泄漏颜色。
+        reflections = {radiance * confidence, confidence}
+    buildGaussianReflectionMipChain(reflections)
 ```
 
-trace helper 将射线投影后按屏幕主轴步进，以透视校正插值判断射线深度区间与场景深度/厚度是否相交。它不查询场景 BVH，也不能恢复离屏信息。输出接入第 11 节 IBL 融合，而不是单独把一张反射图直接加到最终颜色上。
+trace helper 来自 McGuire/Mara 的投影 DDA：裁掉 near 后的无效射线段，沿屏幕主轴步进，以齐次位置和 reciprocal-w 做透视校正，比较一个步进区间的 view-space Z 范围与场景深度/厚度。bias、stride、最大步数和最大距离共同限制查询；它不查询场景 BVH，也不能恢复离屏信息。命中点通过 `ssrReprojection` 从当前 view space 投到历史颜色的栅格，不读取逐对象 motion。[F61]
+
+当前预滤波 profile 只在 `p < sqrt(0.5)` 时使用 SSR；以 `alpha=p²`、正的相机平面距离 `d` 计算 `lod=max(0,(log2(alpha/d)+lodOffset)*0.8614)`。`lodOffset` 来自反射分辨率、视场和 Gaussian 初始核，`0.8614` 与逐级 Gaussian 方差累积的推导配套；不能单独把这两个常量挪到另一种 mip 核上。超出有效粗糙度、没有历史或没有命中时，confidence 为零，回退 IBL。[F34] [F36]
+
+输出 RGB 是已乘 confidence 的屏幕辐亮度，A 是贡献权重；第 11 节采用 `IBL*(1-A)+DFG*RGB`。若接收方选择未预乘表示，必须同时改过滤和合成，不能再对已预乘 RGB 乘一次 A。上游 SSR 历史从所选颜色路径的 `linearColor` 导出；其包含范围与该路径有关。Physara 的 ReflectionHdr 导出点和实际生产相机矩阵另由架构明确，不能把上游保留的 jitter 投影疑问当作已验证合同。[F08] [F36] [F61]
 
 <a id="f10"></a>
 ## 10. 主表面阶段：顶点数据如何变成可着色片元
@@ -1424,7 +1432,7 @@ $$
 ```cpp
 evaluateIBL(M, P, inout C) {
     E = mix(P.dfg.x, P.dfg.y, P.F0);
-    ssr = sampleValidSSRIfEnabled(...); // RGB 为反射入射量，A 为贡献置信度
+    ssr = sampleValidSSRIfEnabled(...); // RGB 已乘贡献置信度，A 保存同一权重
 
     if (ssr.a < 1) {
         R = getReflectedVector(P, N);   // 各向异性可调整反射方向
@@ -1458,9 +1466,32 @@ evaluateIBL(M, P, inout C) {
 }
 ```
 
-SSAO 主要进入间接光遮蔽，不能直接当作每盏灯的阴影因子。SSR 已经是屏幕空间的反射入射量，在合成处应用相应 DFG 响应；不能先把它当最终高光、再乘一次完整 BRDF。没有有效 SSR 的区域自然保留环境反射。[F36] [F59]
+SSAO 主要进入间接光遮蔽，不能直接当作每盏灯的阴影因子。SSR 已经是加权的屏幕空间反射入射量，在合成处应用相应 DFG 响应；不能先把它当最终高光、再乘一次完整 BRDF，也不能把 confidence 重复乘入。固定源码的 SSR 分支没有再次乘环境亮度，且不与环境分支完全共用所有能量补偿操作；移植时应明确所选共同模型，不能仅凭函数名称认定两分支代数相同。没有有效 SSR 的区域自然保留环境反射。[F36] [F59]
 
 源码还有运行时重要性采样 IBL 的编译分支，但包含未完成项；本文的完整链路以默认的预滤波环境方案为准。接下来分析上面尚未展开的 Ft，以及颜色怎样写入 HDR 目标。
+
+### 11.8 标准 glTF 输入与 Filament 参数的适配边界
+
+同名材质属性不保证参数化相同。glTF 字段、默认值、纹理通道、颜色域与扩展交互属于资产语义；规范中明确标为非规范性的 Implementation 示例提供可选择的实时算法，不要求逐行复制。下列差异解释移植边界；Physara 的支持范围和固定求值 profile 仍见架构。
+
+**核心、IOR 与 specular。** glTF metallic-roughness 的默认 metallic、roughness 都是 1，不采用 Filament 通用材质接口的 metallic=0 初始化。保留 glTF 的 IOR、specular weight/color，派生介质 F0/F90 后再按 metallic 与金属响应混合：
+
+```text
+weight = specularFactor * specularTexture.a
+color = specularColorFactor * DecodeSrgb(specularColorTexture.rgb)
+dielectricF0 = min(((ior-1)/(ior+1))² * color, 1) * weight
+dielectricF90 = weight
+```
+
+默认 IOR=1.5、weight=1、color=1 恢复 F0=0.04。specular 只改变介质响应，不缩放金属高光；只修改 F0 而始终保留 F90=1 也不符合该扩展的响应定义。固定 Filament 在相应 feature 分支中有独立 F0/F90 字段，可以复用数据组织。IOR=0 是 Khronos 定义的兼容模式，基底 Fresnel 必须恒为 1，再按该模式组合 specular/color；不能将它按普通折射率直接代入折射函数或像固定 Filament 通用入口那样简单 clamp 到 1。[F29] [G01] [G02] [G09]
+
+**各向异性。** 第 11.4 节的 `alpha*(1±a)` 是 Filament 自有参数化。KHR_materials_anisotropy 的强度 s 及纹理 B、方向 RG/rotation 需要先按扩展解释，再由 `alphaT=mix(alpha,1,s²)`、`alphaB=alpha` 产生两个方向粗糙度；它不等于给 Filament 的 a 直接赋 s。可以复用接受 alphaT/alphaB 的 GGX D 与各向异性 Smith visibility 基础函数，IBL 则明确采用其弯曲反射方向近似，不改写原始 glTF 参数。[F38] [F73] [G03]
+
+**清漆、sheen 与发射。** KHR clearcoat 的独立法线缺省为几何法线，不继承基底 normal map；清漆和基底的 IOR 分开解释。标准层定义覆盖整个基底，包括发射；其非规范性实现示例用清漆透过权重衰减 emission。固定 Filament 的可选基底 IOR 重映射、以及灯光求值后直接相加的 emissive 不能不经适配便视为标准叠层。Sheen 也不等于切换整个 Cloth shading model；Charlie/visibility、albedo scaling 和 DFG 必须配套。KHR 示例允许用 NoV 单次查询的 albedo scaling 换取性能，因此 Filament 式简化可作为明确的实时 profile，而不是任意组合严格能量守恒的保证。[F29] [F36] [F73] [G04] [G05]
+
+**透射与体积。** 固定 Filament 的直接光只把基底漫反射乘 `1-transmission`，透射 Ft 在 IBL/背景函数加入；这不自动提供逐灯 BTDF。KHR transmission 定义包含微表面透射分量，官方 Sample Renderer 的 [逐灯循环](https://github.com/KhronosGroup/glTF-Sample-Renderer/blob/5650e2c8958801445ac0b38937a83984e3a6b278/source/Renderer/shaders/pbr.frag#L353) 也求透射。选择实现完整的直接/间接响应时，应复用同一灯循环并补齐透射分量，不能仅展示背景折射便认为两者等价。厚度的 mesh space、吸收距离的 world space，以及实例变换的处理见第 12.2 节。[F36] [F73] [G06] [G07] [G08]
+
+**薄膜。** KHR iridescenceFactor 乘强度纹理 R；厚度由纹理 G 在 minimum/maximum 间插值，单位 nm，无纹理时取 maximum，且 minimum 允许大于 maximum。原始薄膜 IOR 默认 1.3，不与场景米单位或基底 IOR 混淆。第 11.4 节的有限阶干涉和等效 F0 是具体实时求值近似，不替代这些输入语义。[F38] [G11]
 
 <a id="f12"></a>
 ## 12. 颜色合成：折射、透明、天空、雾与自发光
@@ -1522,13 +1553,17 @@ vec3 evaluateTransmission(P, E) {
     t *= exp(-P.absorption * ray.d); // Beer-Lambert；absorption 为逆场景长度
     E = optionalThinLayerInternalReflectionCorrection(E, P.transmission);
     t *= (1-E) * P.diffuseColor;
-    return t * P.transmission;
+    return t; // 外层 evaluateIBL 仅在这里返回后乘一次 transmission。
 }
 ```
 
 环境采样须结合环境亮度和曝光，屏幕背景已经预曝光，不能重复乘。粗糙透射通过不同 LOD 的颜色采样近似，没有逐微表面追踪。薄层还用一个收敛级数近似前后界面的内部反射：`E *= 1 + transmission*(1-E.g)/(1+E.g)`，随后再计算透射边界的 1-E。[F36]
 
+glTF volume 的 `thicknessFactor` 和 thicknessTexture.G 给出 mesh-space 厚度，节点变换也作用于厚度；`attenuationDistance` 则是 world-space 距离。计算 Beer–Lambert 时，吸收系数的逆长度必须与实际 world-space 路径长度配套，不能因为两个字段都是长度就一同乘实例缩放。官方 Sample Renderer 从 model matrix 提取轴向尺度并构造近似透射路径，这是示例算法，不是规范强制的完整几何求交。球体、薄层或该尺度近似应有明确适用条件，非均匀缩放/剪切不能不加说明地视为精确体积传输。[G07] [G08]
+
 色散进一步拆出四条 Solid Sphere 近似射线，对应约 486.1、546.1、589.3、656.3 nm；以 dispersion/20 和基础 IOR 的偏移生成各波段 IOR，加入像素抖动，各采一次环境或屏幕背景，最后由四个预计算 3×3 矩阵重建 RGB。吸收统一使用其中 r1 的代表路径长度。这是四样本光谱积分近似，不是只把 RGB 三个通道作屏幕平移，也不是任意精度光谱追踪。[F36]
+
+KHR dispersion 的字段语义是 `20/Abbe`，默认零表示无色散。其非规范性示例提供更轻的 RGB 三次透射：`halfSpread=(ior-1)*0.025*dispersion`，三个 IOR 为 `ior-halfSpread, ior, ior+halfSpread`；极端值需避免红通道 IOR 小于 1。这是一种可选近似，并非资产保存三个 IOR，也不是固定 Filament 当前四波长实现。采纳哪种 profile 都应保持相同标准输入，分别说明采样成本、极值和体积路径近似。[G10]
 
 ### 12.3 透明：混合公式取决于材质约定和 Draw 排序
 
@@ -1598,26 +1633,41 @@ Resolve 是多样本到单样本资源的转换，TAA 是跨帧采样重建，FX
 
 ### 13.2 TAA：投影、历史图像和重新投影组成闭环
 
-第 3 节对颜色采样加 jitter，同时保留稳定裁剪投影。TAA 使用当前深度和矩阵把当前采样位置映射到上一帧；再用邻域统计限制历史，按选项应用方差裁剪、滤波、运动自适应和历史深度拒绝。[F64]
+第 3 节对颜色采样加 jitter，同时保留稳定投影。`TaaJitterCamera` 在加入 jitter 前保存当前 `projection*view`，jitter 以渲染像素为单位记录；Shader 接收的 sample jitter 与投影偏移符号相反。所选模式可使用 Halton(2,3) 16 样本。TAA 的输出经当前邻域重建后位于 stable 输出栅格；原始 depth 与 depthHistory 仍在各帧 jittered 光栅栅格。这三种坐标不能当成同一 UV。[F34] [F64] [F78] [F79]
 
 ```cpp
-taa(current, depth, previous, matrices) {
+// 对应上游 1:1 路径；UvToClip 同时包含实际后端的 UV/clip 约定。
+taa(current, depth, previous, matrices, sampleJitter) {
     uvCurrent = currentPixelUv();
     z = depth(uvCurrent);
-    uvPrev = reprojectUsingDepthAndCameraMatrices(uvCurrent, z, matrices);
+    R = previousStableClipFromWorld * inverse(currentStableClipFromWorld) * UvToClip;
+    q = R * vec4(uvCurrent, z, 1);
+    uvPrev = ClipToUv(q.xy / q.w);
 
-    cur = reconstructCurrentNeighborhood(current, jitter);
-    hist = previous.isValid && inside(uvPrev) ? sampleHistory(uvPrev) : cur.center;
+    cur = reconstructLanczos2Neighborhood(current, sampleJitter);
+    hist = sampleHistoryWithSelectedFilter(uvPrev);
+    cur, hist = compressHdrForTemporalFiltering(cur, hist);
 
     stats = computeNeighborhoodStatistics(cur);
     hist = clipOrClampHistory(hist, stats, taaOptions);
-    valid = optionalDepthRejection(...);
+    historyDepthUv = uvPrev + (sampleJitter - previousSampleJitter) / renderExtent;
+    expectedHistoryDepth = q.z / q.w;
+    valid = optionalDepthRejectionWithJitterNeighborhoodTolerance(
+        expectedHistoryDepth, depthHistory(historyDepthUv), depthNeighborhood);
     weight = historyWeightAdjustedByMotionAndValidity(valid, ...);
-    return blendCurrentAndHistory(cur, hist, weight);
+    return expandHdrAfterTemporalFiltering(blendCurrentAndHistory(cur, hist, weight));
 }
 ```
 
-此主路径以深度和相机变换为重投影基础，并不因此具备通用逐物体速度缓冲。骨骼动画、物体独立移动、遮挡显露和透明表面会带来不同于纯相机运动的历史误差。代码中的 temporal upscaling 也有样本、配置和资源约束，不能视为任何输入都可任意叠加的最后一步放大。[F08] [F64]
+上述伪代码表示资源齐全的普通路径：没有历史时，上游以当前颜色/深度作为输入、采用当前矩阵并令 jitter 差为零，不读取未初始化历史。历史颜色可选 bilinear 或带 deringing 的 5-tap Catmull–Rom；当前颜色以 3×3 Lanczos-2 重建并限制负瓣 overshoot。历史限制可使用邻域 min/max 与九点均值/方差框的交集，clip 与 clamp 是可选策略，不是固定 0.9/0.1 混色。[F34] [F64] [F78]
+
+HDR 过滤的可逆压缩为 `c/(1+maxRGB(c))`，过滤后用 `c/(1-maxRGB(c))` 还原，并对分母极点和非法值作防护。这是 TAA 内部的数值工作域，不是最终显示 ToneMap，也不改变线性 HDR 历史的角色。可选 YCoCg 不能省略 RGB gamut/有限值约束；固定基线还保留部分权重 gamut clamp 的 FIXME，不能把所有可选分支视为无条件正确。[F64] [F78]
+
+`depthDisocclusion` 在该固定基线中默认关闭；启用时额外保留原始渲染分辨率 depth。比较 `q.z/q.w` 与 point-sampled depthHistory 的 raw Reverse-Z，两种深度差符号都可能表示表面变化；当前 3×3 深度范围和可选历史邻域用来容忍 jitter 在薄边界造成的采样跳变，不能用任意固定线性距离代替。当前/历史 depth 的 sample jitter 差只补一次，符号与当前重建使用同一接口定义。[F34] [F64] [F78]
+
+此主路径以深度和相机变换为重投影基础，并不具备通用逐对象速度缓冲。骨骼动画、物体独立移动和多层透明会带来不同于纯相机运动的历史误差；depth rejection 也不能恢复其正确前态。代码中的 temporal upscaling 有独立的样本、重建和资源约束，不等于最后追加一个任意放大操作。[F08] [F64]
+
+Physara 采用静态场景时，可复用相机-depth 重投影，无需建设对象 motion、Skin/Morph 前态。内容编辑与相机 pose 更新要分开识别：前者保守失效 TAA/SSR，后者保留静态重投影资格；确切失效 key、1:1 profile 和历史提交规则归架构。固定 Filament 的 FrameHistoryEntry 没有保存 preExposure 或在此函数显式重标定历史；Physara 若沿用预曝光变化，需要记录历史曝光并在压缩/混合前乘 `currentPreExposure/previousPreExposure`，这是项目适配，不应写成上游已经执行的行为。[F34] [F79]
 
 ### 13.3 景深：Camera 参数先转成 CoC，再调度空间滤波
 
@@ -1702,6 +1752,8 @@ view.commitFrameHistory(engine); // 轮转条目，处理最旧历史
 
 普通纹理缓存复用、图资源 last-use 释放、View 的历史环和 Vulkan 在途对象引用是四个不同层次。图内“最后一次 CPU 使用”不能自行证明原生资源已不被 GPU 使用。
 
+固定 TAA 的导出还包括启用 depthDisocclusion 时的 raw depth，并记录同次渲染的 stable projection、jitter 与采样序列位置；FrameHistory 的颜色、深度和元数据不能分别轮转。Renderer 在 renderJob 完成后调用 commitFrameHistory，这属于上游前端时序，不表示 GPU 已完成。Physara 用实际成功提交来发布完整历史代、失败不推进，并以 ticket 保护旧对象，是架构对 RHI 执行模型的采纳合同。[F03] [F08] [F34] [F79]
+
 ### 14.2 endFrame 的控制逻辑
 
 ```cpp
@@ -1772,7 +1824,7 @@ Filament 的 Executor 已经决定了要画什么、用哪个 Program、绑定�
 <a id="fa"></a>
 ## A. 源码索引
 
-所有链接固定到本文分析的 commit；行号定位主要入口，相关分支位于同一文件中。正文的代码为结构化伪代码，准确签名、平台条件和异常处理以链接源码为准。
+Filament 源码链接固定到本文分析的 commit；补充的 Khronos 扩展和 Sample Renderer 分别固定到 `7cee0fcddd5730e90d488bfb5aa2e52171483dde`、`5650e2c8958801445ac0b38937a83984e3a6b278`，核心语义另链接官方规范。行号定位主要入口，相关分支位于同一文件中。正文的代码为结构化伪代码，准确签名、平台条件和异常处理以链接源码为准；示例算法不自动变成规范要求。
 
 | 引用 | 文件 | 阅读主题 |
 |---|---|---|
@@ -1850,6 +1902,19 @@ Filament 的 Executor 已经决定了要画什么、用哪个 Program、绑定�
 | [F75] | `filament/src/ShadowMap.cpp` | 阴影相机聚焦、稳定化、LiSPSM 与纹理映射 |
 | [F76] | `filament/src/details/SkinningBuffer.cpp` | 骨骼变换打包与上传 |
 | [F77] | `filament/src/details/MorphTargetBuffer.cpp` | Morph target 纹理数据上传 |
+| [F78] | `filament/src/materials/antiAliasing/taa/taa.md` | TAA 重建、裁剪、jitter 栅格和深度拒绝的源码配套说明 |
+| [F79] | `filament/src/FrameHistory.h` | TAA 颜色/深度/矩阵/jitter 与 SSR 历史角色 |
+| [G01] | Khronos `KHR_materials_specular` | 标准字段、通道、颜色域与 F0/F90 |
+| [G02] | Khronos `KHR_materials_ior` | 普通 IOR 和零值兼容模式 |
+| [G03] | Khronos `KHR_materials_anisotropy` | 标准方向/强度与两个方向粗糙度 |
+| [G04] | Khronos `KHR_materials_clearcoat` | 层、法线与 emission 的关系 |
+| [G05] | Khronos `KHR_materials_sheen` | Charlie、albedo scaling 与性能近似 |
+| [G06] | Khronos `KHR_materials_transmission` | BTDF、资产语义与非规范性实现说明 |
+| [G07] | Khronos `KHR_materials_volume` | mesh-space 厚度和 world-space 吸收距离 |
+| [G08] | Khronos Sample Renderer `punctual.glsl` | 逐灯透射与实例厚度变换示例 |
+| [G09] | Khronos glTF 2.0 官方规范 | 核心材质缺省值和纹理语义 |
+| [G10] | Khronos `KHR_materials_dispersion` | Abbe 字段与非规范性 RGB 三采样示例 |
+| [G11] | Khronos `KHR_materials_iridescence` | 薄膜强度、厚度纹理、单位与 IOR |
 
 [F01]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/README.md#L177
 [F02]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/details/Engine.cpp#L774
@@ -1925,3 +1990,16 @@ Filament 的 Executor 已经决定了要画什么、用哪个 Program、绑定�
 [F75]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/ShadowMap.cpp#L128
 [F76]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/details/SkinningBuffer.cpp#L175
 [F77]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/details/MorphTargetBuffer.cpp#L183
+[F78]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/materials/antiAliasing/taa/taa.md
+[F79]: https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/FrameHistory.h#L33
+[G01]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_specular/README.md
+[G02]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_ior/README.md
+[G03]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_anisotropy/README.md
+[G04]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_clearcoat/README.md
+[G05]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_sheen/README.md
+[G06]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_transmission/README.md
+[G07]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_volume/README.md
+[G08]: https://github.com/KhronosGroup/glTF-Sample-Renderer/blob/5650e2c8958801445ac0b38937a83984e3a6b278/source/Renderer/shaders/punctual.glsl#L82
+[G09]: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-material-pbrmetallicroughness
+[G10]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_dispersion/README.md
+[G11]: https://github.com/KhronosGroup/glTF/blob/7cee0fcddd5730e90d488bfb5aa2e52171483dde/extensions/2.0/Khronos/KHR_materials_iridescence/README.md
