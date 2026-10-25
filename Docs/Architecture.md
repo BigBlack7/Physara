@@ -1858,6 +1858,8 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 | include/nvrhi/nvrhi.h | RHI/RHI.hpp |
 | include/nvrhi/common/resource.h | RHI/Resource.hpp |
 | include/nvrhi/common/containers.h | RHI/Containers.hpp |
+| include/nvrhi/nvrhiHLSL.h | RHI/ShaderTypes.hpp, 共享 GPU 声明, 当前仅验证 C++ profile |
+| include/nvrhi/utils.h | RHI/Utils.hpp, 外部定义随 Common 接入 |
 | src/common/state-tracking.* | RHI/Common/StateTracking.* |
 | utils、format-info、misc | RHI/Common/ 与对应公开头 |
 | include/nvrhi/validation.h、src/validation/* | RHI/Validation.hpp、RHI/Validation/ |
@@ -1880,6 +1882,12 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 这是源级接口形状与行为的映射，不宣称重命名之后仍与 NVRHI 二进制 ABI 兼容。保留 OriginalHeaderVersion/来源记录，不借机械移植修改 descriptor 的含义。
 
 允许的全局差异仅为：API 枚举增加 OpenGL、原生 GL 对象类型/创建入口、错误与调试宏适配。GL 的 sampler 合并、push constant 模拟和即时执行放在后端，不能扩张公共接口。
+
+D02-T01 的限定移植选择见 [establish-rhi-public-contract](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/design.md). 标准容器 aliases/操作名、来源子命名空间及先填充后消费的暂存构造保留; 补齐自包含 include, 不补猜测默认值. 为遵守语义键与活动 union 成员合同, BindingSetItem 的相等/哈希纳入 arrayElement 并按 type 读取有效 subresources/range, 排除 reserved/padding; BindingSetDesc 的相等/哈希纳入 trackLiveness. 这是已枚举的局部正确性例外, 不改字段/布局或扩大后端能力. 独立头/消费者编译、CPU 引用/容器与绑定键/碰撞检查及完整来源 token 差异共同验证, 不以 CPU 检查代替原生后端证据.
+
+公共头移植阶段由实际头文件组成 PhysaraRHI INTERFACE target, 不产生 .lib; Common 接入时保持消费名称并加入真实定义. 来源、命名映射、各项差异和外部定义归属集中在 [RHI 来源说明](../RHI/README.md), 参考快照不进入正式 include 或链接.
+
+同一 change 的实施核对还确认 StaticVector 的 initializer-list 构造须与默认/尺寸构造一样初始化 Base, 避免其整数组 swap 读取未初始化的剩余标量/指针槽. 维护者已确认这项局部例外, 仅补 Base(), 不改布局、逻辑容量或内容; 以部分填充构造/swap 和无增长检查验证, 不宣称性能收益.
 
 **实现规范**
 

@@ -96,7 +96,7 @@ flowchart TD
 - 工作包只有在包内目标和验收均满足时才整体完成。原生验证通过但尚未归档可标记“已验证，待归档”；未运行场景明确记录。
 - 已实施或归档的任务保留其 ID 与事实；未开始的工作包可随范围调整合并或重排，并同步计数、前置与所有当前引用，不修改归档来覆盖历史。
 
-不预先替全部任务生成 spec，不指定无依据的工期。**D00 已核查归档，D01-T01/T02 已完成并归档，下一实施目标为 D01-T03/T04**；较后阶段只在所需前置已具备时展开技术讨论与实施设计。
+不预先替全部任务生成 spec，不指定无依据的工期。**D00 和 D01-T01/T02 已归档, D01-T03 已实现但缺真实跨屏证据, T04 已通过本包检查; D02-T01 已按限定前置例外完成并归档**；其余工作包继续遵守所列前置。
 
 ### 2.3 每项统一的完成门槛
 
@@ -268,13 +268,15 @@ flowchart TD
 <a id="d02-t01"></a>
 #### D02-T01 · 机械移植完整公共接口与来源映射
 
-**职责位置：** RHI/RHI.hpp、Resource.hpp、Containers.hpp、Utils.hpp。**前置：** 本阶段入口满足。**架构依据：** [7.1](Architecture.md#rhi)。
+**职责位置：** RHI/RHI.hpp、Resource.hpp、Containers.hpp、ShaderTypes.hpp、Utils.hpp。**前置：** 本阶段入口满足, 或仅使用上述限定前置例外。**架构依据：** [7.1](Architecture.md#rhi)。
 
-- [ ] 按 Architecture 固定 NVRHI commit 移植公共类型、接口、句柄、描述符、资源状态和扩展方法，应用受控命名规则。
-- [ ] 记录上游路径/目标路径、hash、许可及非机械差异；保留未来 Vulkan 所需字段和虚函数。
-- [ ] 建立公共消费者编译检查和接口差异核对；不把 GL 暂不支持的 API 从公共合同删掉。
+- [x] 按 Architecture 固定 NVRHI commit 移植公共类型、接口、句柄、描述符、资源状态和扩展方法，应用受控命名规则。
+- [x] 记录上游路径/目标路径、hash、许可及非机械差异；保留未来 Vulkan 所需字段和虚函数。
+- [x] 建立公共消费者编译检查和接口差异核对；不把 GL 暂不支持的 API 从公共合同删掉。
 
 **完成条件：** 公共声明与固定上游有可审查的映射，业务层不出现窗口、ImGui 或 CombinedTextureSampler 公共类型。
+
+**当前状态：** 已完成并归档, 关联 [establish-rhi-public-contract](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/tasks.md). 五个公共头、来源 token/许可核对、正式 target 的独立消费者及 Debug/Release 编译/CPU 检查通过, 现有产品的真实隐藏宿主 smoke 通过. D01 的 4.1 与阶段出口仍未完成, 后续 Common/Validation 和 GL Device 能力尚未实现。
 
 <a id="d02-t02"></a>
 #### D02-T02 · 移植 Common 与 Validation 并定义初始 profile
@@ -1679,7 +1681,7 @@ flowchart TD
 | 工程位置 | 主要工作包/阶段 | 交付责任 |
 |---|---|---|
 | 根及各模块 CMakeLists.txt | D00-T02/T03、D17-T05、D19-T01 | target 关系、必要生成步骤、声明配置与部署 |
-| RHI 公共头：RHI.hpp / Resource.hpp / Containers.hpp / Utils.hpp | D02-T01 | 完整 NVRHI 公共谱系的命名移植 |
+| RHI 公共头：RHI.hpp / Resource.hpp / Containers.hpp / ShaderTypes.hpp / Utils.hpp | D02-T01 | 完整 NVRHI 公共谱系的命名移植 |
 | RHI/Common、Validation、Validation.hpp | D02-T02、D05-T03、D08-T04 | 引用、合同验证、统一状态跟踪 |
 | RHI/OpenGL.hpp、RHI/OpenGL | D02–D04、D08 | GL 工厂、资源/Shader/绑定/命令/提交/退休 |
 | Platform/DeviceHost.hpp / DeviceHost.cpp / OpenGLDeviceHost.cpp | D01-T02/T04、D04-T03、D05-T05 | 窄宿主、初始化、PresentColor/呈现、取消/退出 |
