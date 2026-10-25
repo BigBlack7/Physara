@@ -147,7 +147,8 @@ Physara/
     Platform/
         CMakeLists.txt
         DeviceHost.hpp, DeviceHost.cpp, Input.hpp, GlfwAccess.hpp
-        GlfwWindow.cpp, OpenGLDeviceHost.cpp
+        GlfwWindow.cpp, GlfwInput.cpp, OpenGLDeviceHost.cpp
+        InputState.hpp, InputState.cpp
     Engine/
         CMakeLists.txt
         Core/
@@ -183,6 +184,7 @@ Physara/
     ThirdParty/
         CMakeLists.txt
     Docs/
+        Build.md
         Architecture.md
         Developments.md
         Reference/
@@ -202,7 +204,7 @@ Physara/
 | Engine/Core | [1.2](#core)、[11.4](#diagnostics) | identity、arena、作业发布、文件/计时/诊断基础 |
 | Engine/Shader/Interface、Engine/Shader | [1.3](#shader-build) | 生成 ABI、编译包、反射与依赖 |
 | Runtime/Main.cpp | [1.4](#runtime)、[0.6](#frame-flow)、[11.5](#shutdown) | 唯一组合入口、主循环与关闭顺序 |
-| Platform/DeviceHost、GlfwWindow | [1.5](#platform-start)、[2.1](#input)、[10.3](#present)、[11.5](#shutdown) | 创建、输入、呈现与原生资源退出 |
+| Platform/DeviceHost、GlfwWindow、GlfwInput、InputState | [1.5](#platform-start)、[2.1](#input)、[10.3](#present)、[11.5](#shutdown) | 创建、输入、呈现与原生资源退出 |
 | Platform/Input、GlfwAccess | [2.1](#input)、[2.2](#editor-input) | 只读事件及受限 GLFW/ImGui 互操作 |
 | Editor/Session、Panels | [2.2](#editor-input) | 只读展示、布局与领域请求 |
 | Editor/Commands | [2.3](#edits) | 编辑事务、Undo/Redo、版本与脏标记 |
@@ -631,7 +633,9 @@ Platform 保留为小型独立静态库，封闭 OS/原生设备寿命。它不�
 | 实现位置 | 真实状态与责任 |
 |---|---|
 | DeviceHost.hpp/.cpp | 生命周期、线程断言、平台请求与错误状态 |
-| GlfwWindow.cpp | GLFW 初始化、窗口、回调、尺寸/焦点与输入累积 |
+| GlfwWindow.cpp | GLFW 初始化、窗口/context 建立和原生生命周期退出 |
+| GlfwInput.cpp | 原生输入回调、窗口事实观察、事件泵与请求适配 |
+| InputState.hpp/.cpp | DeviceHost 私有输入状态、双事件缓冲和只读发布，不调用原生 API |
 | OpenGLDeviceHost.cpp | context、RHI GL 工厂、PresentColor、窗口交换 |
 | Input.hpp | WindowState、HostFrameInput、事件与请求值类型 |
 | GlfwAccess.hpp | 只供私有 UI 适配借用类型化 GLFWwindow* |
@@ -677,14 +681,14 @@ GLFW 初始化/事件/窗口创建销毁按其主线程限制执行；Physara �
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| GLFW 回调、窗口焦点/尺寸/鼠标状态 | HostFrameInput、WindowState、平台请求结果 | Platform/Input.hpp、GlfwWindow.cpp | Editor 输入路由 / Runtime |
+| GLFW 回调、窗口焦点/尺寸/鼠标状态 | HostFrameInput、WindowState、平台请求结果 | Platform/Input.hpp、私有 InputState、GlfwInput.cpp | Editor 输入路由 / Runtime |
 
 ```cpp
 struct WindowState
 {
-    Float2 clientSizeLogical;
-    Extent2D framebufferSizePixels;
-    Float2 contentScale;
+    WindowExtent clientSizeLogical;
+    WindowExtent framebufferSizePixels;
+    ContentScale contentScale;
     bool focused;
     bool iconified;
     bool closeRequested;
@@ -696,7 +700,7 @@ struct HostFrameInput
     uint64_t sequence;
     WindowState window;
     InputSnapshot state;
-    Span<const InputEvent> events;
+    std::span<const InputEvent> events;
 };
 ```
 
@@ -3355,6 +3359,8 @@ Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初
 | 内容 | 权威位置 | 更新方式 |
 |---|---|---|
 | 通用行为/C++/图形准则 | 根 AGENTS.md | 不写 Physara 专用模块方案 |
+| 项目介绍、展示与文档导航 | 根 README.md | 保持简短的项目名片, 不随每次 change 累加 API、阶段进展或验收记录 |
+| 当前构建工具、命令与运行选项 | [Docs/Build.md](Build.md) | 随实际构建和产品入口更新; API 合同引用公开头, 验收状态引用 Developments/change |
 | 当前 Physara 路线与各单元实现约束 | Docs/Architecture.md | 中层架构：结合 Reference 与维护者定位采纳合同，长期变化同步更新 |
 | 全流程阶段、依赖与工作包验收 | Docs/Developments.md | 根据 AGENTS/Architecture 制定顺序，完成后据证据勾选，不另立架构真相 |
 | 已采纳可观察行为 | openspec/specs | 通过原生 delta/sync 工作流维护 |

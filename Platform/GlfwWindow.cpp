@@ -1,6 +1,5 @@
 #include "DeviceHostInternal.hpp"
 
-#include <algorithm>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -59,21 +58,6 @@ namespace
         return true;
     }
 
-    void MergeCleanupError(std::optional<HostError> &first, std::optional<HostError> next)
-    {
-        if (!next)
-        {
-            return;
-        }
-        if (!first)
-        {
-            first = std::move(next);
-            return;
-        }
-        constexpr auto MaxCount = std::numeric_limits<std::uint64_t>::max();
-        const auto additional = next->additionalNativeErrors == MaxCount ? MaxCount : next->additionalNativeErrors + 1;
-        first->additionalNativeErrors += std::min(additional, MaxCount - first->additionalNativeErrors);
-    }
 }
 
 namespace Physara::Platform::Detail
@@ -235,6 +219,7 @@ namespace Physara::Platform::Detail
         std::optional<HostError> first;
         if (state.window != nullptr)
         {
+            MergeCleanupError(first, ReleaseWindowInput(state));
             BeginNativeOperation(state);
             glfwSetWindowUserPointer(state.window, nullptr);
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
@@ -286,6 +271,51 @@ namespace Physara::Platform::Detail
     }
 
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+    void DeviceHostChecks::InjectInput(DeviceHost &host, const InputEvent &event)
+    {
+        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->stopped)
+        {
+            throw std::logic_error("Input checks require a live owner thread");
+        }
+        host.m_State->input.Record(event);
+    }
+
+    void DeviceHostChecks::SetInputCounters(DeviceHost &host, std::uint64_t sequence, std::uint64_t revision)
+    {
+        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->stopped)
+        {
+            throw std::logic_error("Input counter checks require a live owner thread");
+        }
+        host.m_State->input.SetCountersForChecks(sequence, revision);
+    }
+
+    InputSnapshot DeviceHostChecks::InspectInput(DeviceHost &host)
+    {
+        if (host.m_State->ownerThread != std::this_thread::get_id())
+        {
+            throw std::logic_error("Input inspection requires the owner thread");
+        }
+        return host.m_State->input.Snapshot();
+    }
+
+    int DeviceHostChecks::InspectCursorMode(DeviceHost &host)
+    {
+        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->window == nullptr)
+        {
+            throw std::logic_error("Native cursor inspection requires an owned window");
+        }
+        return glfwGetInputMode(host.m_State->window, GLFW_CURSOR);
+    }
+
+    bool DeviceHostChecks::InspectCloseFlag(DeviceHost &host)
+    {
+        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->window == nullptr)
+        {
+            throw std::logic_error("Native close inspection requires an owned window");
+        }
+        return glfwWindowShouldClose(host.m_State->window) == GLFW_TRUE;
+    }
+
     std::uint64_t DeviceHostChecks::SetLastGenerationWhenIdle(std::uint64_t value)
     {
         std::scoped_lock lock(s_Process.mutex);

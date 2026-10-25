@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <variant>
+
+#include "Input.hpp"
 
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
@@ -92,7 +96,11 @@ namespace Physara::Platform
         EnvironmentQuery,
         SwapInterval,
         Ready,
-        Shutdown
+        Shutdown,
+        InputSetup,
+        EventPolling,
+        EventWait,
+        RequestApplication
     };
 
     enum class HostErrorReason : std::uint8_t
@@ -110,7 +118,15 @@ namespace Physara::Platform
         EnvironmentQuery,
         SwapInterval,
         Cleanup,
-        InternalFailure
+        InternalFailure,
+        Stopped,
+        ReentrantCall,
+        InputOverflow,
+        InputInvalidData,
+        CounterExhausted,
+        EventProcessing,
+        RequestApplication,
+        RequestRejected
     };
 
     struct HostError
@@ -123,14 +139,19 @@ namespace Physara::Platform
         std::optional<Core::ErrorContext> cleanupError;
         std::uint64_t additionalCleanupErrors = 0;
         double elapsedSeconds = 0.0;
+        std::optional<std::size_t> requestIndex;
     };
+
+    // 纯值格式化, 无分配/原生操作; 描述在返回后自持, 可跨线程读取.
+    [[nodiscard]] Core::BoundedText DescribeHostError(const HostError &error) noexcept;
 
     // 首次 Create 必须从进程 main 线程调用, 且本类独占进程 GLFW 生命周期.
     // diagnostics 必须活到本 owner 完成关闭; 所有活跃宿主操作限创建线程.
     class DeviceHost final
     {
-      public:
+    public:
         using CreateResult = std::variant<std::unique_ptr<DeviceHost>, HostError>;
+        using PollResult = std::variant<HostFrameInput, HostError>;
 
         [[nodiscard]] static CreateResult Create(const HostDesc &desc, Core::Diagnostics &diagnostics) noexcept;
         ~DeviceHost();
@@ -145,7 +166,14 @@ namespace Physara::Platform
         // 自持值拷贝可跨线程/关闭保留; 活跃 host 本身不并发访问.
         [[nodiscard]] HostInfo GetInfo() const noexcept;
 
-      private:
+        // 以下入口限 owner/main 线程且不可重入. 接受的 poll 开始即结束上批 events 借用.
+        [[nodiscard]] PollResult PollEvents() noexcept;
+        // 有限正秒; 处理回调但不发布, 不缩短已有 events 借用.
+        [[nodiscard]] std::optional<HostError> WaitForEvents(double timeoutSeconds) noexcept;
+        // 借用到返回, 顺序执行, 不存储队列; native 失败允许 prefix 已生效, 由 requestIndex 定位.
+        [[nodiscard]] std::optional<HostError> ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept;
+
+    private:
         explicit DeviceHost(std::unique_ptr<Detail::DeviceHostState> state) noexcept;
         std::unique_ptr<Detail::DeviceHostState> m_State;
         friend struct Detail::DeviceHostFactory;

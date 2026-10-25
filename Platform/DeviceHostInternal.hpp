@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeviceHost.hpp"
+#include "InputState.hpp"
 
 #include <chrono>
 #include <source_location>
@@ -42,6 +43,11 @@ namespace Physara::Platform::Detail
         bool initialized = false;
         bool ready = false;
         bool stopped = false;
+        InputState input;
+        std::optional<HostError> inputFailure;
+        bool inputCallbacksInstalled = false;
+        bool inputAccepting = false;
+        bool operationActive = false;
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
         HostCheckConfig checks;
 #endif
@@ -51,6 +57,8 @@ namespace Physara::Platform::Detail
                                       std::string_view message,
                                       std::source_location source = std::source_location::current()) noexcept;
     void ReportError(Core::Diagnostics &diagnostics, const HostError &error) noexcept;
+    void AttachCleanupFailure(HostError &primary, const HostError &cleanup) noexcept;
+    void MergeCleanupError(std::optional<HostError> &first, std::optional<HostError> next) noexcept;
     [[noreturn]] void TerminateForContract(std::string_view message) noexcept;
 
     [[nodiscard]] std::optional<HostError> ReserveProcess(DeviceHostState &state);
@@ -64,6 +72,14 @@ namespace Physara::Platform::Detail
     [[nodiscard]] std::optional<HostError> InspectEnvironment(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> RequestSwapInterval(DeviceHostState &state, bool vsync);
     [[nodiscard]] std::optional<HostError> ReleaseNativeState(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> InitializeWindowInput(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> ReleaseWindowInput(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> ReleaseRelativeCursor(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> PollNativeInput(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> WaitNativeInput(DeviceHostState &state, double timeoutSeconds);
+    [[nodiscard]] std::optional<HostError> ApplyNativeRequests(DeviceHostState &state,
+                                                               std::span<const HostRequest> requests);
+    [[nodiscard]] std::optional<HostError> TakeInputFault(DeviceHostState &state);
 
     struct DeviceHostFactory
     {

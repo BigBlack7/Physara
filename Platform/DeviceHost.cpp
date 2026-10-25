@@ -1,5 +1,6 @@
 #include "DeviceHost.hpp"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -16,10 +17,33 @@ namespace
 {
     using namespace Physara::Platform;
 
-    constexpr std::array<std::string_view, 11> StageNames = {
-        "Validation",   "Reservation",      "GlfwInitialization", "WindowCreation", "ContextActivation",
-        "EntryLoading", "EnvironmentQuery", "SwapInterval",       "Ready",          "Shutdown",
-        "Unknown"};
+#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+    std::optional<Detail::HostCheckConfig> &NextChecks()
+    {
+        static std::optional<Detail::HostCheckConfig> value;
+        return value;
+    }
+    using CheckObserver = void (*)(HostStage, Physara::Core::Diagnostics &);
+    CheckObserver &ObserverSlot()
+    {
+        static CheckObserver observer = nullptr;
+        return observer;
+    }
+    void ObserveOperation(HostStage stage, Physara::Core::Diagnostics &diagnostics)
+    {
+        if (auto observer = ObserverSlot())
+        {
+            observer(stage, diagnostics);
+        }
+    }
+#endif
+
+    constexpr std::array<std::string_view, 15> StageNames = {
+        "Validation",       "Reservation",        "GlfwInitialization",
+        "WindowCreation",   "ContextActivation",  "EntryLoading",
+        "EnvironmentQuery", "SwapInterval",       "Ready",
+        "Shutdown",         "InputSetup",         "EventPolling",
+        "EventWait",        "RequestApplication", "Unknown"};
 
     void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
     {
@@ -68,6 +92,10 @@ namespace
         {
             error = Detail::RequestSwapInterval(state, desc.vsync);
         }
+        if (!error)
+        {
+            error = Detail::InitializeWindowInput(state);
+        }
         return error;
     }
 
@@ -92,6 +120,119 @@ namespace
             static_cast<void>(diagnostics.Write(Physara::Core::Severity::Info, value.View()));
         }
     }
+    class OperationScope final
+    {
+    public:
+        OperationScope(Detail::DeviceHostState &state, HostStage stage) noexcept : m_State(state)
+        {
+            m_State.operationActive = true;
+            m_State.stage = stage;
+        }
+        ~OperationScope()
+        {
+            m_State.operationActive = false;
+        }
+        OperationScope(const OperationScope &) = delete;
+        OperationScope &operator=(const OperationScope &) = delete;
+        OperationScope(OperationScope &&) = delete;
+        OperationScope &operator=(OperationScope &&) = delete;
+
+    private:
+        Detail::DeviceHostState &m_State;
+    };
+
+    template <typename Operation>
+    std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
+                                               Operation &&operation) noexcept
+    {
+        const auto started = std::chrono::steady_clock::now();
+        const auto reject = [&](HostErrorReason reason, std::string_view message)
+        {
+            auto error = Detail::MakeError(&state, reason, stage, message);
+            error.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            return error;
+        };
+        if (state.ownerThread != std::this_thread::get_id())
+        {
+            return reject(HostErrorReason::WrongThread, "Input operation requires the owner thread");
+        }
+        if (state.operationActive)
+        {
+            return reject(HostErrorReason::ReentrantCall, "Native host operation is not reentrant");
+        }
+        if (state.stopped)
+        {
+            return reject(HostErrorReason::Stopped, "Input operation requires a live host");
+        }
+        if (state.inputFailure)
+        {
+            return state.inputFailure;
+        }
+        if (!state.ready)
+        {
+            return reject(HostErrorReason::Stopped, "Host is not ready for input");
+        }
+        OperationScope scope(state, stage);
+        std::optional<HostError> error;
+        try
+        {
+#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+            ObserveOperation(stage, state.diagnostics);
+#endif
+            error = operation();
+        }
+        catch (const std::exception &failure)
+        {
+            error = Detail::MakeError(&state, HostErrorReason::InternalFailure, stage, failure.what());
+        }
+        catch (...)
+        {
+            error =
+                Detail::MakeError(&state, HostErrorReason::InternalFailure, stage, "Unknown input operation failure");
+        }
+        if (!error)
+        {
+            return std::nullopt;
+        }
+        const bool rejected = (error->reason == HostErrorReason::InvalidConfiguration ||
+                               error->reason == HostErrorReason::RequestRejected) &&
+                              !error->cleanupError;
+        if (!rejected)
+        {
+            state.ready = false;
+            state.inputAccepting = false;
+            if (error->context.nativeCode)
+            {
+                if (auto input = Detail::TakeInputFault(state))
+                {
+                    error->context.description.Append("; ");
+                    error->context.description.Append(input->context.description.View());
+                }
+            }
+            state.input.ResetForFailure();
+            // 清理也可能同步触发窗口回调; 先停止输入入口, 全局错误捕获仍保持有效.
+            state.inputFailure = error;
+            try
+            {
+                if (auto cleanup = Detail::ReleaseRelativeCursor(state))
+                {
+                    Detail::AttachCleanupFailure(*error, *cleanup);
+                }
+            }
+            catch (...)
+            {
+                Detail::TerminateForContract("Input failure cleanup synchronization failed");
+            }
+        }
+        error->elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        if (!rejected)
+        {
+            state.inputFailure = error;
+        }
+        Detail::ReportError(state.diagnostics, *error);
+        return error;
+    }
+
 }
 
 namespace Physara::Platform::Detail
@@ -117,29 +258,39 @@ namespace Physara::Platform::Detail
 
     void ReportError(Core::Diagnostics &diagnostics, const HostError &error) noexcept
     {
-        const auto stageIndex = static_cast<std::size_t>(error.stage);
-        Core::BoundedText message("DeviceHost.");
-        message.Append(StageNames[stageIndex < StageNames.size() - 1 ? stageIndex : StageNames.size() - 1]);
-        if (error.attempt)
+        const auto text = DescribeHostError(error);
+        static_cast<void>(diagnostics.Write(Core::Severity::Error, text.View(), error.context.source));
+    }
+
+    void AttachCleanupFailure(HostError &primary, const HostError &cleanup) noexcept
+    {
+        if (!primary.cleanupError)
         {
-            AppendIdentity(message, *error.attempt);
+            primary.cleanupError = cleanup.context;
+            primary.additionalCleanupErrors = cleanup.additionalNativeErrors;
         }
-        if (error.context.nativeCode)
+        else
         {
-            message.Append(error.context.nativeCode->domain == Core::NativeErrorDomain::Glfw ? " GLFW=" : " GL=");
-            std::array<char, 32> number{};
-            const auto result =
-                std::to_chars(number.data(), number.data() + number.size(), error.context.nativeCode->value);
-            message.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
+            constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+            const auto count = cleanup.additionalNativeErrors == max ? max : cleanup.additionalNativeErrors + 1;
+            primary.additionalCleanupErrors += std::min(count, max - primary.additionalCleanupErrors);
         }
-        message.Append(": ");
-        message.Append(error.context.description.View());
-        if (error.cleanupError)
+    }
+
+    void MergeCleanupError(std::optional<HostError> &first, std::optional<HostError> next) noexcept
+    {
+        if (!next)
         {
-            message.Append("; cleanup: ");
-            message.Append(error.cleanupError->description.View());
+            return;
         }
-        static_cast<void>(diagnostics.Write(Core::Severity::Error, message.View(), error.context.source));
+        if (!first)
+        {
+            first = std::move(next);
+            return;
+        }
+        constexpr auto MaxCount = std::numeric_limits<std::uint64_t>::max();
+        const auto additional = next->additionalNativeErrors == MaxCount ? MaxCount : next->additionalNativeErrors + 1;
+        first->additionalNativeErrors += std::min(additional, MaxCount - first->additionalNativeErrors);
     }
 
     [[noreturn]] void TerminateForContract(std::string_view message) noexcept
@@ -164,8 +315,7 @@ namespace Physara::Platform::Detail
             {
                 if (auto cleanup = ReleaseNativeState(*host->m_State))
                 {
-                    error.cleanupError = cleanup->context;
-                    error.additionalCleanupErrors = cleanup->additionalNativeErrors;
+                    AttachCleanupFailure(error, *cleanup);
                 }
             }
             error.elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -185,6 +335,11 @@ namespace Physara::Platform::Detail
             {
                 state->checks = *checks;
             }
+            else if (NextChecks())
+            {
+                state->checks = *NextChecks();
+                NextChecks().reset();
+            }
 #endif
             host = std::unique_ptr<DeviceHost>(new DeviceHost(std::move(state)));
             if (auto error = ReserveProcess(*host->m_State))
@@ -199,6 +354,9 @@ namespace Physara::Platform::Detail
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             host->m_State->stage = HostStage::Ready;
             host->m_State->ready = true;
+#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+            ObserveOperation(HostStage::Ready, diagnostics);
+#endif
             ReportReady(diagnostics, host->m_State->info);
             return host;
         }
@@ -231,6 +389,14 @@ namespace Physara::Platform::Detail
     }
 
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+    void DeviceHostChecks::SetNextCreateConfig(const HostCheckConfig &config)
+    {
+        NextChecks() = config;
+    }
+    void DeviceHostChecks::SetOperationObserver(void (*observer)(HostStage, Core::Diagnostics &))
+    {
+        ObserverSlot() = observer;
+    }
     DeviceHost::CreateResult DeviceHostChecks::Create(const HostDesc &desc, Core::Diagnostics &diagnostics,
                                                       const HostCheckConfig &config) noexcept
     {
@@ -241,6 +407,40 @@ namespace Physara::Platform::Detail
 
 namespace Physara::Platform
 {
+    Core::BoundedText DescribeHostError(const HostError &error) noexcept
+    {
+        const auto stageIndex = static_cast<std::size_t>(error.stage);
+        Core::BoundedText message("DeviceHost.");
+        message.Append(StageNames[stageIndex < StageNames.size() - 1 ? stageIndex : StageNames.size() - 1]);
+        if (error.attempt)
+        {
+            AppendIdentity(message, *error.attempt);
+        }
+        if (error.context.nativeCode)
+        {
+            message.Append(error.context.nativeCode->domain == Core::NativeErrorDomain::Glfw ? " GLFW=" : " GL=");
+            std::array<char, 32> number{};
+            const auto result =
+                std::to_chars(number.data(), number.data() + number.size(), error.context.nativeCode->value);
+            message.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
+        }
+        if (error.requestIndex)
+        {
+            std::array<char, 32> number{};
+            const auto result = std::to_chars(number.data(), number.data() + number.size(), *error.requestIndex);
+            message.Append(" request=");
+            message.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
+        }
+        message.Append(": ");
+        message.Append(error.context.description.View());
+        if (error.cleanupError)
+        {
+            message.Append("; cleanup: ");
+            message.Append(error.cleanupError->description.View());
+        }
+        return message;
+    }
+
     DeviceHost::DeviceHost(std::unique_ptr<Detail::DeviceHostState> state) noexcept : m_State(std::move(state))
     {
     }
@@ -250,6 +450,10 @@ namespace Physara::Platform
         if (m_State->ownerThread != std::this_thread::get_id())
         {
             Detail::TerminateForContract("DeviceHost destroyed on a non-owner thread");
+        }
+        if (m_State->operationActive)
+        {
+            Detail::TerminateForContract("DeviceHost destroyed during an active native operation");
         }
         static_cast<void>(Shutdown());
     }
@@ -266,8 +470,20 @@ namespace Physara::Platform
             return Detail::MakeError(m_State.get(), HostErrorReason::WrongThread, HostStage::Shutdown,
                                      "Shutdown requires the host owner thread");
         }
+        if (m_State->operationActive)
+        {
+            return Detail::MakeError(m_State.get(), HostErrorReason::ReentrantCall, HostStage::Shutdown,
+                                     "Shutdown is not reentrant");
+        }
+        OperationScope scope(*m_State, HostStage::Shutdown);
         try
         {
+#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+            if (!m_State->stopped)
+            {
+                ObserveOperation(HostStage::Shutdown, m_State->diagnostics);
+            }
+#endif
             auto error = Detail::ReleaseNativeState(*m_State);
             if (error)
             {
@@ -289,5 +505,45 @@ namespace Physara::Platform
     HostInfo DeviceHost::GetInfo() const noexcept
     {
         return m_State->info;
+    }
+
+    DeviceHost::PollResult DeviceHost::PollEvents() noexcept
+    {
+        std::optional<HostFrameInput> frame;
+        auto error = RunInputOperation(*m_State, HostStage::EventPolling,
+                                       [&]() -> std::optional<HostError>
+                                       {
+                                           if (auto failure = Detail::PollNativeInput(*m_State))
+                                           {
+                                               return failure;
+                                           }
+                                           frame = m_State->input.Publish();
+                                           if (!frame)
+                                           {
+                                               if (auto failure = Detail::TakeInputFault(*m_State))
+                                               {
+                                                   return failure;
+                                               }
+                                               return Detail::MakeError(m_State.get(), HostErrorReason::InternalFailure,
+                                                                        HostStage::EventPolling,
+                                                                        "Publication failed without input fault");
+                                           }
+                                           return std::nullopt;
+                                       });
+        if (error)
+        {
+            return *error;
+        }
+        return *frame;
+    }
+    std::optional<HostError> DeviceHost::WaitForEvents(double timeoutSeconds) noexcept
+    {
+        return RunInputOperation(*m_State, HostStage::EventWait,
+                                 [&] { return Detail::WaitNativeInput(*m_State, timeoutSeconds); });
+    }
+    std::optional<HostError> DeviceHost::ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept
+    {
+        return RunInputOperation(*m_State, HostStage::RequestApplication,
+                                 [&] { return Detail::ApplyNativeRequests(*m_State, requests); });
     }
 }

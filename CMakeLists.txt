@@ -14,7 +14,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 add_subdirectory(ThirdParty)
 
 # Core 先于 Platform 定义; 模块按实际源文件声明标准, 警告与单向依赖.
-# Editor/Runtime 尚无实现, 不创建空库或不可运行的产品程序.
+# Runtime 只装配已有 Core/Platform; 尚无实现的模块不创建空库.
 add_subdirectory(RHI)
 add_subdirectory(Engine)
 add_subdirectory(Platform)

@@ -192,7 +192,7 @@ flowchart TD
 
 **D00 阶段出口：** 在新构建目录完成声明配置的 configure/build；CMake 组织、依赖记录、资源归属和文档一致，当前未实现的能力清楚可见。
 
-**当前状态：** 轻量工程初始化已核查并归档，关联 [establish-d00-baseline](../openspec/changes/archive/2026-10-22-establish-d00-baseline/tasks.md)。当前第三方源码的干净 Debug/Release 构建、缺失源码诊断、文档链接与 OpenSpec 严格结构校验通过；业务程序和 GPU 能力尚未实现，资源来源未知项保留明确记录。
+**当前状态：** 轻量工程初始化已核查并归档，关联 [establish-d00-baseline](../openspec/changes/archive/2026-10-22-establish-d00-baseline/tasks.md)。该阶段的第三方干净 Debug/Release 构建、缺失源码诊断、文档链接与 OpenSpec 严格结构校验通过；归档时只交付工程基线，当前运行期进展见下方 D01，资源来源未知项保留明确记录。
 
 <a id="dev-d01"></a>
 ### D01 · 建立 Core 与窗口宿主的可靠寿命
@@ -229,28 +229,32 @@ flowchart TD
 <a id="d01-t03"></a>
 #### D01-T03 · 实现窗口状态与有序输入快照
 
-**职责位置：** Platform/Input.hpp、GlfwWindow。**前置：** [D01-T02](#d01-t02)。**架构依据：** [2.1](Architecture.md#input)、[conventions](Architecture.md#conventions)。
+**职责位置：** Platform/Input.hpp、InputState、GlfwInput、GlfwWindow。**前置：** [D01-T02](#d01-t02)。**架构依据：** [2.1](Architecture.md#input)、[conventions](Architecture.md#conventions)。
 
-- [ ] 采集逻辑尺寸、framebuffer 像素尺寸、content scale、焦点、鼠标键盘与文本，形成有序事件和 poll 后只读快照。
-- [ ] 定义按键释放、失焦清理、鼠标捕获和 closeRequested；平台请求在确定边界应用。
+- [x] 采集逻辑尺寸、framebuffer 像素尺寸、content scale、焦点、鼠标键盘与文本，形成有序事件和 poll 后只读快照。
+- [x] 定义按键释放、失焦清理、鼠标捕获和 closeRequested；平台请求在确定边界应用。
 - [ ] 检查 DPI/跨屏比例、零尺寸、快速 resize 和文本输入，确认单位转换只在约定边界发生。
 
 **完成条件：** 输入和尺寸不依赖初始窗口值；关闭请求由上层解释，窗口不会在回调里自行销毁。
+
+**当前状态：** 已实现，原生跨屏验收待补；关联 [establish-window-input-runtime](../openspec/changes/establish-window-input-runtime/tasks.md)。Debug/Release 的输入边界、双 bank、快速 resize、Win32 字符分发、焦点和实际光标限制/释放、关闭取消、ImGui 回调链及故障/重建检查通过。逻辑坐标、framebuffer 像素和 content scale 独立；当前只有 1 个 150% 显示器，真实跨屏比例变化未覆盖，第三项和 D01 出口保持未完成。零 framebuffer 的暂停/恢复已由实际输入算法检查，未宣称本机最小化自然产生零尺寸。
 
 <a id="d01-t04"></a>
 #### D01-T04 · 建立单产品入口及分阶段退出
 
 **职责位置：** Runtime/Main.cpp。**前置：** [D01-T02](#d01-t02)、[D01-T03](#d01-t03)。**架构依据：** [1.4](Architecture.md#runtime)、[frame-flow](Architecture.md#frame-flow)、[11.5](Architecture.md#shutdown)。
 
-- [ ] Main.cpp 只装配当前存在的 Core/DeviceHost，保留后续 Editor、RenderEngine 的依赖方向；不创建第二个产品入口。
-- [ ] 落实 poll、关闭/最小化判断与平台请求的基本顺序，暂不宣称具备场景渲染能力。
-- [ ] 检查正常、初始化失败及用户关闭的逆依赖释放；后续每引入一个实际 owner 就扩充同一退出路径。
+- [x] Main.cpp 只装配当前存在的 Core/DeviceHost，保留后续 Editor、RenderEngine 的依赖方向；不创建第二个产品入口。
+- [x] 落实 poll、关闭/最小化判断与平台请求的基本顺序，暂不宣称具备场景渲染能力。
+- [x] 检查正常、初始化失败及用户关闭的逆依赖释放；后续每引入一个实际 owner 就扩充同一退出路径。
 
 **完成条件：** 启动程序与隐藏窗口检查复用同一宿主；最小化不创建零尺寸 GPU 目标。
 
+**当前状态：** 已实现并通过本工作包检查，change 尚未归档；关联 [establish-window-input-runtime](../openspec/changes/establish-window-input-runtime/tasks.md)。唯一 Physara 产品的可见/隐藏启动、五项选项、0/2/1 返回码、有限事件等待和逆依赖关闭已通过 Debug/Release 生产构建与进程检查；实际 Main.cpp 的隔离检查覆盖初始化、运行、关闭、诊断/输出及复合失败。当前没有请求生产者，不增加空队列；后续 Editor 使用已验证的同一请求边界。T03 的跨屏环境缺口仍阻止 D01 总出口。
+
 **D01 阶段出口：** 单入口可反复启动/关闭；初始化失败、失焦、DPI 变化和零像素窗口均有确定行为，全部原生对象在所属线程释放。
 
-**当前状态：** D01-T01/T02 已完成并归档，D01-T03/T04 尚未实施；当前交付 Core/Platform 静态库，尚无产品程序、输入快照、RHI Device 或渲染画面，D01 总出口未通过。
+**当前状态：** D01-T01/T02 已完成并归档，D01-T03 已实现但缺真实跨屏 DPI 证据，D01-T04 本包检查通过。当前交付 Core/Platform 静态库和可运行的 Physara 事件程序，提供有序输入、窗口事实与安全退出；RHI Device 和渲染画面尚未实现。D01 总出口保留未通过，不把统一内部坐标或单屏/纯值检查代替跨屏实测。
 
 <a id="dev-d02"></a>
 ### D02 · 移植 RHI 合同并实现原生资源
@@ -258,6 +262,8 @@ flowchart TD
 **性质：** 基线。**入口：** [D01](#dev-d01) 的阶段出口通过。
 
 **阶段目标：** 保留 NVRHI 完整公共谱系，先实现基础 OpenGL 资源与可验证的设备/资源生命周期。
+
+**当前前置例外：** 维护者允许保留 D01 的 4.1 跨屏环境验收，先在新 change 中推进 D02-T01 的公共合同、来源映射和编译核对；原因、适用范围与退出验证见 [当前 change 的收尾决定](../openspec/changes/establish-window-input-runtime/design.md#closeout)。D01 出口仍未通过，不将此例外扩展为取消其他任务前置。
 
 <a id="d02-t01"></a>
 #### D02-T01 · 机械移植完整公共接口与来源映射
@@ -1677,7 +1683,7 @@ flowchart TD
 | RHI/Common、Validation、Validation.hpp | D02-T02、D05-T03、D08-T04 | 引用、合同验证、统一状态跟踪 |
 | RHI/OpenGL.hpp、RHI/OpenGL | D02–D04、D08 | GL 工厂、资源/Shader/绑定/命令/提交/退休 |
 | Platform/DeviceHost.hpp / DeviceHost.cpp / OpenGLDeviceHost.cpp | D01-T02/T04、D04-T03、D05-T05 | 窄宿主、初始化、PresentColor/呈现、取消/退出 |
-| Platform/Input.hpp / GlfwWindow.cpp / GlfwAccess.hpp | D01-T03、D04-T01 | 输入状态/单位、窗口事件、Editor 私有适配借用 |
+| Platform/Input.hpp / InputState / GlfwInput.cpp / GlfwAccess.hpp | D01-T03、D04-T01 | 输入状态/单位、窗口事件、Editor 私有适配借用 |
 | Engine/Core | D01-T01、D04-T04、D06-T01、D08-T07、D16-T06 | 身份/计时日志、按实际消费接入 arena/作业/IO/取消/变更通知 |
 | Engine/Asset | D06-T01/T02、D12/D13、D16-T01/T02 | glTF/GLB 标准导入/发布、扩展、校验与重导入 |
 | Engine/Scene | D06-T03/T04、D07-T02/T03、D16-T02 | 实例/层级/变换、可保存快照与候选场景校验、主相机引用、静态创作参数、内容版本 |
@@ -1716,4 +1722,4 @@ flowchart TD
 4. **完成工作包：** 对包内目标与完成条件逐项核对，关联原生 change 和已有证据；只有已证明部分可勾选。
 5. **通过阶段出口：** 汇总实际支持 profile、剩余限制和下一阶段前置。可选项明确是否选择，不影响已定义基线的完成范围。
 
-D00 工程基线已归档，运行期工作仍未实施，下一步按 D01 的窗口闭环推进。M1 之前优先解决输入到窗口的真实链路；M1 之后以现有基线逐项扩展。每次实施的技术细节在对应 spec/design 中确定，避免计划先于实际调研冻结全部算法参数和设备预算。
+D00 工程基线和 D01-T01/T02 已归档，D01-T03/T04 已实现当前窗口事件闭环；真实跨屏 DPI 验收补足后才确认 D01 出口。M1 之前优先解决输入到窗口的真实链路；M1 之后以现有基线逐项扩展。每次实施的技术细节在对应 spec/design 中确定，避免计划先于实际调研冻结全部算法参数和设备预算。

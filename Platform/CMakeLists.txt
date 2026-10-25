@@ -6,6 +6,10 @@ add_library(PhysaraPlatform STATIC
     GlfwAccess.hpp
     GlfwWindow.cpp
     OpenGLDeviceHost.cpp
+    Input.hpp
+    InputState.hpp
+    InputState.cpp
+    GlfwInput.cpp
 )
 target_include_directories(PhysaraPlatform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(PhysaraPlatform PUBLIC PhysaraCore PRIVATE glfw glad)
