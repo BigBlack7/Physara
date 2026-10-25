@@ -96,7 +96,7 @@ flowchart TD
 - 工作包只有在包内目标和验收均满足时才整体完成。原生验证通过但尚未归档可标记“已验证，待归档”；未运行场景明确记录。
 - 已实施或归档的任务保留其 ID 与事实；未开始的工作包可随范围调整合并或重排，并同步计数、前置与所有当前引用，不修改归档来覆盖历史。
 
-不预先替全部任务生成 spec，不指定无依据的工期。**D00 已核查归档，下一实施目标为 D01**；较后阶段只在所需前置已具备时展开技术讨论与实施设计。
+不预先替全部任务生成 spec，不指定无依据的工期。**D00 已核查归档，D01-T01/T02 已完成并归档，下一实施目标为 D01-T03/T04**；较后阶段只在所需前置已具备时展开技术讨论与实施设计。
 
 ### 2.3 每项统一的完成门槛
 
@@ -206,21 +206,25 @@ flowchart TD
 
 **职责位置：** Engine/Core。**前置：** 本阶段入口满足。**架构依据：** [1.2](Architecture.md#core)、[conventions](Architecture.md#conventions)。
 
-- [ ] 实现窗口与后续真实消费者需要的类型化身份、秒计时、带上下文错误结果及有界日志；不同身份不可混用。
-- [ ] 核对正常与初始化失败诊断、日志容量、时间单位和最小 owner 的关闭顺序，不预建当前没有消费者的帧内存或作业系统。
+- [x] 实现窗口与后续真实消费者需要的类型化身份、秒计时、带上下文错误结果及有界日志；不同身份不可混用。
+- [x] 核对正常与初始化失败诊断、日志容量、时间单位和最小 owner 的关闭顺序，不预建当前没有消费者的帧内存或作业系统。
 
 **完成条件：** 窗口链能表达身份、失败和时间，不引入全局服务定位器；FrameArena、后台作业和文件监视分别随实际消费者接入。
+
+**当前状态：** 已完成并归档；关联 [establish-native-gl-host](../openspec/changes/archive/2026-10-25-establish-native-gl-host/tasks.md)。类型化身份、受检代际、秒计时、有界错误与日志已由真实宿主消费，Core 边界与失败检查在 Debug/Release 通过。
 
 <a id="d01-t02"></a>
 #### D01-T02 · 实现 DeviceHost 和原生 GL 启动边界
 
 **职责位置：** Platform/DeviceHost、GlfwWindow、OpenGLDeviceHost。**前置：** [D01-T01](#d01-t01)。**架构依据：** [1.5](Architecture.md#platform-start)、[1.4](Architecture.md#runtime)。
 
-- [ ] 依次完成 GLFW 初始化、窗口/context 创建、current、入口加载、实际版本/limits 查询；Device 工厂在 D02 接入。
-- [ ] 实现唯一宿主和主线程合同，隔离 GlfwAccess 私有借用；Engine targets 不链接 Platform。
-- [ ] 为 GLFW/context/加载失败和部分初始化退出建立真实宿主检查；记录实际平台与驱动信息。
+- [x] 依次完成 GLFW 初始化、窗口/context 创建、current、入口加载、实际版本/limits 查询；Device 工厂在 D02 接入。
+- [x] 实现唯一宿主和主线程合同，隔离 GlfwAccess 私有借用；Engine targets 不链接 Platform。
+- [x] 为 GLFW/context/加载失败和部分初始化退出建立真实宿主检查；记录实际平台与驱动信息。
 
 **完成条件：** 真实 GL context 可重复创建销毁，失败不留下全局 GLFW 状态或半初始化宿主。
+
+**当前状态：** 已完成并归档；关联 [establish-native-gl-host](../openspec/changes/archive/2026-10-25-establish-native-gl-host/tasks.md)。Windows x64/MSVC 的干净 Debug/Release 构建、Intel GL 4.6 Core 的可见/隐藏启动、32 次生命周期、初始化失败及重建、回调恢复和线程检查通过；原生观测与故障注入的证据分别记录在 tasks 中。
 
 <a id="d01-t03"></a>
 #### D01-T03 · 实现窗口状态与有序输入快照
@@ -245,6 +249,8 @@ flowchart TD
 **完成条件：** 启动程序与隐藏窗口检查复用同一宿主；最小化不创建零尺寸 GPU 目标。
 
 **D01 阶段出口：** 单入口可反复启动/关闭；初始化失败、失焦、DPI 变化和零像素窗口均有确定行为，全部原生对象在所属线程释放。
+
+**当前状态：** D01-T01/T02 已完成并归档，D01-T03/T04 尚未实施；当前交付 Core/Platform 静态库，尚无产品程序、输入快照、RHI Device 或渲染画面，D01 总出口未通过。
 
 <a id="dev-d02"></a>
 ### D02 · 移植 RHI 合同并实现原生资源

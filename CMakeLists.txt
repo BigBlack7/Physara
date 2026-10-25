@@ -13,10 +13,10 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 add_subdirectory(ThirdParty)
 
-# 各模块在首次实现时声明自己的源文件, C++20, 警告和链接依赖.
-# 当前目录尚无业务实现, 因此不创建空库或不可运行的程序.
+# Core 先于 Platform 定义; 模块按实际源文件声明标准, 警告与单向依赖.
+# Editor/Runtime 尚无实现, 不创建空库或不可运行的产品程序.
 add_subdirectory(RHI)
-add_subdirectory(Platform)
 add_subdirectory(Engine)
+add_subdirectory(Platform)
 add_subdirectory(Editor)
 add_subdirectory(Runtime)

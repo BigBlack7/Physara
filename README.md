@@ -31,6 +31,17 @@ Dependencies are included in `ThirdParty`; configuration does not download packa
 Build artifacts stay in `build`.
 See [dependency sources and licenses](ThirdParty/README.md) and [development guidelines](AGENTS.md) for details.
 
+The current first-party targets are `PhysaraCore` and `PhysaraPlatform` static libraries.
+Core provides typed identities, owned bounded errors, monotonic CPU timestamps, and a bounded diagnostic log.
+Platform creates and verifies a real OpenGL 4.6 Core context and reports its actual startup properties.
+The Runtime and editor executable, input snapshots, and RHI device arrive in later work packages.
+
+The host API is declared in [DeviceHost.hpp](Platform/DeviceHost.hpp).
+Create Diagnostics first, call `DeviceHost::Create` from the process main thread, and keep Diagnostics alive until the host closes.
+The host exclusively owns the process GLFW lifecycle; use the same thread for host operations and destruction.
+Creation returns either a complete owner or a contextual error. `GetInfo` returns an owned snapshot;
+explicit `Shutdown` is idempotent and reports cleanup failures. Hidden windows use the same native creation path and still require a window system and a capable driver.
+
 ## Gallery
 
 Renders and editor captures.
