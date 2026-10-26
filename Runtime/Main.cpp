@@ -12,11 +12,9 @@
 #include <Core/Error.hpp>
 #include <DeviceHost.hpp>
 
-namespace
+namespace Physara::Runtime
 {
-    using namespace Physara;
-
-    constexpr std::string_view Usage =
+    static constexpr std::string_view Usage =
         "Physara - native window event runtime\n"
         "Usage: Physara [--help] [--hidden] [--width=N] [--height=N] [--poll-limit=N]\n"
         "Dimensions are unsigned 32-bit logical units. Poll limit is a positive unsigned 64-bit value.\n"
@@ -29,7 +27,8 @@ namespace
         bool help = false;
     };
 
-    template <typename Integer> bool ParseUnsigned(std::string_view text, Integer &value) noexcept
+    template <typename Integer>
+    static bool ParseUnsigned(std::string_view text, Integer &value) noexcept
     {
         if (text.empty())
         {
@@ -39,7 +38,7 @@ namespace
         return result.ec == std::errc{} && result.ptr == text.data() + text.size();
     }
 
-    std::variant<StartupOptions, Core::BoundedText> ParseOptions(int argc, char **argv) noexcept
+    static std::variant<StartupOptions, Core::BoundedText> ParseOptions(int argc, char **argv) noexcept
     {
         StartupOptions options;
         unsigned seen = 0;
@@ -90,7 +89,7 @@ namespace
         return options;
     }
 
-    void PrintError(const Core::BoundedText &text) noexcept
+    static void PrintError(const Core::BoundedText &text) noexcept
     {
         // 输出不是错误形成的前置; stderr 失败时仍保留原来的进程结果.
         static_cast<void>(std::fwrite(text.View().data(), 1, text.View().size(), stderr));
@@ -101,29 +100,29 @@ namespace
 int main(int argc, char **argv)
 {
     using namespace Physara;
-    auto parsed = ParseOptions(argc, argv);
+    auto parsed = Runtime::ParseOptions(argc, argv);
     if (const auto *error = std::get_if<Core::BoundedText>(&parsed))
     {
-        PrintError(*error);
+        Runtime::PrintError(*error);
         return 2;
     }
-    const auto &options = std::get<StartupOptions>(parsed);
+    const auto &options = std::get<Runtime::StartupOptions>(parsed);
     if (options.help)
     {
-        static_cast<void>(std::fwrite(Usage.data(), 1, Usage.size(), stdout));
+        static_cast<void>(std::fwrite(Runtime::Usage.data(), 1, Runtime::Usage.size(), stdout));
         return 0;
     }
     auto diagnosticsResult = Core::Diagnostics::Create();
     if (const auto *error = std::get_if<Core::DiagnosticFailure>(&diagnosticsResult))
     {
-        PrintError(error->context.description);
+        Runtime::PrintError(error->context.description);
         return 1;
     }
     auto diagnostics = std::move(std::get<std::unique_ptr<Core::Diagnostics>>(diagnosticsResult));
     auto creation = Platform::DeviceHost::Create(options.host, *diagnostics);
     if (const auto *error = std::get_if<Platform::HostError>(&creation))
     {
-        PrintError(Platform::DescribeHostError(*error));
+        Runtime::PrintError(Platform::DescribeHostError(*error));
         return 1;
     }
     auto host = std::move(std::get<std::unique_ptr<Platform::DeviceHost>>(creation));
@@ -136,7 +135,7 @@ int main(int argc, char **argv)
             auto polled = host->PollEvents();
             if (const auto *error = std::get_if<Platform::HostError>(&polled))
             {
-                PrintError(Platform::DescribeHostError(*error));
+                Runtime::PrintError(Platform::DescribeHostError(*error));
                 exitCode = 1;
                 break;
             }
@@ -156,7 +155,7 @@ int main(int argc, char **argv)
             // 当前没有 Editor/Renderer 请求生产者; 正常和暂停状态都等待事件, 不制造空渲染分支.
             if (auto error = host->WaitForEvents(0.05))
             {
-                PrintError(Platform::DescribeHostError(*error));
+                Runtime::PrintError(Platform::DescribeHostError(*error));
                 exitCode = 1;
                 break;
             }
@@ -164,17 +163,17 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &error)
     {
-        PrintError(Core::BoundedText(error.what()));
+        Runtime::PrintError(Core::BoundedText(error.what()));
         exitCode = 1;
     }
     catch (...)
     {
-        PrintError(Core::BoundedText("Unknown runtime failure"));
+        Runtime::PrintError(Core::BoundedText("Unknown runtime failure"));
         exitCode = 1;
     }
     if (auto error = host->Shutdown())
     {
-        PrintError(Platform::DescribeHostError(*error));
+        Runtime::PrintError(Platform::DescribeHostError(*error));
         exitCode = 1;
     }
     return exitCode;

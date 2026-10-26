@@ -7,12 +7,9 @@
 #include <span>
 #include <variant>
 
-namespace
+namespace Physara::Platform::Detail
 {
-    using namespace Physara::Platform;
-    using namespace Physara::Platform::Detail;
-
-    constexpr auto NativeKeys = []
+    static constexpr auto NativeKeys = []
     {
         std::array<Key, GLFW_KEY_LAST + 1> result{};
         result[GLFW_KEY_SPACE] = Key::Space;
@@ -138,7 +135,7 @@ namespace
         return result;
     }();
 
-    DeviceHostState *Target(GLFWwindow *window) noexcept
+    static DeviceHostState *Target(GLFWwindow *window) noexcept
     {
         auto *state = static_cast<DeviceHostState *>(glfwGetWindowUserPointer(window));
         if (state != nullptr && state->ownerThread != std::this_thread::get_id())
@@ -151,7 +148,7 @@ namespace
         }
         return state;
     }
-    std::optional<KeyAction> Action(int action) noexcept
+    static std::optional<KeyAction> Action(int action) noexcept
     {
         if (action == GLFW_PRESS)
         {
@@ -167,7 +164,7 @@ namespace
         }
         return std::nullopt;
     }
-    std::optional<Modifier> TranslateModifiers(int mods) noexcept
+    static std::optional<Modifier> TranslateModifiers(int mods) noexcept
     {
         constexpr int KnownMods =
             GLFW_MOD_SHIFT | GLFW_MOD_CONTROL | GLFW_MOD_ALT | GLFW_MOD_SUPER | GLFW_MOD_CAPS_LOCK | GLFW_MOD_NUM_LOCK;
@@ -181,7 +178,7 @@ namespace
                                       ((mods & GLFW_MOD_CAPS_LOCK) ? 16 : 0) | ((mods & GLFW_MOD_NUM_LOCK) ? 32 : 0));
         return static_cast<Modifier>(flags);
     }
-    void OnKey(GLFWwindow *window, int key, int scanCode, int action, int mods) noexcept
+    static void OnKey(GLFWwindow *window, int key, int scanCode, int action, int mods) noexcept
     {
         if (auto *state = Target(window))
         {
@@ -197,14 +194,14 @@ namespace
             state->input.Record(KeyEvent{logical, scanCode, *translated, *modifiers});
         }
     }
-    void OnChar(GLFWwindow *window, unsigned int codepoint) noexcept
+    static void OnChar(GLFWwindow *window, unsigned int codepoint) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(CharEvent{static_cast<char32_t>(codepoint)});
         }
     }
-    void OnMouseButton(GLFWwindow *window, int button, int action, int mods) noexcept
+    static void OnMouseButton(GLFWwindow *window, int button, int action, int mods) noexcept
     {
         if (auto *state = Target(window))
         {
@@ -218,49 +215,49 @@ namespace
             state->input.Record(MouseButtonEvent{static_cast<MouseButton>(button), *translated, *modifiers});
         }
     }
-    void OnCursorPosition(GLFWwindow *window, double x, double y) noexcept
+    static void OnCursorPosition(GLFWwindow *window, double x, double y) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(CursorPositionEvent{{x, y}});
         }
     }
-    void OnCursorEnter(GLFWwindow *window, int entered) noexcept
+    static void OnCursorEnter(GLFWwindow *window, int entered) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(CursorEnterEvent{entered == GLFW_TRUE});
         }
     }
-    void OnScroll(GLFWwindow *window, double x, double y) noexcept
+    static void OnScroll(GLFWwindow *window, double x, double y) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(ScrollEvent{{x, y}});
         }
     }
-    void OnFocus(GLFWwindow *window, int focused) noexcept
+    static void OnFocus(GLFWwindow *window, int focused) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(FocusEvent{focused == GLFW_TRUE});
         }
     }
-    void OnIconify(GLFWwindow *window, int iconified) noexcept
+    static void OnIconify(GLFWwindow *window, int iconified) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(IconifyEvent{iconified == GLFW_TRUE});
         }
     }
-    void OnClose(GLFWwindow *window) noexcept
+    static void OnClose(GLFWwindow *window) noexcept
     {
         if (auto *state = Target(window))
         {
             state->input.Record(CloseRequestedEvent{true});
         }
     }
-    void OnClientSize(GLFWwindow *window, int width, int height) noexcept
+    static void OnClientSize(GLFWwindow *window, int width, int height) noexcept
     {
         if (auto *state = Target(window))
         {
@@ -273,7 +270,7 @@ namespace
                 ClientSizeEvent{{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)}});
         }
     }
-    void OnFramebufferSize(GLFWwindow *window, int width, int height) noexcept
+    static void OnFramebufferSize(GLFWwindow *window, int width, int height) noexcept
     {
         if (auto *state = Target(window))
         {
@@ -286,7 +283,7 @@ namespace
                 FramebufferSizeEvent{{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)}});
         }
     }
-    void OnContentScale(GLFWwindow *window, float x, float y) noexcept
+    static void OnContentScale(GLFWwindow *window, float x, float y) noexcept
     {
         if (auto *state = Target(window))
         {
@@ -300,7 +297,7 @@ namespace
         LogicalPoint cursor;
         CursorMode mode = CursorMode::Normal;
     };
-    std::variant<WindowFacts, HostError> ReadWindowFacts(DeviceHostState &state)
+    static std::variant<WindowFacts, HostError> ReadWindowFacts(DeviceHostState &state)
     {
         BeginNativeOperation(state);
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
@@ -336,7 +333,7 @@ namespace
         facts.mode = mode == GLFW_CURSOR_DISABLED ? CursorMode::Relative : CursorMode::Normal;
         return facts;
     }
-    std::optional<HostError> RefreshWindowInput(DeviceHostState &state)
+    static std::optional<HostError> RefreshWindowInput(DeviceHostState &state)
     {
         auto result = ReadWindowFacts(state);
         if (auto *error = std::get_if<HostError>(&result))
@@ -377,11 +374,11 @@ namespace
         return TakeInputFault(state);
     }
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    bool StopSetup(DeviceHostState &state, int step)
+    static bool StopSetup(DeviceHostState &state, int step)
     {
         return state.checks.failInputSetupStep == step;
     }
-    void InjectNativeError(DeviceHostState &state, HostStage stage)
+    static void InjectNativeError(DeviceHostState &state, HostStage stage)
     {
         if (state.checks.nativeInputError == stage)
         {
@@ -390,7 +387,7 @@ namespace
         }
     }
 #endif
-    std::optional<HostError> TakeRequestFailure(DeviceHostState &state, std::size_t index)
+    static std::optional<HostError> TakeRequestFailure(DeviceHostState &state, std::size_t index)
     {
         // 原生首错优先; 回调终止故障必须先于可恢复的捕获拒绝报告.
         auto error = TakeNativeError(state, HostErrorReason::RequestApplication, state.stage);
@@ -404,7 +401,7 @@ namespace
         }
         return error;
     }
-    std::optional<HostError> FinishEvents(DeviceHostState &state)
+    static std::optional<HostError> FinishEvents(DeviceHostState &state)
     {
         auto error = TakeNativeError(state, HostErrorReason::EventProcessing, state.stage);
         if (!error)

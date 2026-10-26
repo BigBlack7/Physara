@@ -745,6 +745,7 @@ namespace Physara::RHI
         MipLevel mipLevel = 0;
         ArraySlice arraySlice = 0;
 
+        // 前提: desc 有效, mipLevel<desc.mipLevels 且<32; 外部输入由 Validation/业务边界先校验.
         [[nodiscard]] PHYSARA_RHI_API TextureSlice Resolve(const TextureDesc &desc) const;
 
         constexpr TextureSlice &SetOrigin(uint32_t vx = 0, uint32_t vy = 0, uint32_t vz = 0)
@@ -2269,6 +2270,7 @@ namespace Physara::RHI
         uint32_t arraySize = 1;
 
         FramebufferInfoEx() = default;
+        // 前提: 附件描述及 mip/layer 已验证, mip<32; 此纯 metadata 构造不执行设备校验.
         PHYSARA_RHI_API FramebufferInfoEx(const FramebufferDesc &desc);
 
         FramebufferInfoEx &SetWidth(uint32_t value)
@@ -2302,7 +2304,7 @@ namespace Physara::RHI
 
     typedef RefCountPtr<Framebuffer> FramebufferHandle;
 
-    namespace rt
+    namespace RT
     {
         //////////////////////////////////////////////////////////////////////////
         // rt::OpacityMicromap
@@ -2989,7 +2991,7 @@ namespace Physara::RHI
         //////////////////////////////////////////////////////////////////////////
         // Clusters
         //////////////////////////////////////////////////////////////////////////
-        namespace cluster
+        namespace Cluster
         {
             enum class OperationType : uint8_t
             {
@@ -3125,7 +3127,7 @@ namespace Physara::RHI
                 uint64_t outAccelerationStructuresOffsetInBytes =
                     0; // Offset (in bytes) to where the output acceleration structures starts in outAccelerationStructuresBuffer
             };
-        } // namespace cluster
+        } // namespace Cluster
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -3615,7 +3617,7 @@ namespace Physara::RHI
             return result;
         }
 
-        static BindingSetItem RayTracingAccelStruct(uint32_t slot, rt::AccelStruct *as)
+        static BindingSetItem RayTracingAccelStruct(uint32_t slot, RT::AccelStruct *as)
         {
             BindingSetItem result;
             result.slot = slot;
@@ -4538,7 +4540,7 @@ namespace Physara::RHI
     // Ray Tracing
     //////////////////////////////////////////////////////////////////////////
 
-    namespace rt
+    namespace RT
     {
         struct PipelineShaderDesc
         {
@@ -4723,7 +4725,7 @@ namespace Physara::RHI
         class Pipeline : public Resource
         {
           public:
-            [[nodiscard]] virtual const rt::PipelineDesc &GetDesc() const = 0;
+            [[nodiscard]] virtual const RT::PipelineDesc &GetDesc() const = 0;
             virtual ShaderTableHandle CreateShaderTable(ShaderTableDesc const &desc = ShaderTableDesc()) = 0;
         };
 
@@ -4782,7 +4784,7 @@ namespace Physara::RHI
     // Linear Algebra / Cooperative Vectors
     //////////////////////////////////////////////////////////////////////////
 
-    namespace coopvec
+    namespace CoopVec
     {
         enum class DataType
         {
@@ -5338,7 +5340,7 @@ namespace Physara::RHI
         // Not supported on DX11.
         // See the members of rt::State for more information.
         // See the comment to setGraphicsState(...) for information on state caching.
-        virtual void SetRayTracingState(const rt::State &state) = 0;
+        virtual void SetRayTracingState(const RT::State &state) = 0;
 
         // Launches a grid of ray generation shader threads using the current ray tracing state.
         // The ray generation shader to use is specified by the shader table, which currently supports only one
@@ -5348,7 +5350,7 @@ namespace Physara::RHI
         // - DX11: Not supported.
         // - DX12: Maps to DispatchRays.
         // - Vulkan: Maps to vkCmdTraceRaysKHR.
-        virtual void DispatchRays(const rt::DispatchRaysArguments &args) = 0;
+        virtual void DispatchRays(const RT::DispatchRaysArguments &args) = 0;
 
         // Launches an opacity micromap (OMM) build kernel.
         // A temporary memory region for the build is suballocated using the scratch buffer manager attached to the
@@ -5356,7 +5358,7 @@ namespace Physara::RHI
         // - DX11: Not supported.
         // - DX12: Maps to NvAPI_D3D12_BuildRaytracingOpacityMicromapArray and requires NVAPI.
         // - Vulkan: Maps to vkCmdBuildMicromapsEXT.
-        virtual void BuildOpacityMicromap(rt::OpacityMicromap *omm, const rt::OpacityMicromapDesc &desc) = 0;
+        virtual void BuildOpacityMicromap(RT::OpacityMicromap *omm, const RT::OpacityMicromapDesc &desc) = 0;
 
         // Builds or updates a bottom-level ray tracing acceleration structure (BLAS).
         // A temporary memory region for the build is suballocated using the scratch buffer manager attached to the
@@ -5376,8 +5378,8 @@ namespace Physara::RHI
         // If NVRHI is built with RTXMU enabled, all BLAS builds, updates and compactions are handled by RTXMU.
         // Note that RTXMU currently doesn't support OMM or LSS.
         virtual void BuildBottomLevelAccelStruct(
-            rt::AccelStruct *as, const rt::GeometryDesc *pGeometries, size_t numGeometries,
-            rt::AccelStructBuildFlags buildFlags = rt::AccelStructBuildFlags::None) = 0;
+            RT::AccelStruct *as, const RT::GeometryDesc *pGeometries, size_t numGeometries,
+            RT::AccelStructBuildFlags buildFlags = RT::AccelStructBuildFlags::None) = 0;
 
         // Compacts all bottom-level ray tracing acceleration structures (BLASes) that are currently available
         // for compaction. This process is handled by the RTXMU library. If NVRHI is built without RTXMU,
@@ -5390,7 +5392,7 @@ namespace Physara::RHI
         // - DX12: Maps to ID3D12GraphicsCommandList4::CopyRaytracingAccelerationStructure with
         //   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE.
         // - Vulkan: Maps to vkCmdCopyAccelerationStructureKHR or vkCmdCopyAccelerationStructureToMemoryKHR.
-        virtual void CopyRaytracingAccelerationStructure(rt::AccelStruct *destination, rt::AccelStruct *source) = 0;
+        virtual void CopyRaytracingAccelerationStructure(RT::AccelStruct *destination, RT::AccelStruct *source) = 0;
 
         // Builds or updates a top-level ray tracing acceleration structure (TLAS).
         // A temporary memory region for the build is suballocated using the scratch buffer manager attached to the
@@ -5405,15 +5407,15 @@ namespace Physara::RHI
         // - DX12: Maps to BuildRaytracingAccelerationStructure.
         // - Vulkan: Maps to vkCmdBuildAccelerationStructuresKHR.
         virtual void BuildTopLevelAccelStruct(
-            rt::AccelStruct *as, const rt::InstanceDesc *pInstances, size_t numInstances,
-            rt::AccelStructBuildFlags buildFlags = rt::AccelStructBuildFlags::None) = 0;
+            RT::AccelStruct *as, const RT::InstanceDesc *pInstances, size_t numInstances,
+            RT::AccelStructBuildFlags buildFlags = RT::AccelStructBuildFlags::None) = 0;
 
         // Performs one of the supported operations on clustered ray tracing acceleration structures (CLAS).
         // See the comments to rt::cluster::OperationDesc for more information.
         // - DX11: Not supported.
         // - DX12: Maps to NvAPI_D3D12_RaytracingExecuteMultiIndirectClusterOperation and requires NVAPI.
         // - Vulkan: Not supported.
-        virtual void ExecuteMultiIndirectClusterOperation(const rt::cluster::OperationDesc &desc) = 0;
+        virtual void ExecuteMultiIndirectClusterOperation(const RT::Cluster::OperationDesc &desc) = 0;
 
         // Builds or updates a top-level ray tracing acceleration structure (TLAS) using instance data provided
         // through a buffer on the GPU. The buffer must be pre-filled with rt::InstanceDesc structures using a
@@ -5424,15 +5426,15 @@ namespace Physara::RHI
         // - DX12: Maps to BuildRaytracingAccelerationStructure.
         // - Vulkan: Maps to vkCmdBuildAccelerationStructuresKHR.
         virtual void BuildTopLevelAccelStructFromBuffer(
-            rt::AccelStruct *as, Physara::RHI::Buffer *instanceBuffer, uint64_t instanceBufferOffset,
-            size_t numInstances, rt::AccelStructBuildFlags buildFlags = rt::AccelStructBuildFlags::None) = 0;
+            RT::AccelStruct *as, Physara::RHI::Buffer *instanceBuffer, uint64_t instanceBufferOffset,
+            size_t numInstances, RT::AccelStructBuildFlags buildFlags = RT::AccelStructBuildFlags::None) = 0;
 
         // Converts one or several CoopVec compatible matrices between layouts in GPU memory.
         // Source and destination buffers must be different.
         // - DX11: Not supported.
         // - DX12: Maps to ConvertLinearAlgebraMatrix.
         // - Vulkan: Maps to vkCmdConvertCooperativeVectorMatrixNV.
-        virtual void ConvertCoopVecMatrices(coopvec::ConvertMatrixLayoutDesc const *convertDescs, size_t numDescs) = 0;
+        virtual void ConvertCoopVecMatrices(CoopVec::ConvertMatrixLayoutDesc const *convertDescs, size_t numDescs) = 0;
 
         // Starts measuring GPU execution time using the provided timer query at this point in the command list.
         // Use endTimerQuery(...) to stop measuring time, and IDevice::getTimerQueryTime(...) to get the results later.
@@ -5521,7 +5523,7 @@ namespace Physara::RHI
         // Places the necessary barriers to make sure that the underlying buffer for the acceleration structure is
         // in the given state. See the comment to setTextureState(...) for more information.
         // Has no effect on DX11.
-        virtual void SetAccelStructState(rt::AccelStruct *as, ResourceStates stateBits) = 0;
+        virtual void SetAccelStructState(RT::AccelStruct *as, ResourceStates stateBits) = 0;
 
         // Places the necessary barriers to make sure that the entire texture is in the given state, and marks that
         // state as the texture's permanent state. Once a texture is transitioned into a permanent state, its state
@@ -5578,8 +5580,8 @@ namespace Physara::RHI
 
         // Optional TLAS prebuild query. See doc/memory-queries.md for the contract
         // and backend limitations.
-        virtual bool QueryTopLevelAccelStructPrebuildInfo(const rt::AccelStructDesc &desc, uint32_t instanceCount,
-                                                          rt::AccelStructPrebuildInfo &outInfo) = 0;
+        virtual bool QueryTopLevelAccelStructPrebuildInfo(const RT::AccelStructDesc &desc, uint32_t instanceCount,
+                                                          RT::AccelStructPrebuildInfo &outInfo) = 0;
 
         virtual TextureHandle CreateTexture(const TextureDesc &d) = 0;
         virtual MemoryRequirements GetTextureMemoryRequirements(Texture *texture) = 0;
@@ -5658,7 +5660,7 @@ namespace Physara::RHI
         [[deprecated("Use CreateMeshletPipeline with FramebufferInfo instead")]]
         virtual MeshletPipelineHandle CreateMeshletPipeline(const MeshletPipelineDesc &desc, Framebuffer *fb) = 0;
 
-        virtual rt::PipelineHandle CreateRayTracingPipeline(const rt::PipelineDesc &desc) = 0;
+        virtual RT::PipelineHandle CreateRayTracingPipeline(const RT::PipelineDesc &desc) = 0;
 
         virtual BindingLayoutHandle CreateBindingLayout(const BindingLayoutDesc &desc) = 0;
         virtual BindingLayoutHandle CreateBindlessLayout(const BindlessLayoutDesc &desc) = 0;
@@ -5670,12 +5672,12 @@ namespace Physara::RHI
                                            bool keepContents = true) = 0;
         virtual bool WriteDescriptorTable(DescriptorTable *descriptorTable, const BindingSetItem &item) = 0;
 
-        virtual rt::OpacityMicromapHandle CreateOpacityMicromap(const rt::OpacityMicromapDesc &desc) = 0;
-        virtual rt::AccelStructHandle CreateAccelStruct(const rt::AccelStructDesc &desc) = 0;
-        virtual MemoryRequirements GetAccelStructMemoryRequirements(rt::AccelStruct *as) = 0;
-        virtual rt::cluster::OperationSizeInfo GetClusterOperationSizeInfo(
-            const rt::cluster::OperationParams &params) = 0;
-        virtual bool BindAccelStructMemory(rt::AccelStruct *as, Heap *heap, uint64_t offset) = 0;
+        virtual RT::OpacityMicromapHandle CreateOpacityMicromap(const RT::OpacityMicromapDesc &desc) = 0;
+        virtual RT::AccelStructHandle CreateAccelStruct(const RT::AccelStructDesc &desc) = 0;
+        virtual MemoryRequirements GetAccelStructMemoryRequirements(RT::AccelStruct *as) = 0;
+        virtual RT::Cluster::OperationSizeInfo GetClusterOperationSizeInfo(
+            const RT::Cluster::OperationParams &params) = 0;
+        virtual bool BindAccelStructMemory(RT::AccelStruct *as, Heap *heap, uint64_t offset) = 0;
 
         virtual CommandListHandle CreateCommandList(const CommandListParameters &params = CommandListParameters()) = 0;
         virtual uint64_t ExecuteCommandLists(CommandList *const *pCommandLists, size_t numCommandLists,
@@ -5700,19 +5702,19 @@ namespace Physara::RHI
         // queryCoopVecTrainingFormatSupport(...) instead.
         // Some backends may not populate matMulFormats; use queryCoopVecMatMulFormatSupport(...)
         // to query specific matrix multiplication combinations.
-        virtual coopvec::DeviceFeatures QueryCoopVecFeatures() = 0;
+        virtual CoopVec::DeviceFeatures QueryCoopVecFeatures() = 0;
 
         // Queries support for CoopVec matrix multiplication with the given type combination.
         // combination.transposeSupported is ignored; transpose capability is reported in MatMulFormatSupport.
-        virtual coopvec::MatMulFormatSupport QueryCoopVecMatMulFormatSupport(
-            const coopvec::MatMulFormatCombo &combination) = 0;
+        virtual CoopVec::MatMulFormatSupport QueryCoopVecMatMulFormatSupport(
+            const CoopVec::MatMulFormatCombo &combination) = 0;
 
         // Queries training support for the given accumulation component type (typically Float16 or Float32).
         // See TrainingFormatSupport for details on what each flag means.
-        virtual coopvec::TrainingFormatSupport QueryCoopVecTrainingFormatSupport(coopvec::DataType componentType) = 0;
+        virtual CoopVec::TrainingFormatSupport QueryCoopVecTrainingFormatSupport(CoopVec::DataType componentType) = 0;
 
         // Calculates and returns the on-device size for a CoopVec matrix of the given dimensions, type and layout.
-        virtual size_t GetCoopVecMatrixSize(coopvec::DataType type, coopvec::MatrixLayout layout, int rows,
+        virtual size_t GetCoopVecMatrixSize(CoopVec::DataType type, CoopVec::MatrixLayout layout, int rows,
                                             int columns) = 0;
 
         virtual Object GetNativeQueue(ObjectType objectType, CommandQueue queue) = 0;
@@ -5720,6 +5722,7 @@ namespace Physara::RHI
         virtual MessageCallback *GetMessageCallback() = 0;
 
         virtual bool IsAftermathEnabled() = 0;
+        // 仅在 crash helper 实际可用时获取引用; 初始 OpenGL Validation 报告 Unsupported 后抛 std::logic_error.
         virtual AftermathCrashDumpHelper &GetAftermathCrashDumpHelper() = 0;
 
         // Front-end for executeCommandLists(..., 1) for compatibility and convenience

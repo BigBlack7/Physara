@@ -197,4 +197,4 @@ namespace Physara::RHI
         size_type m_CurrentSize = 0;
     };
 
-} // namespace nvrhi
+} // namespace Physara::RHI

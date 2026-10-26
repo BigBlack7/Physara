@@ -5,11 +5,8 @@
 #include <stdexcept>
 #include <string>
 
-namespace
+namespace Physara::Platform::Detail
 {
-    using namespace Physara::Platform;
-    using namespace Physara::Platform::Detail;
-
     struct GlfwProcessState
     {
         std::mutex mutex;
@@ -17,9 +14,9 @@ namespace
         std::uint64_t lastGeneration = 0;
     };
 
-    GlfwProcessState s_Process;
+    static GlfwProcessState s_Process;
 
-    void CaptureGlfwError(int code, const char *description) noexcept
+    static void CaptureGlfwError(int code, const char *description) noexcept
     {
         try
         {
@@ -46,7 +43,7 @@ namespace
         }
     }
 
-    bool ReleaseProcess(DeviceHostState &state)
+    static bool ReleaseProcess(DeviceHostState &state)
     {
         std::scoped_lock lock(s_Process.mutex);
         if (s_Process.active != &state || !state.ownsProcess)

@@ -16,10 +16,10 @@
 #include "DiagnosticsChecks.hpp"
 #endif
 
-namespace
+namespace Physara::Core
 {
-    Physara::Core::BoundedText BuildPayload(double seconds, std::string_view message,
-                                            const std::source_location &source) noexcept
+    static Physara::Core::BoundedText BuildPayload(double seconds, std::string_view message,
+                                                   const std::source_location &source) noexcept
     {
         Physara::Core::BoundedText payload("[+");
         std::array<char, 64> number{};
@@ -44,8 +44,9 @@ namespace
         return payload;
     }
 
-    Physara::Core::DiagnosticFailure MakeFailure(Physara::Core::DiagnosticError reason, std::string_view message,
-                                                 std::source_location source = std::source_location::current()) noexcept
+    static Physara::Core::DiagnosticFailure MakeFailure(
+        Physara::Core::DiagnosticError reason, std::string_view message,
+        std::source_location source = std::source_location::current()) noexcept
     {
         return {reason, {Physara::Core::BoundedText(message), std::nullopt, source}};
     }

@@ -5,12 +5,9 @@
 
 #include <glad/gl.h>
 
-namespace
+namespace Physara::Platform::Detail
 {
-    using namespace Physara::Platform;
-    using namespace Physara::Platform::Detail;
-
-    GLADapiproc ResolveGlEntry(void *user, const char *name)
+    static GLADapiproc ResolveGlEntry(void *user, const char *name)
     {
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
         const auto &checks = static_cast<DeviceHostState *>(user)->checks;
@@ -25,7 +22,7 @@ namespace
         return glfwGetProcAddress(name);
     }
 
-    HostError GlQueryError(const DeviceHostState &state, GLenum code, std::string_view description) noexcept
+    static HostError GlQueryError(const DeviceHostState &state, GLenum code, std::string_view description) noexcept
     {
         auto error = MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage, description);
         error.context.nativeCode =
@@ -33,7 +30,7 @@ namespace
         return error;
     }
 
-    bool ReadGlString(GLenum name, Physara::Core::BoundedText &destination) noexcept
+    static bool ReadGlString(GLenum name, Physara::Core::BoundedText &destination) noexcept
     {
         const auto *text = glGetString(name);
         if (text == nullptr || text[0] == 0)
@@ -44,7 +41,7 @@ namespace
         return true;
     }
 
-    std::optional<HostError> ReadGlfwEnvironment(DeviceHostState &state)
+    static std::optional<HostError> ReadGlfwEnvironment(DeviceHostState &state)
     {
         BeginNativeOperation(state);
         int major = 0;
@@ -80,7 +77,7 @@ namespace
         std::array<GLint, 6> limits{};
     };
 
-    std::optional<HostError> ValidateObservations(DeviceHostState &state, const GlObservations &observed)
+    static std::optional<HostError> ValidateObservations(DeviceHostState &state, const GlObservations &observed)
     {
         if (!(observed.major > 4 || (observed.major == 4 && observed.minor >= 6)) ||
             (observed.profile & GL_CONTEXT_CORE_PROFILE_BIT) == 0 ||
@@ -110,8 +107,7 @@ namespace
         info.coreProfile = true;
         info.debugContext = (observed.flags & GL_CONTEXT_FLAG_DEBUG_BIT) != 0;
         info.doubleBuffered = true;
-        info.defaultFramebufferEncoding =
-            observed.encoding == GL_SRGB ? FramebufferEncoding::SRGB : FramebufferEncoding::Linear;
+        info.defaultFramebufferEncoding =  observed.encoding == GL_SRGB ? FramebufferEncoding::SRGB : FramebufferEncoding::Linear;
         info.maxTextureSizePixels = static_cast<std::uint32_t>(observed.limits[0]);
         info.maxRenderbufferSizePixels = static_cast<std::uint32_t>(observed.limits[1]);
         info.maxUniformBufferBindings = static_cast<std::uint32_t>(observed.limits[2]);

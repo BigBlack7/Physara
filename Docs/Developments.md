@@ -92,11 +92,12 @@ flowchart TD
 - proposal 关联本计划 ID，说明本次覆盖哪些目标、哪些仍留在原工作包。
 - spec 定义可观察行为和失败场景；design 按参考分析与现实设备讨论技术，不把本计划当成已经作出的全部实现决策。
 - tasks 展开本次真实实施和验证顺序。原生 verify 使用构建、测试、图像/数值、寿命和必要性能证据，不另建 verification.md。
-- 本文保留宏观进度；具体实施状态和历史由原生 change 管理。完成工作包时在其完成条件后追加对应 change/归档路径，多个 changes 列明共同覆盖范围。
+- 本文在对应工作包记录进度、前置例外、实施边界、关键修正和验收结论；完整方案、逐任务状态及原始证据由原生 change 管理并引用。完成工作包时追加对应 change/归档路径，多个 changes 列明共同覆盖范围。
+- 普通实施只更新本计划与 change；是否需要修改架构，先按 [文档职责规范](../AGENTS.md#document-boundaries) 判断，不能把实施进度回写为架构设计。
 - 工作包只有在包内目标和验收均满足时才整体完成。原生验证通过但尚未归档可标记“已验证，待归档”；未运行场景明确记录。
 - 已实施或归档的任务保留其 ID 与事实；未开始的工作包可随范围调整合并或重排，并同步计数、前置与所有当前引用，不修改归档来覆盖历史。
 
-不预先替全部任务生成 spec，不指定无依据的工期。**D00 和 D01-T01/T02 已归档, D01-T03 已实现但缺真实跨屏证据, T04 已通过本包检查; D02-T01 已按限定前置例外完成并归档**；其余工作包继续遵守所列前置。
+不预先替全部任务生成 spec，不指定无依据的工期。**D00 和 D01-T01/T02 已归档, D01-T03 已实现但缺真实跨屏证据, T04 已通过本包检查; D02-T01/T02 已按限定前置例外完成并归档**；其余工作包继续遵守所列前置。
 
 ### 2.3 每项统一的完成门槛
 
@@ -263,7 +264,7 @@ flowchart TD
 
 **阶段目标：** 保留 NVRHI 完整公共谱系，先实现基础 OpenGL 资源与可验证的设备/资源生命周期。
 
-**当前前置例外：** 维护者允许保留 D01 的 4.1 跨屏环境验收，先在新 change 中推进 D02-T01 的公共合同、来源映射和编译核对；原因、适用范围与退出验证见 [当前 change 的收尾决定](../openspec/changes/establish-window-input-runtime/design.md#closeout)。D01 出口仍未通过，不将此例外扩展为取消其他任务前置。
+**当前前置例外：** 维护者允许保留 D01 的 4.1 跨屏环境验收, 先推进 D02-T01 的公共合同和 D02-T02 的 Common/Validation 通用实现及 CPU 验证. T01 的原决定见 [窗口 change 的收尾决定](../openspec/changes/establish-window-input-runtime/design.md#closeout), T02 的追加限定决定见 [establish-rhi-common-validation](../openspec/changes/archive/2026-10-26-establish-rhi-common-validation/design.md). 真实 GL Device 包装、设备 caps、资源归属与原生验收由 T03/T05 完成. D01/D02 总出口仍未通过; T03 及后续 native 工作仍须满足 D01 阶段入口, 不从此例外推导提前实施许可.
 
 <a id="d02-t01"></a>
 #### D02-T01 · 机械移植完整公共接口与来源映射
@@ -276,29 +277,46 @@ flowchart TD
 
 **完成条件：** 公共声明与固定上游有可审查的映射，业务层不出现窗口、ImGui 或 CombinedTextureSampler 公共类型。
 
-**当前状态：** 已完成并归档, 关联 [establish-rhi-public-contract](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/tasks.md). 五个公共头、来源 token/许可核对、正式 target 的独立消费者及 Debug/Release 编译/CPU 检查通过, 现有产品的真实隐藏宿主 smoke 通过. D01 的 4.1 与阶段出口仍未完成, 后续 Common/Validation 和 GL Device 能力尚未实现。
+**当前状态：** 已完成并归档, 关联 [establish-rhi-public-contract](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/tasks.md). 五个公共头、来源 token/许可核对、正式 target 的独立消费者及 Debug/Release 编译/CPU 检查通过, 现有产品的真实隐藏宿主 smoke 通过. D01 的 4.1 与阶段出口仍未完成; 后续 Common/Validation 进展见下方 T02, GL Device 尚未实现。
+
+**实施记录：** 初次公共合同交付由五个实际头组成 PhysaraRHI INTERFACE 目标，不产生 .lib；Common 定义和静态库接入由 T02 完成。标准容器协议与先填充后消费的暂存构造保留，自包含 include 补齐，不补猜测默认值。ShaderTypes 本包仅验证 C++20/MSVC 布局；原生 Shader/后端证据不计入此包。初次保留的来源小写子域已在 T02 的统一风格审查中取代。
+
+**局部修正与验证：** BindingSetItem 的相等/哈希纳入 arrayElement，并按 type 读取活动 subresources/range、排除 reserved/padding；BindingSetDesc 的相等/哈希纳入 trackLiveness。StaticVector 的 initializer-list 构造补 Base() 初始化，避免整数组 swap 读取未初始化的剩余标量/指针槽，不改布局或容量。独立头/消费者、语义键/碰撞和部分填充构造/swap 检查已通过；完整理由与证据见本包归档 design/tasks，来源差异集中在 [RHI 来源说明](../RHI/README.md)。
 
 <a id="d02-t02"></a>
 #### D02-T02 · 移植 Common 与 Validation 并定义初始 profile
 
-**职责位置：** RHI/Common、RHI/Validation、Validation.hpp。**前置：** [D02-T01](#d02-t01)。**架构依据：** [7.2](Architecture.md#rhi-objects)、[7.5](Architecture.md#barriers)、[7.7](Architecture.md#capabilities)。
+**职责位置：** RHI/Common、RHI/Validation、Validation.hpp。**前置：** [D02-T01](#d02-t01), 并满足阶段入口或上述仅限通用层的前置例外。**架构依据：** [7.2](Architecture.md#rhi-objects)、[7.5](Architecture.md#barriers)、[7.7](Architecture.md#capabilities)。
 
-- [ ] 移植资源引用、状态跟踪及公共辅助逻辑，核对 GL 所需的后端分类、状态和合法调用验证。
-- [ ] 定义真实 caps 与资源格式/usage 检查；未实现方法返回明确不支持，不能成功执行空操作。
-- [ ] 增加描述符、range、绑定与能力的正反用例；状态跟踪先保留单一权威，为 D05/D08 接入发射。
+- [x] 移植资源引用、状态跟踪及公共辅助逻辑，核对 GL 所需的后端分类、状态和合法调用验证。
+- [x] 定义初始 GL 限制策略和基于底层查询的格式/usage 检查; 不把策略、格式表或 CPU fixture 当作真实 caps, 未实现操作明确拒绝.
+- [x] 增加描述符、range、绑定与能力的正反用例；状态跟踪先保留单一权威，为 D05/D08 接入发射。
 
-**完成条件：** Validation 可包裹 GL Device，能区分非法调用、能力不支持和真正成功。
+**完成条件：** 正式静态目标的 Common/Validation 可独立构建、链接, CPU 正反用例验证通用算法、输入拒绝、策略过滤、调用状态和 CPU 所有权. 包装保留底层失败, 能区分非法调用与不支持; 本包不依赖尚待 T03 创建的真实 GL Device, 不声称已证明原生成功. 实施与证据见 [归档 change](../openspec/changes/archive/2026-10-26-establish-rhi-common-validation/tasks.md).
+
+**当前状态：** Common/Validation 通用工作包已完成并归档, 第一方域与文件作用域规则已统一. 正式 STATIC 的独立消费者 Debug/Release、完整来源/许可/命名对照、输入/profile/列表/状态 CPU 正反用例和现有产品的真实宿主 0/2/0 回归通过. T03/T05 的真实 GL 包装、caps、资源归属和原生行为仍待完成; T03 保持 D01 出口前置, D01 跨屏及 D01/D02 总出口不随本包关闭.
+
+**通用实现记录：** PhysaraRHI 从头文件 INTERFACE 目标演进为 STATIC，保留消费名称、模块 include 与 C++20，完整接入 Common/Validation 的实际通用闭包，不引入 native 或业务依赖。公开与私有域统一为 Physara 拼写，不保留旧域 alias；第一方 cpp 私有辅助在所属模块域中用 static 保持内部链接，Core/Platform/Runtime 的相应作用域一并检查。完整迁移映射和适配理由见本包归档 design 与 RHI 来源说明。
+
+**本包实现与验收边界：** 通用包装拥有底层 Device/列表的 intrusive CPU 引用，MessageCallback 借用且覆盖包装寿命、不抛出、不重入；列表/tracker 单写者，设备遵守底层线程合同。Release 输入检查先于解引用、类型转换、范围计算和委托，提交批次先只读预检、后统一消耗状态；取消只释放 CPU claim/引用，不补提交或等待。工厂/提交预检自身 bad_alloc 返回空/0，其余标准 CPU 异常依头合同传播，不支持的引用型 crash-helper getter 报告后抛 logic_error。通用资源没有统一 GetDevice，本包只能检查可查询事实；真实资源归属、limits 和样本限制仍由 T03/T05 实现并原生验证，不使用地址 registry 代替。
+
+**状态跟踪实施：** descRef/extension/callback 在 recording 内保持稳定；Unknown 前态、非法范围/state、永久状态冲突或本地分配失败置 sticky error，owner 先检查 HasErrors 再发射。Reset 释放本地工作集且不发布 metadata；CommandListSubmitted 在 owner 接受提交、无错误且依赖已消费后整体预检并发布 permanent/stateInitialized。该通知不表示 GPU 完成，失败/取消不得通过它伪清理；CPU fixture 不证明原生 barrier。
+
+**初始策略记录：** 通用 Validation 对 OpenGL 的现有 27 个 Feature 仅允许 ConstantBufferRanges 委托底层，其余 false 且不改 output；格式 metadata 不等于实际支持。队列仅 Graphics，列表仅 immediate；heap/virtual/sparse、bindless、RT/Mesh/feedback/CoopVec 等排除族在读取专有 payload 前拒绝。该通用层限制不等于架构目标 GL 基础能力已交付，真实 Device/caps 与扩大支持范围由 T03/T05 验收。
+
+**局部修正与验证：** 来源 CreateSamplerFeedbackForNativeTexture 的 D3D12 自递归改为底层一次委托，CPU 检查参数、调用次数和失败结果，GL 仍提前拒绝。Reset/提交清理修正 MSVC Debug 空容器构造分配，stencil SRV 检查保留来源的有效视图对。Debug/Release 的正反用例、正式消费者、完整产品、Core/输入/宿主及退出回归已通过；详细命令、环境和原始结果见本包归档 tasks。D01 跨屏缺口与阶段前置例外仍以本阶段入口记录为准，不由这些 CPU 结果关闭。
 
 <a id="d02-t03"></a>
 #### D02-T03 · 接入 GL Device、资源对象与基本格式
 
-**职责位置：** RHI/OpenGL.hpp、RHI/OpenGL、Platform/OpenGLDeviceHost。**前置：** [D02-T01](#d02-t01)、[D02-T02](#d02-t02)。**架构依据：** [7.3](Architecture.md#opengl)、[7.2](Architecture.md#rhi-objects)、[7.7](Architecture.md#capabilities)。
+**职责位置：** RHI/OpenGL.hpp、RHI/OpenGL、Platform/OpenGLDeviceHost。**前置：** D01 阶段出口通过, [D02-T01](#d02-t01)、[D02-T02](#d02-t02) 完成; 上述通用层例外不覆盖本包。**架构依据：** [7.3](Architecture.md#opengl)、[7.2](Architecture.md#rhi-objects)、[7.7](Architecture.md#capabilities)。
 
 - [ ] 在有效 context 上创建 Device，读取并保存 limits/格式支持，落实 GL_UPPER_LEFT、ZERO_TO_ONE 及公共 raster 语义。
 - [ ] 实现 DSA Buffer、Texture、独立 Sampler、基础视图/Framebuffer 和图形目标所需格式；创建失败有明确诊断。
 - [ ] 验证尺寸、mip/layer、格式、sRGB/data、usage 和样本限制；公开 API 保持 Texture/Sampler 分离。
+- [ ] 将同一 Validation 包装接入真实 GL Device, 在 Release 核对本机 limits、每格式 sample 支持、资源 Device/context 归属与正反调用; 不增加平行参数检查系统.
 
-**完成条件：** 基础资源可在真实设备上创建与检查，非法描述在 Release 也不会发出非法原生命令。
+**完成条件：** 基础资源和 Validation 包装在真实设备上创建与检查, 设备 caps 与实际启用能力一致, 非法描述/跨设备资源在 Release 也不会发出非法原生命令.
 
 <a id="d02-t04"></a>
 #### D02-T04 · 实现安全的初始上传与资源释放协议
@@ -319,6 +337,7 @@ flowchart TD
 - [ ] 建立共享 DeviceHost 的 native fixture，验证 buffer 数据、纹理行序、mip/layer 和格式读写所需的最小原生读回通道。
 - [ ] 记录 GL graphics 单队列/单即时列表等 profile；对 replay、异步队列、RT/mesh/sparse 等当前能力明确拒绝。
 - [ ] 测试异常描述、资源耗尽可控失败与设备前资源释放；测试辅助原生操作只位于 fixture/后端边界。
+- [ ] 复核同一 Validation 包装下的真实 caps/格式/样本/资源归属和原生行为一致性; CPU double 不替代此项证据.
 
 **完成条件：** 资源语义有真实设备证据；测试环境与产品使用同一个 GL 后端实现。
 

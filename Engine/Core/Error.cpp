@@ -3,11 +3,11 @@
 #include <algorithm>
 #include <cstring>
 
-namespace
+namespace Physara::Core
 {
-    constexpr std::string_view TruncationMarker = "...[truncated]";
+    static constexpr std::string_view TruncationMarker = "...[truncated]";
 
-    std::size_t Utf8PrefixLength(std::string_view text, std::size_t limit) noexcept
+    static std::size_t Utf8PrefixLength(std::string_view text, std::size_t limit) noexcept
     {
         std::size_t count = std::min(text.size(), limit);
         if (count < text.size())

@@ -2,6 +2,8 @@
 
 > 本文规定 Physara 的技术路线、模块职责、流水线合同和实现约束。通用开发行为与编码风格见 [AGENTS.md](../AGENTS.md)。本文中的接口、类型和伪代码是待实现的设计合同，不表示仓库已具有相同 API。
 >
+> 本文默认保持稳定，修改边界见 [文档职责规范](../AGENTS.md#document-boundaries)。实际开发进度、实施记录和验收结论见 [开发计划](Developments.md) 的对应工作包。
+>
 > 大纲中的“阶段”是数据在一次运行/一帧中的生产消费阶段，不是开发里程碑。CPU 先构造计划，再沿 RHI 发出命令；GPU 异步执行后文定义的各 Pass。OpenGL 即时列表使录制与原生发射交错，并不意味着构图时就绘制或 CPU 等待每个 GPU 阶段完成。
 
 ## 阅读入口
@@ -1851,19 +1853,19 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 
 公共 API、Common、Validation 的基线固定为 NVRHI commit `6b96fb03e07539f08327aea76c56d55f1de9d906`。不依据其文件夹名称自由重写另一套接口。保留完整公共契约，包括 GL 暂不支持的扩展类型和方法，避免 Vulkan 接入时补回被删虚函数和描述字段。[N01] [N02]
 
-完整契约不等于当前实现所有能力或编译所有后端。公共声明保持完整，Common/Validation 保持同版本谱系并按真实通用依赖组织；GL 对未支持能力显式返回 false/不支持，实际调用被拒绝并报告。只为声明存在而引入 Vulkan SDK、Vulkan-Hpp、RTXMU、RT、Mesh Shader、多队列或其他无消费者依赖是禁止的。当前 ThirdParty/nvrhi 仍仅为参考快照；实际 Physara RHI 在自身目录移植，不 include/链接整份参考源码。
+完整契约不等于当前实现所有能力或编译所有后端。公共声明保持完整，Common/Validation 保持同版本谱系并按真实通用依赖组织；GL 对未支持能力显式返回 false/不支持，实际调用被拒绝并报告。只为声明存在而引入 Vulkan SDK、Vulkan-Hpp、RTXMU、RT、Mesh Shader、多队列或其他无消费者依赖是禁止的。ThirdParty/nvrhi 仅作参考快照；实际 Physara RHI 在自身目录移植，不 include/链接整份参考源码。
 
 | 上游 | Physara 目标位置 |
 |---|---|
 | include/nvrhi/nvrhi.h | RHI/RHI.hpp |
 | include/nvrhi/common/resource.h | RHI/Resource.hpp |
 | include/nvrhi/common/containers.h | RHI/Containers.hpp |
-| include/nvrhi/nvrhiHLSL.h | RHI/ShaderTypes.hpp, 共享 GPU 声明, 当前仅验证 C++ profile |
-| include/nvrhi/utils.h | RHI/Utils.hpp, 外部定义随 Common 接入 |
+| include/nvrhi/nvrhiHLSL.h | RHI/ShaderTypes.hpp, 共享 GPU 声明 |
+| include/nvrhi/utils.h | RHI/Utils.hpp 与 RHI/Common/ |
 | src/common/state-tracking.* | RHI/Common/StateTracking.* |
 | utils、format-info、misc | RHI/Common/ 与对应公开头 |
 | include/nvrhi/validation.h、src/validation/* | RHI/Validation.hpp、RHI/Validation/ |
-| include/nvrhi/vulkan.h、src/vulkan/* | 后续 RHI/Vulkan.hpp、RHI/Vulkan/ |
+| include/nvrhi/vulkan.h、src/vulkan/* | RHI/Vulkan.hpp、RHI/Vulkan/ |
 | 新建 GL 实现 | RHI/OpenGL.hpp、RHI/OpenGL/ |
 
 移植清单记录上游路径、目标路径、来源 hash、机械规则及非机械差异；保留 MIT 版权。Common/Validation 的真实能力检查随 profile 正确扩展，不能让 Validation 把所有 GL 调用误判成 Vulkan，或对 GL 不支持项静默接受。
@@ -1871,6 +1873,7 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 | 上游语义 | 目标名称 |
 |---|---|
 | namespace nvrhi | Physara::RHI |
+| utils / rt / rt::cluster / coopvec / validation | Utils / RT / RT::Cluster / CoopVec / Validation |
 | IDevice / ICommandList / ITexture 等 | Device / CommandList / Texture |
 | createTexture / setGraphicsState | CreateTexture / SetGraphicsState |
 | descriptor 的 camelCase 字段 | 保持字段名与语义 |
@@ -1883,11 +1886,7 @@ RenderGraph 给出用途和顺序，RHI 保持 NVRHI 语义并生成后端访问
 
 允许的全局差异仅为：API 枚举增加 OpenGL、原生 GL 对象类型/创建入口、错误与调试宏适配。GL 的 sampler 合并、push constant 模拟和即时执行放在后端，不能扩张公共接口。
 
-D02-T01 的限定移植选择见 [establish-rhi-public-contract](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/design.md). 标准容器 aliases/操作名、来源子命名空间及先填充后消费的暂存构造保留; 补齐自包含 include, 不补猜测默认值. 为遵守语义键与活动 union 成员合同, BindingSetItem 的相等/哈希纳入 arrayElement 并按 type 读取有效 subresources/range, 排除 reserved/padding; BindingSetDesc 的相等/哈希纳入 trackLiveness. 这是已枚举的局部正确性例外, 不改字段/布局或扩大后端能力. 独立头/消费者编译、CPU 引用/容器与绑定键/碰撞检查及完整来源 token 差异共同验证, 不以 CPU 检查代替原生后端证据.
-
-公共头移植阶段由实际头文件组成 PhysaraRHI INTERFACE target, 不产生 .lib; Common 接入时保持消费名称并加入真实定义. 来源、命名映射、各项差异和外部定义归属集中在 [RHI 来源说明](../RHI/README.md), 参考快照不进入正式 include 或链接.
-
-同一 change 的实施核对还确认 StaticVector 的 initializer-list 构造须与默认/尺寸构造一样初始化 Base, 避免其整数组 swap 读取未初始化的剩余标量/指针槽. 维护者已确认这项局部例外, 仅补 Base(), 不改布局、逻辑容量或内容; 以部分填充构造/swap 和无增长检查验证, 不宣称性能收益.
+RHI 的公共合同与通用实现只依赖标准库；原生依赖在对应后端边界引入。来源、接口映射、局部正确性适配及定义归属集中在 [RHI 来源说明](../RHI/README.md)，参考快照不进入正式 include 或链接。适配不得裁剪公共契约或扩大后端能力。
 
 **实现规范**
 
@@ -1940,6 +1939,8 @@ SubmissionId ticket = device.ExecuteCommandList(cmd);
 以上是结构化用法；聚合字段与签名以移植后的头文件为准。每个 backend 必须通过同一组公共行为测试；不能用 GL 能运行掩盖跨 API 状态、字段和单位错误。
 
 Validation 在开发/测试配置中包装实际 Device，检查描述范围、类型、能力、状态调用与对象归属；它不替代原生行为测试。业务层验证资产语义，RHI 验证图形合同，两者不是重复检查同一事实。
+
+通用 Validation 负责公开输入和调用协议的校验，原生 Device 负责实际资源归属与设备限制。校验阶段的拒绝不得发出底层工作；包装的 CPU 拥有关系不替代原生资源的 GPU 寿命管理。
 
 **实现规范**
 
@@ -2069,6 +2070,8 @@ GraphManaged 执行时关闭 automatic inference，按编译后的 Use 请求 Se
 图执行器在正常和失败退出时恢复 Automatic 并 ClearState；同一命令缓冲内不让图和自动机制分别发一份原生 barrier。资源状态跟踪并未因此被禁用，只是用途的来源改变了。设备已经不可用时仅做合法的 CPU 清理，不借状态恢复调用失效 context。
 
 持久资源采用明确的 initialState/keepInitialState 协议；新纹理的首次 Common/Undefined、外部导入的 entry state、图输出的 final state和 close 的恢复必须一致。不能调用 BeginTracking 冒充真正的 GPU 转换。[N03]
+
+通用 tracker 形成抽象资源依赖，由后端统一发射。无效或取消的录制不得作为有效工作执行或发布资源状态；提交接受与 GPU 完成是不同阶段。
 
 ```cpp
 Execute(cmd)
@@ -3298,7 +3301,7 @@ Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初
 <a id="stage-12"></a>
 ## 12. 验证、测量与变更闭环
 
-验证和测量随实际模块与变更需要开展，文档记录当前合同、选择与真实结果。不预设测试目录结构、自动化平台或独立工具程序，不重新实现另一套渲染器，也不新增与原生 OpenSpec 重复的审批/文档步骤。
+验证和测量随实际模块与变更需要开展，实施结果记录在对应工作包和 change 中。不预设测试目录结构、自动化平台或独立工具程序，不重新实现另一套渲染器，也不新增与原生 OpenSpec 重复的审批/文档步骤。
 
 <a id="tests"></a>
 ### 12.1 按合同验证行为
@@ -3362,15 +3365,15 @@ Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初
 
 | 输入 | 输出 | 状态/实现归属 | 下一消费者 |
 |---|---|---|---|
-| 新需求、实现选择、参考资料与验证结果 | 当前架构/spec、可追踪 change、按需报告 | Docs/Architecture、Reference；openspec | 下一次开发与审查 |
+| 设计需求、来源依据、变更行为与实施结果 | 按职责维护的设计/spec、开发计划、来源与 change 记录 | Docs、Reference；openspec | 下一次开发与审查 |
 
 | 内容 | 权威位置 | 更新方式 |
 |---|---|---|
 | 通用行为/C++/图形准则 | 根 AGENTS.md | 不写 Physara 专用模块方案 |
 | 项目介绍、展示与文档导航 | 根 README.md | 保持简短的项目名片, 不随每次 change 累加 API、阶段进展或验收记录 |
 | 当前构建工具、命令与运行选项 | [Docs/Build.md](Build.md) | 随实际构建和产品入口更新; API 合同引用公开头, 验收状态引用 Developments/change |
-| 当前 Physara 路线与各单元实现约束 | Docs/Architecture.md | 中层架构：结合 Reference 与维护者定位采纳合同，长期变化同步更新 |
-| 全流程阶段、依赖与工作包验收 | Docs/Developments.md | 根据 AGENTS/Architecture 制定顺序，完成后据证据勾选，不另立架构真相 |
+| 长期模块设计、跨层合同与技术路线 | Docs/Architecture.md | 设计纠错或已采纳的长期方案变化时修订，不记录任务实施过程与进度 |
+| 阶段顺序、前置及工作包实施与验收状态 | Docs/Developments.md | 按对应工作包更新，引用 change 的具体方案与证据，不另立架构真相 |
 | 已采纳可观察行为 | openspec/specs | 通过原生 delta/sync 工作流维护 |
 | 技术理由、备选方案、任务 | openspec/changes/<id> | 原生 design/tasks，完成后归档 |
 | Filament/NVRHI 等参考分析 | Docs/Reference/ | 底层技术依据：固定来源、真实行为、限制与适用范围，不覆盖项目选择 |
@@ -3378,12 +3381,12 @@ Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初
 
 遵循锁定版本的 OpenSpec 原生 propose/apply/verify/sync/archive 工作流和 schema；工具的可用命令/产物依赖以安装版本为准，不新增必交验证文件或独立 ADR 体系。[S01] [S02]
 
-文档按三层阅读：Reference 提供底层依据；AGENTS 与本文分别规定开发行为和当前架构；Developments 承接为全流程任务，OpenSpec 经讨论/调查细化每次落地行为、方案和小任务。OpenSpec 中 spec 定义可观察结果，design 定义当次如何做，本文维护当前架构。不要把通用编码标准复制进每个模块，也不要把当前 Physara 的路径、OpenGL 限制和未来移植任务塞回 AGENTS。
+文档按三层阅读：Reference 提供底层依据；AGENTS 与本文分别规定开发行为和当前架构；Developments 承接为全流程任务，OpenSpec 经讨论/调查细化每次落地行为、方案和小任务。OpenSpec 中 spec 定义可观察结果，design 定义当次如何做，本文维护稳定的模块设计；实际推进和验收归开发计划的对应工作包。不要把通用编码标准复制进每个模块，也不要把当前 Physara 的路径、OpenGL 限制和未来移植任务塞回 AGENTS。
 
 **实现规范**
 
-- 架构中模块职责、技术合同与实现规范一起更新，工程新增目录必须补入覆盖表和相应阶段。
-- Developments 维护全流程任务顺序，当前工作的细化与实施进入 change；本文的流水线阶段不能被误当当前已完成里程碑。
+- 本文只因设计纠错或长期架构变化修订；实现既定目录、增加源文件或完成验收，不自动触发架构更新。
+- Developments 在对应工作包维护进度、前置例外、实施边界和验收结论，具体方案与证据留在 change；本文的流水线阶段不表示已完成里程碑。
 - 历史理由引用已归档 change，不回写历史或建立镜像决策记录。
 
 <a id="feature-closure"></a>

@@ -3,17 +3,17 @@
 #include <cmath>
 #include <limits>
 
-namespace
+namespace Physara::Platform::Detail
 {
-    bool IsFinite(Physara::Platform::LogicalPoint value) noexcept
+    static bool IsFinite(Physara::Platform::LogicalPoint value) noexcept
     {
         return std::isfinite(value.x) && std::isfinite(value.y);
     }
-    bool ValidScale(Physara::Platform::ContentScale value) noexcept
+    static bool ValidScale(Physara::Platform::ContentScale value) noexcept
     {
         return std::isfinite(value.x) && std::isfinite(value.y) && value.x > 0.0f && value.y > 0.0f;
     }
-    void UpdateButton(Physara::Platform::ButtonState &button, Physara::Platform::KeyAction action) noexcept
+    static void UpdateButton(Physara::Platform::ButtonState &button, Physara::Platform::KeyAction action) noexcept
     {
         using Physara::Platform::KeyAction;
         if (action == KeyAction::Press)

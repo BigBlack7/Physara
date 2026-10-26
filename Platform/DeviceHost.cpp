@@ -13,23 +13,21 @@
 #include "DeviceHostInternal.hpp"
 #include "GlfwAccess.hpp"
 
-namespace
+namespace Physara::Platform
 {
-    using namespace Physara::Platform;
-
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    std::optional<Detail::HostCheckConfig> &NextChecks()
+    static std::optional<Detail::HostCheckConfig> &NextChecks()
     {
         static std::optional<Detail::HostCheckConfig> value;
         return value;
     }
     using CheckObserver = void (*)(HostStage, Physara::Core::Diagnostics &);
-    CheckObserver &ObserverSlot()
+    static CheckObserver &ObserverSlot()
     {
         static CheckObserver observer = nullptr;
         return observer;
     }
-    void ObserveOperation(HostStage stage, Physara::Core::Diagnostics &diagnostics)
+    static void ObserveOperation(HostStage stage, Physara::Core::Diagnostics &diagnostics)
     {
         if (auto observer = ObserverSlot())
         {
@@ -38,14 +36,14 @@ namespace
     }
 #endif
 
-    constexpr std::array<std::string_view, 15> StageNames = {
-        "Validation",       "Reservation",        "GlfwInitialization",
-        "WindowCreation",   "ContextActivation",  "EntryLoading",
-        "EnvironmentQuery", "SwapInterval",       "Ready",
-        "Shutdown",         "InputSetup",         "EventPolling",
-        "EventWait",        "RequestApplication", "Unknown"};
+    static constexpr std::array<std::string_view, 15> StageNames = {
+        "Validation", "Reservation", "GlfwInitialization",
+        "WindowCreation", "ContextActivation", "EntryLoading",
+        "EnvironmentQuery", "SwapInterval", "Ready",
+        "Shutdown", "InputSetup", "EventPolling",
+        "EventWait", "RequestApplication", "Unknown"};
 
-    void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
+    static void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
     {
         std::array<char, 32> number{};
         text.Append(" window=");
@@ -56,7 +54,7 @@ namespace
         text.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
     }
 
-    std::optional<HostError> ValidateDescription(const HostDesc &desc) noexcept
+    static std::optional<HostError> ValidateDescription(const HostDesc &desc) noexcept
     {
         constexpr auto MaxDimension = static_cast<std::uint32_t>(std::numeric_limits<int>::max());
         if (desc.clientWidthLogical == 0 || desc.clientHeightLogical == 0 || desc.clientWidthLogical > MaxDimension ||
@@ -68,7 +66,7 @@ namespace
         return std::nullopt;
     }
 
-    std::optional<HostError> StartNativeHost(Detail::DeviceHostState &state, const HostDesc &desc)
+    static std::optional<HostError> StartNativeHost(Detail::DeviceHostState &state, const HostDesc &desc)
     {
         // 固定进入顺序与统一回滚是一项完整算法, 保留在一起便于核对每个已取得阶段.
         auto error = Detail::InitializeGlfw(state);
@@ -99,7 +97,7 @@ namespace
         return error;
     }
 
-    void ReportReady(Physara::Core::Diagnostics &diagnostics, const HostInfo &info) noexcept
+    static void ReportReady(Physara::Core::Diagnostics &diagnostics, const HostInfo &info) noexcept
     {
         Physara::Core::BoundedText message("DeviceHost.Ready");
         AppendIdentity(message, info.identity);
@@ -142,8 +140,8 @@ namespace
     };
 
     template <typename Operation>
-    std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
-                                               Operation &&operation) noexcept
+    static std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
+                                                      Operation &&operation) noexcept
     {
         const auto started = std::chrono::steady_clock::now();
         const auto reject = [&](HostErrorReason reason, std::string_view message)
@@ -539,11 +537,13 @@ namespace Physara::Platform
     std::optional<HostError> DeviceHost::WaitForEvents(double timeoutSeconds) noexcept
     {
         return RunInputOperation(*m_State, HostStage::EventWait,
-                                 [&] { return Detail::WaitNativeInput(*m_State, timeoutSeconds); });
+                                 [&]
+                                 { return Detail::WaitNativeInput(*m_State, timeoutSeconds); });
     }
     std::optional<HostError> DeviceHost::ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept
     {
         return RunInputOperation(*m_State, HostStage::RequestApplication,
-                                 [&] { return Detail::ApplyNativeRequests(*m_State, requests); });
+                                 [&]
+                                 { return Detail::ApplyNativeRequests(*m_State, requests); });
     }
 }

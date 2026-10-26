@@ -52,7 +52,7 @@ namespace Physara::RHI
         uint64_t strideInBytes;
     };
 
-    namespace rt
+    namespace RT
     {
         //////////////////////////////////////////////////////////////////////////
         // Indirect Arg Structs that are shader friendly
@@ -73,7 +73,7 @@ namespace Physara::RHI
             GpuVirtualAddress blasDeviceAddress;
         };
 
-        namespace cluster
+        namespace Cluster
         {
             static const uint32_t ClasByteAlignment = 128;
             static const uint32_t ClasMaxTriangles = 256;      // Defined by spec
@@ -197,9 +197,9 @@ namespace Physara::RHI
                 GpuVirtualAddress
                     clusterAddresses; // Address of an array of D3D12_GPU_VIRTUAL_ADDRESS holding valid addresses of CLAS previously constructed
             };
-        } // namespace cluster
-    } // namespace rt
-} // namespace nvrhi
+        } // namespace Cluster
+    } // namespace RT
+} // namespace Physara::RHI
 
 #endif // __HLSL_VERSION 2021
 #endif

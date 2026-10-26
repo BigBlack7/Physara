@@ -32,7 +32,7 @@
 
 #include "RHI.hpp"
 
-namespace Physara::RHI::utils
+namespace Physara::RHI::Utils
 {
     PHYSARA_RHI_API BlendState::RenderTarget CreateAddBlendState(BlendFactor srcBlend, BlendFactor dstBlend);
 
@@ -41,6 +41,8 @@ namespace Physara::RHI::utils
     PHYSARA_RHI_API BufferDesc CreateVolatileConstantBufferDesc(uint32_t byteSize, const char *debugName,
                                                                 uint32_t maxVersions);
 
+    // 来源工具的自动 layout 仅覆盖每槽单元素; 数组先提供匹配 layout. 输入须已初始化,
+    // PushConstants 字节数在调用前检查为有效且<=MaxPushConstantSize, 再进入窄字段构造.
     PHYSARA_RHI_API bool CreateBindingSetAndLayout(Device *device, Physara::RHI::ShaderType visibility,
                                                    uint32_t registerSpace, const BindingSetDesc &bindingSetDesc,
                                                    BindingLayoutHandle &bindingLayout, BindingSetHandle &bindingSet,
@@ -52,8 +54,8 @@ namespace Physara::RHI::utils
     PHYSARA_RHI_API void ClearDepthStencilAttachment(CommandList *commandList, Framebuffer *framebuffer, float depth,
                                                      uint32_t stencil);
 
-    PHYSARA_RHI_API void BuildBottomLevelAccelStruct(CommandList *commandList, rt::AccelStruct *as,
-                                                     const rt::AccelStructDesc &desc);
+    PHYSARA_RHI_API void BuildBottomLevelAccelStruct(CommandList *commandList, RT::AccelStruct *as,
+                                                     const RT::AccelStructDesc &desc);
 
     // Places a UAV barrier on the provided texture.
     // Useful when doing multiple consecutive dispatch calls with the same resources but different constants.
@@ -90,6 +92,8 @@ namespace Physara::RHI::utils
     class BitSetAllocator
     {
       public:
+        // 容量固定; capacity>INT_MAX 在分配前抛 length_error, 标准存储分配异常可传播.
+        // multithreaded=true 同步 Allocate/Release; false 要求调用者串行访问. CPU 索引不表示 GPU 退休.
         explicit BitSetAllocator(size_t capacity, bool multithreaded);
 
         int Allocate();

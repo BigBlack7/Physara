@@ -420,4 +420,4 @@ namespace Physara::RHI
         }
     };
 
-} // namespace nvrhi
+} // namespace Physara::RHI

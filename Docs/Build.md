@@ -14,7 +14,7 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraPlatform 静态库、PhysaraRHI INTERFACE 公共头目标和唯一 Physara 可执行程序. PhysaraRHI 只提供模块 include/C++20, 不产生 .lib; 头内 CPU 行为与仍待 Common/后端定义的函数边界见 [RHI 来源说明](../RHI/README.md). NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
+当前第一方目标是 PhysaraCore、PhysaraPlatform、PhysaraRHI 静态库和唯一 Physara 可执行程序. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义, 产生 .lib; 当前可链接能力与后端边界见 [RHI 来源说明](../RHI/README.md). Runtime 仍只链接其实际使用的 Core/Platform. NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
 
 ## 运行
 
