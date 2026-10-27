@@ -12,7 +12,8 @@ namespace Physara::Platform::Detail
     {
         None,
         VersionString,
-        BooleanQuery
+        BooleanQuery,
+        BufferStorage
     };
 
     struct HostCheckConfig
@@ -37,6 +38,8 @@ namespace Physara::Platform::Detail
         std::optional<std::size_t> failRequestIndex;
         bool failCursorRelease = false;
         bool loseFocusOnCapture = false;
+        bool failValidationComposition = false;
+        bool failRhiCurrentRestore = false;
     };
 
     struct DeviceHostChecks
@@ -54,5 +57,6 @@ namespace Physara::Platform::Detail
         [[nodiscard]] static InputSnapshot InspectInput(DeviceHost &host);
         [[nodiscard]] static int InspectCursorMode(DeviceHost &host);
         [[nodiscard]] static bool InspectCloseFlag(DeviceHost &host);
+        [[nodiscard]] static RHI::Device *BorrowRawDevice(DeviceHost &host) noexcept;
     };
 }

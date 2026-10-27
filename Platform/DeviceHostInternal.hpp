@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include <Core/Diagnostics.hpp>
+#include <RHI.hpp>
 
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
 #include "DeviceHostChecks.hpp"
@@ -17,6 +18,31 @@
 
 namespace Physara::Platform::Detail
 {
+    class RhiMessageAdapter final : public RHI::MessageCallback
+    {
+    public:
+        explicit RhiMessageAdapter(Core::Diagnostics &diagnostics) noexcept : m_Diagnostics(diagnostics)
+        {
+        }
+        void Message(RHI::MessageSeverity severity, const char *message) noexcept override;
+        void BeginCapture() noexcept;
+        void EndCapture() noexcept;
+        [[nodiscard]] const std::optional<Core::BoundedText> &First() const noexcept
+        {
+            return m_First;
+        }
+        [[nodiscard]] std::uint64_t Additional() const noexcept
+        {
+            return m_Additional;
+        }
+
+    private:
+        Core::Diagnostics &m_Diagnostics;
+        std::optional<Core::BoundedText> m_First;
+        std::uint64_t m_Additional = 0;
+        bool m_Capturing = false;
+    };
+
     struct NativeCapture
     {
         std::optional<Core::ErrorContext> first;
@@ -26,7 +52,7 @@ namespace Physara::Platform::Detail
 
     struct DeviceHostState
     {
-        explicit DeviceHostState(Core::Diagnostics &log) noexcept : diagnostics(log)
+        explicit DeviceHostState(Core::Diagnostics &log) noexcept : diagnostics(log), rhiMessages(log)
         {
         }
 
@@ -48,6 +74,10 @@ namespace Physara::Platform::Detail
         bool inputCallbacksInstalled = false;
         bool inputAccepting = false;
         bool operationActive = false;
+        // adapter 必须先于 Device 声明, 覆盖 raw/Validation 的全部 CPU 寿命.
+        RhiMessageAdapter rhiMessages;
+        RHI::DeviceHandle rawDevice;
+        RHI::DeviceHandle validatedDevice;
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
         HostCheckConfig checks;
 #endif
@@ -71,6 +101,9 @@ namespace Physara::Platform::Detail
     [[nodiscard]] std::optional<HostError> LoadGlEntries(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> InspectEnvironment(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> RequestSwapInterval(DeviceHostState &state, bool vsync);
+    [[nodiscard]] std::optional<HostError> InitializeResourceDevice(DeviceHostState &state);
+    [[nodiscard]] bool HasExternalRhiOwners(const DeviceHostState &state) noexcept;
+    [[nodiscard]] std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> ReleaseNativeState(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> InitializeWindowInput(DeviceHostState &state);
     [[nodiscard]] std::optional<HostError> ReleaseWindowInput(DeviceHostState &state);

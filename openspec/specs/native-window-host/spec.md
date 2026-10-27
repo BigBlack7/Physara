@@ -7,7 +7,7 @@ Define the native window host that later input, runtime and rendering work can s
 ## Requirements
 
 ### Requirement: Create a verified native OpenGL context
-The host SHALL report successful creation only after obtaining a real, current OpenGL context with version 4.6 or later, a Core profile, the entry points required by this capability and a double-buffered default framebuffer. Visible and hidden windows SHALL use the same creation and validation path. Invalid configuration, unavailable native facilities and missing requirements SHALL produce distinguishable failures without a partially ready host.
+Successful visible or hidden host creation SHALL require a real current OpenGL 4.6+ Core context, required entry points, a double-buffered default framebuffer and its resource device with validation ready. Invalid configuration, missing native or RHI requirements and creation failures SHALL return distinguishable failures without a partially ready host.
 
 #### Scenario: Create a supported visible or hidden host
 - **WHEN** a caller creates a host on a supported system with a valid initial logical size and either visibility setting
@@ -20,6 +20,18 @@ The host SHALL report successful creation only after obtaining a real, current O
 #### Scenario: Reject invalid startup data
 - **WHEN** the initial logical dimensions are zero or cannot be represented by the native size parameters, or the title contains an embedded null
 - **THEN** creation rejects the configuration before changing process native state
+
+#### Scenario: Borrow the resource device after readiness
+- **WHEN** creation succeeds and the caller borrows the device on the owner thread
+- **THEN** it receives the live validated device without gaining ownership of the host, context or device reference
+
+#### Scenario: Fail during native resource device creation
+- **WHEN** context creation succeeds but a required resource entry, device query or device allocation fails
+- **THEN** the host reports the RHI creation failure, preserves available native error context and unwinds the device, context, window and process state
+
+#### Scenario: Fail during validation composition
+- **WHEN** native device creation succeeds but composing the required validation layer fails
+- **THEN** no Ready host is returned and the unpublished device and native host are released in reverse dependency order
 
 ### Requirement: Report owned observations of the native environment
 A successful host SHALL expose an owned value snapshot of its identity, actual graphics version and profile, vendor and renderer strings, declared startup limits, default framebuffer color encoding and creation duration in seconds. Requested swap interval SHALL be identified as a request rather than proof of effective presentation behavior. An encoding observation SHALL NOT be inferred solely from a creation preference. These observations SHALL NOT imply unimplemented resource, drawing or presentation support.
@@ -63,7 +75,7 @@ Creation and explicit shutdown failures SHALL carry a stable domain reason, oper
 - **THEN** the primary creation failure remains distinguishable and the additional cleanup failure is observable without unbounded error accumulation
 
 ### Requirement: Release native ownership completely and repeatably
-Shutdown and failed creation SHALL release all state acquired by this capability in reverse dependency order on the owner thread. Owned callbacks and borrowed targets SHALL be disconnected before their storage is released, and a previously installed process error callback SHALL be restored. Successful shutdown SHALL be idempotent. After successful rollback or shutdown, the same process SHALL be able to create a new host. A stopped old owner SHALL NOT release the resources or process claim of a newer host.
+On the owner thread, shutdown and rollback SHALL release acquired state in reverse dependency order, disconnect borrowed callbacks before storage dies and restore the prior process error callback. Successful shutdown SHALL be idempotent and allow a new host; a stopped owner SHALL NOT release a newer host. Shutdown with external RHI owners or live resources SHALL instead report ResourceInUse before teardown and permit retry after release.
 
 #### Scenario: Repeat successful create and shutdown
 - **WHEN** a caller repeatedly creates a real host, explicitly shuts it down and destroys the stopped owner
@@ -80,6 +92,18 @@ Shutdown and failed creation SHALL release all state acquired by this capability
 #### Scenario: Shut down a stopped owner after replacement
 - **WHEN** a stopped owner remains alive, a new host is created, and shutdown is called again on the old owner
 - **THEN** the operation is an idempotent success and leaves the new host intact
+
+#### Scenario: Reject shutdown while a resource is live
+- **WHEN** explicit shutdown is requested while an externally owned buffer, texture, sampler or framebuffer remains alive
+- **THEN** it reports ResourceInUse before destroying the device, callbacks, input or native environment and a later retry can succeed after those resources are released
+
+#### Scenario: Reject shutdown while the device is externally retained
+- **WHEN** explicit shutdown is requested while a caller owns an extra device or validation-layer reference
+- **THEN** it reports ResourceInUse without invalidating that reference or its callback target and permits retry after the reference is released
+
+#### Scenario: Drain final releases before closing the context
+- **WHEN** resource users have stopped, final releases have been queued and no external RHI owner remains
+- **THEN** shutdown drains native deletions with the owning context current, releases validation before its raw device and releases the callback target after device destruction
 
 ### Requirement: Keep identities distinct across types and lifetimes
 The foundation SHALL provide identities that cannot be implicitly mixed between domains. Host identities SHALL distinguish successive lifetimes even if a logical slot is reused. Generation exhaustion SHALL be reported rather than wrapping into an older identity. Native pointers SHALL NOT serve as the public host identity.

@@ -16,6 +16,8 @@ add_subdirectory(ThirdParty)
 # Core 先于 Platform 定义; 模块按实际源文件声明标准, 警告与单向依赖.
 # Runtime 只装配已有 Core/Platform; 尚无实现的模块不创建空库.
 add_subdirectory(RHI)
+# 原生组件只在完整工程接入, 独立 generic 消费者无需配置 loader.
+add_subdirectory(RHI/OpenGL)
 add_subdirectory(Engine)
 add_subdirectory(Platform)
 add_subdirectory(Editor)

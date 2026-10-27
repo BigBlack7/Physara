@@ -36,12 +36,12 @@ namespace Physara::Platform
     }
 #endif
 
-    static constexpr std::array<std::string_view, 15> StageNames = {
+    static constexpr std::array<std::string_view, 17> StageNames = {
         "Validation", "Reservation", "GlfwInitialization",
         "WindowCreation", "ContextActivation", "EntryLoading",
         "EnvironmentQuery", "SwapInterval", "Ready",
         "Shutdown", "InputSetup", "EventPolling",
-        "EventWait", "RequestApplication", "Unknown"};
+        "EventWait", "RequestApplication", "RhiCreation", "RhiShutdown", "Unknown"};
 
     static void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
     {
@@ -85,6 +85,14 @@ namespace Physara::Platform
         if (!error)
         {
             error = Detail::InspectEnvironment(state);
+        }
+        if (!error)
+        {
+            state.stage = HostStage::RhiCreation;
+#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
+            ObserveOperation(state.stage, state.diagnostics);
+#endif
+            error = Detail::InitializeResourceDevice(state);
         }
         if (!error)
         {
@@ -454,6 +462,10 @@ namespace Physara::Platform
             Detail::TerminateForContract("DeviceHost destroyed during an active native operation");
         }
         static_cast<void>(Shutdown());
+        if (!m_State->stopped)
+        {
+            Detail::TerminateForContract("DeviceHost destroyed while external RHI owners remain");
+        }
     }
 
     DeviceHost::CreateResult DeviceHost::Create(const HostDesc &desc, Core::Diagnostics &diagnostics) noexcept
@@ -503,6 +515,15 @@ namespace Physara::Platform
     HostInfo DeviceHost::GetInfo() const noexcept
     {
         return m_State->info;
+    }
+
+    RHI::Device *DeviceHost::GetDevice() const noexcept
+    {
+        if (m_State->ownerThread != std::this_thread::get_id() || !m_State->ready)
+        {
+            return nullptr;
+        }
+        return m_State->validatedDevice.Get();
     }
 
     DeviceHost::PollResult DeviceHost::PollEvents() noexcept

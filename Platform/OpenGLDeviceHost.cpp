@@ -12,7 +12,8 @@ namespace Physara::Platform::Detail
 #if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
         const auto &checks = static_cast<DeviceHostState *>(user)->checks;
         if ((checks.missingEntry == MissingEntry::VersionString && std::strcmp(name, "glGetString") == 0) ||
-            (checks.missingEntry == MissingEntry::BooleanQuery && std::strcmp(name, "glGetBooleanv") == 0))
+            (checks.missingEntry == MissingEntry::BooleanQuery && std::strcmp(name, "glGetBooleanv") == 0) ||
+            (checks.missingEntry == MissingEntry::BufferStorage && std::strcmp(name, "glNamedBufferStorage") == 0))
         {
             return nullptr;
         }

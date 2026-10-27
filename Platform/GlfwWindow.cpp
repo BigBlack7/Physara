@@ -211,9 +211,14 @@ namespace Physara::Platform::Detail
         {
             return std::nullopt;
         }
+        if (HasExternalRhiOwners(state))
+        {
+            return MakeError(&state, HostErrorReason::ResourceInUse, HostStage::RhiShutdown,
+                             "Release all resources and extra Device owners before host shutdown");
+        }
         state.ready = false;
+        auto first = ReleaseResourceDevice(state);
         state.stage = HostStage::Shutdown;
-        std::optional<HostError> first;
         if (state.window != nullptr)
         {
             MergeCleanupError(first, ReleaseWindowInput(state));

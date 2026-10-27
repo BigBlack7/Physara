@@ -18,6 +18,11 @@ namespace Physara::Core
     class Diagnostics;
 }
 
+namespace Physara::RHI
+{
+    class Device;
+}
+
 namespace Physara::Platform
 {
     namespace Detail
@@ -100,7 +105,9 @@ namespace Physara::Platform
         InputSetup,
         EventPolling,
         EventWait,
-        RequestApplication
+        RequestApplication,
+        RhiCreation,
+        RhiShutdown
     };
 
     enum class HostErrorReason : std::uint8_t
@@ -126,7 +133,10 @@ namespace Physara::Platform
         CounterExhausted,
         EventProcessing,
         RequestApplication,
-        RequestRejected
+        RequestRejected,
+        RhiCreation,
+        RhiShutdown,
+        ResourceInUse
     };
 
     struct HostError
@@ -160,11 +170,16 @@ namespace Physara::Platform
         DeviceHost(DeviceHost &&) = delete;
         DeviceHost &operator=(DeviceHost &&) = delete;
 
-        // 错误线程不执行原生操作; owner 线程重复关闭成功. 错误线程析构是致命合同违例.
+        // 先停止并 join 资源使用者, 释放全部资源及额外 Device owner, 再关闭.
+        // ResourceInUse 在任何 teardown 前拒绝且可重试; 析构前未收拢 owner 或错误线程析构是致命合同违例.
+        // 清理已开始时即使带错也完成停止; owner 线程重复关闭成功.
         [[nodiscard]] std::optional<HostError> Shutdown() noexcept;
         [[nodiscard]] bool IsReady() const noexcept;
         // 自持值拷贝可跨线程/关闭保留; 活跃 host 本身不并发访问.
         [[nodiscard]] HostInfo GetInfo() const noexcept;
+        // 仅 owner/Ready 返回 Validation Device 借用, 不增加引用; 借用止于成功 Shutdown.
+        // 从此指针构造 owning handle 会取得额外引用, 必须先释放才能关闭 Host.
+        [[nodiscard]] RHI::Device *GetDevice() const noexcept;
 
         // 以下入口限 owner/main 线程且不可重入. 接受的 poll 开始即结束上批 events 借用.
         [[nodiscard]] PollResult PollEvents() noexcept;
