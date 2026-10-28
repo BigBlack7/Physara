@@ -11,17 +11,25 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | 当前入口 | 支持和边界 |
 |---|---|
 | Device | 68 项 override 保留; 原生 Feature 全 false/output 不变, 格式 flags 仅说明资源用途. clip 为 upper-left/zero-to-one, 未作为绘制图像验收 |
-| Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile, 无上传/映射 |
+| Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入, 公共 Map/Copy 仍拒绝 |
 | Texture | 1D/2D/3D、array/cube 和两种 MS storage; 17 项格式映射及每 target 的实际 limits/完整支持/样本集合按当前 design 第 5/6 节执行. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 3D/layered/空/shading-rate/只读颜色拒绝; 深度只读为后续写检查 metadata |
-| 其余 Device 操作 | content/Shader/Binding/Pipeline/CommandList/query/submission/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据/等待成功. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
+| CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持 Open/Close/ClearState、Buffer/颜色 Texture 写入及受限 transfer tracker; 其余方法在读取 payload 前 Unsupported |
+| 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放写入. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, orphan 由 owner 建内部 fence 退休 |
+| 其余 Device 操作 | Shader/Binding/Pipeline/公共 copy/readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
-GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 不把资源分配或格式支持解释为已经交付 Shader、Draw、上传、readback、提交或 GPU 完成.
+GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
+
+上传策略为设备总 mapped capacity 64 MiB、最多 64 物理包、每包最多 4096 非空写入/不同资源及 64 MiB 逻辑目标字节. 小于等于 256 KiB 的 Buffer 写入使用 DSA subdata, 更大写入使用包独有的 persistent/coherent chunk 和 GPU copy. 所有 Texture 上传使用同类 PBO chunk; 完成前不覆写或跨包复用, 完成即释放, 没有 idle cache. 耗尽报告 requested/retained/limit, 不隐式等待. 这些是初始有界策略, 不是设备显存或性能结论.
+
+颜色上传沿唯一 FormatMapping 扩充 external format/type, 支持 R8_UNORM/R8_UINT/RG8_UNORM/RGBA8_UNORM/RGBA8_UINT/SRGBA8_UNORM、R16/RG16/RGBA16_FLOAT、R32_UINT/R32/RG32/RGBA32_FLOAT, 覆盖七种非 MS 维度. 每次写完整选定 mip/layer/face 或 3D volume; row/depth footprint 检查后逐行紧凑复制, 不读取 padding 为 texel, 不翻转或做 gamma 转换. 单行允许 rowPitch=0, 单 depth 忽略 depthPitch; caller 须保证源指针覆盖计算出的可读 footprint. Write 返回后源可释放. 深度/模板/MS 仍可按原分配 profile 创建, 上传拒绝; 已知有限 half/float 值的存储行为不扩展为任意 NaN 位模式保证.
+
+ContextState 仅拥有 unpack PBO 与相关 pixel-store 的一份状态缓存; 外部原生互操作后须在 recording 中 ClearState. transfer tracker 复用 Common, 支持 Common/CopyDest 及 keepInitialState 的原始 ordinary 状态恢复, 不提供 shader-write lowering. 只有 fence/flush 接受后才发布 tracker metadata; 它不代表 texel 已初始化或 GPU 已完成. 预算、租约和 tracker 都由设备物理包持有, 逻辑列表最终 Release 可在已停止的 worker 上只交接, 不执行 GL 或新分配.
 
 ContextAccess 的 user/isCurrent 和 MessageCallback 借用到所有 Device CPU 引用结束; 直接工厂调用方保留根 owner, 收拢资源和额外引用后在 owner 线程 ShutdownDevice. CPU final Release 只转移创建时预留的删除记录, 真正 glDelete 由 owning/current 线程收集. Normal 与 ContextUnavailable 明确区分当前 context 删除和外部 owner 随后销毁不可用 context 的退出; 后者不发布 GPU 完成. 普通缺少 current 不自动切换模式.
 
-Host 的 GetDevice 只在 owner/Ready 返回 Validation 借用. 调用方先停止/join 使用者并释放资源及额外 Device owner; 关闭前 raw==2/validated==1 的已知根关系不满足时, ResourceInUse 在 teardown 前拒绝且可重试. 通过后收集 -> Validation -> raw -> adapter -> context/window; 析构时仍有外部 owner 属于致命合同违例. 回调先保存有界主错再写 Diagnostics, 不从 severity 推断 context loss. Native 首错使 Device 停止新工作, context 已确认不可用时只撤销 CPU 状态并由 owner 最终销毁 context.
+Host 的 GetDevice 只在 owner/Ready 返回 Validation 借用. 调用方先停止/join 使用者并释放外部资源及额外 Device owner; 纯 CPU 预检核对 validated==1、raw==已知根数+内部唯一 wrapper 数及每个资源的精确内部 holds. 不满足时 ResourceInUse 在 teardown 前拒绝且可重试. 通过后 drain -> Validation -> raw -> adapter -> input/context/window. RhiDrainPending 停止新工作并保留全部 owner/context 供重试; 析构仍有外部 owner 或未完成 drain 属于致命合同违例. 回调先保存有界主错再写 Diagnostics, 不从 severity 推断 context loss. 无可靠 fence 只在受控退出尝试一次 glFinish, 驱动调用无硬实时保证; 再次失败/确认不可用后只撤销 CPU 状态并由 owner 最终销毁 context, 不发布假完成.
 
 ## 固定输入
 
@@ -90,13 +98,15 @@ D02-T02 的当前有限差异及前提:
 - 初始 OpenGL 策略在 Device/CommandList 共同的私有 profile 中判定, 无第二份 caps/cache. 27 个 Feature 仅 ConstantBufferRanges 可委托底层, 其余 false 且不改 output; 已知格式仅转发实际 flags, UNKNOWN 无支持. Graphics/immediate 以外、heap/virtual/sparse、bindless、RT/Mesh/feedback/CoopVec 及专属 Shader/raster/VRS/共享资源扩展拒绝. 当前仅有 D3D/Vulkan 原生对象标识, 对应 native-handle imports 拒绝. ShaderLibrary 可提取普通及扩展阶段, 来源 Validation 不包装其 GetShader; 初始 GL 关闭这一未受检入口, 普通 Shader 通过受检的 CreateShader, 库能力随真实消费者接入并验收. 创建/查询/mutation/void 及复用现有 pipeline/bindings 的状态入口共同检查, 不先读取专有 payload. IsAftermathEnabled=false, 引用 getter 报告后抛 logic_error. 现有 D3D11 忽略 registerSpace、Vulkan 要求 descriptor-set 标记等分支保留, GL 的 logical spaces 不被合并.
 - 经维护者确认, 修正固定源 validation-device.cpp:309 的 sampler-feedback native-handle 工厂自递归, 仅在来源允许的 D3D12 分支改为底层一次委托并保留 handle/失败结果; GL 的 Unsupported 拒绝不变. CPU recording double 的调用/参数/空结果回归验证此局部差异, 不声称原生 D3D12 支持.
 - Release 输入检查先于解析/转换/委托. 共用私有 Input 规则集中 Texture/Buffer 的维度、mip、格式、flags、范围与状态条件, 创建和命令消费同一事实; 绑定 validator 在创建和复用已有集合时共享, 不新增可变 registry/caps cache. Resource* 的 Texture/Buffer/Sampler/反馈/AS 类型检查在所有配置使用 dynamic_cast. 只读取 type 对应的 union 载荷, 校验 view、arrayElement、slot/type/layout 与 push constant size. 合法请求保留一次委托, 参数错误、缺少格式能力分别为 InvalidArgument/Unsupported, 一个失败操作只报告一次.
-- buffer/heap 显式区间以 size<=capacity-offset 检查, 不用加法或 clamp 掩盖 copy/write 越界. Texture slice 先证明 mip<32 与范围, 写入按 block/row/depth pitch 检查最小可表示 footprint. Framebuffer 多附件检查 mip 尺寸、层级、sampleCount/quality, 状态检查 vertex/index/indirect range、固定枚举、viewport/scissor 和绑定对应. 公共数据不能表达全部 native limits、每格式样本集合、staging CPU access/mapped 状态或资源 Device. T03 已实现并原生验证基础分配的 limits、样本集合与 Device 归属; staging/mapped 状态及内容读写仍随 T04/T05 验收. 不臆造 QueryLimits、owner getter 或全局地址表.
+- buffer/heap 显式区间以 size<=capacity-offset 检查, 不用加法或 clamp 掩盖 copy/write 越界. Texture slice 先证明 mip<32 与范围, 写入按 block/row/depth pitch 检查最小可表示 footprint. Framebuffer 多附件检查 mip 尺寸、层级、sampleCount/quality, 状态检查 vertex/index/indirect range、固定枚举、viewport/scissor 和绑定对应. 公共数据不能表达全部 native limits、每格式样本集合、staging CPU access/mapped 状态或资源 Device. T03 已原生验证基础分配的 limits、样本集合与 Device 归属, T04 验证普通 Buffer/初始颜色上传及实际完成; 公共 staging/mapped 与完整读回仍归后续验收. 不臆造 QueryLimits、owner getter 或全局地址表.
 - 外部值进入 builder 的窄字段前仍须检查, 本层无法恢复已截断的原值. Utils 自动 layout 生成保留来源的每槽单元素前提, 数组由调用者提供现有匹配 layout. Vertex attribute 不臆造设备 stride/offset 上限, 允许可表示的零步长和较大相对偏移; viewport 深度端点分别受 [0,1] 限制, 不额外禁止反向范围. 资源描述与参数均须先初始化, 例如值初始化 GraphicsState, 再填充实际使用字段.
 - 列表批次先检查数量/包装身份/queue/Closed/重复项并准备全部暂存, 再统一消耗状态并委托一次. 拒绝或自身预检分配失败保留全部 Closed, 后项失败不消耗前项; 委托后的 0/异常不恢复重放. MSVC Debug 的容器构造也纳入分配失败边界, 空 batch 按来源直接返回 0. immediate claim 以原子 CAS 获取, 关闭/析构只释放一次; 底层列表先于父包装释放, 不补执行. BitSetAllocator 的容量检查放在 vector 成员的构造参数求值中, 先于其 Debug bookkeeping/数据存储; 私有数组比较使用 size_t 遍历, 不截断逻辑序列长度.
 
 完整理由与适配边界见 [通用层 design](../openspec/changes/archive/2026-10-26-establish-rhi-common-validation/design.md), 实际结果见其 tasks. 不将本表的 CPU/metadata 合同解释为原生支持或 GPU 完成.
 
 Tracker 的两张 map 按需在 optional 中构造, Reset 销毁它们并清空/释放 vector 容量. 这避免 MSVC Debug 空容器 swap 的清理分配; 故障注入覆盖 Reset 和 Submitted 的无分配清理, 未推广到其他标准库.
+
+Tracker 的四个空 vector 以 count=0 构造, 避免当前 MSVC Debug 默认 noexcept 构造在 proxy OOM 时终止, 使 native Open 的 owner 可捕获失败. 不改动通用状态算法或公共数据布局; 相关差异与验收见上传 change 的 design/tasks.
 
 View 检查保留来源已有的 typeless stencil SRV 对: D24S8→X24G8_UINT 和 D32S8→X32G8_UINT, 依据为同快照的 common/dxgi-format.cpp 与 vulkan-texture.cpp. 不把 stencil-only metadata 误判成深度布局不兼容; 格式/采样能力仍查询底层, 错误对、非 typeless 和其他 view 用途不放宽. T03 已原生验证本包单层附件 view 的兼容性; stencil SRV 导出与内容访问未启用, 不由通用 metadata 检查推导为已支持.
 
@@ -113,6 +123,7 @@ View 检查保留来源已有的 typeless stencil SRV 对: D24S8→X24G8_UINT �
 | Utils 的自由函数、BitSetAllocator 构造/Allocate/Release | `Common/Utils.cpp`, 已实现 |
 | Validation::CreateValidationLayer 及完整 Device/CommandList 包装 | `Validation/ValidationDevice.cpp` / `ValidationCommandList.cpp`, 仅通用层 |
 | Device 纯虚方法 | OpenGL/Backend.hpp 及其 cpp 的完整 68 项闭包, 已实现资源与明确拒绝见上表 |
-| CommandList 等未交付对象、AftermathCrashDumpHelper | 后续实际执行/可选能力工作包; 当前工厂拒绝, 不提供占位实例 |
+| 上传 CommandList | OpenGL/CommandList*.cpp 的 61 项闭包; 正向子集与明确拒绝见上表 |
+| 其它未交付对象、AftermathCrashDumpHelper | 后续实际执行/可选能力工作包; 当前工厂拒绝, 不提供占位实例 |
 
 ScopedMarker 和 descriptor 的头内转发仍需满足其调用对象/外部定义前提, 不因函数体在头里就保证所有使用方式可链接. 公共头不依赖 Core、Platform、Editor、GLFW、GLAD、ImGui 或 Vulkan SDK. 构建/运行说明集中在 [Build](../Docs/Build.md), 当前工作包状态见 [Developments](../Docs/Developments.md#d02-t02).

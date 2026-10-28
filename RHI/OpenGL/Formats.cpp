@@ -9,25 +9,42 @@ namespace Physara::RHI::OpenGL
     {
         Format format;
         GLenum internalFormat;
+        GLenum uploadFormat = 0;
+        GLenum uploadType = 0;
     };
 
-    static constexpr FormatMapping FormatMappings[] = {{Format::R8_UNORM, GL_R8},
-                                                       {Format::R8_UINT, GL_R8UI},
-                                                       {Format::RG8_UNORM, GL_RG8},
-                                                       {Format::RGBA8_UNORM, GL_RGBA8},
-                                                       {Format::RGBA8_UINT, GL_RGBA8UI},
-                                                       {Format::SRGBA8_UNORM, GL_SRGB8_ALPHA8},
-                                                       {Format::R16_FLOAT, GL_R16F},
-                                                       {Format::RG16_FLOAT, GL_RG16F},
-                                                       {Format::RGBA16_FLOAT, GL_RGBA16F},
-                                                       {Format::R32_UINT, GL_R32UI},
-                                                       {Format::R32_FLOAT, GL_R32F},
-                                                       {Format::RG32_FLOAT, GL_RG32F},
-                                                       {Format::RGBA32_FLOAT, GL_RGBA32F},
-                                                       {Format::D16, GL_DEPTH_COMPONENT16},
-                                                       {Format::D24S8, GL_DEPTH24_STENCIL8},
-                                                       {Format::D32, GL_DEPTH_COMPONENT32F},
-                                                       {Format::D32S8, GL_DEPTH32F_STENCIL8}};
+    static constexpr FormatMapping FormatMappings[] = {
+        {Format::R8_UNORM, GL_R8, GL_RED, GL_UNSIGNED_BYTE},
+        {Format::R8_UINT, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE},
+        {Format::RG8_UNORM, GL_RG8, GL_RG, GL_UNSIGNED_BYTE},
+        {Format::RGBA8_UNORM, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        {Format::RGBA8_UINT, GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},
+        {Format::SRGBA8_UNORM, GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        {Format::R16_FLOAT, GL_R16F, GL_RED, GL_HALF_FLOAT},
+        {Format::RG16_FLOAT, GL_RG16F, GL_RG, GL_HALF_FLOAT},
+        {Format::RGBA16_FLOAT, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
+        {Format::R32_UINT, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT},
+        {Format::R32_FLOAT, GL_R32F, GL_RED, GL_FLOAT},
+        {Format::RG32_FLOAT, GL_RG32F, GL_RG, GL_FLOAT},
+        {Format::RGBA32_FLOAT, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {Format::D16, GL_DEPTH_COMPONENT16},
+        {Format::D24S8, GL_DEPTH24_STENCIL8},
+        {Format::D32, GL_DEPTH_COMPONENT32F},
+        {Format::D32S8, GL_DEPTH32F_STENCIL8}};
+
+    bool GetUploadFormat(Format format, GLenum &externalFormat, GLenum &externalType) noexcept
+    {
+        for (const auto &mapping : FormatMappings)
+        {
+            if (mapping.format == format && mapping.uploadFormat != 0)
+            {
+                externalFormat = mapping.uploadFormat;
+                externalType = mapping.uploadType;
+                return true;
+            }
+        }
+        return false;
+    }
 
     GLenum TextureTarget(TextureDimension dimension) noexcept
     {

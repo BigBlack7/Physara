@@ -464,7 +464,7 @@ namespace Physara::Platform
         static_cast<void>(Shutdown());
         if (!m_State->stopped)
         {
-            Detail::TerminateForContract("DeviceHost destroyed while external RHI owners remain");
+            Detail::TerminateForContract("DeviceHost destroyed with external RHI owners or an unfinished RHI drain");
         }
     }
 

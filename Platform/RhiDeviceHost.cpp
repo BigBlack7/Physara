@@ -99,7 +99,9 @@ namespace Physara::Platform::Detail
     {
         // 调用方必须先收拢用户. 此处只验证已知根引用关系, 不作为并发停止协议.
         return (state.validatedDevice && state.validatedDevice->GetRefCount() != 1) ||
-               (state.rawDevice && state.rawDevice->GetRefCount() != (state.validatedDevice ? 2ul : 1ul));
+               (state.rawDevice &&
+                RHI::OpenGL::CheckShutdownPreconditions(state.rawDevice.Get(), state.validatedDevice ? 2ul : 1ul) !=
+                    RHI::OpenGL::ShutdownPrecondition::Ready);
     }
 
     std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state)
@@ -129,20 +131,22 @@ namespace Physara::Platform::Detail
                 MakeError(&state, HostErrorReason::RhiShutdown, state.stage,
                           "Owning context unavailable during final RHI shutdown; releasing context without GL cleanup");
         }
-        if (current)
-        {
-            state.rawDevice->RunGarbageCollection();
-        }
-        state.validatedDevice.Reset();
         std::uint32_t nativeError = 0;
-        const bool stopped = RHI::OpenGL::ShutdownDevice(
+        const auto result = RHI::OpenGL::DrainDeviceWork(
             state.rawDevice.Get(),
             current ? RHI::OpenGL::ShutdownMode::Normal : RHI::OpenGL::ShutdownMode::ContextUnavailable, &nativeError);
-        if (!stopped)
+        if (result != RHI::OpenGL::DrainResult::Ready)
+        {
+            state.rhiMessages.EndCapture();
+            return MakeError(&state, HostErrorReason::RhiDrainPending, state.stage,
+                             "RHI drain incomplete; retain host and retry Shutdown before destruction");
+        }
+        if (nativeError != 0 || state.rhiMessages.First())
         {
             MergeCleanupError(first,
                               ResourceError(state, HostErrorReason::RhiShutdown, "RHI cleanup failed", nativeError));
         }
+        state.validatedDevice.Reset();
         state.rawDevice.Reset();
         state.rhiMessages.EndCapture();
         return first;

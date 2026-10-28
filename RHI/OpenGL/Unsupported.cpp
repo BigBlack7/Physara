@@ -443,30 +443,12 @@ namespace Physara::RHI::OpenGL
         return false;
     }
 
-    CommandListHandle OpenGLDevice::CreateCommandList(const CommandListParameters &)
-    {
-        if (RequireContext("CreateCommandList"))
-        {
-            Report("CreateCommandList", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
     void OpenGLDevice::QueueWaitForCommandList(CommandQueue, CommandQueue, uint64_t)
     {
         if (RequireContext("QueueWaitForCommandList"))
         {
             Report("QueueWaitForCommandList", "Unsupported: resource-only device");
         }
-    }
-
-    bool OpenGLDevice::WaitForIdle()
-    {
-        if (RequireContext("WaitForIdle"))
-        {
-            Report("WaitForIdle", "Unsupported: resource-only device");
-        }
-        return false;
     }
 
     CommandListLifetimeTrackerHandle OpenGLDevice::CreateCommandListLifetimeTracker(CommandQueue)

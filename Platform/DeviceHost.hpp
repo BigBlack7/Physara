@@ -136,7 +136,8 @@ namespace Physara::Platform
         RequestRejected,
         RhiCreation,
         RhiShutdown,
-        ResourceInUse
+        ResourceInUse,
+        RhiDrainPending
     };
 
     struct HostError
@@ -172,7 +173,8 @@ namespace Physara::Platform
 
         // 先停止并 join 资源使用者, 释放全部资源及额外 Device owner, 再关闭.
         // ResourceInUse 在任何 teardown 前拒绝且可重试; 析构前未收拢 owner 或错误线程析构是致命合同违例.
-        // 清理已开始时即使带错也完成停止; owner 线程重复关闭成功.
+        // RhiDrainPending 停止新工作并保留 context/owner, 必须重试至停止后再析构; 无硬实时保证.
+        // 最终删除开始后即使带错也完成停止; owner 线程重复关闭成功.
         [[nodiscard]] std::optional<HostError> Shutdown() noexcept;
         [[nodiscard]] bool IsReady() const noexcept;
         // 自持值拷贝可跨线程/关闭保留; 活跃 host 本身不并发访问.

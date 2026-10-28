@@ -25,6 +25,8 @@
 #include "../OpenGL.hpp"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <source_location>
@@ -32,10 +34,14 @@
 
 #include <glad/gl.h>
 
+#include "../Common/StateTracking.hpp"
+#include "ContextState.hpp"
+
 namespace Physara::RHI::OpenGL
 {
     // 接口签名来源见 RHI/README; GL 实现与下列私有状态由本项目定义.
     inline constexpr std::size_t TextureDimensionCount = 10;
+    inline constexpr std::size_t UploadPacketLimit = 64;
     struct FormatCaps
     {
         GLenum internalFormat = 0;
@@ -56,6 +62,7 @@ namespace Physara::RHI::OpenGL
         GLint maxSamples = 0;
         GLfloat maxAnisotropy = 0;
         GLfloat maxLodBias = 0;
+        GLint minMapAlignment = 0;
     };
 
     enum class NativeKind : std::uint8_t
@@ -84,6 +91,12 @@ namespace Physara::RHI::OpenGL
     };
 
     struct ResourceChecks;
+    struct UploadChecks;
+    struct UploadWorkPacket;
+    struct UploadSlice;
+    struct SubmissionState;
+    class OpenGLCommandList;
+    class UploadResourceLease;
     class OpenGLDevice final : public RefCounter<RHI::Device>
     {
     public:
@@ -91,6 +104,8 @@ namespace Physara::RHI::OpenGL
         ~OpenGLDevice() override;
         [[nodiscard]] bool Initialize();
         [[nodiscard]] bool Shutdown(ShutdownMode mode, std::uint32_t *nativeError);
+        [[nodiscard]] ShutdownPrecondition CheckShutdown(unsigned long knownRoots) const noexcept;
+        [[nodiscard]] DrainResult DrainWork(ShutdownMode mode, std::uint32_t *nativeError);
         [[nodiscard]] bool RequireContext(const char *operation, bool allowFaulted = false) const noexcept;
         [[nodiscard]] bool BeginNative(const char *operation, const char *label = nullptr,
                                        std::source_location location = std::source_location::current()) noexcept;
@@ -200,12 +215,24 @@ namespace Physara::RHI::OpenGL
         {
             Active,
             Faulted,
+            Draining,
             Stopped
         };
         void Drain(bool nativeAvailable) noexcept;
         [[nodiscard]] bool DeleteNative(NativeDeletion &record) noexcept;
         void NativeFailure(const char *operation, GLenum error, const char *resource,
                            std::source_location location) noexcept;
+        [[nodiscard]] UploadWorkPacket *OpenPacket(std::size_t minimumChunk);
+        void AbandonPacket(UploadWorkPacket &packet) noexcept;
+        void ReleaseClaim(std::uint64_t recordingId) noexcept;
+        void RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept;
+        [[nodiscard]] bool SealOrphans();
+        [[nodiscard]] bool CollectWork(bool wait);
+        [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
+        [[nodiscard]] bool CheckCompletionFence(GLsync sync, const char *operation) noexcept;
+        [[nodiscard]] bool AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice);
+        void ReportBudget(const char *operation, std::size_t requested, std::size_t retained,
+                          std::size_t limit) const noexcept;
         DeviceDesc m_Desc;
         const std::thread::id m_OwnerThread = std::this_thread::get_id();
         DeviceCaps m_Caps;
@@ -215,12 +242,26 @@ namespace Physara::RHI::OpenGL
         std::mutex m_DeletionMutex;
         NativeDeletion *m_DeletionHead = nullptr;
         NativeDeletion *m_DeletionTail = nullptr;
+        std::array<std::unique_ptr<UploadWorkPacket>, UploadPacketLimit> m_Packets{};
+        std::unique_ptr<SubmissionState> m_Submissions;
+        std::atomic<std::uint64_t> m_ActiveRecording{0};
+        std::uint64_t m_LastRecordingId = 0;
+        std::uint64_t m_LastSubmissionId = 0;
+        std::uint64_t m_CompletedSubmissionId = 0;
+        std::size_t m_UploadCapacity = 0;
+        unsigned long m_InternallyRetainedWrappers = 0;
+        ContextState m_ContextState;
+        bool m_WorkFailed = false;
         friend struct ResourceChecks;
+        friend struct UploadChecks;
+        friend class OpenGLCommandList;
+        friend class UploadResourceLease;
     };
 
     [[nodiscard]] bool BuildCaps(OpenGLDevice &device, DeviceCaps &caps);
     [[nodiscard]] GLenum TextureTarget(TextureDimension dimension) noexcept;
     [[nodiscard]] bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept;
+    [[nodiscard]] bool GetUploadFormat(Format format, GLenum &externalFormat, GLenum &externalType) noexcept;
 
     // 以下 wrapper 的不可变描述/CPU 引用可跨线程, 原生创建/收集限 owning/current 线程.
     // 每个活 wrapper 强持有 Device; 外部根 owner 必须保留到全部 wrapper 释放和退休排空.
@@ -245,10 +286,14 @@ namespace Physara::RHI::OpenGL
     private:
         RefCountPtr<OpenGLDevice> m_Device;
         BufferDesc m_Desc;
+        BufferStateExtension m_State{m_Desc};
+        unsigned long m_InternalUploadHolds = 0;
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
         friend struct ResourceChecks;
+        friend struct UploadChecks;
+        friend class OpenGLCommandList;
     };
 
     class OpenGLTexture final : public RefCounter<RHI::Texture>
@@ -281,10 +326,14 @@ namespace Physara::RHI::OpenGL
     private:
         RefCountPtr<OpenGLDevice> m_Device;
         TextureDesc m_Desc;
+        TextureStateExtension m_State{m_Desc};
+        unsigned long m_InternalUploadHolds = 0;
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
         friend struct ResourceChecks;
+        friend struct UploadChecks;
+        friend class OpenGLCommandList;
     };
 
     class OpenGLSampler final : public RefCounter<RHI::Sampler>

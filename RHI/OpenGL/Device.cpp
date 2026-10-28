@@ -1,11 +1,14 @@
 #include "Backend.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <exception>
 #include <memory>
 #include <new>
 #include <thread>
 #include <utility>
+
+#include "Submission.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -15,7 +18,9 @@ namespace Physara::RHI::OpenGL
 
     OpenGLDevice::~OpenGLDevice()
     {
-        if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr)
+        if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr || m_UploadCapacity != 0 ||
+            m_InternallyRetainedWrappers != 0 || (m_Submissions && m_Submissions->count != 0) ||
+            std::any_of(m_Packets.begin(), m_Packets.end(), [](const auto &packet) { return packet != nullptr; }))
         {
             // 原生 owner 必须先显式收拢; Stopped 后只剩 CPU 状态, 最后引用可跨线程释放.
             std::terminate();
@@ -38,7 +43,7 @@ namespace Physara::RHI::OpenGL
             Report(operation, "InvalidState: wrong owner thread");
             return false;
         }
-        if (m_Phase == Phase::Stopped || (!allowFaulted && m_Phase == Phase::Faulted))
+        if (m_Phase == Phase::Stopped || (!allowFaulted && m_Phase != Phase::Active))
         {
             Report(operation, "InvalidState: device is stopped or faulted");
             return false;
@@ -64,6 +69,7 @@ namespace Physara::RHI::OpenGL
             m_FirstNativeError = error;
         }
         m_Phase = Phase::Faulted;
+        m_WorkFailed = true;
         if (error == GL_CONTEXT_LOST)
         {
             m_NativeUsable = false;
@@ -134,7 +140,22 @@ namespace Physara::RHI::OpenGL
                                  {glNamedFramebufferDrawBuffers != nullptr, "glNamedFramebufferDrawBuffers"},
                                  {glNamedFramebufferReadBuffer != nullptr, "glNamedFramebufferReadBuffer"},
                                  {glCheckNamedFramebufferStatus != nullptr, "glCheckNamedFramebufferStatus"},
-                                 {glDeleteFramebuffers != nullptr, "glDeleteFramebuffers"}};
+                                 {glDeleteFramebuffers != nullptr, "glDeleteFramebuffers"},
+                                 {glNamedBufferSubData != nullptr, "glNamedBufferSubData"},
+                                 {glCopyNamedBufferSubData != nullptr, "glCopyNamedBufferSubData"},
+                                 {glMapNamedBufferRange != nullptr, "glMapNamedBufferRange"},
+                                 {glUnmapNamedBuffer != nullptr, "glUnmapNamedBuffer"},
+                                 {glBindBuffer != nullptr, "glBindBuffer"},
+                                 {glPixelStorei != nullptr, "glPixelStorei"},
+                                 {glTextureSubImage1D != nullptr, "glTextureSubImage1D"},
+                                 {glTextureSubImage2D != nullptr, "glTextureSubImage2D"},
+                                 {glTextureSubImage3D != nullptr, "glTextureSubImage3D"},
+                                 {glFenceSync != nullptr, "glFenceSync"},
+                                 {glClientWaitSync != nullptr, "glClientWaitSync"},
+                                 {glDeleteSync != nullptr, "glDeleteSync"},
+                                 {glIsSync != nullptr, "glIsSync"},
+                                 {glFlush != nullptr, "glFlush"},
+                                 {glFinish != nullptr, "glFinish"}};
         for (const auto &entry : entries)
         {
             if (!entry.available)
@@ -145,6 +166,14 @@ namespace Physara::RHI::OpenGL
         }
         if (!BeginNative("CreateDevice"))
         {
+            return false;
+        }
+        m_Submissions = std::make_unique<SubmissionState>();
+        glGetIntegerv(GL_MIN_MAP_BUFFER_ALIGNMENT, &m_Caps.minMapAlignment);
+        if (!CheckNative("CreateDevice.MapAlignment") || m_Caps.minMapAlignment <= 0 ||
+            (m_Caps.minMapAlignment & (m_Caps.minMapAlignment - 1)) != 0)
+        {
+            Report("CreateDevice", "Unsupported: invalid minimum map alignment");
             return false;
         }
         GLint major = 0;
@@ -294,52 +323,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    void OpenGLDevice::RunGarbageCollection()
-    {
-        if (RequireContext("RunGarbageCollection", true) && CheckNative("RunGarbageCollection"))
-        {
-            Drain(true);
-        }
-    }
 
-    bool OpenGLDevice::Shutdown(ShutdownMode mode, std::uint32_t *nativeError)
-    {
-        if (nativeError != nullptr)
-        {
-            *nativeError = 0;
-        }
-        if (std::this_thread::get_id() != m_OwnerThread || mode > ShutdownMode::ContextUnavailable)
-        {
-            Report("ShutdownDevice", "InvalidArgument: thread or shutdown mode");
-            return false;
-        }
-        if (m_Phase == Phase::Stopped)
-        {
-            return true;
-        }
-        if (GetRefCount() != 1)
-        {
-            Report("ShutdownDevice", "ResourceInUse: release all extra device and resource references");
-            return false;
-        }
-        if (mode == ShutdownMode::Normal && m_NativeUsable && !RequireContext("ShutdownDevice", true))
-        {
-            return false;
-        }
-        bool nativeAvailable = mode == ShutdownMode::Normal && m_NativeUsable;
-        if (nativeAvailable)
-        {
-            // 清理也先归属既存首错; 确认 loss 后不再调用任何 GL 删除.
-            nativeAvailable = CheckNative("ShutdownDevice") && m_NativeUsable;
-        }
-        Drain(nativeAvailable);
-        m_Phase = Phase::Stopped;
-        if (nativeError != nullptr)
-        {
-            *nativeError = m_FirstNativeError;
-        }
-        return m_FirstNativeError == GL_NO_ERROR;
-    }
 
     DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError)
     {
@@ -434,14 +418,6 @@ namespace Physara::RHI::OpenGL
         return m_Caps.formats[std::size_t(format)][std::size_t(dimension)];
     }
 
-    uint64_t OpenGLDevice::ExecuteCommandLists(CommandList *const *, size_t count, CommandQueue)
-    {
-        if (count != 0 && RequireContext("ExecuteCommandLists"))
-        {
-            Report("ExecuteCommandLists", "Unsupported: resource-only device has no command submission");
-        }
-        return 0;
-    }
 
     bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept
     {

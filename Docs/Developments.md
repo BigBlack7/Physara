@@ -264,7 +264,7 @@ flowchart TD
 
 **阶段目标：** 保留 NVRHI 完整公共谱系，先实现基础 OpenGL 资源与可验证的设备/资源生命周期。
 
-**当前前置例外：** 维护者允许保留 D01 的 4.1 跨屏环境验收, 先推进 D02-T01 公共合同、T02 Common/Validation, 并在本次明确授权后推进 T03 设备、基础资源、必要删除及既定 native 测试. T01 原决定见 [窗口 change](../openspec/changes/establish-window-input-runtime/design.md#closeout), T02 决定见 [通用层归档](../openspec/changes/archive/2026-10-26-establish-rhi-common-validation/design.md), T03 的独立授权、原因和退出条件见 [设备资源归档](../openspec/changes/archive/2026-10-27-establish-opengl-device-resources/design.md). 资源分配/查询不依赖跨屏变化, 受影响 Host/输入仍须回归. 例外只覆盖所列工作包, D01 4.1/出口、T04 上传、T05 全面读回、D03 绘制提交及 D01/D02 总出口继续未完成; 呈现/跨屏 UI 及其余 native 工作不获得提前实施许可. 补足 D01 实测并通过出口后恢复普通前置.
+**当前前置例外：** 维护者分别允许保留 D01 的 4.1 跨屏环境验收先推进 D02-T01 公共合同、T02 Common/Validation、T03 设备/基础资源, 并在本次 apply 单独明确允许 T04 初始上传及必要即时列表/fence/在途保活/Host 关闭和 T05 最小读回. T01 原决定见 [窗口 change](../openspec/changes/establish-window-input-runtime/design.md#closeout), T02 决定见 [通用层归档](../openspec/changes/archive/2026-10-26-establish-rhi-common-validation/design.md), T03 决定见 [设备资源归档](../openspec/changes/archive/2026-10-27-establish-opengl-device-resources/design.md), 本次独立授权、原因、回归和退出条件见 [上传 design](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md). 所列资源/内容/完成协议不依赖跨屏比例, 受影响 Host/输入仍须回归; 单屏结果不替代 D01 原验收. 例外不放行完整 T05/D03、呈现/跨屏 UI、其它 native 工作或 D01/D02 总出口, 也不把获准实施写成已完成. 补足 D01 实测并通过出口后恢复普通前置.
 
 <a id="d02-t01"></a>
 #### D02-T01 · 机械移植完整公共接口与来源映射
@@ -325,15 +325,19 @@ flowchart TD
 <a id="d02-t04"></a>
 #### D02-T04 · 实现安全的初始上传与资源释放协议
 
-**职责位置：** RHI/OpenGL 资源/上传/删除。**前置：** [D02-T03](#d02-t03)。**架构依据：** [7.4](Architecture.md#uploads)、[11.1](Architecture.md#retirement)。
+**职责位置：** RHI/OpenGL 资源/上传/删除与上传限定列表/提交, Platform 关闭互操作。**前置：** [D02-T03](#d02-t03) 完成, 并通过 D01 出口或取得本 change 独立明确的限定例外; 既有 T03 例外不自动延续。**架构依据：** [7.4](Architecture.md#uploads)、[7.6](Architecture.md#command-execution)、[11.1](Architecture.md#retirement)、[11.5](Architecture.md#shutdown)。
 
-- [ ] 实现有界、拥有源数据的基础 Buffer/Texture 内容写入路径；声明 CPU 数据可以释放的确切时刻。
-- [x] 实现 wrapper 引用与 context 线程原生删除队列；设备关闭前清理资源，后续提交引用从 D03 接入。
+- [x] 实现有界、拥有源数据的基础 Buffer/Texture 内容写入路径；声明 CPU 数据可以释放的确切时刻。
+- [x] 建立上传所需的 Graphics/单即时列表、一次提交、真实 fence/完成及在途保活基础, 供 D03 在同一对象上扩展。
+- [x] 实现 T03 无提交资源的 wrapper 引用与 context 线程原生删除队列；设备关闭前收拢该已交付子集。
 - [x] 验证资源创建失败、重复分配释放、视图持有关系及原生名称复用时的缓存失效。
+- [x] 验证上传区段与资源只在真实完成后退休, 并完成未提交即时前缀、外部/内部引用区分和可重试 drain 的关闭协议。
 
-**完成条件：** 资源生存期不依赖固定帧差；在途复用尚未启用时也没有裸指针或错误线程删除。
+**完成条件：** CPU 源数据释放时刻明确, 上传内容及寿命有真实设备证据; 资源和上传区段的退休不依赖固定帧差, 没有悬空来源、过早复用或错误线程删除。
 
-**与 T03 的交付衔接：** T03 已验证 wrapper 引用、创建前预分配退休节点、context 线程删除和关闭收拢, 并覆盖失败/视图强引用与实际名称复用. 当前没有视图缓存, 原生复用未误认旧状态. 本包沿用同一 Device/删除协议；内容上传及其源数据寿命仍未实施, T04 整体保持未完成, 后续提交引用/真实完成保护由 D03 接入.
+**与 T03 的交付衔接：** T03 已验证 wrapper 引用、创建前预分配退休节点、context 线程删除和关闭收拢, 并覆盖失败/视图强引用与实际名称复用. 当前没有视图缓存, 原生复用未误认旧状态. T04 沿用同一 Device/删除协议推进内容上传、真实提交完成和源数据寿命; 完成状态以本包实际任务与验证为准.
+
+**本轮实施与证据：** 关联 [establish-opengl-resource-uploads](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/proposal.md), 具体方法与边界见其 [design](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 实际命令/源标识/验证见 [tasks](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/tasks.md). 本次维护者单独批准的限定例外只覆盖 T04、必要即时列表/fence/在途保活/Host 关闭和 T05 最小读回. 普通 Buffer 与 13 种颜色格式/7 种非 MS 纹理维度上传已实现; Write 返回后 CPU 源可释放, GPU 引用/存储只在真实完成或明确不可用 context 的受控退出中撤销. Debug/Release 各 702 次纹理子资源实际读回、Buffer 阈值/区间、所有预算、worker、失败前缀及 Pending 关闭重试通过; 通用层、T03、Core/Host/输入/Runtime 与独立生产构建回归通过. 完整 T05/D03/呈现和 D01 跨屏及阶段出口保留未完成, 本 change 已同步主规格并归档, 尚未提交 Git.
 
 <a id="d02-t05"></a>
 #### D02-T05 · 建立真实资源与设备能力一致性用例
@@ -347,11 +351,13 @@ flowchart TD
 
 **完成条件：** 资源语义有真实设备证据；测试环境与产品使用同一个 GL 后端实现。
 
-**T05 当前边界：** T03 已提供资源分配、实际 caps/归属及失败/退出的共享 native 证据. buffer 内容、纹理数据/行序读回、完整执行 profile 与写入路径仍待 T04 后完整验收. 当前没有可用列表或提交；通用层 Graphics/immediate 准入不等于原生执行能力, T05 保留未完成.
+**T05 当前边界：** T03 提供资源分配、实际 caps/归属及失败/退出证据, T04 已补充普通 Buffer、初始颜色纹理写入/行序和真实完成的最小读回. 当前原生列表只支持上传限定 profile; 深度/模板/MS 内容、公共 staging/readback、Shader/Draw 等完整执行行为仍需后续验收, T05 保留未完成.
+
+**与 T04 的交付衔接：** 上传 change 已通过同一正式 Host/Validation/backend 的最小 fixture 读回验证颜色数据、mip/layer/行序和真实完成, 自然观察与受控 Pending/失败分开记录. T05 复用该入口验收后续完整 profile, 不将初始颜色上传推导为深度/模板/MS 内容写入、公共 staging/readback、Shader 消费或阶段出口; 当前不据此勾选本包任务.
 
 **D02 阶段出口：** 公共层、Common、Validation 可构建；真实 GL 设备可创建/写入/释放基础资源，不支持项明确报错，设备/context 退出顺序正确。
 
-**当前状态：** T01/T02 已归档, T03 资源实现、Code Review 与本包 native/verify 检查通过, change 尚未归档. T04 上传、T05 内容/行序/完整行为验收及 D01 跨屏仍有缺口, D02 总出口保持未通过.
+**当前状态：** T01/T02/T03 已完成并归档, T04 的限定上传/寿命实现与两配置验证已完成, 证据分别见对应 change tasks. T05 完整行为验收及 D01 跨屏仍有缺口, D02 总出口保持未通过; T04 已完成三能力主规格同步与归档, 阶段出口不因限定例外放行.
 
 <a id="dev-d03"></a>
 ### D03 · 打通 Shader ABI 与第一次原生绘制
@@ -393,6 +399,8 @@ flowchart TD
 
 **完成条件：** 原生 Draw 在即时列表调用时发出，Execute 不重放；基本状态及索引语义通过像素/已知数据检查。
 
+**与 D02-T04 的交付衔接：** 上传限定列表的 open/close、owner/唯一 claim 和一次提交基础已在 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md) 建立. 本包在同一列表上扩展 clear/Graphics/Draw、原生状态与实际访问 lowering, 不复制第二套列表; 上传基础不是本包绘制验收, 上述任务继续未完成.
+
 <a id="d03-t04"></a>
 #### D03-T04 · 实现提交票据、在途引用与完成回收
 
@@ -403,6 +411,8 @@ flowchart TD
 - [ ] 检查关闭后提交、重复执行拒绝、提交后立即释放 CPU 句柄、在途退出和未提交即时工作退出；区分 poll 的 Complete/Pending/Failed，只有 Complete 推进完成值。Fatal 停止新渲染而不等于 device lost，可用 context 的无 fence 工作在退出收拢，失效 context 不等待失败 ID。
 
 **完成条件：** 像素读回和资源退休由真实完成驱动，CPU 释放不导致 GPU 或上传区段提前复用。
+
+**与 D02-T04 的交付衔接：** 上传 change 已实现其必要的真实 fence/flush、完成收集、内部引用/预算和无 fence 退出基础. 本包在同一 Device/packet/删除协议上覆盖真实 Draw、后续上传版本、查询及其它在途消费者, 完整验收既有票据/失败合同; 不因有限子集交付而提前勾选本包或 D03 出口.
 
 <a id="d03-t05"></a>
 #### D03-T05 · 形成首个稳定原生绘制门槛

@@ -196,10 +196,10 @@ Creation SHALL publish a handle only after all CPU and native steps succeed. Fai
 - **THEN** new resource work is rejected and controlled cleanup follows the actual context condition without inferring device loss solely from diagnostic severity
 
 ### Requirement: Reject unavailable operations without fictitious GPU work
-The delivered resource-only device SHALL preserve the complete public interface while explicitly refusing unavailable content, shader, binding, draw, query, submission and extension operations. Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, upload data, issue a ticket or wait for invented GPU work.
+The delivered device SHALL preserve the complete public interface and distinguish the documented upload-list, content and submission subset from unavailable shader, binding, draw, query and extension operations. Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, issue work or tickets, or wait for invented GPU work. Enabling the upload subset SHALL NOT imply general rendering support.
 
 #### Scenario: Request a command list or submission
-- **WHEN** a caller requests an unavailable list or executes a nonempty batch on this resource-only device
+- **WHEN** a caller requests a list or submission mode outside the documented upload profile
 - **THEN** the operation fails with no list, replay, issued work or positive submission result
 
 #### Scenario: Request an excluded family with unused payload
@@ -226,12 +226,12 @@ The existing generic RHI target and headers SHALL remain independently consumabl
 - **THEN** native types remain inside interoperability boundaries, existing public values and layouts remain intact and the reference snapshot stays outside the build
 
 ### Requirement: Report allocation separately from completed rendering
-Delivery SHALL identify the tested resource profile, native environment and observed results. Allocation, queries and CPU validation SHALL NOT imply upload, raster output, synchronization, presentation or whole-stage acceptance. Deferred acceptance and any prerequisite exception SHALL remain explicit. An approved exception SHALL stay limited to its documented work package and SHALL NOT close deferred acceptance.
+Delivery SHALL distinguish allocation, verified uploads and completed rendering, identify its tested profile, native environment and observed results, and keep deferred acceptance explicit. Allocation or CPU validation alone SHALL NOT establish upload, raster, synchronization or presentation behavior. Upload evidence SHALL cover only implemented data paths. A prerequisite exception SHALL stay limited to its explicitly approved work package and SHALL NOT close deferred acceptance.
 
 #### Scenario: Report successful resource verification
-- **WHEN** the resource checks and affected builds pass
-- **THEN** completion identifies this resource capability and leaves content upload, full data and row-order readback, drawing and submission assigned to their remaining work packages
+- **WHEN** allocation checks or the separately scoped native upload checks and affected builds pass
+- **THEN** completion identifies the capability actually verified and leaves excluded content modes, full-stage acceptance, drawing and presentation with their remaining work packages
 
 #### Scenario: Encounter an unmet implementation prerequisite
 - **WHEN** D01 still lacks its required cross-display acceptance or stage exit
-- **THEN** only an explicitly approved exception permits the documented resource work, while D01 acceptance and all other work-package prerequisites remain incomplete without relying on the earlier generic-only exception
+- **THEN** only an explicitly approved exception for the current change permits its documented work, including this change's limited initial uploads, necessary immediate submission/lifetime/shutdown and minimum native readback, while D01 acceptance, full T05/D03, presentation and stage exits remain incomplete without inheriting earlier generic or T03 resource exceptions

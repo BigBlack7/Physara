@@ -217,7 +217,12 @@ namespace Physara::Platform::Detail
                              "Release all resources and extra Device owners before host shutdown");
         }
         state.ready = false;
+        state.inputAccepting = false;
         auto first = ReleaseResourceDevice(state);
+        if (first && first->reason == HostErrorReason::RhiDrainPending)
+        {
+            return first;
+        }
         state.stage = HostStage::Shutdown;
         if (state.window != nullptr)
         {

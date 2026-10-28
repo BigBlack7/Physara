@@ -9,6 +9,18 @@ add_library(PhysaraRHIOpenGL STATIC
     Texture.cpp
     Sampler.cpp
     Framebuffer.cpp
+    # 即时列表/上传数据与提交退休分别拥有其状态, 共享唯一 Common tracker.
+    CommandList.hpp
+    CommandList.cpp
+    CommandListState.cpp
+    CommandListUpload.cpp
+    CommandListUnsupported.cpp
+    Upload.hpp
+    Upload.cpp
+    Submission.hpp
+    Submission.cpp
+    ContextState.hpp
+    ContextState.cpp
 )
 
 target_link_libraries(PhysaraRHIOpenGL PUBLIC PhysaraRHI PRIVATE glad)

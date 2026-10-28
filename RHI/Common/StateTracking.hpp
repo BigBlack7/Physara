@@ -95,10 +95,13 @@ namespace Physara::RHI
     class CommandListResourceStateTracker
     {
       public:
-        explicit CommandListResourceStateTracker(MessageCallback *messageCallback) : m_MessageCallback(messageCallback)
-        {
-            m_HasErrors = messageCallback == nullptr;
-        }
+          explicit CommandListResourceStateTracker(MessageCallback *messageCallback)
+              : m_MessageCallback(messageCallback), m_PermanentTextureStates(0), m_PermanentBufferStates(0),
+                m_TextureBarriers(0), m_BufferBarriers(0)
+          {
+              // MSVC Debug 的默认 vector 构造为 noexcept 却分配 proxy; count 构造允许 owner 捕获 OOM.
+              m_HasErrors = messageCallback == nullptr;
+          }
 
         // ICommandList-like interface
 
