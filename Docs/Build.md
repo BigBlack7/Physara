@@ -50,3 +50,23 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式使�
 宿主公开合同见 [DeviceHost.hpp](../Platform/DeviceHost.hpp), 输入单位与事件借用寿命见 [Input.hpp](../Platform/Input.hpp). 以公开头为准, 不在此复制实现或内部 API 使用规则.
 
 项目方案见 [Architecture](Architecture.md), 阶段状态与验收缺口见 [Developments](Developments.md#dev-d01); 每次实现的取舍和实际检查证据保存在对应 OpenSpec change. 开发约定见 [AGENTS.md](../AGENTS.md).
+
+## D02 资源一致性本地检查
+
+当前 [资源一致性 change](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/tasks.md) 沿用忽略的 `build/artifacts` 本地 fixture, 不作为产品入口或安装目标. 本机检查输入位于 `build/artifacts/establish-opengl-resource-conformance/checks`, 分别构建 ResourceChecks 与 UploadChecks, 两者的私有 accessor 不链接到同一程序. 新环境需要取得这些本地检查输入; 仅拉取仓库不会生成忽略的 fixture.
+
+已具备输入时, 在仓库根目录执行 (本地 Python runner 记录命令、源码/fixture 标识和日志):
+
+```powershell
+python build/artifacts/establish-opengl-resource-conformance/Run.py configure
+python build/artifacts/establish-opengl-resource-conformance/Run.py build Debug native
+python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks conformance-fixture
+python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks conformance-matrix
+python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks depth-stencil
+python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks multisample
+python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug UploadChecks texture
+```
+
+Release 将上述配置名替换为 `Release`; `Run.py final-native <配置>` 运行两个检查程序全部分组、头消费者及预期失败的析构合同检查. generic、无检查宏 product 和集成检查各用独立 binary 目录, 实际复现命令与覆盖状态以 change tasks 为准. Runner 中 CMake/SDK 路径按本机工具位置选择, 它们不是生产 CMake 的依赖或唯一运行路径.
+
+深度/模板与多重采样内容由 fixture 在正式 RHI 创建的对象上进行原生 clear/同尺寸 resolve/分 aspect 读回. 这证明存储和附件寻址; 产品 clear/resolve、Shader/Draw、公共 staging/query 仍按对应工作包验收. 检查要求真实 OpenGL 4.6 Core 环境; 缺入口、构建失败或未覆盖不能计作通过.

@@ -12,7 +12,7 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 |---|---|
 | Device | 68 项 override 保留; 原生 Feature 全 false/output 不变, 格式 flags 仅说明资源用途. clip 为 upper-left/zero-to-one, 未作为绘制图像验收 |
 | Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入, 公共 Map/Copy 仍拒绝 |
-| Texture | 1D/2D/3D、array/cube 和两种 MS storage; 17 项格式映射及每 target 的实际 limits/完整支持/样本集合按当前 design 第 5/6 节执行. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
+| Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建; 3D 深度/模板存储拒绝. 公共格式 flags 表示 2D 基线. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 3D/layered/空/shading-rate/只读颜色拒绝; 深度只读为后续写检查 metadata |
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持 Open/Close/ClearState、Buffer/颜色 Texture 写入及受限 transfer tracker; 其余方法在读取 payload 前 Unsupported |
@@ -20,6 +20,10 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | 其余 Device 操作 | Shader/Binding/Pipeline/公共 copy/readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
+
+GL 4.6 Core 8.5 不允许 TEXTURE_3D 的深度/模板存储. 自有 `Formats.cpp` 在构建 target caps 时显式过滤 D16/D24S8/D32/D32S8 的此组合, 即使驱动 internal-format query 返回正向值也不发布支持, 创建在原生分配前拒绝. 这是保守能力交集的实现修正, 不修改固定 NVRHI 来源. 复现、来源依据与回归见 [资源一致性 design](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/design.md) 的局部修正; 其他合法 target 仍按实际用途和样本验证.
+
+资源一致性 fixture 复用同一正式 Host/Validation/backend; Buffer/颜色内容经产品上传和实际完成读回, 深度/模板/MS 存储由 fixture 保活资源并原生 clear/同尺寸 resolve/分 aspect 读取, 使用自己的真实 fence. 辅助状态显式保存/恢复, 不发布 RHI tracker 状态或产品票据. 该路径不提供公共 clear/resolve/readback 或绘制能力; 本机 UPPER_LEFT 原生区域观测和 D03 的待验收边界见上述 design, 本地运行入口见 [Build](../Docs/Build.md#d02-资源一致性本地检查).
 
 上传策略为设备总 mapped capacity 64 MiB、最多 64 物理包、每包最多 4096 非空写入/不同资源及 64 MiB 逻辑目标字节. 小于等于 256 KiB 的 Buffer 写入使用 DSA subdata, 更大写入使用包独有的 persistent/coherent chunk 和 GPU copy. 所有 Texture 上传使用同类 PBO chunk; 完成前不覆写或跨包复用, 完成即释放, 没有 idle cache. 耗尽报告 requested/retained/limit, 不隐式等待. 这些是初始有界策略, 不是设备显存或性能结论.
 

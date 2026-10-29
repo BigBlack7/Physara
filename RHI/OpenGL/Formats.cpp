@@ -76,6 +76,11 @@ namespace Physara::RHI::OpenGL
     static bool ReadFormat(OpenGLDevice &device, const DeviceCaps &caps, const FormatMapping &mapping,
                            TextureDimension dimension, FormatCaps &result)
     {
+        // GL 4.6 8.5 排除 3D 深度/模板存储; 不能由驱动的乐观 query 放行非法 target.
+        if (dimension == TextureDimension::Texture3D && GetFormatInfo(mapping.format).hasDepth)
+        {
+            return true;
+        }
         const GLenum target = TextureTarget(dimension);
         const auto query = [&](GLenum property)
         {
