@@ -25,7 +25,7 @@
 
 ### 1. 先落实已获同意的阶段边界
 
-维护者在本轮明确同意: 保留 D01 跨屏缺口, 允许先完成 D02-T02 通用实现和 CPU 验证; 真实 GL Device 包装、设备 caps 和原生行为验收归 T03/T05, D01/D02 总出口仍未完成. 这是本 change 的新限定决定, 不改写 [旧决定](../../establish-window-input-runtime/design.md#closeout) 或将 T01 例外当作全局许可.
+维护者在本轮明确同意: 保留 D01 跨屏缺口, 允许先完成 D02-T02 通用实现和 CPU 验证; 真实 GL Device 包装、设备 caps 和原生行为验收归 T03/T05, D01/D02 总出口仍未完成. 这是本 change 的新限定决定, 不改写 [旧决定](../2026-11-02-establish-window-input-runtime/design.md#closeout) 或将 T01 例外当作全局许可.
 
 实施前先更新 Developments: D02 例外明确列 T01/T02; T02 完成条件改为本通用层构建、链接、校验/profile 和 CPU 合同通过; T03 增加实际 GL Device 上的 Validation 集成和真实 limits/format/资源归属验证; T05 保持真实读回/生命周期/caps 一致性. T03 仍受 D01 阶段入口约束, 本次没有授权提前实施 native 工作. 从而 T02 能独立验收, T03 消费完成的 T02, 原生证据有明确归属而不是被删除.
 

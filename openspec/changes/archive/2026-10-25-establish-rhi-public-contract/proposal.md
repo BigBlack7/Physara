@@ -2,7 +2,7 @@
 
 ## Why
 
-[D02-T01](../../../../Docs/Developments.md#d02-t01) 需要为后续 Common/Validation 和 OpenGL 实现提供完整、可独立消费且能追溯到固定 NVRHI 的公共合同, 当前 `RHI/CMakeLists.txt` 为空, 尚无第一方 RHI 声明. 本次沿 [D01 收尾决定](../../establish-window-input-runtime/design.md#closeout) 的限定前置例外推进这一工作包, 将已确认的移植规则、必要局部修正和编译验收落到同一 change.
+[D02-T01](../../../../Docs/Developments.md#d02-t01) 需要为后续 Common/Validation 和 OpenGL 实现提供完整、可独立消费且能追溯到固定 NVRHI 的公共合同, 当前 `RHI/CMakeLists.txt` 为空, 尚无第一方 RHI 声明. 本次沿 [D01 收尾决定](../2026-11-02-establish-window-input-runtime/design.md#closeout) 的限定前置例外推进这一工作包, 将已确认的移植规则、必要局部修正和编译验收落到同一 change.
 
 ## What Changes
 

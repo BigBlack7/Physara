@@ -2,7 +2,7 @@
 
 ## Why
 
-[D01-T01/T02](../../../Docs/Developments.md#d01-t01) 已交付并提交真实 GL 宿主, 但窗口状态尚未持续发布, 没有有序输入或可运行的产品入口. [D01-T03/T04](../../../Docs/Developments.md#d01-t03) 需要在同一宿主上闭合事件处理、调用方关闭决策与退出, 作为后续 RHI 和编辑器的前置.
+[D01-T01/T02](../../../../Docs/Developments.md#d01-t01) 已交付并提交真实 GL 宿主, 但窗口状态尚未持续发布, 没有有序输入或可运行的产品入口. [D01-T03/T04](../../../../Docs/Developments.md#d01-t03) 需要在同一宿主上闭合事件处理、调用方关闭决策与退出, 作为后续 RHI 和编辑器的前置.
 
 ## What Changes
 
@@ -24,7 +24,7 @@
 
 ### Modified Capabilities
 
-无. 已完整核对 [native-window-host](../../specs/native-window-host/spec.md) 的 8 条要求和 [project-baseline](../../specs/project-baseline/spec.md) 的 4 条要求: 新行为由以上两个能力承载, 既有创建/线程/回滚与轻量构建要求继续适用, 不改名或重复复制原有能力.
+无. 已完整核对 [native-window-host](../../../specs/native-window-host/spec.md) 的 8 条要求和 [project-baseline](../../../specs/project-baseline/spec.md) 的 4 条要求: 新行为由以上两个能力承载, 既有创建/线程/回滚与轻量构建要求继续适用, 不改名或重复复制原有能力.
 
 ## Impact
 

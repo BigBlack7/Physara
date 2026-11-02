@@ -1,6 +1,8 @@
 # Tasks
 
-范围为 [D01-T03/T04](../../../Docs/Developments.md#d01-t03), 依赖已完成的 native-window-host. 实施方法以 [design](design.md) 为准. 清单按实际实施和检查结果更新; 只有对应行为、检查和随附说明实际通过后勾选, 原生环境不足的验收保持未完成. 临时源码、命令和原始输出留在 `build/artifacts/establish-window-input-runtime/`, 不新增仓库测试框架或第二产品入口.
+范围为 [D01-T03/T04](../../../../Docs/Developments.md#d01-t03), 依赖已完成的 native-window-host. 实施方法以 [design](design.md) 为准. 清单按实际实施和检查结果更新; 只有对应行为、检查和随附说明实际通过后勾选, 原生环境不足的验收保持未完成. 临时源码、命令和原始输出留在 `build/artifacts/establish-window-input-runtime/`, 不新增仓库测试框架或第二产品入口.
+
+当前进度为 16/16; 2026-11-01 已补足真实双屏 DPI 验收并回归当前 D02 实现, 见[跨屏补验与 D02 关联复核](#cross-monitor-verification). 2026-11-02 已同步两份主规格并归档, 见[归档结果](#archive-result). 下方 2026-10-25 的实施、verify 和收尾记录保留当时结论.
 
 ## 1. 输入值合同与独立累积算法
 
@@ -26,7 +28,7 @@
 
 ## 4. 跨模块验收与原生 verify
 
-- [ ] 4.1 在完整 Runtime/Host 集成上完成 D01 的 Windows 验收: 真实 resize/快速 resize、最小化/恢复、focus/cursor、按键释放与 Unicode 提交、OS close 及取消; 有不同 DPI 显示器时实际跨屏并记录 logical/framebuffer/scale/revision 的独立变化. 核对零 extent/非 renderable 路径不创建伪目标且持续处理关闭, 区分真实 OS 输入、原生受控消息、回调/纯值注入; 缺少跨屏/焦点等条件的对应原生检查保留未完成, Unicode 可用实际 OS 提交验证而不扩展到 IME 组合界面, 不据缺失证据勾选 D01 总出口.
+- [x] 4.1 在完整 Runtime/Host 集成上完成 D01 的 Windows 验收: 真实 resize/快速 resize、最小化/恢复、focus/cursor、按键释放与 Unicode 提交、OS close 及取消; 有不同 DPI 显示器时实际跨屏并记录 logical/framebuffer/scale/revision 的独立变化. 核对零 extent/非 renderable 路径不创建伪目标且持续处理关闭, 区分真实 OS 输入、原生受控消息、回调/纯值注入; 缺少跨屏/焦点等条件的对应原生检查保留未完成, Unicode 可用实际 OS 提交验证而不扩展到 IME 组合界面, 不据缺失证据勾选 D01 总出口.
 - [x] 4.2 从新 binary 目录离线 configure/build 全部 Debug/Release targets, 再以独立生产消费者运行窗口/产品入口; 用 File API/编译参数/链接与生产符号检查证明 C++20、现有 /W4 /WX /utf-8 /permissive-、Core/Platform/Runtime 单向依赖、原生头私有、检查宏/符号未进入产品, 无新增警告、NVRHI 构建或测试框架. 复查 Docs/Build.md 命令能复现, 原有 Core/宿主关键消费者无回归.
 - [x] 4.3 对照 15 条新增要求和 40 个场景执行原生 verify 与 Code Review, 重点审查状态唯一来源、固定预算、借用/回调寿命、请求 prefix、线程/重入、错误/退出和零尺寸, 修正发现后只重跑受影响检查; 执行 `openspec validate --all --strict`、本地链接/锚点与 `git diff --check`. 将真实命令/环境/覆盖及未运行限制记入本 tasks, 核对此前各组随功能交付的头合同/Build/Architecture 一致, README 只保留项目介绍及文档导航, 按实际验收更新 Developments 的 T03/T04 和 D01 出口; 不提前勾选、同步主规格、归档或改写上一 change 历史.
 
@@ -103,31 +105,31 @@ cmake --build build/artifacts/establish-window-input-runtime/fixture-build --con
 - 工具异常: 一次增量编译出现 MSVC C1001 于 optional 头; 同一代码单目标 --parallel 1 重编通过, 随后的 Debug/Release 完整 clean-first 并行构建和受影响检查均通过. 未改标准库、语言/警告选项或关闭诊断. 记录该次现象, 不推断未确认的编译器根因.
 - 环境缺口: 仅 1 个 2560x1600 活动显示器, dpi=144, scale=1.5/1.5; 本机窗口观测的 logical 与 framebuffer 可相同, 仍保持独立量, 不由 scale 相乘推造尺寸. CROSS_DPI_VERIFIED=0. 使用者确认目前单屏、以后才有第二屏, 因此 4.1 的真实跨屏部分未运行; 标准化程序内部坐标不构成这项原生证据. 零 framebuffer 是实际 CPU 算法输入检查, 不称自然窗口已产生零像素; Win32 消息是受控原生分发, 不称物理键盘或 IME 组合界面验收. 未覆盖其他 OS/GPU、自然设备故障或 UI Draw, 本次无性能结论.
 
-## 要求实现与场景复核
+## 要求实现与场景复核 (2026-10-25)
 
 下表与上方 15 行任务映射一一对应. 40 个场景均已核对实现和检查; Observe independent metric changes 的不同 DPI 原生切换部分未验证, 其余场景按 CPU/原生/进程的适用合同完成检查.
 
 | 新增要求 | 主要实现定位 | 对应检查 |
 |---|---|---|
-| Observe independent live window facts | [InputState.cpp](../../../Platform/InputState.cpp):34,242; [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):303,339 | 初始 getter、快速 resize、独立量/重复 revision、iconify、零 extent/恢复; 跨屏部分未验证 |
-| Publish each input interval once in order | [InputState.cpp](../../../Platform/InputState.cpp):61,85; [DeviceHost.cpp](../../../Platform/DeviceHost.cpp):510 | poll 外/Wait 到达、双 bank、空区间、只发布一次及借用 |
-| Preserve key transitions and committed text meaning | [InputState.cpp](../../../Platform/InputState.cpp):167,180,187; [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):184 | press/repeat/release、Unknown、中文/non-BMP、8 按钮 |
-| Preserve pointer and scroll units | [InputState.cpp](../../../Platform/InputState.cpp):196,222 | fractional、scale 独立、有限数值与差/和溢出 |
-| Reset held and relative motion state at focus boundaries | [InputState.cpp](../../../Platform/InputState.cpp):140,268; [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):588 | 持键失焦、实际 ClipCursor 释放、无重捕获及首样本 |
-| Publish close intent without destroying the window | [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):675 | WM_CLOSE 后窗口仍存活、请求取消和再发布、旧值不变 |
-| Apply requests through an explicit safe boundary | [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):675 | 整批预检无 prefix 副作用、顺序、index=1 的失败、捕获中失焦及附加 cleanup |
-| Preserve callback ownership and integration order | [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):454,612; [GlfwWindow.cpp](../../../Platform/GlfwWindow.cpp) | 官方 ImGui backend 各到达一次、user pointer 不变、恢复/解绑和重建 |
-| Bound input retention and fail incomplete batches visibly | [InputState.cpp](../../../Platform/InputState.cpp):47,61,85; [DeviceHost.cpp](../../../Platform/DeviceHost.cpp):145 | capacity+1、非法值/计数、无半批、held 清理、无重复日志及关闭 |
-| Process idle events without premature publication | [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):656 | 正秒 wait 的原生字符/超时、span 和 sequence、非法值先拒绝 |
-| Enforce operation preconditions and preserve failures | [DeviceHost.cpp](../../../Platform/DeviceHost.cpp):145,466; [GlfwInput.cpp](../../../Platform/GlfwInput.cpp):454 | owner/Stopped/重入、部分安装、原生泵/查询错误、cleanup 与可关闭 |
-| Provide one real product entry | [Main.cpp](../../../Runtime/Main.cpp):101; [Runtime CMakeLists](../../../Runtime/CMakeLists.txt) | 唯一产品 File API、实际可见默认/隐藏入口 |
-| Validate explicit startup options | [Main.cpp](../../../Runtime/Main.cpp):42,104 | 每配置 20 项参数/维度检查、无 owner 的 help/参数拒绝 |
-| Separate event decisions from idle waiting | [Main.cpp](../../../Runtime/Main.cpp):136,148,157 | close/limit 先于 wait、limit=3 时 wait=2、最小化与零 extent 合同、无 GPU 调用 |
-| Exit in ownership order with meaningful results | [Main.cpp](../../../Runtime/Main.cpp):119,175; [DeviceHost.cpp](../../../Platform/DeviceHost.cpp):466 | 正常重复进程、14 项失败/分配/输出检查、显式关闭及 owner 顺序 |
+| Observe independent live window facts | [InputState.cpp](../../../../Platform/InputState.cpp):34,242; [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):303,339 | 初始 getter、快速 resize、独立量/重复 revision、iconify、零 extent/恢复; 跨屏部分未验证 |
+| Publish each input interval once in order | [InputState.cpp](../../../../Platform/InputState.cpp):61,85; [DeviceHost.cpp](../../../../Platform/DeviceHost.cpp):510 | poll 外/Wait 到达、双 bank、空区间、只发布一次及借用 |
+| Preserve key transitions and committed text meaning | [InputState.cpp](../../../../Platform/InputState.cpp):167,180,187; [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):184 | press/repeat/release、Unknown、中文/non-BMP、8 按钮 |
+| Preserve pointer and scroll units | [InputState.cpp](../../../../Platform/InputState.cpp):196,222 | fractional、scale 独立、有限数值与差/和溢出 |
+| Reset held and relative motion state at focus boundaries | [InputState.cpp](../../../../Platform/InputState.cpp):140,268; [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):588 | 持键失焦、实际 ClipCursor 释放、无重捕获及首样本 |
+| Publish close intent without destroying the window | [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):675 | WM_CLOSE 后窗口仍存活、请求取消和再发布、旧值不变 |
+| Apply requests through an explicit safe boundary | [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):675 | 整批预检无 prefix 副作用、顺序、index=1 的失败、捕获中失焦及附加 cleanup |
+| Preserve callback ownership and integration order | [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):454,612; [GlfwWindow.cpp](../../../../Platform/GlfwWindow.cpp) | 官方 ImGui backend 各到达一次、user pointer 不变、恢复/解绑和重建 |
+| Bound input retention and fail incomplete batches visibly | [InputState.cpp](../../../../Platform/InputState.cpp):47,61,85; [DeviceHost.cpp](../../../../Platform/DeviceHost.cpp):145 | capacity+1、非法值/计数、无半批、held 清理、无重复日志及关闭 |
+| Process idle events without premature publication | [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):656 | 正秒 wait 的原生字符/超时、span 和 sequence、非法值先拒绝 |
+| Enforce operation preconditions and preserve failures | [DeviceHost.cpp](../../../../Platform/DeviceHost.cpp):145,466; [GlfwInput.cpp](../../../../Platform/GlfwInput.cpp):454 | owner/Stopped/重入、部分安装、原生泵/查询错误、cleanup 与可关闭 |
+| Provide one real product entry | [Main.cpp](../../../../Runtime/Main.cpp):101; [Runtime CMakeLists](../../../../Runtime/CMakeLists.txt) | 唯一产品 File API、实际可见默认/隐藏入口 |
+| Validate explicit startup options | [Main.cpp](../../../../Runtime/Main.cpp):42,104 | 每配置 20 项参数/维度检查、无 owner 的 help/参数拒绝 |
+| Separate event decisions from idle waiting | [Main.cpp](../../../../Runtime/Main.cpp):136,148,157 | close/limit 先于 wait、limit=3 时 wait=2、最小化与零 extent 合同、无 GPU 调用 |
+| Exit in ownership order with meaningful results | [Main.cpp](../../../../Runtime/Main.cpp):119,175; [DeviceHost.cpp](../../../../Platform/DeviceHost.cpp):466 | 正常重复进程、14 项失败/分配/输出检查、显式关闭及 owner 顺序 |
 
 Code Review 已检查状态唯一来源、固定预算、值/借用寿命、回调 target、请求 prefix、owner/reentry、原始错误和清理、零尺寸及退出. 修正解绑阶段多个 native 错误的计数遗漏, 把原有饱和合并算法统一供窗口/输入释放; 补齐捕获拒绝的 cleanup 计数和两类输入的显式 modifier 转换. 受影响 CPU、原生、旧宿主与 Runtime 检查已重跑通过. Input.hpp/GlfwInput.cpp 的职责规模评审见 design 第 1 节, 未为行数机械拆分或增加第二 owner. 收尾复审另复现并修正请求期间回调超限被归为可恢复失焦拒绝的问题: 在原生返回与光标释放边界核对 InputFault, 统一 requestIndex 和 native 首错优先级, 立即停止输入, 保留附加 cleanup. 已在 Debug/Release 回归缓冲满时捕获失焦及同时 cleanup 失败的两种组合, 以及旧宿主/生产消费者和 Runtime 检查. 本轮未发现尚未处理的代码问题; 真实跨屏环境缺口单独保留.
 
-## 原生 verify 结论
+## 原生 verify 结论 (2026-10-25)
 
 使用锁定版本的原生 status/instructions apply 取得 spec-driven 的四类 contextFiles, 逐份读取并核对以上定位, 未把 planning 的 isComplete 当成实施完成. 没有修改既有两个主规格、同步 delta 或归档.
 
@@ -141,10 +143,94 @@ CRITICAL (验收缺口) 1 项: 4.1 的真实跨屏 DPI 行为未运行. 在具�
 
 工具检查通过: openspec validate --all --strict 为 3/3 (当前 change+两个既有主规格), 仅有两条 >500 字符的 INFO 提示, 无结构错误; 受影响 Markdown 以及全部第一方当前/归档 Markdown 的本地链接/锚点检查通过; git diff --check、23 份修改/未跟踪文件的空白/冲突标记检查、变更 C++ 格式复核和最终构建日志无警告/错误检查通过. 未运行跨屏或其它硬件覆盖, 不把结构/链接检查当行为验收. 临时检查源码和原始输出在上述忽略目录中保留供本机复现, 不新增必交验证文档.
 
-## 本次收尾交付
+## 阶段收尾交付 (2026-10-25)
 
 维护者确认暂时无法提供双屏环境, 接受保留 4.1 并自行提交本次实现; 当前进度仍为 15/16. 本次不提交代码、不同步主规格、不归档, D01 出口不勾选. 后续独立 change 可先推进 D02-T01 的限定前置见 design 的 closeout 节, 已同步到 Developments, 不扩展为取消其他前置.
 
 根 README 已精简为项目介绍、展示和文档导航; Docs/Build.md 集中构建/运行命令与五项选项, 公开头继续承担 API 合同. Architecture 的文档归属表记录这一定位, 本 change 的 proposal/design/tasks 已同步引用, 不再把阶段实现/API/验收记录堆入 README.
 
 收尾 Code Review 的组合边界复现记录为 closeout-repro-before.log: 缓冲满后捕获请求触发失焦回调, 原先误报 RequestRejected 且 Ready=true. 修正后 WindowInputChecks 在两配置分别验证无附加清理错误/同时清理失败两种情况, 均返回 InputOverflow、requestIndex=0、Ready=false, 捕获回到 Normal 且可 Shutdown. 最终记录为 closeout-WindowInputChecks-Debug|Release-run.log; 旧 NativeChecks 的 32 次生命周期及原失败矩阵也通过. 生产目标与独立消费者重建运行、生产符号/依赖检查、实际产品重复关闭和 Runtime 每配置 20 项参数及 14 项失败检查均通过, 输出为 closeout-*.log、runtime-cli-*.json 与 runtime-faults-*.json. 本轮未发现未修复的代码问题; 唯一保留的验收缺口是 4.1 的真实跨屏部分.
+
+<a id="cross-monitor-verification"></a>
+## 跨屏补验与 D02 关联复核 (2026-11-01)
+
+本轮基于已提交的 D01/D02 实现 `8d33a4350f387340a0f4609974220e75f66fe19b`, 开始时工作区干净. 4.1 原环境缺口现已补齐, 本 change 当前 16/16 任务完成. 本次仅更新当前 design/tasks 和 Developments, 生产代码无需修正; README、Architecture、主规格及历史归档保持原貌, 未执行提交、规格同步或归档.
+
+### 环境与实际跨屏结果
+
+- Windows x64, VS 2022/MSVC 19.44.35228, SDK 10.0.26100.0; 同一正式 DeviceHost/Validation/OpenGL backend, 实际 renderer 为 Intel(R) RaptorLake-S Mobile Graphics Controller, GL 4.6.0, driver 32.0.101.6129.
+- 两个不同的 Win32 HMONITOR: `(0,0)-(2560,1440)`, dpi=96/100%; `(2560,0)-(5120,1600)`, dpi=120/125%. GLFW 枚举三个条目, 后两项对应同一个实际 HMONITOR; fixture 按实际窗口所在显示器去重, 只计两个不同输出, 不将重复条目算第三屏.
+- Debug/Release 各运行一次无生产检查宏的 MultiMonitorChecks. 同一窗口在两个输出间交替访问 8 次, 每次执行 20 次快速 resize; 逐次独立对照 GLFW logical/framebuffer/contentScale 和 Win32 DPI, 比较实际窗口所在输出, 并核对 revision 在事实变化时递增、稳定 poll 时不变. 例如 Release 的第 1/2 次跨屏记录均为 logical=659x379、framebuffer=659x379, scale 分别为 1.25/1, revision 分别为 44/85. 本机两个尺寸可以数值相同, 不用 scale 相乘推造 framebuffer.
+- Wait/移动窗口期间保留上一发布 bank, 下一 poll 发布递增 sequence 与新的事实, 中文 WM_CHAR 标记只消费一次; 实际 scale 回调到达消费者. 原生最小化/恢复、OS close 保留窗口及取消请求均通过. 此处字符证据是受控 Win32 消息, 不宣称物理键盘或 IME 组合界面验收.
+- 每配置另启动三个正式 Physara 产品进程, 每进程连续跨屏/resize 6 次并检查消息响应, 覆盖最小化/恢复、正常关闭及最小化期间关闭; 六个产品进程均 exit=0. 同一 GL context/Device 身份在跨屏中保持, 没有新增 context 重建或缩放兜底逻辑.
+- 两配置日志均包含 `CROSS_DPI_VERIFIED=1 D02_UPLOAD_READBACK_VERIFIED=1 production-check-macros=0`, 4.1 的真实跨屏部分通过. 原零 extent 算法、焦点/实际 cursor、key/text 和关闭检查在当前代码上同步回归; 零 framebuffer 仍以实际 CPU 算法输入证明, 不把 Win32 最小化时保留非零像素称为自然零尺寸.
+
+### D02 Code Review 与回归
+
+复核当前公共合同、Common/Validation、Device/caps、Buffer/Texture/Sampler/Framebuffer、上传限定列表、状态跟踪、实际 fence/提交、删除队列和 Platform 关闭装配. 重点核对状态唯一来源、线程/context 前提、checked range/footprint、源数据拥有时刻、提交预检、CPU/GPU 两条寿命、失败前缀及可重试关闭. D02 的资源与上传路径不从初始窗口尺寸或 scale 推导存储, 同一真实 Device 消费当前 context; 没有发现本轮需修复的合同偏差、反向依赖或生产代码问题.
+
+新增关联检查在跨屏前记录实际 large/small Buffer 和 padded-row Texture 写入, Write 返回后立即覆盖/释放 CPU 源, 再跨屏、resize、关闭列表/提交并等待真实完成. 每次按独立字节预期检查两个 Buffer 和 Texture 的实际 GL 读回, 同时检查 Framebuffer 完整性、资源/caps/Device 身份和递增提交票据, 共 8 次访问/配置均通过. 这证明当前上传子集在 DPI 变化时的内容与保活, 不将 fixture 原生读回宣布为产品 readback API.
+
+| 本轮检查 | Debug/Release 的实际结果 |
+|---|---|
+| 构建 | 新 binary 目录完整配置/构建无检查宏产品及跨屏消费者; 既有 native/generic/完整集成三个目录重建, 共 8 组配置, 最终构建无警告/错误 |
+| D02 原生 | 每配置运行 ResourceChecks/UploadChecks 的 all、七个独立头/源消费者与能力检查入口, 加两个预期致命合同进程; 两配置共 22 次调用均符合预期 |
+| 资源/内容 | 每配置矩阵 153 行、1302 次创建、636 次零分配拒绝、2176 次附件检查; 深度/模板 1040 次 guarded 比较及 8 次预期不支持; MS 实际 resolve 后检查 408 次; 颜色独立预期覆盖 13 格式 x 7 维度, 初始化和 patch/preservation 各 1404 次 |
+| 上传/退出 | Buffer 阈值与预算、source/worker/失败前缀、真实完成和 Pending 关闭重试通过; drain 中受控 loss 后 GL 调用=0, 实际完成后受控 unmap 失败诊断=1 |
+| 通用层 | 每配置 12 个 CPU/独立消费者成功, 10 个负编译用例按预期拒绝且无编译器内部错误 |
+| Core/Host/输入 | 每配置 7 个正常入口及 3 个预期致命合同进程通过; 包含 32 次真实宿主生命周期、14 个输入准备回滚点、双 bank/数值边界/焦点/cursor/回调链及组合故障 |
+| Runtime | 每配置 20 个参数/进程结果、9 个操作/输出故障模式、3 个分配失败点、2 个创建 owner 前返回及 3 次可见产品生命周期通过, 两个致命退出符合合同 |
+| 构建隔离 | File API 核对 8 组配置及 134 个编译输入, 第一方 C++20、/W4 /WX /utf-8 /permissive- 和单向依赖成立; 八份无检查宏生产静态库符号检查通过, 通用 RHI 不引入原生依赖 |
+
+同一轮记录共 48 次顶层检查调用, generic/Runtime 驱动内另记录 118 次子调用; 包含预期非零退出, 不把驱动和子调用累加为独立行为覆盖数. `FinalAudit.py evidence` 已逐项核对退出值、当前 59 个生产源码/构建文件哈希、可执行文件与日志哈希, delegated 记录的源码身份也一致. 跨屏 fixture 和运行驱动在这些检查间未变化, 不是沿用旧二进制结果.
+
+### 本机复现与证据位置
+
+临时 fixture 与原始输出位于 `build/artifacts/establish-window-input-runtime/multi-monitor-2026-11-01/`, 沿用本项目忽略 build 树的检查组织, 不新增必交验证文档或产品测试 target. `CMakeLists.txt`、`MultiMonitorChecks.cpp` 和 `RunRound.py` 为新增实际集成输入; D02 检查继续使用 `build/artifacts/establish-opengl-resource-conformance/` 中的既有本机输入, 新环境需另取得这些忽略文件, 规则见 [Build](../../../../Docs/Build.md). 本次完整生产 configure 命令为:
+
+```powershell
+$checkRoot = 'build/artifacts/establish-window-input-runtime/multi-monitor-2026-11-01'
+cmake -S $checkRoot -B "$checkRoot/production" -G 'Visual Studio 17 2022' -A x64 '-DCMAKE_SYSTEM_VERSION=10.0.26100.0' '-DPHYSARA_SOURCE=D:/MyWorkSpace/Physara'
+cmake --build "$checkRoot/production" --config Debug --parallel 2
+cmake --build "$checkRoot/production" --config Release --parallel 2
+python "$checkRoot/RunRound.py" cross Debug
+python "$checkRoot/RunRound.py" native Debug
+python "$checkRoot/RunRound.py" regression Debug
+python "$checkRoot/RunRound.py" generic Debug
+python "$checkRoot/RunRound.py" runtime Debug
+python "$checkRoot/FinalAudit.py" evidence
+python "$checkRoot/FinalAudit.py" build
+python "$checkRoot/FinalAudit.py" docs
+python "$checkRoot/FinalAudit.py" cli
+```
+
+五个 RunRound 模式均另以 Release 实际执行. native/generic/regression 运行前已分别通过 `cmake --build build/artifacts/establish-opengl-resource-conformance/<native|generic|regression-complete> --config <Debug|Release> --parallel 2` 重建, 并保留八份 `*-<config>-build.log`. 部分 SDK/npm 安装目录在默认工具沙箱中不可读, 构建与 CLI 检查通过授权的本机工具访问执行, 未降低警告门槛或改写产品配置.
+
+主要原始结果为 `cross-monitor-<config>.log`, `D02-ResourceChecks-<config>.log`, `D02-UploadChecks-<config>.log`, `regression-*-<config>.log`, `D02-generic-<config>.log`, `Runtime-matrix-<config>.log`, `runs.jsonl`, `evidence-audit.json`, `build-audit.json`, `compile-inputs.json`, `symbols-*.log` 和 `openspec-*.json|log`. delegated 明细在 D02 原目录的 `suites.jsonl` 与对应日志, 旧输出带时间戳保留.
+
+### 当前原生 verify 结论
+
+| 维度 | 当前结果 |
+|---|---|
+| Completeness | 16/16 任务完成; 15/15 ADDED 要求找到实现; 无 MODIFIED/REMOVED/RENAMED 要求 |
+| Correctness | 15 项要求和 40 个场景逐项复核; 原跨屏场景由实际双屏 Host/Runtime 检查补齐, 其余适用 CPU/原生/进程证据在当前 D02 装配上回归通过 |
+| Coherence | 11 项设计决策、现有命名/所有权/错误/构建模式一致; D02 的真实设备扩展遵守既有宿主与输入合同, 不改变本 change 行为 |
+
+CRITICAL/WARNING/SUGGESTION 均为 0, 本 change 没有剩余未验证的适用检查, 可进入规格同步与归档. OpenSpec 1.13.2 的 status/apply 返回 `all_done`, 16/16; `openspec validate --all --strict --json` 为 7/7 (本 change + 6 项主规格) 通过. 本地 Markdown 链接/锚点、文档范围和 `git diff --check` 最终核验随本记录更新完成.
+
+当前结论仅覆盖已交付 D01 和 D02 profile, 不声称所有硬件或未来功能无错误. 其他 OS/GPU、物理设备失效/自然 VRAM 耗尽、IME 组合 UI 未覆盖; D03 的 Shader/Draw、实际 UPPER_LEFT raster/scissor/Reverse-Z 像素验收及后续呈现/公共传输仍按原计划推进, 不由辅助原生操作代替. Developments 已据本次实测确认 D01/D02 出口通过, 原限定前置例外退出; 历史延期决定保留, 没有回写归档来抹除当时缺口.
+
+## 归档复核 (2026-11-02)
+
+归档前重新核对官方 status/list: spec-driven 的四项规划产物全部完成, 唯一活动 change 为本 change, 16/16 任务完成. 生产源码自上述补验以来未修改; `FinalAudit.py evidence/build` 再次通过, 当前源码、两配置二进制及日志哈希一致, 48 次顶层和 118 次驱动内子调用的实际结果继续有效, 八组构建的参数/依赖及生产符号检查通过. 本轮复用这些已证明属于当前实现的结果, 没有将证据核对描述为重新运行整套行为矩阵.
+
+Code Review 再次检查实时窗口事实的独立读取与 revision、双 bank 发布/等待、请求预检与故障优先级、owner/重入以及 Runtime 关闭先于等待的顺序; 对 D02 重点检查外部 owner 预检、真实 fence/在途资源、drain Pending 保留宿主、context 不可用退出和逆依赖释放. 未发现需修正的生产代码或设计偏差; 4.1 已有真实不同 DPI 双屏证据, 不再保留环境缺口.
+
+规格同步评估: `window-input` 和 `runtime-lifecycle` 原无主规格, delta 均仅为 ADDED, 分别包含 11 项要求/30 个场景和 4 项要求/10 个场景, 合并不影响六份既有主规格. 维护者于 2026-11-02 明确选择同步主规格后归档. 同一流程复用已读取的 specs 指令快照, 新建两份正式结构的主规格, Purpose 与全部规范要求/场景保持原文; 针对 status 声明的两个 delta 全量重新比较, 均为已同步, 无待合并内容. 官方 `openspec validate --specs --strict --json` 为 8/8 通过, 仅保留 native-window-host 原有两条长需求 INFO, 无 WARNING/ERROR. 本机归档输入、草稿、同步比对与检查输出保留在 `build/artifacts/establish-window-input-runtime/archive-2026-11-02/`.
+
+<a id="archive-result"></a>
+## 归档结果 (2026-11-02)
+
+已按维护者选择同步 [window-input](../../../specs/window-input/spec.md) 和 [runtime-lifecycle](../../../specs/runtime-lifecycle/spec.md) 主规格, 15 项要求、40 个场景及 Purpose 均与 delta 原文一致, 六份原有主规格字节保持不变. 在重新比较所有 delta 均为已同步后, 将本 change 完整移动到 `openspec/changes/archive/2026-11-02-establish-window-input-runtime/`, 原 `.openspec.yaml` 及六份文件全部保留, 16/16 任务完成且没有延期验收.
+
+本次归档重定位当前 change、Developments 和三处历史引用的相对链接, 不修改历史记录的正文、决定或当时验收结论. 归档后官方 `openspec list --json` 的活动列表为空, `openspec validate --all --strict --json` 为 8/8 通过; 56 份当前/归档 Markdown 的 1162 个本地链接/锚点及 `git diff --check` 通过. 源码/测试证据身份、归档完整性和历史正文核对通过, 原始输出为本机目录中的 `postarchive-*.json`、`sync-verification.json`、`link-relocations.json` 及最终核验日志. README、Architecture、Build 和生产代码保持不变; 没有执行 Git 暂存、提交或推送. D01/D02 出口通过, D03 按原前置与既定工作包推进.

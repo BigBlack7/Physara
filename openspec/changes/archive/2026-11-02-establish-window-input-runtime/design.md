@@ -4,7 +4,7 @@
 
 动机和 D01-T03/T04 范围见 [proposal](proposal.md), 行为要求见 [window-input](specs/window-input/spec.md) 与 [runtime-lifecycle](specs/runtime-lifecycle/spec.md). 起点为提交 `8e9e3e0`: Core/Platform 已有实际实现, `DeviceHost` 独占 GLFW、稳定持有私有 State, 只安装进程错误回调; `Runtime/Main.cpp` 与 Runtime CMakeLists 仍为空. 原生依赖、窗口 user pointer、线程和回滚的权威实现继续复用, 不另建 Window 或 Application owner.
 
-约束依据为 Architecture 的 [主循环](../../../Docs/Architecture.md#frame-flow)、[Runtime](../../../Docs/Architecture.md#runtime)、[输入](../../../Docs/Architecture.md#input)、[UI chaining](../../../Docs/Architecture.md#editor-input)、[退出](../../../Docs/Architecture.md#shutdown), 以及 Developments 的 [D01-T03/T04](../../../Docs/Developments.md#d01-t03). 这些章节描述完整产品; 本次只实现开发计划明确要求的无渲染器阶段, 不照抄尚不存在的对象或方法.
+约束依据为 Architecture 的 [主循环](../../../../Docs/Architecture.md#frame-flow)、[Runtime](../../../../Docs/Architecture.md#runtime)、[输入](../../../../Docs/Architecture.md#input)、[UI chaining](../../../../Docs/Architecture.md#editor-input)、[退出](../../../../Docs/Architecture.md#shutdown), 以及 Developments 的 [D01-T03/T04](../../../../Docs/Developments.md#d01-t03). 这些章节描述完整产品; 本次只实现开发计划明确要求的无渲染器阶段, 不照抄尚不存在的对象或方法.
 
 ## Goals / Non-Goals
 
@@ -220,6 +220,8 @@ stop publishing / expire borrows
 <a id="closeout"></a>
 ## 阶段收尾与后续前置
 
+以下为 2026-10-25 的限定决定, 保留当时的原因、范围和退出条件; 当前结论见本节末尾的补验记录.
+
 维护者已明确接受本次保留 4.1 跨屏环境缺口, 在整理代码和文档后自行提交, 后续另开会话推进新任务. 此为环境验收延后的限定决定, 不删除行为要求, 不把 4.1 或 D01 出口标为完成; 当前 change 保持活动状态, 本次不执行规格同步或归档.
 
 - 原因: 当前仅一个活动显示器, 实际不同缩放跨屏无法执行; 已实现的逻辑坐标、framebuffer 像素和 content scale 合同保持独立, CPU/单屏原生/进程证据在 tasks 中记录.
@@ -228,11 +230,13 @@ stop publishing / expire borrows
 
 README 依维护者定位仅作项目介绍、展示及文档导航; 构建运行说明集中到 Docs/Build.md, 接口合同以公开头为准, 当前阶段状态与验收证据仍分别归 Developments 和本 change 的 tasks, 后续功能不再逐次向 README 累加实施说明.
 
+2026-11-01 补验: 已在两个不同缩放的真实显示器上完成 4.1, 使用当前正式 Host/Runtime 和 D02 的真实 Device/Validation/backend, 不再使用早期空设备装配. Debug/Release 均通过跨屏事实更新、窗口响应/关闭及同时在途上传与资源读回, 受影响输入、宿主、Runtime 和 D02 检查也已回归. 原环境缺口关闭, 限定前置例外退出, D01/D02 阶段出口按各自实际验收通过; 后续工作恢复普通前置. 具体环境、命令、证据和覆盖边界见 [tasks](tasks.md#cross-monitor-verification). 本次未改变长期架构或产品合同, 当前 change 的规格同步与归档另沿原生流程执行.
+
 ## Sources
 
 核对日期为 2026-10-25. 固定源码决定实际可用 API/行为, 在线官方指南用于核对语义, 不据 latest 页升级依赖.
 
-- [GLFW 固定头](../../../ThirdParty/glfw/include/GLFW/glfw3.h)、[window.c](../../../ThirdParty/glfw/src/window.c)、[input.c](../../../ThirdParty/glfw/src/input.c)、[Win32 window](../../../ThirdParty/glfw/src/win32_window.c): 线程/重入、focus 后 release、输入模式、timeout、尺寸/回调及失败.
+- [GLFW 固定头](../../../../ThirdParty/glfw/include/GLFW/glfw3.h)、[window.c](../../../../ThirdParty/glfw/src/window.c)、[input.c](../../../../ThirdParty/glfw/src/input.c)、[Win32 window](../../../../ThirdParty/glfw/src/win32_window.c): 线程/重入、focus 后 release、输入模式、timeout、尺寸/回调及失败.
 - [官方输入指南](https://www.glfw.org/docs/latest/input.html): poll/wait 都处理事件、其他原生调用也可能同步回调、逻辑光标与字符输入. [官方窗口指南](https://www.glfw.org/docs/latest/window.html): framebuffer 与 logical size 独立, content scale 不等于两者比例. [官方线程/重入指南](https://www.glfw.org/docs/latest/intro.html): 原生事件处理边界.
-- [固定 ImGui GLFW backend](../../../ThirdParty/imgui/backends/imgui_impl_glfw.cpp): InstallCallbacks/RestoreCallbacks、保存/链式调用平台回调与 IO 更新; [第三方构建](../../../ThirdParty/CMakeLists.txt) 已有 imgui 核心/GLFW adapter target.
-- [现有 DeviceHost](../../../Platform/DeviceHost.cpp)、[私有状态](../../../Platform/DeviceHostInternal.hpp)、[GlfwWindow](../../../Platform/GlfwWindow.cpp)、[上轮设计](../archive/2026-10-25-establish-native-gl-host/design.md): owner、错误捕获、回滚、稳定地址和 Debug 分配教训.
+- [固定 ImGui GLFW backend](../../../../ThirdParty/imgui/backends/imgui_impl_glfw.cpp): InstallCallbacks/RestoreCallbacks、保存/链式调用平台回调与 IO 更新; [第三方构建](../../../../ThirdParty/CMakeLists.txt) 已有 imgui 核心/GLFW adapter target.
+- [现有 DeviceHost](../../../../Platform/DeviceHost.cpp)、[私有状态](../../../../Platform/DeviceHostInternal.hpp)、[GlfwWindow](../../../../Platform/GlfwWindow.cpp)、[上轮设计](../2026-10-25-establish-native-gl-host/design.md): owner、错误捕获、回滚、稳定地址和 Debug 分配教训.

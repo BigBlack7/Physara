@@ -4,7 +4,7 @@
 
 动机和工作包范围见 [proposal](proposal.md); 行为合同见 [rhi-public-contract](specs/rhi-public-contract/spec.md). 本设计满足 schema 的条件: 完整公共接口的命名/布局迁移、跨构建边界消费及绑定键正确性需要在编码前确定方法和例外.
 
-目前正式构建只有 Core、Platform 和唯一 Runtime 的第一方实现, `RHI/CMakeLists.txt` 为空. 宿主尚无 RHI Device, 现有生命周期不需为本轮增加字段、工厂或关闭分支. 两个主规格继续有效; 旧输入/Runtime change 的 4.1 真实跨屏验收未完成. [现有前置决定](../../establish-window-input-runtime/design.md#closeout) 允许先完成 D02-T01, 适用理由是本轮仅消费源文件与编译器, 不消费窗口尺寸、UI 缩放或 GPU 结果. 该例外的退出仍是回到旧 change 在真实不同缩放双屏验证, 本轮不扩大例外.
+目前正式构建只有 Core、Platform 和唯一 Runtime 的第一方实现, `RHI/CMakeLists.txt` 为空. 宿主尚无 RHI Device, 现有生命周期不需为本轮增加字段、工厂或关闭分支. 两个主规格继续有效; 旧输入/Runtime change 的 4.1 真实跨屏验收未完成. [现有前置决定](../2026-11-02-establish-window-input-runtime/design.md#closeout) 允许先完成 D02-T01, 适用理由是本轮仅消费源文件与编译器, 不消费窗口尺寸、UI 缩放或 GPU 结果. 该例外的退出仍是回到旧 change 在真实不同缩放双屏验证, 本轮不扩大例外.
 
 本次已核对五个公共源文件、`src/common/misc.cpp`/`utils.cpp` 的定义归属、[Architecture 7.1](../../../../Docs/Architecture.md#rhi)、[7.2](../../../../Docs/Architecture.md#rhi-objects)、[7.7](../../../../Docs/Architecture.md#capabilities)、[Developments D02](../../../../Docs/Developments.md#dev-d02) 及 [NVRHI 分析](../../../../Docs/Reference/NVRHI_RHI_Vulkan_Analysis.md#n1). 下文记录的是选定方案, 不是已运行的实现证据.
 
