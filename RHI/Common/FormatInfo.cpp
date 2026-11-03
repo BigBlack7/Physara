@@ -22,6 +22,8 @@
 
 #include "RHI.hpp"
 
+// 固定来源格式表只描述字节/块/通道等元数据. 原生格式用途与实际支持由 Device 查询, 不由此表推断.
+
 #include <cassert>
 #include <iterator>
 

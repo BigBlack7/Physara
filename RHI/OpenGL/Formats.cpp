@@ -1,5 +1,7 @@
 #include "Backend.hpp"
 
+// 唯一格式/target 映射及实际 caps 查询. 格式 metadata、分配用途和当前已实现命令能力分别判定.
+
 #include <cmath>
 #include <vector>
 
@@ -76,6 +78,7 @@ namespace Physara::RHI::OpenGL
     static bool ReadFormat(OpenGLDevice &device, const DeviceCaps &caps, const FormatMapping &mapping,
                            TextureDimension dimension, FormatCaps &result)
     {
+        // 对实际 target 求支持交集; MS 使用枚举出的样本集合, 不由最大样本数推导中间值可用.
         // GL 4.6 8.5 排除 3D 深度/模板存储; 不能由驱动的乐观 query 放行非法 target.
         if (dimension == TextureDimension::Texture3D && GetFormatInfo(mapping.format).hasDepth)
         {
@@ -217,6 +220,7 @@ namespace Physara::RHI::OpenGL
                 }
             }
         }
+        // Device 发布前确认项目必需的 2D 基线. 其他 target 的独立结果仍留在 caps, 创建时继续按实际维度校验.
         for (const auto format :
              {Format::RGBA8_UNORM, Format::SRGBA8_UNORM, Format::RGBA16_FLOAT, Format::R32_UINT, Format::D32})
         {

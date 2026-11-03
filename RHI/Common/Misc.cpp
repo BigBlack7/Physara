@@ -22,6 +22,8 @@
 
 #include "RHI.hpp"
 
+// 提供公开描述的范围解析、Framebuffer 派生信息及纯布局工具. Resolve 求交集, 不替代操作入口的完整范围校验.
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -71,6 +73,8 @@ namespace Physara::RHI
 
     TextureSubresourceSet TextureSubresourceSet::Resolve(const TextureDesc &desc, bool singleMipLevel) const
     {
+        // 此工具保留来源的交集语义, 不将越界显式区间验证为合法请求; 操作边界应先应用自己的范围合同.
+        // 用 capacity-base 的剩余计数限制长度, 避免 base+count 溢出; 非数组纹理仍按唯一层解析.
         TextureSubresourceSet ret;
         ret.baseMipLevel = baseMipLevel;
 

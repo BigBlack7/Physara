@@ -1,5 +1,7 @@
 #include "Backend.hpp"
 
+// 将单 mip/单层附件计划物化为完整 FBO. wrapper 保活附件, 自持必要的重解释 view, 退休顺序先于存储.
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -113,6 +115,7 @@ namespace Physara::RHI::OpenGL
                        textureDesc.debugName.c_str());
                 return false;
             }
+            // 每个计划只代表一个实际附件子资源; 所有尺寸/样本一致后, 下方才整体取得 CPU owner 和原生名称.
             const auto mipWidth = std::max(textureDesc.width >> range.baseMipLevel, 1u);
             const auto mipHeight = std::max(textureDesc.height >> range.baseMipLevel, 1u);
             if (planCount != 0 && (width != mipWidth || height != mipHeight || samples != textureDesc.sampleCount))
@@ -139,6 +142,7 @@ namespace Physara::RHI::OpenGL
             plan.viewTarget = TextureTarget(viewDimension);
             return true;
         };
+        // 先核对全部附件的类型/归属/范围/格式及共同尺寸和样本, 此阶段不创建原生名称.
         for (std::size_t index = 0; index < colorCount; ++index)
         {
             if (!inspect(desc.colorAttachments[index], false, GL_COLOR_ATTACHMENT0 + GLenum(index)))
@@ -152,6 +156,7 @@ namespace Physara::RHI::OpenGL
         }
         try
         {
+            // CPU 依赖和删除记录就绪后才创建 FBO/view; 任一步失败由未发布 wrapper 撤销已取得对象.
             auto framebuffer = std::make_unique<OpenGLFramebuffer>(this, desc);
             if (desc.depthAttachment.texture)
             {

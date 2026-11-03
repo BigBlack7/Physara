@@ -13,6 +13,7 @@ add_library(PhysaraPlatform STATIC
     GlfwInput.cpp
 )
 target_include_directories(PhysaraPlatform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+# DeviceHost/Input 的公开值合同使用 Core, 必须传递; RHI 装配和原生 window/context 只在 Platform 私有实现中出现.
 target_link_libraries(PhysaraPlatform PUBLIC PhysaraCore PRIVATE PhysaraRHIOpenGL glfw glad)
 target_compile_definitions(PhysaraPlatform PRIVATE GLFW_INCLUDE_NONE)
 target_compile_features(PhysaraPlatform PUBLIC cxx_std_20)

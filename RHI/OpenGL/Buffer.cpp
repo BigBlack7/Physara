@@ -1,5 +1,7 @@
 #include "Backend.hpp"
 
+// 创建普通不可变 Buffer 存储. wrapper/删除节点先准备, 全部原生步骤成功后才发布句柄, 不初始化内容.
+
 #include <limits>
 #include <memory>
 #include <new>
@@ -40,6 +42,7 @@ namespace Physara::RHI::OpenGL
         }
         try
         {
+            // 字符串副本/删除节点的分配必须先于原生 name. wrapper 发布前的任何返回都会清理本次取得的对象.
             auto buffer = std::make_unique<OpenGLBuffer>(this, desc);
             if (!BeginNative("CreateBuffer", desc.debugName.c_str()))
             {

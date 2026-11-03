@@ -81,6 +81,10 @@ Validation SHALL reject invalid initialized descriptors, incompatible live resou
 - **WHEN** binding type, slot, array element, view format, active range or layout correspondence is invalid
 - **THEN** validation rejects the binding while preserving distinct valid array elements and separate texture/sampler identities
 
+#### Scenario: Reject a descriptor-set index beyond pipeline capacity
+- **WHEN** a pipeline layout interprets its register space as a descriptor-set index outside the supported layout capacity
+- **THEN** validation reports the invalid index in Debug and Release without out-of-bounds memory access or underlying pipeline creation, while valid boundary indices preserve their existing delegated result
+
 ### Requirement: Distinguish API policy from underlying capabilities
 The layer SHALL identify OpenGL explicitly and keep positive feature/format support grounded in permitted underlying queries. In the initial OpenGL policy, only the existing constant-buffer-range feature can pass through as supported; other known features report false. Metadata, enum presence and CPU fixtures SHALL NOT establish native support. Unsupported queries SHALL NOT overwrite caller output data.
 
@@ -158,7 +162,7 @@ The generic tracker SHALL preserve fixed-source valid-input state semantics for 
 - **THEN** required initial-state restoration is available before submission and permanent/initialized metadata is published only at accepted submission, without marking the GPU complete
 
 ### Requirement: Expose invalid tracking and discard abandoned recordings
-An unknown prior state, invalid range, unsupported state or conflicting permanent-state request SHALL make the recording error observable and prevent its dependencies from being treated as valid work. Discarding an erroneous or abandoned recording SHALL release its local records without publishing permanent or initialized resource metadata. A fresh recording SHALL begin without stale state or retained resource pointers.
+An unknown prior state, invalid range, unsupported state, conflicting permanent-state request or local tracking-storage failure SHALL make the recording error observable and prevent its dependencies from being treated as valid work. Discarding an erroneous or abandoned recording SHALL release its local records without publishing permanent or initialized resource metadata. A fresh recording SHALL begin without stale state or retained resource pointers. A local recording failure SHALL NOT release resources still used by an already issued immediate-upload prefix before that prefix is safely retired.
 
 #### Scenario: Reject an unsafe tracking request
 - **WHEN** a request has an unknown prior state, invalid subresource interval or conflicting permanent state
@@ -171,6 +175,14 @@ An unknown prior state, invalid range, unsupported state or conflicting permanen
 #### Scenario: Reuse a tracker after discard
 - **WHEN** a discarded tracker is used for a new valid recording
 - **THEN** its result depends only on the new declarations and current resource metadata
+
+#### Scenario: Observe allocation failure during first texture tracking or expansion
+- **WHEN** local storage cannot be allocated during first texture tracking or expansion to individual subresources
+- **THEN** the recording exposes a persistent error without terminating the process or publishing resource metadata, and explicit discard allows a later valid recording
+
+#### Scenario: Preserve an issued upload prefix after local tracking failure
+- **WHEN** an immediate upload has issued valid work and a later texture tracking allocation fails
+- **THEN** the owner retains the prefix's resource and upload-storage references until actual completion or its documented controlled exit, without reporting the failed recording as a successful submission
 
 ### Requirement: Deliver a traceable generic implementation without native claims
 The implementation SHALL preserve fixed inputs, source/target correspondence, required licenses and enumerated adaptations, and remain independently consumable without reference sources or native SDKs. Its completion SHALL be limited to Common/Validation and CPU evidence. Real GL device wrapping, caps and resource-ownership/native behavior checks SHALL remain assigned to the later native work packages; the pending D01 acceptance SHALL remain visible.
@@ -186,3 +198,14 @@ The implementation SHALL preserve fixed inputs, source/target correspondence, re
 #### Scenario: Report completion without closing native work
 - **WHEN** the implementation and its CPU/build checks have passed
 - **THEN** the work package is reported complete only under the accepted staged boundary, with native integration, real GPU semantics and D01/D02 exits still pending
+
+### Requirement: Preserve ordinary CPU allocation failure boundaries
+Ordinary Validation CPU storage failures during pipeline and texture validation SHALL follow the documented recoverable exception boundary and SHALL NOT unexpectedly terminate the process inside an operation that requires non-throwing elements. Failure before delegation SHALL NOT perform the affected underlying operation. The validation-layer factory SHALL retain its existing empty-result behavior on its own allocation failure. These CPU behaviors SHALL NOT establish native pipeline or shader support.
+
+#### Scenario: Catch allocation failure through a public pipeline entry
+- **WHEN** a valid pipeline request cannot allocate its CPU validation working storage
+- **THEN** the caller can catch the allocation failure, no partial pipeline operation is delegated, and ordinary empty, single-layout and multi-layout requests preserve binding validation and delegated results when storage is available
+
+#### Scenario: Validate a texture without an allocating capacity query
+- **WHEN** a valid texture is checked while CPU allocations are unavailable
+- **THEN** querying its representable subresource count requires no allocation, and any later allocation failure follows the applicable documented boundary instead of terminating during the capacity query

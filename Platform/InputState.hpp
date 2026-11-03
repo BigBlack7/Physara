@@ -1,5 +1,7 @@
 #pragma once
 
+// 宿主私有的纯 CPU 累积器: 持有窗口/按键状态、两个事件 bank 和终止故障, 不执行 GLFW 操作.
+
 #include "Input.hpp"
 
 #include <optional>
@@ -33,6 +35,8 @@ namespace Physara::Platform::Detail
         InputState(InputState &&) = delete;
         InputState &operator=(InputState &&) = delete;
 
+        // Initialize 仅一次; Record 保留次序并校验值. 首个终止故障锁存后, Publish 不再交付成功批次.
+        // Publish 切换 bank 并重置区间边沿, 不重置 held; 原生 capture 的实际释放由宿主安全边界执行.
         void Initialize(const WindowState &window, LogicalPoint position, CursorMode mode) noexcept;
         void Record(const InputEvent &event) noexcept;
         [[nodiscard]] std::optional<HostFrameInput> Publish() noexcept;

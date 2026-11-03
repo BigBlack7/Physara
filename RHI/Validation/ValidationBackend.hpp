@@ -22,12 +22,15 @@
 
 #pragma once
 
+// Validation 实现文件间共享的输入/profile 规则和包装对象. 包装只拥有 CPU 引用, 不推断原生归属或 GPU 完成.
+
 #include <atomic>
 #include <ostream>
+#include <set>
 #include <source_location>
 #include <string>
 #include <string_view>
-#include <unordered_set>
+#include <tuple>
 
 #include "Validation.hpp"
 
@@ -37,6 +40,7 @@ namespace Physara::RHI::Validation
                 std::source_location location = std::source_location::current());
     namespace Profile
     {
+        // API 策略只过滤当前禁止的族; 允许委托不意味着 backend 已实现或设备支持, 仍须保留下层失败结果.
         bool IsOpenGL(Device *device);
         bool RejectOpenGL(Device *device, std::source_location location = std::source_location::current());
         bool CheckQueue(Device *device, CommandQueue queue,
@@ -62,6 +66,7 @@ namespace Physara::RHI::Validation
     }
     namespace Input
     {
+        // 共享无状态的描述/range 检查, 同时供创建和命令消费使用; 不保存资源地址或推断原生 Device 归属.
         bool Reject(Device *device, const char *reason, const std::string *name = nullptr,
                     std::source_location location = std::source_location::current());
         bool CheckState(Device *device, ResourceStates state, bool allowUnknown = false,
@@ -121,28 +126,17 @@ namespace Physara::RHI::Validation
         {
             return !(*this == other);
         }
-    };
-} // namespace Physara::RHI::Validation
 
-namespace std
-{
-    template <> struct hash<Physara::RHI::Validation::BindingLocation>
-    {
-        std::size_t operator()(Physara::RHI::Validation::BindingLocation const &s) const noexcept
+        // 有序集合按完整逻辑位置去重, registerSpace/arrayElement 均参与身份, 与相等比较保持一致.
+        bool operator<(BindingLocation const &other) const noexcept
         {
-            size_t hash = 0;
-            Physara::RHI::HashCombine(hash, uint32_t(s.type));
-            Physara::RHI::HashCombine(hash, s.registerSpace);
-            Physara::RHI::HashCombine(hash, s.slot);
-            Physara::RHI::HashCombine(hash, s.arrayElement);
-            return hash;
+            return std::tie(type, registerSpace, slot, arrayElement) <
+                   std::tie(other.type, other.registerSpace, other.slot, other.arrayElement);
         }
     };
-} // namespace std
 
-namespace Physara::RHI::Validation
-{
-    typedef std::unordered_set<BindingLocation> BindingLocationSet;
+    // MSVC Debug 的 hash 工作表在 noexcept 内分配 proxy; 有序集合使本地存储失败可传播到既定边界.
+    using BindingLocationSet = std::set<BindingLocation>;
 
     struct BindingSummary
     {
@@ -223,6 +217,7 @@ namespace Physara::RHI::Validation
 
     class CommandListWrapper : public RefCounter<CommandList>
     {
+        // 状态描述已通过的公共调用顺序; 底层 void 方法的原生失败仍由底层诊断/停止协议处理.
       public:
         friend class DeviceWrapper;
 

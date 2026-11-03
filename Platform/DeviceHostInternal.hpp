@@ -1,5 +1,7 @@
 #pragma once
 
+// 宿主各实现文件共享的实际状态和阶段入口; 原生窗口、输入 bank、回调与 RHI 根引用由同一 State 拥有.
+
 #include "DeviceHost.hpp"
 #include "InputState.hpp"
 
@@ -37,6 +39,8 @@ namespace Physara::Platform::Detail
         }
 
     private:
+        // Begin/EndCapture 只包围创建或关闭操作, 不构成逐帧图形成功状态或 device-loss 判定.
+        // 普通 RHI 消费者仍须按公开失败结果和诊断处理操作失败.
         Core::Diagnostics &m_Diagnostics;
         std::optional<Core::BoundedText> m_First;
         std::uint64_t m_Additional = 0;

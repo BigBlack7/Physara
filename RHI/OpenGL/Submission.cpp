@@ -1,5 +1,7 @@
 #include "Submission.hpp"
 
+// 管理即时上传的提交接受、真实完成与退出收拢. GL 工作不重放, CPU lease/chunk 到真实完成或受控退出才撤销.
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -50,6 +52,7 @@ namespace Physara::RHI::OpenGL
             return 0;
         }
         std::array<OpenGLCommandList *, UploadPacketLimit> nativeLists{};
+        // 全批只读预检完成前不消耗任何原生包. 列表的实际发出顺序已经确定, 数组顺序不能重排 GPU 写入.
         for (std::size_t index = 0; index < count; ++index)
         {
             auto *list = dynamic_cast<OpenGLCommandList *>(lists[index]);
@@ -96,6 +99,8 @@ namespace Physara::RHI::OpenGL
             m_WorkFailed = true;
             return 0;
         }
+        // fence 与 flush 都成功才分配公开身份并发布 tracker metadata. 原生失败记录仍留在 FIFO 供受控退出,
+        // 此时逻辑列表继续拥有自己的包, 不能靠返回 0 把已经发出的前缀当成未执行工作释放.
         record.submissionId = ++m_LastSubmissionId;
         for (std::size_t index = 0; index < count; ++index)
         {
@@ -109,6 +114,7 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept
     {
+        // 只由完成收集或最终退出调用. 先释放 tracker 借用和 chunk, 再释放资源 lease, 最后销毁包本身.
         packet.tracker.Reset();
         for (auto &chunk : packet.chunks)
         {
@@ -153,6 +159,7 @@ namespace Physara::RHI::OpenGL
 
     bool OpenGLDevice::SealOrphans()
     {
+        // acquire 接收 worker 的最后交接. 无已发工作可直接退休, 已发前缀先建内部 fence, 不发布提交 metadata.
         std::array<UploadWorkPacket *, UploadPacketLimit> issued{};
         std::size_t count = 0;
         for (auto &slot : m_Packets)
@@ -240,6 +247,7 @@ namespace Physara::RHI::OpenGL
 
     bool OpenGLDevice::CollectWork(bool wait)
     {
+        // false 同时表示 Pending 或失败, 由 m_WorkFailed/设备 phase 区分. 只按 FIFO 中已证明的完成退休.
         if (m_WorkFailed || !SealOrphans())
         {
             return false;
@@ -309,6 +317,7 @@ namespace Physara::RHI::OpenGL
 
     bool OpenGLDevice::WaitForIdle()
     {
+        // 临时 fence 仅证明调用时命令尾的物理完成; 不把仍由逻辑列表拥有的 recording 当作已接受提交.
         if (!BeginNative("WaitForIdle"))
         {
             return false;
@@ -342,6 +351,8 @@ namespace Physara::RHI::OpenGL
 
     ShutdownPrecondition OpenGLDevice::CheckShutdown(unsigned long knownRoots) const noexcept
     {
+        // 调用者先停止/join 使用者, 本检查才有稳定输入. 每个资源 wrapper 自身只持有一份 Device 引用,
+        // 同一 wrapper 在多个包中的 lease 数另行精确核对, 不把内部寿命环误判成外部 owner.
         if (std::this_thread::get_id() != m_OwnerThread || knownRoots == 0)
         {
             return ShutdownPrecondition::InvalidState;
@@ -368,6 +379,8 @@ namespace Physara::RHI::OpenGL
 
     DrainResult OpenGLDevice::DrainWork(ShutdownMode mode, std::uint32_t *nativeError)
     {
+        // 使用者及外部 owner 由入口合同预先收拢. 正常超时保留 Draining/全部存储以便重试;
+        // 无可靠完成证明时仅在退出尝试全流收拢, context 不可用则撤销 CPU 状态并交外部 owner 销毁 context.
         if (nativeError != nullptr)
         {
             *nativeError = m_FirstNativeError;

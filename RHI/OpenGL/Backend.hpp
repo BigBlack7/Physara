@@ -22,6 +22,8 @@
 
 #pragma once
 
+// GL 后端的跨文件私有合同: Device 拥有 caps/物理包/删除 FIFO, 资源 wrapper 持有描述与 Device 引用.
+
 #include "../OpenGL.hpp"
 
 #include <array>
@@ -211,6 +213,8 @@ namespace Physara::RHI::OpenGL
         AftermathCrashDumpHelper &GetAftermathCrashDumpHelper() override;
 
     private:
+        // Active 接受新工作; Faulted 保留无法证明完成的前缀; Draining 只推进显式退出, 超时可重试.
+        // Stopped 才允许最终 CPU 析构. NativeUsable 独立记录 context 健康, 不从 phase/日志严重度推断 loss.
         enum class Phase : std::uint8_t
         {
             Active,

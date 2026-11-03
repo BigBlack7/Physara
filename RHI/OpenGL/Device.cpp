@@ -1,5 +1,7 @@
 #include "Backend.hpp"
 
+// 实现设备进入、线程/context 前提、原生故障锁存与删除 FIFO. 提交和上传预算由同一 Device 的其他文件推进.
+
 #include <algorithm>
 #include <cstdio>
 #include <exception>
@@ -259,6 +261,8 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::ReleaseAllocation(std::unique_ptr<NativeDeletion> record, bool published) noexcept
     {
+        // 未发布且仍在所属 context 的失败分配可立即回滚; 发布后只把预留节点交给 FIFO.
+        // 提交包必须先保活 wrapper 到 GPU 完成, 本删除队列自身不持有完成票据, 也不延迟猜测固定帧数.
         if (!record || !record->HasObjects())
         {
             return;
@@ -292,6 +296,7 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::Drain(bool nativeAvailable) noexcept
     {
+        // 批量摘走队列后在锁外删除. 原生清理失败后仍释放 CPU 节点, 剩余原生存储交最终 context 退出.
         for (;;)
         {
             NativeDeletion *chain = nullptr;

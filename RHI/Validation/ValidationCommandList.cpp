@@ -22,6 +22,8 @@
 
 #include "ValidationBackend.hpp"
 
+// 包装列表的调用协议、状态/绑定输入检查和底层委托. 即时 claim 限制公共录制重叠, 不表示原生命令已经成功.
+
 #include "Common/Misc.hpp"
 #include "Utils.hpp"
 
@@ -141,6 +143,7 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::Open()
     {
+        // 只有合法生命周期才能取得包装层 claim; 底层 void Open 的执行结果仍由后端故障边界报告.
         switch (m_State)
         {
         case CommandListState::Open:
@@ -187,6 +190,8 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::Close()
     {
+        // 这里只推进包装层调用协议并释放 immediate claim. 下层 void Close 的诊断仍由实际 backend 报告,
+        // Closed 不证明原生录制成功, 更不表示已经提交; Execute 还须通过下层整批预检并取得真实票据.
         switch (m_State)
         {
         case CommandListState::Initial:
@@ -466,6 +471,7 @@ namespace Physara::RHI::Validation
             Error("InvalidArgument: invalid texture row pitch or multisample write");
             return;
         }
+        // 计算最后一次读取所需的 footprint, 不把行末 padding 当 texel; 单 depth 不检查未消费的 depthPitch.
         const size_t rowStride = rowPitch == 0 ? rowBytes : rowPitch;
         if (rows > 1 && rowStride > (std::numeric_limits<size_t>::max() - rowBytes) / (rows - 1))
         {

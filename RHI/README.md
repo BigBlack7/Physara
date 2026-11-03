@@ -37,6 +37,10 @@ Host 的 GetDevice 只在 owner/Ready 返回 Validation 借用. 调用方先停�
 
 ## 固定输入
 
+首次存量审查的 CR-001/002/003 修正属于项目局部正确性差异: Validation 在 descriptor-set registerSpace 超限时于映射访问前拒绝; Pipeline 汇总使用普通数组, Shader 工作 vector 使用可抛出的 count 构造, 保留普通 CPU 异常传播; 两处纹理子资源长度检查直接计算受支持默认分配器的可表示上界, TextureState 的空表以 count=0 构造使 Debug proxy 分配失败进入 tracker 的 sticky-error 边界. 这些修正不改变公开 StaticVector 的元素操作前提、固定来源或原生支持范围. 方法与独立复核状态见 [整改 design](../openspec/changes/archive/2026-11-03-fix-validation-cpu-boundaries/design.md) 和 [审查闭环留存](../openspec/changes/archive/2026-11-03-fix-validation-cpu-boundaries/tasks.md#review-loop-closeout).
+
+同轮逐分配点检查还确认 MSVC Debug 的私有 hash 表在 noexcept 内分配 proxy: Validation 的逻辑位置/输入/提交去重集合改为 std::set, tracker 的两个状态索引改为 std::map. 比较仍基于完整语义字段或资源地址身份, 生命周期和错误边界不变; 删除仅供私有 BindingLocationSet 使用的 hash 特化, 公开 RHI hash 保留. 这是已实测的 CPU 故障路径修正, 不宣称更快或更低开销.
+
 来源为 NVIDIA-RTX/NVRHI commit `6b96fb03e07539f08327aea76c56d55f1de9d906`, 原始 HeaderVersion 为 27. MIT 版权及许可保留在每份移植头开头; 完整来源许可见 [参考快照许可](../ThirdParty/nvrhi/LICENSE.txt). 下表路径相对 ThirdParty/nvrhi; SHA256 对 UTF-8 内容仅规范化 CRLF 为 LF, 保留 BOM、空白和注释, 不等于 Git blob 或整个源码 zip 的哈希.
 
 | 来源 | 目标 | SHA256 (LF) |

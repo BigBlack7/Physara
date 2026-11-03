@@ -1,5 +1,7 @@
 #pragma once
 
+// 仅检查配置可见的故障注入边界, 用于验证诊断写失败和计数饱和; 产品不提供这些控制入口.
+
 #if !defined(PHYSARA_CORE_NATIVE_CHECKS)
 #error This private header is available only to the temporary native checks.
 #endif

@@ -1,5 +1,7 @@
 #include "Upload.hpp"
 
+// 校验源行/体积布局并按设备总预算取得包独有的 coherent 映射区段, 不跨未完成包复用存储.
+
 #include <algorithm>
 #include <cstdio>
 #include <limits>
@@ -28,6 +30,7 @@ namespace Physara::RHI::OpenGL
 
     UploadResourceLease::~UploadResourceLease()
     {
+        // 先撤销内部记账, 随后 m_Resource 的成员析构才 Release wrapper, 防止最后引用释放时仍被计作内部 owner.
         if (m_Holds != nullptr && --*m_Holds == 0)
         {
             --m_Device->m_InternallyRetainedWrappers;
@@ -79,6 +82,7 @@ namespace Physara::RHI::OpenGL
     bool BuildUploadLayout(const TextureDesc &desc, std::uint32_t slice, std::uint32_t mip, std::size_t rowPitch,
                            std::size_t depthPitch, TextureUploadLayout &layout) noexcept
     {
+        // 源 footprint 包含行/切片间 padding, tightBytes 只包含 texel. 乘加先受检, 单 depth 不消费 depthPitch.
         if (mip >= desc.mipLevels || mip >= 32 || desc.sampleCount != 1 ||
             (desc.dimension == TextureDimension::Texture3D ? slice != 0 : slice >= desc.arraySize))
         {
@@ -119,6 +123,7 @@ namespace Physara::RHI::OpenGL
 
     bool OpenGLDevice::AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice)
     {
+        // 只从当前包已有 chunk 的未使用尾部取空间. 新 chunk 同时受对齐/设备总预算限制, 不等待 GPU 腾空间.
         const auto alignment = std::size_t(m_Caps.minMapAlignment);
         for (auto &chunk : packet.chunks)
         {

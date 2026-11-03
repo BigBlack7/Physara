@@ -22,10 +22,14 @@
 
 #include "ValidationBackend.hpp"
 
+// Device 包装的输入/profile 校验和一次委托. 来源保留的算法与项目适配共存, 不在本层缓存原生能力或资源地址归属.
+
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <new>
@@ -82,6 +86,7 @@ namespace Physara::RHI::Validation
             {
                 return Reject(device, "invalid texture dimensions, mips, format or flags", &desc.debugName, location);
             }
+            // 空间维度、数组层和样本各有形状约束; 最后一项只检查 CPU 子资源表长度的表示能力.
             const bool array =
                 dimension == TextureDimension::Texture1DArray || dimension == TextureDimension::Texture2DArray ||
                 dimension == TextureDimension::TextureCube || dimension == TextureDimension::TextureCubeArray ||
@@ -90,6 +95,10 @@ namespace Physara::RHI::Validation
                 dimension == TextureDimension::Texture2DMS || dimension == TextureDimension::Texture2DMSArray;
             const bool cube =
                 dimension == TextureDimension::TextureCube || dimension == TextureDimension::TextureCubeArray;
+            // 查询默认分配器和指针差值可表示的元素数, 不为容量检查构造会分配 Debug proxy 的 vector.
+            constexpr size_t maxSubresources =
+                std::min(size_t(std::numeric_limits<std::ptrdiff_t>::max()),
+                         std::numeric_limits<size_t>::max() / sizeof(ResourceStates));
             if ((!array && desc.arraySize != 1) ||
                 ((dimension == TextureDimension::Texture1D || dimension == TextureDimension::Texture1DArray) &&
                  desc.height != 1) ||
@@ -99,7 +108,7 @@ namespace Physara::RHI::Validation
                 (ms && (desc.mipLevels != 1 || desc.isUAV ||
                         (desc.sampleCount != 2 && desc.sampleCount != 4 && desc.sampleCount != 8))) ||
                 (!ms && desc.sampleCount != 1) ||
-                size_t(desc.arraySize) > std::vector<ResourceStates>().max_size() / desc.mipLevels)
+                size_t(desc.arraySize) > maxSubresources / desc.mipLevels)
             {
                 return Reject(device, "incompatible texture shape, samples or subresource count", &desc.debugName,
                               location);
@@ -200,6 +209,8 @@ namespace Physara::RHI::Validation
             {
                 return false;
             }
+            // 通用范围按固定来源求有效交集, oversized count 可 clamp. 显式 copy/write 尺寸另行完整校验;
+            // 原生附件等更窄入口仍可拒绝本 profile 不支持的范围, 此处不声称它们已能成功创建.
             const auto resolved = range.Resolve(desc, singleMip);
             if (resolved.numMipLevels == 0 || resolved.numArraySlices == 0)
             {
@@ -324,7 +335,7 @@ namespace Physara::RHI::Validation
             {
                 return Reject(device, "invalid binding layout visibility or count", nullptr, location);
             }
-            std::unordered_set<uint64_t> locations;
+            std::set<uint64_t> locations;
             uint32_t volatileCount = 0;
             uint32_t pushCount = 0;
             for (const auto &item : desc.bindings)
@@ -607,9 +618,9 @@ namespace Physara::RHI::Validation
         callback->Message(severity, text);
     }
     template <typename T>
-    static std::unordered_set<T> SetDifference(std::unordered_set<T> const &a, std::unordered_set<T> const &b)
+    static std::set<T> SetDifference(std::set<T> const &a, std::set<T> const &b)
     {
-        std::unordered_set<T> result = a;
+        std::set<T> result = a;
         for (T const &item : b)
         {
             result.erase(item);
@@ -618,9 +629,9 @@ namespace Physara::RHI::Validation
     }
 
     template <typename T>
-    static std::unordered_set<T> SetIntersection(std::unordered_set<T> const &a, std::unordered_set<T> const &b)
+    static std::set<T> SetIntersection(std::set<T> const &a, std::set<T> const &b)
     {
-        std::unordered_set<T> result;
+        std::set<T> result;
         for (T const &item : a)
         {
             if (b.find(item) != b.end())
@@ -631,7 +642,7 @@ namespace Physara::RHI::Validation
         return result;
     }
 
-    template <typename T> static void SetUnionInplace(std::unordered_set<T> &a, std::unordered_set<T> const &b)
+    template <typename T> static void SetUnionInplace(std::set<T> &a, std::set<T> const &b)
     {
         for (T const &item : b)
         {
@@ -1725,6 +1736,7 @@ namespace Physara::RHI::Validation
         const StaticVector<BindingLayoutHandle, MaxBindingLayouts> &bindingLayouts,
         const std::vector<Shader *> &shaders) const
     {
+        // 先检查每个 layout 的可读描述, 再按 shader visibility 汇总逻辑位置, 最后核对集合映射及 push constants.
         for (const auto &layout : bindingLayouts)
         {
             if (!layout)
@@ -1757,8 +1769,8 @@ namespace Physara::RHI::Validation
         {
             ShaderType stage = shader->GetDesc().shaderType;
 
-            StaticVector<BindingSummary, MaxBindingLayouts> bindingsPerLayout;
-            bindingsPerLayout.resize(numBindingLayouts);
+            // 汇总元素拥有会分配的集合; 普通数组构造允许异常传播, 不经 StaticVector 的 noexcept resize.
+            std::array<BindingSummary, MaxBindingLayouts> bindingsPerLayout;
 
             // Accumulate binding information about the stage from all layouts
 
@@ -1926,7 +1938,8 @@ namespace Physara::RHI::Validation
                                     << " has registerSpace = " << layoutDesc->registerSpace
                                     << ". Largest supported registerSpace index is " << (MaxBindingLayouts - 1);
                         Error(errorStream.str());
-                        anyErrors = true;
+                        // 非法 set 不能再用作映射下标; Debug/Release 都在底层 Pipeline 工作前结束校验.
+                        return false;
                     }
                     else if (registerSpaceToLayoutIdx[layoutDesc->registerSpace] != -1)
                     {
@@ -2123,7 +2136,8 @@ namespace Physara::RHI::Validation
             Error("InvalidArgument: graphics pipeline requires a vertex shader");
             return nullptr;
         }
-        std::vector<Shader *> shaders;
+        // count 构造允许 MSVC Debug proxy 的分配失败沿普通 CPU 异常边界传播.
+        std::vector<Shader *> shaders(0);
 
         for (ShaderType stage : GraphicsShaderStages)
         {
@@ -2204,7 +2218,8 @@ namespace Physara::RHI::Validation
             return nullptr;
         }
 
-        std::vector<Shader *> shaders;
+        // 与 Graphics 路径一致, 不在 noexcept 默认构造内分配 Debug proxy.
+        std::vector<Shader *> shaders(0);
 
         for (ShaderType stage : MeshletShaderStages)
         {
@@ -2375,7 +2390,8 @@ namespace Physara::RHI::Validation
     bool DeviceWrapper::ValidateBindingSetItem(const BindingSetItem &binding, DescriptorTable *pOptDescriptorTable,
                                                std::stringstream &errorStream, std::source_location location)
     {
-
+        // 先校验公共标签, 再按 type 读取 union 和检查活对象类型/用途/范围; 不用未激活载荷或对象 padding.
+        // Input 规则已直接报告的错误保留空 errorStream, 调用者据此避免为同一次拒绝重复记录日志.
         if (binding.type >= ResourceType::Count || binding.format >= Format::COUNT ||
             binding.dimension > TextureDimension::Texture3D)
         {
@@ -2826,6 +2842,7 @@ namespace Physara::RHI::Validation
     bool DeviceWrapper::ValidateBindingSetDesc(const BindingSetDesc &desc, BindingLayout *layout,
                                                std::source_location location)
     {
+        // 顺序是 profile -> layout -> 单项有效性 -> 完整位置集合. 各 arrayElement 独立, 缺项/重复/多余项均拒绝.
         if (Profile::IsOpenGL(m_Device))
         {
             for (const auto &item : desc.bindings)
@@ -2886,6 +2903,7 @@ namespace Physara::RHI::Validation
                 return false;
             }
         }
+        // 每项有效后再比较完整位置集合; slot、资源类别和 arrayElement 共同标识绑定, 顺序不代替身份检查.
         BindingSummary layoutBindings;
         BindingLocationSet layoutDuplicates;
 
@@ -3407,8 +3425,8 @@ namespace Physara::RHI::Validation
         {
             // MSVC Debug 的容器构造也可能分配; 连同构造一起纳入预检失败边界.
             unwrappedCommandLists.emplace(numCommandLists);
-            std::unordered_set<CommandList *> unique;
-            unique.reserve(numCommandLists);
+            // 与布局去重一致, 预检的工作集合分配失败须进入下方 catch, 不在 STL 内意外终止.
+            std::set<CommandList *> unique;
             // 全批只读预检. 输出暂存与去重分配也在任何状态消耗之前完成.
             for (size_t index = 0; index < numCommandLists; ++index)
             {

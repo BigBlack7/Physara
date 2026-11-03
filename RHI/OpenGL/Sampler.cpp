@@ -1,5 +1,7 @@
 #include "Backend.hpp"
 
+// 创建与 Texture 存储独立的 Sampler, 将已检查的过滤/寻址/比较参数映射到实际原生对象.
+
 #include <cmath>
 #include <memory>
 #include <new>
@@ -60,6 +62,7 @@ namespace Physara::RHI::OpenGL
             }
             constexpr GLint addresses[] = {GL_CLAMP_TO_EDGE, GL_REPEAT, GL_CLAMP_TO_BORDER, GL_MIRRORED_REPEAT,
                                            GL_MIRROR_CLAMP_TO_EDGE};
+            // 三个过滤布尔值独立对应 texel/mip 选择, 此处只设置新 sampler, 不修改任何 Texture 的采样参数.
             constexpr GLint minFilters[2][2] = {{GL_NEAREST_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR},
                                                 {GL_LINEAR_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_LINEAR}};
             struct IntegerParameter

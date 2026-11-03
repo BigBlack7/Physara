@@ -1,5 +1,7 @@
 #include "DeviceHost.hpp"
 
+// 装配启动阶段并统一处理宿主操作的线程/重入前提、主错和回滚; 原生细节由对应实现文件承担.
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -151,6 +153,7 @@ namespace Physara::Platform
     static std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
                                                       Operation &&operation) noexcept
     {
+        // 先拒绝错误线程/重入/停止状态, 再进入原生边界. 参数预检拒绝可恢复, 输入或原生故障则终止该输入寿命.
         const auto started = std::chrono::steady_clock::now();
         const auto reject = [&](HostErrorReason reason, std::string_view message)
         {
@@ -205,6 +208,7 @@ namespace Physara::Platform
                               !error->cleanupError;
         if (!rejected)
         {
+            // 原生或输入故障终止本次输入寿命. 先禁回调写入并保存主错, 再尝试解除 capture.
             state.ready = false;
             state.inputAccepting = false;
             if (error->context.nativeCode)
@@ -528,6 +532,7 @@ namespace Physara::Platform
 
     DeviceHost::PollResult DeviceHost::PollEvents() noexcept
     {
+        // 先完成原生事件分发及事实补查, 再一次发布. 任何失败都返回 HostError, 不暴露部分事件 bank.
         std::optional<HostFrameInput> frame;
         auto error = RunInputOperation(*m_State, HostStage::EventPolling,
                                        [&]() -> std::optional<HostError>

@@ -15,8 +15,11 @@ context: |
   Use the official OpenSpec 1.13.2 CLI and its bundled spec-driven schema independently of the C++ build.
   Keep initialization lightweight. Do not add CI, tool-install targets, formatting gates or a test framework.
   The maintainer will define test organization separately; perform checks appropriate to the actual change.
+  Follow AGENTS.md for the mandatory independent Review/Annotation and correction/recheck loop before final verify and sync/archive. Docs/CodeReview.md is the reusable current review ledger, not an OpenSpec artifact or a substitute for verification evidence.
 rules:
   proposal:
     - Reference the relevant Dxx-Txx work packages and state the change scope.
   tasks:
     - Include verification in each task and check boxes only after the specified behavior is verified.
+    - Plan Agent-A implementation/local checks, independent Agent-B review/annotation, correction and B recheck, then final native verify before sync/archive; hand off after implementation checks while review tasks remain pending.
+    - Only the responsible session may mark its review/correction/recheck tasks complete, using the AGENTS.md loop; preserve detailed review and acceptance evidence in the change tasks before resetting Docs/CodeReview.md. The development plan records only completion status and a link to the change.

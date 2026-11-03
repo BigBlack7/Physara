@@ -1,5 +1,7 @@
 #pragma once
 
+// 无 GL/GLFW 类型的后端互操作合同. 外部 owner 提供 context/诊断寿命, 设备管理资源与真实工作退休.
+
 #include <cstdint>
 
 #include "RHI.hpp"

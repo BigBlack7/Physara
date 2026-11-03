@@ -1,11 +1,15 @@
 #include "CommandList.hpp"
 
+// 对同一资源取得去重 lease 并消费 Common transfer 依赖. 自动/显式模式共用 tracker, 不维护第二份资源状态.
+
 #include <new>
 
 namespace Physara::RHI::OpenGL
 {
     bool OpenGLCommandList::Retain(Resource *resource, unsigned long &holds)
     {
+        // 一个包对一个 wrapper 只取得一份引用; 跨包 holds 用于关闭时区分内部保活和调用方 owner.
+        // 后续准备可能已向 tracker 留下 extension 借用, 即使写入被拒绝, 此引用也随包统一退休.
         for (const auto &lease : m_Packet->resources)
         {
             if (lease.Get() == resource)
@@ -54,6 +58,7 @@ namespace Physara::RHI::OpenGL
 
     static bool TransferStateSupported(ResourceStates state, ResourceStates initial, bool keepInitial) noexcept
     {
+        // 普通 GPU 用途目前只可作为 keepInitialState 的恢复元数据; 本入口不交付这些用途的原生命令.
         return state == ResourceStates::Common || state == ResourceStates::CopyDest ||
                (keepInitial && state == initial && ValidInitialState(initial, true));
     }

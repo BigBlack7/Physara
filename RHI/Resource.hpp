@@ -23,6 +23,7 @@
 #pragma once
 
 // 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
+// 定义原生互操作对象和 intrusive CPU 句柄. retain/copy 与 adoption/move 分别增加和转移拥有权.
 
 #include <atomic>
 #include <cassert>

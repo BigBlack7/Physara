@@ -1,5 +1,7 @@
 #pragma once
 
+// 物理上传包使用的预算、资源 lease、持久映射 chunk 和 CPU 源 footprint 合同; 退休由 Device owner 推进.
+
 #include "Backend.hpp"
 
 #include <cstddef>
@@ -33,6 +35,8 @@ namespace Physara::RHI::OpenGL
 
     struct UploadChunk
     {
+        // 包独有的 persistent/coherent 存储. used 单调增长, 退休前不会覆写; capacity 计入 Device 总预算.
+        // 这里只描述已取得的原生存储, 销毁/解映射由 owning/current 的 RetirePacket 统一完成.
         GLuint name = 0;
         std::byte *mapping = nullptr;
         std::size_t capacity = 0;
@@ -57,6 +61,8 @@ namespace Physara::RHI::OpenGL
         std::uint32_t height = 0;
         std::uint32_t depth = 0;
     };
+    // desc 已由 Device 创建验证且 format 已通过颜色上传筛选. false 时不读取源, layout 不可作为成功结果使用.
+    // sourceBytes 是含行/切片间隙的最小可读范围, tightBytes 是复制到 PBO 的 texel 字节数, 均不含末尾 padding.
     [[nodiscard]] bool BuildUploadLayout(const TextureDesc &desc, std::uint32_t slice, std::uint32_t mip,
                                          std::size_t rowPitch, std::size_t depthPitch,
                                          TextureUploadLayout &layout) noexcept;

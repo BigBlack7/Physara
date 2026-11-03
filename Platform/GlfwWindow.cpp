@@ -1,5 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
+// 独占进程 GLFW 生命周期与错误回调; 窗口/context 的取得和逆序释放都受同一宿主身份保护.
+
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -16,6 +18,7 @@ namespace Physara::Platform::Detail
 
     static GlfwProcessState s_Process;
 
+    // GLFW 的错误描述只在回调期间有效. 锁内只保存首错/计数, 不再调用 GLFW 或日志消费者.
     static void CaptureGlfwError(int code, const char *description) noexcept
     {
         try
@@ -207,6 +210,8 @@ namespace Physara::Platform::Detail
 
     std::optional<HostError> ReleaseNativeState(DeviceHostState &state)
     {
+        // 三个退出边界: 外部 owner 尚存时保持原状; drain Pending 时保留原生环境;
+        // 可以最终释放后, 才按 RHI -> 输入/窗口/context -> GLFW -> 进程 claim 逆序退出.
         if (state.stopped)
         {
             return std::nullopt;
@@ -217,6 +222,7 @@ namespace Physara::Platform::Detail
                              "Release all resources and extra Device owners before host shutdown");
         }
         state.ready = false;
+        // 外部 owner 预检成功后才停止新工作. Pending 必须保留整套原生环境, 由调用方重试.
         state.inputAccepting = false;
         auto first = ReleaseResourceDevice(state);
         if (first && first->reason == HostErrorReason::RhiDrainPending)

@@ -1,5 +1,7 @@
 #pragma once
 
+// Platform 的公开宿主边界: 自持环境观察值, 借用 RHI Device, 并在 owner 线程推进输入和关闭.
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -62,6 +64,8 @@ namespace Physara::Platform
 
     struct HostInfo
     {
+        // 创建时的自持环境快照, 不是当前窗口尺寸或实时 caps 的第二份权威状态.
+        // 当前逻辑尺寸/像素尺寸/缩放由 PollEvents 返回的 WindowState 表达.
         WindowId identity;
         HostPlatform platform = HostPlatform::Unknown;
         std::uint32_t glfwMajor = 0;

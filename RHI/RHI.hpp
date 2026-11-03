@@ -23,6 +23,7 @@
 #pragma once
 
 // 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
+// 完整公共描述、对象和命令合同按来源保留; 设备负责报告当前能力, 不以声明存在作为执行成功证据.
 
 #include <cassert>
 #include <cmath>
@@ -3444,6 +3445,7 @@ namespace Physara::RHI
 
         bool operator==(const BindingSetItem &b) const
         {
+            // 与下方 hash 使用同一组语义字段, 只读取 type 对应的活动载荷, 不比较 reserved/padding.
             if (resourceHandle != b.resourceHandle || slot != b.slot || arrayElement != b.arrayElement ||
                 type != b.type || dimension != b.dimension || format != b.format ||
                 overrideComponentMapping != b.overrideComponentMapping)

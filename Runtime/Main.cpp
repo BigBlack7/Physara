@@ -1,3 +1,6 @@
+// 唯一产品入口: 先解析启动参数, 再装配诊断与宿主, 消费事件并按依赖逆序关闭.
+// 当前只推进已实现的窗口生命周期, 没有绘制或呈现阶段.
+
 #include <charconv>
 #include <cstdio>
 #include <cstdint>
@@ -40,6 +43,7 @@ namespace Physara::Runtime
 
     static std::variant<StartupOptions, Core::BoundedText> ParseOptions(int argc, char **argv) noexcept
     {
+        // 每种选项占一位以拒绝重复; 所有参数都检查完后, main 才解释 help 或创建原生状态.
         StartupOptions options;
         unsigned seen = 0;
         for (int index = 1; index < argc; ++index)
@@ -126,6 +130,7 @@ int main(int argc, char **argv)
         return 1;
     }
     auto host = std::move(std::get<std::unique_ptr<Platform::DeviceHost>>(creation));
+    // 诊断 owner 先构造并在 host 之后析构; 显式 Shutdown 先报告领域错误, 析构仍负责检查退出合同.
     int exitCode = 0;
     try
     {

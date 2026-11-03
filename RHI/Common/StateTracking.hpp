@@ -22,11 +22,13 @@
 
 #pragma once
 
+// 单份 recording 的抽象状态/依赖合同. 后端持有 extension 的寿命并消费 barrier, 此处不发原生命令或等待 GPU.
+
+#include <map>
 #include <memory>
 #include <optional>
 #include <source_location>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -36,6 +38,7 @@ namespace Physara::RHI
 {
     struct BufferStateExtension
     {
+        // descRef 借用资源 wrapper 内的不可变描述; permanentState 只由已接受提交发布.
         const BufferDesc &descRef;
         ResourceStates permanentState = ResourceStates::Unknown;
 
@@ -46,6 +49,7 @@ namespace Physara::RHI
 
     struct TextureStateExtension
     {
+        // stateInitialized 只表示 keepInitialState 的提交协议已建立, 不保证任意 mip/layer 含有效 texel.
         const TextureDesc &descRef;
         ResourceStates permanentState = ResourceStates::Unknown;
         bool stateInitialized = false;
@@ -56,9 +60,12 @@ namespace Physara::RHI
         }
     };
 
+    // 单个纹理在本 recording 内的状态. 整图表示与逐子资源表示互斥, 不修改资源 extension 的提交元数据.
     struct TextureState
     {
-        std::vector<ResourceStates> subresourceStates;
+        // subresourceStates 为空时用 state 表示整图; 展开后由 mip + layer*mipLevels 索引各子资源.
+        // count=0 构造允许 Debug proxy 分配失败传播到 tracker 的 catch, 不使用 noexcept 默认构造.
+        std::vector<ResourceStates> subresourceStates = std::vector<ResourceStates>(0);
         ResourceStates state = ResourceStates::Unknown;
         bool enableUavBarriers = true;
         bool firstUavBarrierPlaced = false;
@@ -103,7 +110,7 @@ namespace Physara::RHI
               m_HasErrors = messageCallback == nullptr;
           }
 
-        // ICommandList-like interface
+        // 录制侧入口: BeginTracking 声明已知前态, Require/永久状态请求形成待消费依赖.
 
         void SetEnableUavBarriersForTexture(TextureStateExtension *texture, bool enableBarriers);
         void SetEnableUavBarriersForBuffer(BufferStateExtension *buffer, bool enableBarriers);
@@ -120,7 +127,7 @@ namespace Physara::RHI
                                                   MipLevel mipLevel);
         ResourceStates GetBufferState(BufferStateExtension *buffer);
 
-        // Internal interface
+        // 后端先消费依赖, 再通知接受提交; 放弃或失败用 Reset, 不调用 CommandListSubmitted 伪造发布.
 
         void RequireTextureState(TextureStateExtension *texture, TextureSubresourceSet subresources,
                                  ResourceStates state);
@@ -161,8 +168,10 @@ namespace Physara::RHI
         bool CheckBuffer(BufferStateExtension *buffer);
         bool CheckState(ResourceStates state);
 
-        std::optional<std::unordered_map<TextureStateExtension *, std::unique_ptr<TextureState>>> m_TextureStates;
-        std::optional<std::unordered_map<BufferStateExtension *, std::unique_ptr<BufferState>>> m_BufferStates;
+        // 有序索引避开 MSVC Debug hash 容器的 noexcept proxy 分配; 建表/插入失败由录制入口锁存.
+        // key 只标识稳定的 extension 地址, 默认 std::less 提供指针全序; map 不拥有 extension.
+        std::optional<std::map<TextureStateExtension *, std::unique_ptr<TextureState>>> m_TextureStates;
+        std::optional<std::map<BufferStateExtension *, std::unique_ptr<BufferState>>> m_BufferStates;
 
         // Deferred transitions of textures and buffers to permanent states.
         // They are executed only when the command list is executed, not when the app calls setPermanentTextureState or setPermanentBufferState.

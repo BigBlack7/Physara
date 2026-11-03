@@ -23,6 +23,7 @@
 #pragma once
 
 // 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
+// 固定来源的跨语言 GPU 数据记录. 当前交付只验证 C++20/MSVC 布局, 不据此承诺 Shader 编译 profile.
 #ifdef __cplusplus
 #include <cstdint>
 #endif

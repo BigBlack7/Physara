@@ -23,6 +23,7 @@ add_library(PhysaraRHIOpenGL STATIC
     ContextState.cpp
 )
 
+# OpenGL.hpp 的公开签名使用 RHI 类型, 因而传递通用合同; glad 仅供 cpp/私有头使用, 不进入公开 include 边界.
 target_link_libraries(PhysaraRHIOpenGL PUBLIC PhysaraRHI PRIVATE glad)
 target_compile_features(PhysaraRHIOpenGL PUBLIC cxx_std_20)
 set_target_properties(PhysaraRHIOpenGL PROPERTIES CXX_EXTENSIONS OFF)

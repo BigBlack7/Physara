@@ -23,6 +23,7 @@
 #pragma once
 
 // 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
+// 描述构造/操作便利函数和固定容量 CPU 索引分配. 传入的设备、资源及参数仍须满足相应操作合同.
 
 #include <cstddef>
 #include <cstdint>

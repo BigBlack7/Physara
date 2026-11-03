@@ -1,5 +1,7 @@
 #include "CommandList.hpp"
 
+// 完整公共命令表中尚未交付的入口统一报告 Unsupported, 不读取专有 payload 或发出替代 GPU 工作.
+
 namespace Physara::RHI::OpenGL
 {
     void OpenGLCommandList::ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor)

@@ -22,6 +22,8 @@
 
 #pragma once
 
+// 上传限定的逻辑即时列表; 借用 Device 所有的稳定物理包, 不保存调用方 CPU 源指针.
+
 #include "Backend.hpp"
 #include "Submission.hpp"
 
@@ -33,6 +35,8 @@ namespace Physara::RHI::OpenGL
     public:
         OpenGLCommandList(OpenGLDevice *device, const CommandListParameters &params) noexcept;
         ~OpenGLCommandList() override;
+        // Open 取得唯一 recording claim 和物理包; Close 保留未提交包, 成功 Execute 后才可再次 Open.
+        // 所有原生命令在 recording 调用时发出, Execute 只封装提交/保活, 不重放上传.
         void Open() override;
         void Close() override;
         void ClearState() override;

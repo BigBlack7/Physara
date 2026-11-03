@@ -1,5 +1,7 @@
 #include "Diagnostics.hpp"
 
+// 将消息与单调秒时间/源位置组合后写入固定容量环, 后端失败不替代调用方的领域错误.
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -56,6 +58,7 @@ namespace Physara::Core
 {
     struct Diagnostics::Impl
     {
+        // 同一 mutex 保护环与统计, 因而成功入环和淘汰计数是一次发布; origin 创建后只读.
         std::chrono::steady_clock::time_point origin = std::chrono::steady_clock::now();
         mutable std::mutex mutex;
         DiagnosticStats stats;
@@ -118,6 +121,7 @@ namespace Physara::Core
                 writeFailed = true;
             }
             auto &stats = m_Impl->stats;
+            // 只有成功入环才推进保留/淘汰统计; 损失计数饱和, 避免长期运行后回绕.
             if (writeFailed)
             {
                 if (stats.writeFailed != std::numeric_limits<std::uint64_t>::max())

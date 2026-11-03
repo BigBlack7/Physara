@@ -22,6 +22,9 @@
 
 #include "Backend.hpp"
 
+// 保留完整 Device 方法闭包, 对当前资源/上传 profile 之外的入口显式诊断并返回既有失败形式.
+// 不解引用无关 payload, 不构造成功占位对象; 引用型 crash-helper 只能以异常报告不可用.
+
 #include <stdexcept>
 
 namespace Physara::RHI::OpenGL

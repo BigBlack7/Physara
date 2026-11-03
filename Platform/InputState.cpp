@@ -1,5 +1,7 @@
 #include "InputState.hpp"
 
+// 按到达顺序校验并累积输入, 发布时复制值状态并交换 bank; 故障不返回成功的部分批次.
+
 #include <cmath>
 #include <limits>
 
@@ -98,6 +100,7 @@ namespace Physara::Platform::Detail
             Fail(InputFaultReason::CounterExhausted);
             return std::nullopt;
         }
+        // 发布 bank 此后保持只读; 后续回调写另一个 bank. 值快照先复制, 再清本间隔的边沿和 delta.
         HostFrameInput frame{++m_Sequence, m_Window, m_Snapshot, {m_Banks[m_PendingBank].data(), m_PendingCount}};
         m_PendingBank = 1 - m_PendingBank;
         m_PendingCount = 0;
@@ -195,6 +198,7 @@ namespace Physara::Platform::Detail
     }
     void InputState::Apply(CursorPositionEvent event) noexcept
     {
+        // baseline 在初始化、焦点边界和光标模式切换后失效; 第一份位置只重建基准, 不产生相机跳变.
         if (!IsFinite(event.position))
         {
             Fail(InputFaultReason::InvalidData);

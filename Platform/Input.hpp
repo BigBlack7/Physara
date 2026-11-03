@@ -1,5 +1,7 @@
 #pragma once
 
+// 窗口事实、输入事件和平台请求的值合同. 逻辑坐标/像素/滚轮单位独立, 原生枚举不穿过此边界.
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -222,6 +224,8 @@ namespace Physara::Platform
     };
     struct InputSnapshot
     {
+        // 同一发布间隔的 press/release 可同时为真; down 表示间隔末值, events 保留实际到达顺序.
+        // cursorDeltaLogical/scrollOffset 只累计当前间隔, 下一次成功发布后从零累计.
         std::array<ButtonState, KeyCount> keys{};
         std::array<ButtonState, MouseButtonCount> mouseButtons{};
         LogicalPoint cursorPositionLogical;

@@ -1,5 +1,7 @@
 #pragma once
 
+// 提供按领域隔离的值身份和不回绕的代号推进, 不管理对象存储或寿命.
+
 #include <cstdint>
 #include <limits>
 

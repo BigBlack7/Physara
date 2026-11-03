@@ -1,5 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
+// 在宿主 current context 上加载固定 GL 入口并查询实际环境; 观察值与创建偏好分开保存.
+
 #include <array>
 #include <cstring>
 

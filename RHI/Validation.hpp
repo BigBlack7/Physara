@@ -22,6 +22,8 @@
 
 #pragma once
 
+// 可组合 Validation 的唯一公共工厂; 实际校验与包装状态封闭在 Validation 私有实现中.
+
 #include "RHI.hpp"
 
 namespace Physara::RHI::Validation

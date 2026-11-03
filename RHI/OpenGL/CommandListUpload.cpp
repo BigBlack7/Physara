@@ -1,5 +1,7 @@
 #include "CommandList.hpp"
 
+// 实现受检 Buffer 区间和整纹理子资源上传. 先准备资源保活/状态/容量, 再消费 CPU 源并发出即时 GL 命令.
+
 #include <cstring>
 #include <limits>
 
@@ -26,6 +28,7 @@ namespace Physara::RHI::OpenGL
         }
         if (size == 0)
         {
+            // 严格空区间不取得上传容量/lease, 也不解引用 data; offset 已按实际容量检查.
             return;
         }
         if (packet->writes == UploadItemLimit)
@@ -43,6 +46,7 @@ namespace Physara::RHI::OpenGL
             return;
         }
         UploadSlice source;
+        // 小写直接由 DSA 消费源字节; 大写先复制到本包映射区段, 两条路径都不跨返回保存源指针.
         if (size > SmallBufferLimit)
         {
             if (!m_Device->AllocateUpload(*packet, size, source))
@@ -57,6 +61,7 @@ namespace Physara::RHI::OpenGL
             packet->invalid = true;
             return;
         }
+        // 从这里起原生调用可能已经消费目标或映射源. 先登记 issuedWork, 即使调用带错也必须保护整个前缀.
         ++packet->writes;
         packet->logicalBytes += size;
         packet->issuedWork = true;
@@ -89,6 +94,7 @@ namespace Physara::RHI::OpenGL
             return;
         }
         const auto &desc = native->m_Desc;
+        // 先排除内容 profile 再解释源布局; 已支持分配的 depth/stencil/MS 不因此取得上传能力.
         GLenum format = 0;
         GLenum type = 0;
         if (!GetUploadFormat(desc.format, format, type) || desc.dimension == TextureDimension::Texture2DMS ||
@@ -148,6 +154,7 @@ namespace Physara::RHI::OpenGL
             packet->invalid = true;
             return;
         }
+        // 从此指针表示已绑定 PBO 内的字节 offset, 而不是 CPU 地址. 首个可能发出的写前保留全部包所有权.
         const auto *offset = reinterpret_cast<const void *>(source.offset);
         ++packet->writes;
         packet->logicalBytes += layout.tightBytes;

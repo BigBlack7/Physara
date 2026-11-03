@@ -1,5 +1,7 @@
 #pragma once
 
+// Device 独占的物理包和有界 fence FIFO. recordingId 与提交身份分开, orphan 的退休 fence 没有公开票据.
+
 #include "Upload.hpp"
 
 #include <array>
@@ -26,6 +28,7 @@ namespace Physara::RHI::OpenGL
         const std::uint64_t recordingId;
         const std::size_t minimumChunk;
         PacketPhase phase = PacketPhase::Recording;
+        // worker 最后释放列表时以 release 交接, owner 以 acquire 接收后才可读取/退休包; 交接后 worker 不再访问.
         std::atomic<bool> orphaned{false};
         bool issuedWork = false;
         bool invalid = false;

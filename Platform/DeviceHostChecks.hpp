@@ -1,5 +1,7 @@
 #pragma once
 
+// 仅检查配置可见的宿主故障/输入观测入口; 不改变生产 API 或把受控观察值当作真实硬件证据.
+
 #if !defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
 #error This private header is available only to the temporary native checks.
 #endif

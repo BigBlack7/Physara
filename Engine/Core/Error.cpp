@@ -1,5 +1,7 @@
 #include "Error.hpp"
 
+// 实现固定字节预算的文本复制/追加; 截断为有效 UTF-8 输入保留完整码点及截断标记.
+
 #include <algorithm>
 #include <cstring>
 
@@ -9,6 +11,7 @@ namespace Physara::Core
 
     static std::size_t Utf8PrefixLength(std::string_view text, std::size_t limit) noexcept
     {
+        // count 指向保留前缀后的首字节; 若落在续字节上, 回退到该码点的起始位置.
         std::size_t count = std::min(text.size(), limit);
         if (count < text.size())
         {
@@ -52,6 +55,7 @@ namespace Physara::Core
         }
         else
         {
+            // 先从已有正文腾出标记空间, 再追加新正文, 两段合计仍受同一字节预算约束.
             constexpr auto BodyLimit = MaxTextBytes - TruncationMarker.size();
             m_Size = Utf8PrefixLength(View(), BodyLimit);
             const auto copied = Utf8PrefixLength(text, BodyLimit - m_Size);

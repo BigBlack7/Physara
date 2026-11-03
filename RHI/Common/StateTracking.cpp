@@ -22,8 +22,11 @@
 
 #include "StateTracking.hpp"
 
+// 在来源算法上校验 recording 输入并保留 sticky error. 声明已知前态、请求依赖、提交发布和放弃分别执行.
+
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <new>
@@ -96,7 +99,12 @@ namespace Physara::RHI
             Error("invalid texture dimensions/mip count", &desc.debugName);
             return false;
         }
-        if (size_t(desc.arraySize) > std::vector<ResourceStates>().max_size() / desc.mipLevels)
+        // 后续表以 layer*mipLevels+mip 寻址, 此处限制其可表示长度, 不证明原生尺寸或格式可用.
+        // 不为查询构造临时 vector, 避免 MSVC Debug 的 noexcept 默认构造分配 proxy 后意外终止.
+        constexpr size_t maxSubresources =
+            std::min(size_t(std::numeric_limits<std::ptrdiff_t>::max()),
+                     std::numeric_limits<size_t>::max() / sizeof(ResourceStates));
+        if (size_t(desc.arraySize) > maxSubresources / desc.mipLevels)
         {
             Error("unrepresentable texture subresource count", &desc.debugName);
             return false;
@@ -244,6 +252,7 @@ namespace Physara::RHI
 
         subresources = subresources.Resolve(desc, false);
 
+        // 声明只更新本地前态, 不生成转换. 部分声明展开整图存储, 未声明部分保留其原先状态.
         if (subresources.IsEntireTexture(desc))
         {
             tracking->state = stateBits;
@@ -475,6 +484,7 @@ namespace Physara::RHI
         {
             return;
         }
+        // 已请求但尚未发布的永久状态也限制本 recording 后续用途; 不能等到提交后才发现冲突.
         for (const auto &[pendingResource, pendingState] : m_PermanentTextureStates)
         {
             if (pendingResource == texture)
@@ -514,6 +524,7 @@ namespace Physara::RHI
 
         if (subresources.IsEntireTexture(texture->descRef) && tracking->subresourceStates.empty())
         {
+            // 保持整图表示直至真正需要部分用途; 同态 UAV 仍可能需要顺序依赖, 与状态变化分别判断.
             // We're requiring state for the entire texture, and it's been tracked as entire texture too
 
             bool transitionNecessary = tracking->state != state;
@@ -771,6 +782,7 @@ namespace Physara::RHI
 
     void CommandListResourceStateTracker::CommandListSubmitted()
     {
+        // 仅在 owner 已接受提交时调用. 所有冲突预检先完成, 再发布 extension 元数据并释放本地工作集.
 
         if (HasErrors())
         {
@@ -822,6 +834,8 @@ namespace Physara::RHI
     TextureState *CommandListResourceStateTracker::GetTextureStateTracking(TextureStateExtension *texture,
                                                                            bool allowCreate)
     {
+        // 按需创建 recording 的本地记录. 首次 keepInitialState 纹理从 Common 起步, 后续才从承诺的初态起步.
+        // map 持有 tracking, extension 由后端保活; 它们都必须活到依赖消费及提交发布/放弃完成.
         if (!m_TextureStates)
         {
             if (!allowCreate)

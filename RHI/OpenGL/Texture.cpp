@@ -1,5 +1,8 @@
 #include "Backend.hpp"
 
+// 校验纹理形状、实际 target/format 用途和样本集合, 创建 immutable storage 并设置独立的采样 swizzle.
+// initialState/clearValue 仅为描述元数据; 本文件不上传或清除 texel.
+
 #include <algorithm>
 #include <bit>
 #include <exception>
@@ -31,6 +34,7 @@ namespace Physara::RHI::OpenGL
         const bool cube =
             desc.dimension == TextureDimension::TextureCube || desc.dimension == TextureDimension::TextureCubeArray;
         const bool volume = desc.dimension == TextureDimension::Texture3D;
+        // 空间尺寸按实际 target 选择上限; layer/face 不随 mip 缩小, 与空间 depth 分开校验.
         const auto spatialLimit = std::uint32_t(volume ? m_Caps.max3DTextureSize
                                                 : cube ? m_Caps.maxCubeTextureSize
                                                        : m_Caps.maxTextureSize);
@@ -70,6 +74,7 @@ namespace Physara::RHI::OpenGL
         }
         const auto maxMipLevels = std::uint32_t(std::bit_width(std::max({desc.width, desc.height, desc.depth})));
         const auto &caps = GetFormatCaps(desc.format, desc.dimension);
+        // 描述保留完整 RHI 语义, 接受能力取当前实现与原生 target/format 观察的交集, 不自动降级格式或样本数.
         const ComponentSwizzle components[] = {desc.defaultComponentMapping.r, desc.defaultComponentMapping.g,
                                                desc.defaultComponentMapping.b, desc.defaultComponentMapping.a};
         for (auto component : components)
@@ -98,6 +103,7 @@ namespace Physara::RHI::OpenGL
         }
         try
         {
+            // 描述副本与退休节点先取得, 未发布对象负责撤销失败前缀; 成功后也只拥有未初始化存储.
             auto texture = std::make_unique<OpenGLTexture>(this, desc);
             if (!BeginNative("CreateTexture", desc.debugName.c_str()))
             {
@@ -154,6 +160,7 @@ namespace Physara::RHI::OpenGL
             }
             if (!multisample)
             {
+                // swizzle 改变未来采样的分量解释, 不变换存储字节; MS target 不接受这些普通纹理参数.
                 constexpr GLint swizzles[] = {GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA, GL_ZERO, GL_ONE};
                 GLint mapping[4]{};
                 for (std::size_t index = 0; index < 4; ++index)

@@ -1,5 +1,8 @@
 #include "DeviceHostInternal.hpp"
 
+// 将 GLFW 回调翻译为项目输入, 在事件泵边界补查窗口事实并执行有序平台请求.
+// 回调只写累积器; capture 释放和原生错误合并在回调返回后的安全边界完成.
+
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -335,6 +338,7 @@ namespace Physara::Platform::Detail
     }
     static std::optional<HostError> RefreshWindowInput(DeviceHostState &state)
     {
+        // getter 补齐未送达回调的最新事实, 仅对差异追加事件. 不清除已到达的边沿或重写已发布 bank.
         auto result = ReadWindowFacts(state);
         if (auto *error = std::get_if<HostError>(&result))
         {
@@ -403,6 +407,7 @@ namespace Physara::Platform::Detail
     }
     static std::optional<HostError> FinishEvents(DeviceHostState &state)
     {
+        // 原生主错优先, 然后检查回调故障/补查事实; 最后释放失焦 capture, 不提前发布事件.
         auto error = TakeNativeError(state, HostErrorReason::EventProcessing, state.stage);
         if (!error)
         {
@@ -671,6 +676,7 @@ namespace Physara::Platform::Detail
 
     std::optional<HostError> ApplyNativeRequests(DeviceHostState &state, std::span<const HostRequest> requests)
     {
+        // 整批先做无原生副作用的值/焦点预检. 进入执行后逐项生效, 失败仅定位 prefix, 不声称回滚.
         for (std::size_t index = 0; index < requests.size(); ++index)
         {
             if (const auto *cursor = std::get_if<SetCursorMode>(&requests[index]))

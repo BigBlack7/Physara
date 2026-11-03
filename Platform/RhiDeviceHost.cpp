@@ -1,5 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
+// 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根引用, 捕获领域诊断并收拢上传/删除后释放.
+
 #include <limits>
 
 #include <OpenGL.hpp>
@@ -106,6 +108,7 @@ namespace Physara::Platform::Detail
 
     std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state)
     {
+        // 调用者已完成外部引用预检. 先恢复 owner context, 再 drain; 不可用时由 Host 最终销毁 context.
         if (!state.rawDevice)
         {
             return std::nullopt;
@@ -137,6 +140,7 @@ namespace Physara::Platform::Detail
             current ? RHI::OpenGL::ShutdownMode::Normal : RHI::OpenGL::ShutdownMode::ContextUnavailable, &nativeError);
         if (result != RHI::OpenGL::DrainResult::Ready)
         {
+            // 此时两份根引用、adapter 和窗口仍须一起存活, 不能让重试面对已销毁的 callback/context.
             state.rhiMessages.EndCapture();
             return MakeError(&state, HostErrorReason::RhiDrainPending, state.stage,
                              "RHI drain incomplete; retain host and retry Shutdown before destruction");

@@ -1,5 +1,7 @@
 #include "CommandList.hpp"
 
+// 管理逻辑列表的进入/关闭与唯一 recording claim. 未提交包的最终 Release 只交接给 Device, 不发 GL.
+
 #include <limits>
 #include <memory>
 #include <new>
@@ -70,6 +72,7 @@ namespace Physara::RHI::OpenGL
 
     UploadWorkPacket *OpenGLDevice::OpenPacket(std::size_t minimumChunk)
     {
+        // 物理包和 tracker 先构造, 成功取得唯一 claim 才发布身份和 slot; 失败不覆盖另一份录制.
         if (m_ActiveRecording.load() != 0)
         {
             Report("Open", "InvalidState: another immediate recording is active");
@@ -153,6 +156,8 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLCommandList::Close()
     {
+        // Faulted 仍允许结束逻辑录制并释放 claim, 但不会让错误包恢复为可正常提交.
+        // 当前 transfer 子集没有 shader-write lowering; 清空的是已由有序 transfer 满足的抽象依赖.
         if (!m_Device->RequireContext("Close", true))
         {
             return;

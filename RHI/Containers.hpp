@@ -23,6 +23,7 @@
 #pragma once
 
 // 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
+// 固定容量容器保留来源的标准容器协议及槽保留语义; 调用者必须满足容量/索引和元素操作前提.
 
 #include <array>
 #include <assert.h>

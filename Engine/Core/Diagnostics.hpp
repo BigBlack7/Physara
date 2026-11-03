@@ -1,5 +1,7 @@
 #pragma once
 
+// 有界 CPU 诊断记录的唯一 owner; 写入可并发, 消费者通过自持快照读取最近记录和损失计数.
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -57,6 +59,7 @@ namespace Physara::Core
 
     struct DiagnosticSnapshot
     {
+        // stats 和 records 在同一把锁内取得, records 从旧到新排列; 返回后不依赖诊断 owner 的寿命.
         DiagnosticStats stats;
         std::vector<DiagnosticRecord> records;
     };
@@ -78,6 +81,7 @@ namespace Physara::Core
         // payload 总计最多 2048 字节, 含单调秒时间戳和源位置; 失败返回 false.
         [[nodiscard]] bool Write(Severity severity, std::string_view message,
                                  std::source_location source = std::source_location::current()) noexcept;
+        // 只复制计数; 与 Write/ReadRecent 同步, 锁自身的标准库异常可传播.
         [[nodiscard]] DiagnosticStats GetStats() const;
         // 冷路径自持拷贝, 分配/复制成本与 limit 成正比, 最大 1024 条.
         [[nodiscard]] SnapshotResult ReadRecent(std::size_t limit = DiagnosticCapacity) const noexcept;

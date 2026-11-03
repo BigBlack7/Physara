@@ -22,6 +22,8 @@
 
 #include "Utils.hpp"
 
+// 实现固定来源的描述构造、字符串诊断和固定容量索引分配. 不拥有 Device/context, 不建立原生资源缓存.
+
 #include <algorithm>
 #include <cassert>
 #include <limits>
@@ -502,6 +504,7 @@ namespace Physara::RHI::Utils
 
     int BitSetAllocator::Allocate()
     {
+        // 从上次候选开始至多检查 capacity 个位置; 零容量直接耗尽, 只有找到空位才推进下次候选.
         std::unique_lock lock(m_Mutex, std::defer_lock);
         if (m_MultiThreaded)
         {

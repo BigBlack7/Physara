@@ -22,6 +22,8 @@
 
 #pragma once
 
+// Common 与 Validation 使用的内部纯算法. 对齐/转换保留固定来源的有效输入前提, 不作为外部输入边界.
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
