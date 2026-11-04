@@ -6,7 +6,7 @@
 
 <p align="center">
     <a href="Docs/Architecture.md">Architecture</a> &nbsp;·&nbsp;
-    <a href="Docs/Developments.md">Development</a> &nbsp;·&nbsp;
+    <a href="Docs/Developments/Developments.md">Development</a> &nbsp;·&nbsp;
     <a href="Docs/Build.md">Build</a>
 </p>
 

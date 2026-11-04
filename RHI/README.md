@@ -134,4 +134,4 @@ View 检查保留来源已有的 typeless stencil SRV 对: D24S8→X24G8_UINT �
 | 上传 CommandList | OpenGL/CommandList*.cpp 的 61 项闭包; 正向子集与明确拒绝见上表 |
 | 其它未交付对象、AftermathCrashDumpHelper | 后续实际执行/可选能力工作包; 当前工厂拒绝, 不提供占位实例 |
 
-ScopedMarker 和 descriptor 的头内转发仍需满足其调用对象/外部定义前提, 不因函数体在头里就保证所有使用方式可链接. 公共头不依赖 Core、Platform、Editor、GLFW、GLAD、ImGui 或 Vulkan SDK. 构建/运行说明集中在 [Build](../Docs/Build.md), 当前工作包状态见 [Developments](../Docs/Developments.md#d02-t02).
+ScopedMarker 和 descriptor 的头内转发仍需满足其调用对象/外部定义前提, 不因函数体在头里就保证所有使用方式可链接. 公共头不依赖 Core、Platform、Editor、GLFW、GLAD、ImGui 或 Vulkan SDK. 构建/运行说明集中在 [Build](../Docs/Build.md), 当前工作包状态见 [Developments](../Docs/Developments/D00-D02-Foundation.md#d02-t02).

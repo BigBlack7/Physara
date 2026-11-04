@@ -49,7 +49,7 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式使�
 
 宿主公开合同见 [DeviceHost.hpp](../Platform/DeviceHost.hpp), 输入单位与事件借用寿命见 [Input.hpp](../Platform/Input.hpp). 以公开头为准, 不在此复制实现或内部 API 使用规则.
 
-项目方案见 [Architecture](Architecture.md), 阶段状态与验收缺口见 [Developments](Developments.md#dev-d01); 每次实现的取舍和实际检查证据保存在对应 OpenSpec change. 开发约定见 [AGENTS.md](../AGENTS.md).
+项目方案见 [Architecture](Architecture.md), 当前阶段与工作包见 [Developments](Developments/Developments.md#current-stage); 每次实现的取舍和实际检查证据保存在对应 OpenSpec change. 开发约定见 [AGENTS.md](../AGENTS.md).
 
 ## D02 资源一致性本地检查
 
