@@ -1,6 +1,7 @@
 #pragma once
 
-// Platform 的公开宿主边界: 自持环境观察值, 借用 RHI Device, 并在 owner 线程推进输入和关闭.
+/// @file
+/// @brief Platform 的宿主边界: 发布窗口与输入事实, 借出 RHI Device, 在 owner 线程推进生命周期.
 
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +38,7 @@ namespace Physara::Platform
     struct WindowIdentityTag;
     using WindowId = Core::Identity<WindowIdentityTag>;
 
+    /// @brief 创建一个窗口及 OpenGL context 的配置, 尺寸使用窗口逻辑单位.
     struct HostDesc
     {
         std::uint32_t clientWidthLogical = 1280;
@@ -61,6 +63,8 @@ namespace Physara::Platform
         SRGB
     };
 
+    /// @brief 创建成功时的自持环境快照, 可在宿主关闭后保留.
+    /// @note 当前窗口尺寸和缩放以 PollEvents 的 WindowState 为准, 此值不充当实时能力缓存.
     struct HostInfo
     {
         // 创建时的自持环境快照, 不是当前窗口尺寸或实时 caps 的第二份权威状态.
@@ -88,7 +92,7 @@ namespace Physara::Platform
         std::uint32_t maxStorageBufferBindings = 0;
         std::uint32_t maxCombinedTextureUnits = 0;
         std::uint32_t uniformBufferOffsetAlignmentBytes = 0;
-        // 请求不等于驱动实际等待行为; 本轮不测量 PresentWait.
+        // 记录请求的间隔, 不表示驱动实际执行的等待或测得的呈现耗时.
         std::int32_t requestedSwapInterval = 0;
         double creationSeconds = 0.0;
     };
@@ -143,30 +147,35 @@ namespace Physara::Platform
         RhiDrainPending
     };
 
+    /// @brief 一次宿主操作的首错及附加错误计数, 保留创建代与清理失败上下文.
     struct HostError
     {
         HostErrorReason reason = HostErrorReason::InternalFailure;
         HostStage stage = HostStage::Validation;
-        std::optional<WindowId> attempt;
+        std::optional<WindowId> attempt; ///< 尚未取得进程创建代时为空.
         Core::ErrorContext context;
         std::uint64_t additionalNativeErrors = 0;
         std::optional<Core::ErrorContext> cleanupError;
         std::uint64_t additionalCleanupErrors = 0;
         double elapsedSeconds = 0.0;
-        std::optional<std::size_t> requestIndex;
+        std::optional<std::size_t> requestIndex; ///< 请求应用失败时定位批内首个失败项.
     };
 
-    // 纯值格式化, 无分配/原生操作; 描述在返回后自持, 可跨线程读取.
+    /// @brief 无分配地格式化自持错误描述, 不执行原生操作, 返回后可跨线程读取.
     [[nodiscard]] Core::BoundedText DescribeHostError(const HostError &error) noexcept;
 
-    // 首次 Create 必须从进程 main 线程调用, 且本类独占进程 GLFW 生命周期.
-    // diagnostics 必须活到本 owner 完成关闭; 所有活跃宿主操作限创建线程.
+    /// @brief 独占进程 GLFW 生命周期, 拥有窗口, context, 输入与 raw/Validation Device.
+    /// @par 线程与寿命
+    /// 首次 Create 从进程 main 线程调用; 活跃操作限创建线程且不可重入.
+    /// diagnostics 必须活到本 owner 完成关闭, 原生借用不得跨成功关闭保留.
     class DeviceHost final
     {
     public:
         using CreateResult = std::variant<std::unique_ptr<DeviceHost>, HostError>;
         using PollResult = std::variant<HostFrameInput, HostError>;
 
+        /// @brief 校验配置并按阶段装配宿主, 任一初始化失败都尝试逆序回滚.
+        /// @return Ready 的独占宿主或携带首错及清理上下文的 HostError.
         [[nodiscard]] static CreateResult Create(const HostDesc &desc, Core::Diagnostics &diagnostics) noexcept;
         ~DeviceHost();
         DeviceHost(const DeviceHost &) = delete;
@@ -174,23 +183,26 @@ namespace Physara::Platform
         DeviceHost(DeviceHost &&) = delete;
         DeviceHost &operator=(DeviceHost &&) = delete;
 
-        // 先停止并 join 资源使用者, 释放全部资源及额外 Device owner, 再关闭.
-        // ResourceInUse 在任何 teardown 前拒绝且可重试; 析构前未收拢 owner 或错误线程析构是致命合同违例.
-        // RhiDrainPending 停止新工作并保留 context/owner, 必须重试至停止后再析构; 无硬实时保证.
-        // 最终删除开始后即使带错也完成停止; owner 线程重复关闭成功.
+        /// @brief 收拢 RHI 后按逆序释放窗口/context/GLFW, owner 线程重复关闭成功.
+        /// @pre 先停止并 join 资源使用者, 释放全部资源及额外 Device owner.
+        /// @return ResourceInUse 在 teardown 前拒绝且可重试; RhiDrainPending 保留 context/owner,
+        /// 停止新工作并要求重试至停止后再析构. 最终删除开始后即使带错也完成停止.
+        /// @note 无硬实时保证; 错误线程析构或析构前未收拢 owner 是致命合同违例.
         [[nodiscard]] std::optional<HostError> Shutdown() noexcept;
         [[nodiscard]] bool IsReady() const noexcept;
-        // 自持值拷贝可跨线程/关闭保留; 活跃 host 本身不并发访问.
+        /// @brief 取得自持环境值, 拷贝可跨线程或关闭保留; 活跃 host 本身不并发访问.
         [[nodiscard]] HostInfo GetInfo() const noexcept;
-        // 仅 owner/Ready 返回 Validation Device 借用, 不增加引用; 借用止于成功 Shutdown.
-        // 从此指针构造 owning handle 会取得额外引用, 必须先释放才能关闭 Host.
+        /// @brief 仅在 owner/Ready 状态借出 Validation Device, 其他情况返回空指针.
+        /// @note 不增加引用, 借用止于成功 Shutdown; 构造 owning handle 取得的额外引用须先释放.
         [[nodiscard]] RHI::Device *GetDevice() const noexcept;
 
-        // 以下入口限 owner/main 线程且不可重入. 接受的 poll 开始即结束上批 events 借用.
+        /// @brief 消费原生事件并发布一批有序输入; 接受的 poll 开始即结束上批 events 借用.
+        /// @return 完整输入批次或 HostError, 输入故障不发布成功的部分批次.
         [[nodiscard]] PollResult PollEvents() noexcept;
-        // 有限正秒; 处理回调但不发布, 不缩短已有 events 借用.
+        /// @brief 等待有限正秒并累积回调, 不发布输入, 不缩短已有 events 借用.
         [[nodiscard]] std::optional<HostError> WaitForEvents(double timeoutSeconds) noexcept;
-        // 借用到返回, 顺序执行, 不存储队列; native 失败允许 prefix 已生效, 由 requestIndex 定位.
+        /// @brief 顺序应用本次借用的请求, 不保存队列; 原生失败允许此前缀已经生效.
+        /// @return 成功为空; 失败的 HostError 通过 requestIndex 定位首个失败项.
         [[nodiscard]] std::optional<HostError> ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept;
 
     private:

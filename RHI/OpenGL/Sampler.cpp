@@ -1,6 +1,7 @@
 #include "Backend.hpp"
 
-// 创建与 Texture 存储独立的 Sampler, 将已检查的过滤/寻址/比较参数映射到实际原生对象.
+/// @file
+/// @brief 创建独立 Sampler, 将已检查的过滤, 寻址和比较参数映射到实际对象, 不修改 Texture.
 
 #include <cmath>
 #include <memory>
@@ -19,6 +20,7 @@ namespace Physara::RHI::OpenGL
         m_Device->ReleaseAllocation(std::move(m_Deletion), m_Published);
     }
 
+    // 先拒绝非有限值, 越界参数和不支持的归约模式, 所有 GL 参数成功后才发布 sampler.
     SamplerHandle OpenGLDevice::CreateSampler(const SamplerDesc &desc)
     {
         if (!RequireContext("CreateSampler"))

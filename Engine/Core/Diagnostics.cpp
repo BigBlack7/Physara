@@ -1,6 +1,7 @@
 #include "Diagnostics.hpp"
 
-// 将消息与单调秒时间/源位置组合后写入固定容量环, 后端失败不替代调用方的领域错误.
+/// @file
+/// @brief 格式化有界诊断正文, 在同一互斥区间发布记录与计数, 将后端异常转成失败值.
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 
 namespace Physara::Core
 {
+    // 用栈上数值转换拼装相对秒时间, 源位置和正文, 整段共享同一截断预算.
     static Physara::Core::BoundedText BuildPayload(double seconds, std::string_view message,
                                                    const std::source_location &source) noexcept
     {
@@ -42,6 +44,7 @@ namespace Physara::Core
         return payload;
     }
 
+    // 诊断设施不可用时仍返回自持错误, 避免递归调用日志系统.
     static Physara::Core::DiagnosticFailure MakeFailure(
         Physara::Core::DiagnosticError reason, std::string_view message,
         std::source_location source = std::source_location::current()) noexcept
@@ -52,6 +55,7 @@ namespace Physara::Core
 
 namespace Physara::Core
 {
+    // 隔离日志后端, 将环, 计数与同步设施固定在同一 owner 下.
     struct Diagnostics::Impl
     {
         // 同一 mutex 保护环与统计, 因而成功入环和淘汰计数是一次发布; origin 创建后只读.

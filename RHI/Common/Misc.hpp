@@ -22,7 +22,8 @@
 
 #pragma once
 
-// Common 与 Validation 使用的内部纯算法. 对齐/转换保留固定来源的有效输入前提, 不作为外部输入边界.
+/// @file
+/// @brief Common 与 Validation 的内部纯算法, 保留有效输入前提, 不承担外部信任边界校验.
 
 #include <cassert>
 #include <cstddef>
@@ -40,6 +41,7 @@ namespace Physara::RHI
         return (size + alignment - 1) & ~(alignment - 1);
     }
 
+    /// @brief 按长度和对应元素比较数组, 不读取 padding 或比较容器存储布局.
     template <typename T, typename U> [[nodiscard]] bool ArraysAreDifferent(const T &a, const U &b)
     {
         if (a.size() != b.size())
@@ -58,6 +60,7 @@ namespace Physara::RHI
         return false;
     }
 
+    /// @brief 将最多 32 个对应元素的差异编码成位图, 长度不同返回全一.
     template <typename T, typename U> [[nodiscard]] uint32_t ArrayDifferenceMask(const T &a, const U &b)
     {
         assert(a.size() <= 32);
@@ -80,6 +83,7 @@ namespace Physara::RHI
         return mask;
     }
 
+    /// @brief 将当前 64 位宿主哈希的高低半部异或成 32 位, 不用于持久内容身份.
     inline uint32_t HashToUInt32(size_t hash)
     {
         return uint32_t(hash) ^ (uint32_t(hash >> 32));

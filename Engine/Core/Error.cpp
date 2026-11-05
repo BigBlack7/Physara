@@ -1,6 +1,7 @@
 #include "Error.hpp"
 
-// 实现固定字节预算的文本复制/追加; 截断为有效 UTF-8 输入保留完整码点及截断标记.
+/// @file
+/// @brief 实现固定字节预算的文本复制/追加, 截断时为有效 UTF-8 保留完整码点及标记.
 
 #include <algorithm>
 #include <cstring>
@@ -9,6 +10,7 @@ namespace Physara::Core
 {
     static constexpr std::string_view TruncationMarker = "...[truncated]";
 
+    // 将字节上限退到 UTF-8 码点边界, 不扫描或验证整个输入.
     static std::size_t Utf8PrefixLength(std::string_view text, std::size_t limit) noexcept
     {
         // count 指向保留前缀后的首字节; 若落在续字节上, 回退到该码点的起始位置.

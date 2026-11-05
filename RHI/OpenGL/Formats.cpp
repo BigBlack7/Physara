@@ -1,12 +1,14 @@
 #include "Backend.hpp"
 
-// 唯一格式/target 映射及实际 caps 查询. 格式 metadata、分配用途和当前已实现命令能力分别判定.
+/// @file
+/// @brief 统一格式/target/上传映射并查询实际 caps, 格式元数据, 分配用途与命令支持分别判断.
 
 #include <cmath>
 #include <vector>
 
 namespace Physara::RHI::OpenGL
 {
+    // 分配 internal format 与颜色上传解释共享一表, 无 external format 的格式不允许 CPU 上传.
     struct FormatMapping
     {
         Format format;
@@ -75,6 +77,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 对实际 target 求项目 profile 与驱动观察的交集, 多样本使用离散集合, 不由 maxSamples 推测.
     static bool ReadFormat(OpenGLDevice &device, const DeviceCaps &caps, const FormatMapping &mapping,
                            TextureDimension dimension, FormatCaps &result)
     {

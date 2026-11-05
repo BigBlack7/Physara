@@ -22,7 +22,8 @@
 
 #include "RHI.hpp"
 
-// 提供公开描述的范围解析、Framebuffer 派生信息及纯布局工具. Resolve 求交集, 不替代操作入口的完整范围校验.
+/// @file
+/// @brief 公开描述的区间解析, Framebuffer 派生信息与纯布局工具, Resolve 取交集而不替代入口校验.
 
 #include <algorithm>
 #include <cassert>
@@ -40,6 +41,7 @@ namespace Physara::RHI
         return version == HeaderVersion;
     }
 
+    // 将全尺寸哨兵解析为当前 mip 的 texel 范围, 调用前 desc/mip 已有效, 不执行原生查询.
     TextureSlice TextureSlice::Resolve(const TextureDesc &desc) const
     {
         TextureSlice ret(*this);
@@ -133,6 +135,7 @@ namespace Physara::RHI
         }
     }
 
+    // 对合法起点计算剩余区间并裁到实际容量, 不证明原始请求适合某个具体命令.
     BufferRange BufferRange::Resolve(const BufferDesc &desc) const
     {
         BufferRange result;
@@ -169,6 +172,7 @@ namespace Physara::RHI
         return false;
     }
 
+    // 从附件中提取格式与样本数, 由创建边界保证附件集与子资源已合法.
     FramebufferInfo::FramebufferInfo(const FramebufferDesc &desc)
     {
         for (size_t i = 0; i < desc.colorAttachments.size(); i++)
@@ -214,6 +218,7 @@ namespace Physara::RHI
         }
     }
 
+    // 对实际颜色/深度附件声明用途, 深度只读标记决定 DepthRead/DepthWrite, 发射仍由后端管理.
     void CommandList::SetResourceStatesForFramebuffer(Framebuffer *framebuffer)
     {
         const FramebufferDesc &desc = framebuffer->GetDesc();

@@ -1,6 +1,7 @@
 #include "ContextState.hpp"
 
-// 通过唯一入口设置 PBO 和紧凑上传的 pixel-store; 失效后的下一次 ApplyUnpack 会重建全部已拥有状态.
+/// @file
+/// @brief 失效与应用后端拥有的 unpack 状态, 只比较必要绑定, 不查询并恢复外部原生状态.
 
 namespace Physara::RHI::OpenGL
 {

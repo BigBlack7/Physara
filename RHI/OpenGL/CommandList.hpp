@@ -22,23 +22,26 @@
 
 #pragma once
 
-// 上传限定的逻辑即时列表; 借用 Device 所有的稳定物理包, 不保存调用方 CPU 源指针.
+/// @file
+/// @brief 上传限定的逻辑即时列表, 借用 Device 拥有的稳定物理包, 不保存调用方 CPU 源指针.
 
 #include "Backend.hpp"
 #include "Submission.hpp"
 
 namespace Physara::RHI::OpenGL
 {
-    // 逻辑列表持有设备. 物理包始终由设备拥有, worker 析构只能交接已有节点.
+    /// @brief 单写者即时列表, GL 在 recording 调用时发出, Execute 只接受提交而不重放.
+    /// @note 物理包归 Device, 未提交列表的 worker 最终析构只交接 orphan, 不执行 GL.
     class OpenGLCommandList final : public RefCounter<RHI::CommandList>
     {
     public:
         OpenGLCommandList(OpenGLDevice *device, const CommandListParameters &params) noexcept;
         ~OpenGLCommandList() override;
-        // Open 取得唯一 recording claim 和物理包; Close 保留未提交包, 成功 Execute 后才可再次 Open.
-        // 所有原生命令在 recording 调用时发出, Execute 只封装提交/保活, 不重放上传.
+        /// @brief 取得唯一 recording claim 与物理包; Close 后须成功 Execute 或释放列表才能重新 Open.
         void Open() override;
+        /// @brief 结束逻辑录制并保留待提交包, 故障时仍可释放 claim, 不恢复错误包为合法提交.
         void Close() override;
+        /// @brief 在有效 recording 中失效后端原生 unpack 缓存, 外部原生互操作后必须调用.
         void ClearState() override;
         void ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor) override;
         void ClearDepthStencilTexture(Texture *t, TextureSubresourceSet subresources, bool clearDepth, float depth,
@@ -50,13 +53,14 @@ namespace Physara::RHI::OpenGL
                          const TextureSlice &srcSlice) override;
         void CopyTexture(Texture *dest, const TextureSlice &destSlice, StagingTexture *src,
                          const TextureSlice &srcSlice) override;
-        // owning/current recording. CPU 源在返回前消费; caller 保证完整可读 footprint.
-        // 选定整 mip/layer/volume, 排除 depth/stencil/MS; 单行 rowPitch=0, 单 depth 忽略 depthPitch.
+        /// @brief 在 owning/current recording 写完整选定 mip/layer/face 或 3D volume, 拒绝深度/模板/MS.
+        /// @note CPU 源在返回前消费, caller 保证完整可读 footprint; 单行可 rowPitch=0, 单 depth 忽略 depthPitch.
         void WriteTexture(Texture *dest, uint32_t arraySlice, uint32_t mipLevel, const void *data, size_t rowPitch,
                           size_t depthPitch) override;
         void ResolveTexture(Texture *dest, const TextureSubresourceSet &dstSubresources, Texture *src,
                             const TextureSubresourceSet &srcSubresources) override;
-        // size=0 为严格空写, 允许 null 和末尾 offset; 非空源在返回前消费, GPU 租约到真实完成.
+        /// @brief 写受检 Buffer 区间, 非空源在返回前消费, GPU lease 保留至真实完成.
+        /// @note dataSize=0 是严格空写, 允许 null 与末尾 offset, 不取得上传容量或 lease.
         void WriteBuffer(Buffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes) override;
         void ClearBufferUInt(Buffer *b, uint32_t clearValue) override;
         void CopyBuffer(Buffer *dest, uint64_t destOffsetBytes, Buffer *src, uint64_t srcOffsetBytes,
@@ -99,18 +103,22 @@ namespace Physara::RHI::OpenGL
         void EndTimerQuery(TimerQuery *query) override;
         void BeginMarker(const char *name) override;
         void EndMarker() override;
+        /// @brief 控制上传是否自动要求 CopyDest, 不启用当前未实现的 shader-write barrier lowering.
         void SetEnableAutomaticBarriers(bool enable) override;
         void SetResourceStatesForBindingSet(BindingSet *bindingSet) override;
         void SetEnableUavBarriersForTexture(Texture *texture, bool enableBarriers) override;
         void SetEnableUavBarriersForBuffer(Buffer *buffer, bool enableBarriers) override;
+        /// @brief 声明资源已知前态, Buffer 重载同义; 保活 extension 后交由单份 Common tracker 管理.
         void BeginTrackingTextureState(Texture *texture, TextureSubresourceSet subresources,
                                        ResourceStates stateBits) override;
         void BeginTrackingBufferState(Buffer *buffer, ResourceStates stateBits) override;
+        /// @brief 要求 transfer profile 目标状态, Buffer 重载同义, 生成的抽象依赖须在写入前消费.
         void SetTextureState(Texture *texture, TextureSubresourceSet subresources, ResourceStates stateBits) override;
         void SetBufferState(Buffer *buffer, ResourceStates stateBits) override;
         void SetAccelStructState(RT::AccelStruct *as, ResourceStates stateBits) override;
         void SetPermanentTextureState(Texture *texture, ResourceStates stateBits) override;
         void SetPermanentBufferState(Buffer *buffer, ResourceStates stateBits) override;
+        /// @brief 消费已由当前有序 transfer 满足的抽象依赖, 不声明完整 Shader/Draw 同步能力.
         void CommitBarriers() override;
         ResourceStates GetTextureSubresourceState(Texture *texture, ArraySlice arraySlice, MipLevel mipLevel) override;
         ResourceStates GetBufferState(Buffer *buffer) override;
@@ -118,12 +126,19 @@ namespace Physara::RHI::OpenGL
         const CommandListParameters &GetDesc() override;
 
     private:
+        // 只借出本列表拥有的有效 recording, 同时检查 context, claim 和 sticky tracker 错误.
         [[nodiscard]] UploadWorkPacket *Recording(const char *operation);
+        // 核对实际实现和 Device 归属, 不以接口类型相同推定原生对象可用.
         [[nodiscard]] OpenGLBuffer *BufferFor(Buffer *buffer, const char *operation);
+        // 取得属于同一 Device 的 Texture wrapper, 失败先报告并返回空.
         [[nodiscard]] OpenGLTexture *TextureFor(Texture *texture, const char *operation);
+        // 一个包对一个 wrapper 只建立一份 lease, 跨包 holds 单独计数以支持精确关闭预检.
         [[nodiscard]] bool Retain(Resource *resource, unsigned long &holds);
+        // 自动模式要求 CopyDest 并消费依赖; 显式模式核对调用方已完成的同一前提.
         [[nodiscard]] bool TransferState(OpenGLBuffer &buffer);
+        // 对选定纹理子资源应用同一 CopyDest 合同, 不把原生缓存命中当成同步完成.
         [[nodiscard]] bool TransferState(OpenGLTexture &texture, TextureSubresourceSet subresources);
+        // 保留完整公共命令表的失败出口, 不解引用专有 payload 或发出替代 GPU 工作.
         void Unsupported(const char *operation);
         RefCountPtr<OpenGLDevice> m_Device;
         const CommandListParameters m_Desc;

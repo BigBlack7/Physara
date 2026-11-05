@@ -1,5 +1,8 @@
 #include "Compiler.hpp"
 
+/// @file
+/// @brief 将程序请求与受控源图编译为 canonical SPIR-V, 核对最终反射后形成包身份.
+
 #include <algorithm>
 #include <array>
 #include <map>
@@ -15,6 +18,7 @@
 
 namespace Physara::Shader
 {
+    // 已校验程序的一阶段入口, source 仍是受控源根内的相对拼写.
     struct ProgramStage
     {
         Stage stage = Stage::Vertex;
@@ -22,6 +26,7 @@ namespace Physara::Shader
         std::string entry;
     };
 
+    // 程序声明的纯值模型, 阶段排序固定为 VS/FS, defines 使用有序映射保证身份稳定.
     struct Program
     {
         std::string name;
@@ -30,6 +35,7 @@ namespace Physara::Shader
         std::map<std::string, std::uint32_t> defines;
     };
 
+    // 拒绝超 profile 的阶段/入口与未声明 define 值, 将合法请求归一为固定两阶段.
     static Program ParseProgram(const Json &json)
     {
         CheckFields(json, {"version", "name", "interface", "profile", "stages", "defines"}, "/program");
@@ -92,6 +98,7 @@ namespace Physara::Shader
         return program;
     }
 
+    // 本次已核对的生成接口快照, 真实路径及身份输入, 字节预算包含全部必要产物.
     struct InterfaceInput
     {
         InterfaceSchema schema;
@@ -100,6 +107,7 @@ namespace Physara::Shader
         std::size_t bytes = 0;
     };
 
+    // 按 manifest 验证五个产物, 再独立推导 Expected 中的布局与 ABI, 拒绝不完整或混合代.
     static InterfaceInput ReadInterface(const std::filesystem::path &root, const Program &program)
     {
         // 先按 manifest 核对每份产物的字节. 读到 Expected.json 时再从其中的声明重算布局和 ABI.
@@ -163,6 +171,7 @@ namespace Physara::Shader
         return input;
     }
 
+    // 优先保留程序/阶段与编译器原因, 再按预算补充实际展开的 include 来源.
     static std::string CompileDiagnostic(std::string_view program, std::string_view stage, const char *log,
                                          const SourceGraph &graph)
     {
@@ -207,6 +216,7 @@ namespace Physara::Shader
                                              " / main: " + error.what());
                     }
                 }
+                // 合并请求, 生成文件和传递源的预算; 生成 include 必须与前面核对的产物属于同一代.
                 auto totalBytes = interfaceInput.bytes + requestText.size();
                 auto totalFiles = interfaceInput.files.size() + 1;
                 if (totalBytes > MaxPackageBytes)
@@ -238,6 +248,7 @@ namespace Physara::Shader
                 {
                     throw BuildError(ErrorCode::InvalidInput, "Program input exceeds total byte/file budget.");
                 }
+                // 声明图完成后才进入编译器, defines 使用确定顺序, 源字节与名称借用保持到链接结束.
                 std::string preamble;
                 for (const auto &[name, value] : program.defines)
                 {
@@ -282,6 +293,7 @@ namespace Physara::Shader
                     throw BuildError(ErrorCode::CompilationFailed,
                                      CompileDiagnostic(program.name, "VS/FS link", linked.getInfoLog(), graph));
                 }
+                // 链接后的 IR 是反射与包载荷的共同来源, 不对另一次重编译的结果做旁路核对.
                 BuildOutput output;
                 auto &package = output.package;
                 package.profile = "GraphicsBaselineV1";
@@ -327,6 +339,7 @@ namespace Physara::Shader
                     package.modules.push_back(std::move(module));
                 }
                 CheckProgramInterfaces(package.modules);
+                // 包内只存逻辑身份, depfile 单独保存本机路径; 静态图包含未活动分支以保守触发重建.
                 output.fileDependencies = interfaceInput.files;
                 for (auto &file : output.fileDependencies)
                 {

@@ -22,14 +22,15 @@
 
 #pragma once
 
-// 可组合 Validation 的唯一公共工厂; 实际校验与包装状态封闭在 Validation 私有实现中.
+/// @file
+/// @brief 可组合 Validation 的公共工厂, 输入规则和包装状态封闭在私有实现中.
 
 #include "RHI.hpp"
 
 namespace Physara::RHI::Validation
 {
-    // 借用输入, 成功返回拥有底层 Device 的 CPU 引用; null Device/callback 或无效 API 返回空.
-    // callback 必须覆盖全部包装对象寿命, 不抛出且不重入同一可变操作. 设备遵守底层线程合同,
-    // 列表为单写者; CPU 引用不表示 GPU 已完成. 工厂自身 bad_alloc 转为空, 普通 CPU 容器异常可传播.
+    /// @brief 借用底层 Device 并返回强持有它的包装, null Device/callback 或无效 API 返回空.
+    /// @note callback 覆盖全部包装对象, 不抛异常, 不重入; 设备沿用底层线程合同, 列表为单写者.
+    /// 工厂 bad_alloc 转为空, 普通 CPU 容器异常可传播, 包装引用不表示 GPU 完成.
     PHYSARA_RHI_API DeviceHandle CreateValidationLayer(Device *underlyingDevice);
 }

@@ -1,6 +1,7 @@
 #include "DeviceHost.hpp"
 
-// 装配启动阶段并统一处理宿主操作的线程/重入前提、主错和回滚; 原生细节由对应实现文件承担.
+/// @file
+/// @brief 装配宿主阶段, 统一处理线程/重入前提, 主错和回滚, 原生细节交给各阶段入口.
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,7 @@ namespace Physara::Platform
         "Shutdown", "InputSetup", "EventPolling",
         "EventWait", "RequestApplication", "RhiCreation", "RhiShutdown", "Unknown"};
 
+    // 将槽索引与分配代写入同一有界正文, 不为诊断建立动态字符串.
     static void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
     {
         std::array<char, 32> number{};
@@ -36,6 +38,7 @@ namespace Physara::Platform
         text.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
     }
 
+    // 在分配宿主和触碰 GLFW 之前拒绝原生 int 无法表示的尺寸及嵌入 NUL 的标题.
     static std::optional<HostError> ValidateDescription(const HostDesc &desc) noexcept
     {
         constexpr auto MaxDimension = static_cast<std::uint32_t>(std::numeric_limits<int>::max());
@@ -48,6 +51,7 @@ namespace Physara::Platform
         return std::nullopt;
     }
 
+    // 依次取得 GLFW, 窗口/context, 入口/环境, RHI 和输入, 首错后停止进入后继阶段.
     static std::optional<HostError> StartNativeHost(Detail::DeviceHostState &state, const HostDesc &desc)
     {
         // 固定进入顺序与统一回滚是一项完整算法, 保留在一起便于核对每个已取得阶段.
@@ -84,6 +88,7 @@ namespace Physara::Platform
         return error;
     }
 
+    // Ready 日志与环境条目都携带同一窗口代, 便于区分关闭后重建的宿主.
     static void ReportReady(Physara::Core::Diagnostics &diagnostics, const HostInfo &info) noexcept
     {
         Physara::Core::BoundedText message("DeviceHost.Ready");
@@ -105,6 +110,7 @@ namespace Physara::Platform
             static_cast<void>(diagnostics.Write(Physara::Core::Severity::Info, value.View()));
         }
     }
+    // 已完成线程/重入预检后的作用域标记, 异常退出也恢复 operationActive.
     class OperationScope final
     {
     public:
@@ -126,6 +132,7 @@ namespace Physara::Platform
         Detail::DeviceHostState &m_State;
     };
 
+    // 输入操作共用的失败边界: 预检拒绝可重试, 进入原生操作后的故障锁存并解除捕获.
     template <typename Operation>
     static std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
                                                       Operation &&operation) noexcept
@@ -288,6 +295,7 @@ namespace Physara::Platform::Detail
     {
         const auto started = std::chrono::steady_clock::now();
         std::unique_ptr<DeviceHost> host;
+        // 所有阶段失败都经过同一逆序释放入口, 保留首错并附上清理故障.
         const auto fail = [&](HostError error) -> DeviceHost::CreateResult
         {
             if (host)

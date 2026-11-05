@@ -22,8 +22,8 @@
 
 #pragma once
 
-// 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
-// 完整公共描述、对象和命令合同按来源保留; 设备负责报告当前能力, 不以声明存在作为执行成功证据.
+/// @file
+/// @brief 固定 NVRHI 谱系的公开描述, 对象与命令合同, 来源和受控差异见 RHI/README.md, 声明不代表后端已实现.
 
 #include <cassert>
 #include <cmath>
@@ -308,6 +308,7 @@ namespace Physara::RHI
         DepthStencil
     };
 
+    /// @brief 格式的静态字节/块/通道元数据, 设备实际用途支持由 QueryFormatSupport 查询.
     struct FormatInfo
     {
         Format format;
@@ -422,6 +423,7 @@ namespace Physara::RHI
         Write
     };
 
+    /// @brief 资源访问用途的位集, 用于声明依赖, 不表示 texel 已初始化或 GPU 已完成.
     enum class ResourceStates : uint32_t
     {
         Unknown = 0,
@@ -577,6 +579,7 @@ namespace Physara::RHI
         return overrideMapping ? *overrideMapping : textureDefault;
     }
 
+    /// @brief 存储形状, 格式和用途的值描述, initialState/clearValue 本身不执行转换或清除.
     struct TextureDesc
     {
         uint32_t width = 1;
@@ -732,6 +735,7 @@ namespace Physara::RHI
     };
 
     // Describes a 2D or 3D section of a single mip level, single array slice of a texture.
+    /// @brief 一个 mip/layer 内的 texel 区域, 全尺寸哨兵在 Resolve 中结合已验证的 desc 解释.
     struct TextureSlice
     {
         uint32_t x = 0;
@@ -791,6 +795,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief mip 与数组层的二维范围, Resolve 取描述内交集, 不替代操作边界对原请求的校验.
     struct TextureSubresourceSet
     {
         static constexpr MipLevel AllMipLevels = MipLevel(-1);
@@ -862,6 +867,7 @@ namespace Physara::RHI
     static const TextureSubresourceSet AllSubresources =
         TextureSubresourceSet(0, TextureSubresourceSet::AllMipLevels, 0, TextureSubresourceSet::AllArraySlices);
 
+    /// @brief 纹理存储对象, GetDesc 借用对象内描述; 子资源视图遵守实现的格式与寿命合同.
     class Texture : public Resource
     {
       public:
@@ -1022,6 +1028,7 @@ namespace Physara::RHI
     // Buffer
     //////////////////////////////////////////////////////////////////////////
 
+    /// @brief 字节容量与 GPU/CPU 用途描述, 可表达的选项仍须由实际 Device 检查支持.
     struct BufferDesc
     {
         uint64_t byteSize = 0;
@@ -1167,6 +1174,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 字节区间, Resolve 将 byteSize=0 解释为从裁定起点到末尾, EntireBuffer 使用全一长度哨兵.
     struct BufferRange
     {
         uint64_t byteOffset = 0;
@@ -1202,6 +1210,7 @@ namespace Physara::RHI
 
     static const BufferRange EntireBuffer = BufferRange(0, ~0ull);
 
+    /// @brief Buffer 存储的 CPU 接口, owning handle 保活 wrapper, GPU 在途寿命由提交协议管理.
     class Buffer : public Resource
     {
       public:
@@ -1278,6 +1287,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 原生 Shader 创建元数据, 不承担源编译或 Shader 包校验, 与 Engine/Shader 的 CPU 包分层.
     struct ShaderDesc
     {
         ShaderType shaderType = ShaderType::None;
@@ -2007,6 +2017,7 @@ namespace Physara::RHI
         Maximum
     };
 
+    /// @brief 独立采样状态, filter/address/reduction 等参数共同定义采样, 实际范围由设备验证.
     struct SamplerDesc
     {
         Color borderColor = 1.f;
@@ -2147,6 +2158,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 某次实际附件集的描述, 保存具体纹理与子资源, 不作为 Pipeline 的纹理身份 key.
     struct FramebufferDesc
     {
         StaticVector<FramebufferAttachment, MaxRenderTargets> colorAttachments;
@@ -2203,6 +2215,7 @@ namespace Physara::RHI
     // Describes the parameters of a framebuffer that can be used to determine if a given framebuffer
     // is compatible with a certain graphics or meshlet pipeline object. All fields of FramebufferInfo
     // must match between the framebuffer and the pipeline for them to be compatible.
+    /// @brief 从有效附件描述提取格式和样本兼容信息, 本身不证明设备支持或 FBO 完整.
     struct FramebufferInfo
     {
         StaticVector<Format, MaxRenderTargets> colorFormats;
@@ -3238,6 +3251,7 @@ namespace Physara::RHI
     static_assert(sizeof(BindingLayoutItem) == 8, "sizeof(BindingLayoutItem) is supposed to be 8 bytes");
 
     // Describes compile-time settings for HLSL -> SPIR-V register allocation.
+    /// @brief 将各资源类的逻辑槽映射到 canonical Vulkan binding 分区, 不等于 GL 原生绑定点.
     struct VulkanBindingOffsets
     {
         uint32_t shaderResource = 0;
@@ -3267,6 +3281,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 集合的资源类型/数组形状与整体阶段可见性, descriptor-set 模式要求各布局使用同一策略.
     struct BindingLayoutDesc
     {
         ShaderType visibility = ShaderType::None;
@@ -3409,6 +3424,7 @@ namespace Physara::RHI
     //////////////////////////////////////////////////////////////////////////
 
     // 资源指针为借用. key 须已初始化且 type 与活动载荷匹配; reserved 不参与 key.
+    /// @brief 一个逻辑资源位置的借用记录, 须由匹配工厂/setter 初始化活动载荷后才可比较, 哈希或提交.
     struct BindingSetItem
     {
         Resource *resourceHandle;
@@ -3775,6 +3791,7 @@ namespace Physara::RHI
     static_assert(sizeof(BindingSetItem) == 40, "sizeof(BindingSetItem) is supposed to be 40 bytes");
 
     // Describes a set of bindings corresponding to one binding layout
+    /// @brief 与一个布局对应的实际资源集合, trackLiveness=false 时调用方承担 GPU 完成前的保活.
     struct BindingSetDesc
     {
         std::vector<BindingSetItem> bindings;
@@ -3817,6 +3834,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 固定资源集合对象, 描述与布局为对象内借用; DescriptorTable 的 GetDesc 可为空.
     class BindingSet : public Resource
     {
       public:
@@ -3982,6 +4000,7 @@ namespace Physara::RHI
 
     typedef StaticVector<BindingLayoutHandle, MaxBindingLayouts> BindingLayoutVector;
 
+    /// @brief Shader, 布局和固定渲染状态的组合, 目标兼容性另由 FramebufferInfo 提供.
     struct GraphicsPipelineDesc
     {
         PrimitiveType primType = PrimitiveType::TriangleList;
@@ -4249,6 +4268,7 @@ namespace Physara::RHI
 
     typedef StaticVector<BindingSet *, MaxBindingLayouts> BindingSetVector;
 
+    /// @brief 一次录制中的动态图形状态, 使用具体 framebuffer/bindings/buffer, 不替代 Pipeline 固定配置.
     struct GraphicsState
     {
         GraphicsPipeline *pipeline = nullptr;
@@ -4323,6 +4343,7 @@ namespace Physara::RHI
         }
     };
 
+    /// @brief 绘制范围与实例偏移, indexed 调用沿用 vertexCount 字段表示索引数.
     struct DrawArguments
     {
         uint32_t vertexCount = 0;
@@ -4969,6 +4990,8 @@ namespace Physara::RHI
     };
 
     // IMessageCallback should be implemented by the application.
+    /// @brief RHI 同步借用的消息出口, 文本仅在回调期间有效, 消费者长期保留时须复制.
+    /// @note 项目适配回调不抛异常, 不重入同一可变操作, 并覆盖所有借用者的 CPU 寿命.
     class MessageCallback
     {
       protected:
@@ -4989,6 +5012,7 @@ namespace Physara::RHI
     class Device;
     class CommandListLifetimeTracker;
 
+    /// @brief 列表执行模式, 队列和临时存储策略, 当前 GL 只接受 Graphics/immediate 且无外部 tracker.
     struct CommandListParameters
     {
         // A command list with enableImmediateExecution = true maps to the immediate context on DX11.
@@ -5082,6 +5106,8 @@ namespace Physara::RHI
     //   amounts of data and to destroy it when uploading is finished.
     // - Vulkan: The command list objects don't own the VkCommandBuffer-s but request available ones from the queue
     //   instead. The upload and scratch buffers behave the same way they do on DX12.
+    /// @brief 单写者命令录制接口, 方法须满足 Open/Close 协议及实际队列能力.
+    /// @note GL 当前为上传限定的即时子集, 录制时发出工作, Execute 不重放, 不支持项明确拒绝.
     class CommandList : public Resource
     {
       public:
@@ -5575,6 +5601,8 @@ namespace Physara::RHI
 
     class AftermathCrashDumpHelper;
 
+    /// @brief RHI 资源创建, 能力查询, 提交与完成收集的入口, 线程/context 合同由具体实现给出.
+    /// @note 空 handle, false, 零票据及消息用于报告失败; CPU 引用数不证明 GPU 完成.
     class Device : public Resource
     {
       public:

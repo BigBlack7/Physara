@@ -22,7 +22,8 @@
 
 #pragma once
 
-// GL 后端的跨文件私有合同: Device 拥有 caps/物理包/删除 FIFO, 资源 wrapper 持有描述与 Device 引用.
+/// @file
+/// @brief GL 后端跨文件私有合同, Device 拥有 caps, 物理包和删除 FIFO, wrapper 持有描述与 Device 引用.
 
 #include "../OpenGL.hpp"
 
@@ -44,6 +45,7 @@ namespace Physara::RHI::OpenGL
     // 接口签名来源见 RHI/README; GL 实现与下列私有状态由本项目定义.
     inline constexpr std::size_t TextureDimensionCount = 10;
     inline constexpr std::size_t UploadPacketLimit = 64;
+    /// @brief 单个格式/target 的实际用途交集, sampleMask 的第 n 位表示支持 n 个样本.
     struct FormatCaps
     {
         GLenum internalFormat = 0;
@@ -52,6 +54,7 @@ namespace Physara::RHI::OpenGL
         std::uint32_t sampleMask = 0;
     };
 
+    /// @brief 创建时查询的设备限制及按实际维度区分的格式表, 不代表 Shader/Draw 已实现.
     struct DeviceCaps
     {
         std::array<std::array<FormatCaps, TextureDimensionCount>, std::size_t(Format::COUNT)> formats{};
@@ -74,6 +77,7 @@ namespace Physara::RHI::OpenGL
         Sampler,
         Framebuffer
     };
+    /// @brief 创建前预留的原生删除节点, final Release 只转交节点, owner 才执行 GL 删除.
     struct NativeDeletion
     {
         // 创建前预留的节点自持 native 名称; final Release 只入队, 不再分配或执行 GL.
@@ -97,23 +101,35 @@ namespace Physara::RHI::OpenGL
     struct SubmissionState;
     class OpenGLCommandList;
     class UploadResourceLease;
+    /// @brief 原生设备状态的唯一 owner, 跨实现文件管理能力, 上传, 提交与删除.
+    /// @invariant Active 接受新工作, Faulted 保留未知完成前缀, Draining 仅推进退出, Stopped 后才可最终析构.
+    /// @note context 健康与阶段独立, CPU 引用释放不能代替 GPU 完成证明.
     class OpenGLDevice final : public RefCounter<RHI::Device>
     {
     public:
         explicit OpenGLDevice(const DeviceDesc &desc) noexcept;
         ~OpenGLDevice() override;
+        /// @brief 核对实际入口和环境, 查询 caps 并建立 upper-left/zero-to-one clip 约定.
         [[nodiscard]] bool Initialize();
+        /// @brief 单根关闭适配, 先预检外部 owner, 再收拢设备; false 可为 Pending 或清理带错.
         [[nodiscard]] bool Shutdown(ShutdownMode mode, std::uint32_t *nativeError);
+        /// @brief 在使用者已停止后精确核对根引用及内部 lease, 不修改设备或调用 GL.
         [[nodiscard]] ShutdownPrecondition CheckShutdown(unsigned long knownRoots) const noexcept;
+        /// @brief 正常 fence 收拢可超时重试, 无可靠完成证明时仅在退出尝试全流收拢.
         [[nodiscard]] DrainResult DrainWork(ShutdownMode mode, std::uint32_t *nativeError);
+        /// @brief 核对 owner, 阶段, 确切 current context 和原生可用性, 拒绝不改变 context.
         [[nodiscard]] bool RequireContext(const char *operation, bool allowFaulted = false) const noexcept;
+        /// @brief 发出新操作前检查调用合同和已有 GL 错误, 防止把前序故障归因到新操作.
         [[nodiscard]] bool BeginNative(const char *operation, const char *label = nullptr,
                                        std::source_location location = std::source_location::current()) noexcept;
+        /// @brief 消费一次 GL 错误并锁存失败/健康状态, 不将未知完成的工作当作可释放.
         [[nodiscard]] bool CheckNative(const char *operation, GLuint object = 0, const char *label = nullptr,
                                        std::source_location location = std::source_location::current()) noexcept;
+        /// @brief 以固定栈缓冲组合操作, 资源与原生错误, 同步交给借用的消息回调.
         void Report(const char *operation, const char *reason, const char *resource = nullptr,
                     GLenum nativeError = GL_NO_ERROR,
                     std::source_location location = std::source_location::current()) const noexcept;
+        /// @brief 未发布分配可在所属 context 回滚; 已发布对象仅入删除 FIFO, 不等待 GPU.
         void ReleaseAllocation(std::unique_ptr<NativeDeletion> record, bool published) noexcept;
         [[nodiscard]] const FormatCaps &GetFormatCaps(Format format, TextureDimension dimension) const noexcept;
         [[nodiscard]] const DeviceCaps &GetCaps() const noexcept
@@ -220,19 +236,32 @@ namespace Physara::RHI::OpenGL
             Draining,
             Stopped
         };
+        // 摘走删除 FIFO 后在锁外清理, context 不可用或删除失败时由最终 context 销毁回收原生存储.
         void Drain(bool nativeAvailable) noexcept;
+        // 先删对象再删其自有 view, 原生错误后停止后续未知 GL 清理.
         [[nodiscard]] bool DeleteNative(NativeDeletion &record) noexcept;
+        // 记录首个 GL 错误并停止新工作, 仅依据原生 loss/reset 事实更新 context 健康.
         void NativeFailure(const char *operation, GLenum error, const char *resource,
                            std::source_location location) noexcept;
+        // 先构造物理包和 tracker, 再取得唯一 recording claim, 成功后发布不回绕身份.
         [[nodiscard]] UploadWorkPacket *OpenPacket(std::size_t minimumChunk);
+        // 解除本包 recording claim 后 release 交接 orphan, worker 此后不再访问包或 lease.
         void AbandonPacket(UploadWorkPacket &packet) noexcept;
+        // 只解除与 recordingId 匹配的 claim, 不影响后继录制.
         void ReleaseClaim(std::uint64_t recordingId) noexcept;
+        // 完成或退出边界统一清 tracker, chunk, lease 后销毁包, 由 owner 独占执行.
         void RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept;
+        // acquire 接收交接包, 有已发工作时建立内部 fence, 不发布公开票据或 tracker metadata.
         [[nodiscard]] bool SealOrphans();
+        // 按 FIFO 收集真实完成, wait 共享一次五秒截止点; false 由失败标记区分 Pending 与故障.
         [[nodiscard]] bool CollectWork(bool wait);
+        // 分段等待至统一截止点, 只将实际 signaled 视为成功, WAIT_FAILED 锁存停止.
         [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
+        // 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
         [[nodiscard]] bool CheckCompletionFence(GLsync sync, const char *operation) noexcept;
+        // 从当前包尾部或新 coherent chunk 分配, 受设备总预算约束, 不隐式等待其他包退休.
         [[nodiscard]] bool AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice);
+        // 输出 requested/retained/limit, 让容量拒绝可归因, 不伪装成硬件显存不足.
         void ReportBudget(const char *operation, std::size_t requested, std::size_t retained,
                           std::size_t limit) const noexcept;
         DeviceDesc m_Desc;
@@ -258,13 +287,17 @@ namespace Physara::RHI::OpenGL
         friend class UploadResourceLease;
     };
 
+    /// @brief 查询限制和每 target 的格式/样本集合, 再验证必需的 2D 基线.
     [[nodiscard]] bool BuildCaps(OpenGLDevice &device, DeviceCaps &caps);
+    /// @brief 按 RHI 维度取得原生 target, Unknown 或非法值返回零.
     [[nodiscard]] GLenum TextureTarget(TextureDimension dimension) noexcept;
+    /// @brief 检查普通状态元数据与 keepInitialState 的一致性, 不推导 texel 初始化或命令支持.
     [[nodiscard]] bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept;
+    /// @brief 取得已支持颜色上传的 external format/type, 不支持时输出参数不变.
     [[nodiscard]] bool GetUploadFormat(Format format, GLenum &externalFormat, GLenum &externalType) noexcept;
 
-    // 以下 wrapper 的不可变描述/CPU 引用可跨线程, 原生创建/收集限 owning/current 线程.
-    // 每个活 wrapper 强持有 Device; 外部根 owner 必须保留到全部 wrapper 释放和退休排空.
+    /// @brief 不可变 Buffer 存储的 CPU wrapper, 自持描述并强持有 Device, 发布后析构仅交接删除节点.
+    /// @note 以下资源 wrapper 的原生创建/收集限 owning/current, CPU 引用可跨线程释放.
     class OpenGLBuffer final : public RefCounter<RHI::Buffer>
     {
     public:
@@ -294,6 +327,7 @@ namespace Physara::RHI::OpenGL
         friend class OpenGLCommandList;
     };
 
+    /// @brief 纹理存储, 不可变描述及 tracker extension 的共同 owner, 不因创建而初始化 texel.
     class OpenGLTexture final : public RefCounter<RHI::Texture>
     {
     public:
@@ -332,6 +366,7 @@ namespace Physara::RHI::OpenGL
         friend class OpenGLCommandList;
     };
 
+    /// @brief 独立采样参数对象, 不拥有或修改 Texture 存储的采样配置.
     class OpenGLSampler final : public RefCounter<RHI::Sampler>
     {
     public:
@@ -354,6 +389,7 @@ namespace Physara::RHI::OpenGL
         friend class OpenGLDevice;
     };
 
+    /// @brief 一个实际附件集的 FBO owner, 强持有纹理及自有重解释 view, 先退休 FBO/view 再释放附件.
     class OpenGLFramebuffer final : public RefCounter<RHI::Framebuffer>
     {
     public:

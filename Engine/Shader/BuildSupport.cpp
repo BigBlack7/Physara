@@ -1,5 +1,8 @@
 #include "BuildSupport.hpp"
 
+/// @file
+/// @brief 实现受预算约束的文件/JSON 边界, 使用 CNG 摘要和同目录原子发布保护旧产物.
+
 #include <algorithm>
 #include <array>
 #include <fstream>

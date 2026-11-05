@@ -1,6 +1,7 @@
 #pragma once
 
-// 无 GL/GLFW 类型的后端互操作合同. 外部 owner 提供 context/诊断寿命, 设备管理资源与真实工作退休.
+/// @file
+/// @brief 不暴露 GL/GLFW 类型的后端互操作合同, 外部 owner 管理 context, Device 管理资源与工作退休.
 
 #include <cstdint>
 
@@ -8,20 +9,22 @@
 
 namespace Physara::RHI::OpenGL
 {
-    // 只借用外部 owner; user 和回调必须覆盖全部 Device CPU 引用, 不抛出且不重入.
-    // 回调同时确认 owner 线程和确切 context, 后端不负责窗口、入口加载或 context 迁移.
+    /// @brief 借用外部 owner 的 context 访问检查, 同时确认 owner 线程与确切 current context.
+    /// @note user/回调须覆盖全部 Device CPU 引用, 不抛出, 不重入; 后端不迁移 context 或加载入口.
     struct ContextAccess
     {
         void *user = nullptr;
         bool (*isCurrent)(void *) noexcept = nullptr;
     };
 
+    /// @brief 创建设备的借用依赖, callback 与 context 均由外部 owner 保证寿命.
     struct DeviceDesc
     {
         MessageCallback *messageCallback = nullptr;
         ContextAccess context;
     };
 
+    /// @brief Normal 在有效 current context 上清理; ContextUnavailable 仅撤销 CPU 状态, 不调用 GL.
     enum class ShutdownMode : std::uint8_t
     {
         Normal,
@@ -35,6 +38,7 @@ namespace Physara::RHI::OpenGL
         InvalidState
     };
 
+    /// @brief 退出收拢结果; Pending 要求保留 Device/context/回调并重试, InvalidState 未满足调用合同.
     enum class DrainResult : std::uint8_t
     {
         Ready,
@@ -42,23 +46,25 @@ namespace Physara::RHI::OpenGL
         InvalidState
     };
 
-    // 使用者已停止/join. 纯 CPU、无分配、无状态修改; knownRootReferences 为调用方实际拥有的根.
-    // 内部上传 lease 不算外部 owner; 额外资源、列表和 Device 引用仍拒绝.
+    /// @brief 纯 CPU, 无分配且不改状态的关闭预检, 使用者须已停止/join.
+    /// @param knownRootReferences 调用方实际拥有的根数, 内部上传 lease 不算外部 owner.
+    /// @return 额外资源, 列表或 Device 引用存在时拒绝, 本检查不承担并发停止协议.
     [[nodiscard]] ShutdownPrecondition CheckShutdownPreconditions(RHI::Device *device,
                                                                   unsigned long knownRootReferences) noexcept;
-    // 预检成功后在 owner/current 调用. Pending 保留设备/context/回调供重试, 已停止接收新工作.
-    // Ready 已撤销全部内部寿命环并 Stopped; nativeError 仍可能报告清理首错, owner 随后销毁 context.
-    // ContextUnavailable 不执行 GL, 不声称 GPU 完成; owner 必须销毁确切 context.
+    /// @brief 预检成功后在 owner 线程收拢, Normal 还要求 owning context current.
+    /// @return Pending 停止新工作并保留原生环境; Ready 撤销内部寿命环且进入 Stopped.
+    /// @note Ready 仍可能通过 nativeError 报告清理首错; ContextUnavailable 不声称 GPU 完成,
+    /// 外部 owner 随后须销毁确切 context, 回收未成功删除的原生对象.
     [[nodiscard]] DrainResult DrainDeviceWork(RHI::Device *device, ShutdownMode mode,
                                               std::uint32_t *nativeError = nullptr);
 
-    // 首发每个 context 只装配一个 Device. 工厂须在 owning/current 线程调用.
-    // nativeError 借用到返回, 先置 0, GL 失败保存首个实际错误; bad_alloc 返回空.
+    /// @brief 在 owning/current 线程为一个 context 创建唯一原生 Device.
+    /// @param nativeError 可空输出, 先置零, GL 失败记录首个实际错误.
+    /// @return 成功 owning handle, 参数/环境不支持或 bad_alloc 时为空.
     [[nodiscard]] DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError = nullptr);
 
-    // 先停止使用者并释放外部资源/列表及额外 Device 引用, 保留唯一根引用调用此入口.
-    // Normal 需要 owning/current; ContextUnavailable 只撤销 CPU 状态, owner 随后必须释放 context.
-    // 预检拒绝不改变设备; Pending 返回 false 并保留根供重试, 不得直接释放根/context.
-    // Ready 后最终删除带错时 owner 必须销毁所属 context, 由它回收未成功删除的原生对象.
+    /// @brief 收拢并停止仅保留一个根引用的设备, 调用前须释放外部资源, 列表和额外 Device 引用.
+    /// @return 预检拒绝不改设备; Pending 返回 false 并保留根/context 供重试.
+    /// @note Normal 需要 owning/current; ContextUnavailable 不调用 GL. Ready 后删除带错也须由 owner 销毁 context.
     [[nodiscard]] bool ShutdownDevice(RHI::Device *device, ShutdownMode mode, std::uint32_t *nativeError = nullptr);
 }

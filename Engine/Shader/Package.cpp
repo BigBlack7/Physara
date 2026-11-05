@@ -1,5 +1,8 @@
 #include "Package.hpp"
 
+/// @file
+/// @brief 编码与解码版本化包, 在文件完整性, 声明 ABI 和最终 IR 三个边界独立核对后交付 CPU 值.
+
 #include <algorithm>
 #include <array>
 #include <set>
@@ -11,6 +14,7 @@ namespace Physara::Shader
     static constexpr std::array<unsigned char, 8> PackageMagic{'P', 'S', 'H', 'A', 'D', 'E', 'R', 0};
     static constexpr std::size_t PrefixBytes = 64;
 
+    // 把文件格式或内部一致性违例统一归为损坏包, 不返回部分解码结果.
     static void RequirePackage(bool valid, std::string_view message)
     {
         if (!valid)
@@ -29,6 +33,7 @@ namespace Physara::Shader
                                                         });
     }
 
+    // 包路径必须使用受控逻辑根和规范拼写, 不允许机器盘符, 父目录或诊断换行.
     static bool IsLogicalPath(std::string_view text)
     {
         if ((!text.starts_with("Source/") && !text.starts_with("Interface/")) ||
@@ -46,6 +51,7 @@ namespace Physara::Shader
                                     });
     }
 
+    // 先核对身份, 依赖和载荷预算, 再从最终 IR 重建活动反射与所存元数据逐项比较.
     static void CheckPackage(const ShaderPackage &package, const InterfaceSchema &expected)
     {
         RequirePackage(package.profile == "GraphicsBaselineV1" && IsHash(package.abiHash) &&
@@ -87,6 +93,7 @@ namespace Physara::Shader
         }
     }
 
+    // 文件整数显式按小端逐字节编码/解码, 不依赖宿主布局或对未对齐字节强转; 范围由上层证明.
     static void PutInteger(std::vector<std::byte> &bytes, std::size_t offset, std::uint64_t value, std::size_t width)
     {
         for (std::size_t index = 0; index < width; ++index)
@@ -110,6 +117,7 @@ namespace Physara::Shader
         return static_cast<unsigned char>(character <= '9' ? character - '0' : character - 'a' + 10);
     }
 
+    // 先重新解析声明并核对 IR, 再布局定宽头, JSON, 四字节 padding 和连续 words, 最后填摘要槽.
     static std::vector<std::byte> EncodePackage(const ShaderPackage &package)
     {
         const auto declaration = DeclarationSchema(package.declaration);
@@ -188,6 +196,7 @@ namespace Physara::Shader
         return bytes;
     }
 
+    // 依次检查头/长度/摘要, JSON/ABI, 模块连续区间和 IR 一致性, 全部成功才交付包.
     static ShaderPackage DecodePackage(std::vector<std::byte> bytes, std::string_view expectedAbiHash)
     {
         RequirePackage(bytes.size() >= PrefixBytes, "Truncated package prefix.");

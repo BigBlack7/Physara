@@ -1,7 +1,8 @@
 #include "DeviceHostInternal.hpp"
 
-// 将 GLFW 回调翻译为项目输入, 在事件泵边界补查窗口事实并执行有序平台请求.
-// 回调只写累积器; capture 释放和原生错误合并在回调返回后的安全边界完成.
+/// @file
+/// @brief 将 GLFW 回调翻译为输入事实, 在事件泵边界补查窗口状态并执行平台请求.
+/// 回调只写累积器; 光标捕获释放和错误合并在回调返回后的安全边界完成.
 
 #include <array>
 #include <charconv>
@@ -12,6 +13,7 @@
 
 namespace Physara::Platform::Detail
 {
+    // 显式映射原生离散键码, 未列出的条目保留 Unknown, 不把两套枚举数值强转等同.
     static constexpr auto NativeKeys = []
     {
         std::array<Key, GLFW_KEY_LAST + 1> result{};
@@ -138,6 +140,7 @@ namespace Physara::Platform::Detail
         return result;
     }();
 
+    // 回调只取得仍接收输入的 owner; 错线程是生命周期合同违例, 停止状态直接忽略.
     static DeviceHostState *Target(GLFWwindow *window) noexcept
     {
         auto *state = static_cast<DeviceHostState *>(glfwGetWindowUserPointer(window));
@@ -151,6 +154,7 @@ namespace Physara::Platform::Detail
         }
         return state;
     }
+    // 严格转换 GLFW 动作, 未知数值不降级为 Release.
     static std::optional<KeyAction> Action(int action) noexcept
     {
         if (action == GLFW_PRESS)
@@ -167,6 +171,7 @@ namespace Physara::Platform::Detail
         }
         return std::nullopt;
     }
+    // 将已知修饰位映射成项目位集, 保留 Caps/NumLock, 拒绝未知协议位.
     static std::optional<Modifier> TranslateModifiers(int mods) noexcept
     {
         constexpr int KnownMods =
@@ -181,6 +186,8 @@ namespace Physara::Platform::Detail
                                       ((mods & GLFW_MOD_CAPS_LOCK) ? 16 : 0) | ((mods & GLFW_MOD_NUM_LOCK) ? 32 : 0));
         return static_cast<Modifier>(flags);
     }
+    // 以下回调仅翻译并记录事实, 不发布 bank 或执行平台请求; 输入值的统一校验由累积器承担.
+    // 按键还保留未知键的原生 scanCode, 字符输入由独立回调给出.
     static void OnKey(GLFWwindow *window, int key, int scanCode, int action, int mods) noexcept
     {
         if (auto *state = Target(window))
@@ -294,12 +301,14 @@ namespace Physara::Platform::Detail
         }
     }
 
+    // 一次补查取得的值, 与累积状态比较后只为差异追加事实.
     struct WindowFacts
     {
         WindowState window;
         LogicalPoint cursor;
         CursorMode mode = CursorMode::Normal;
     };
+    // 统一读取逻辑尺寸, 像素尺寸, 缩放, 焦点和光标, 在有符号原生边界检查后返回.
     static std::variant<WindowFacts, HostError> ReadWindowFacts(DeviceHostState &state)
     {
         BeginNativeOperation(state);
@@ -329,6 +338,7 @@ namespace Physara::Platform::Detail
         facts.mode = mode == GLFW_CURSOR_DISABLED ? CursorMode::Relative : CursorMode::Normal;
         return facts;
     }
+    // 把 getter 发现的遗漏变化合并进待发布批次, 保留已到达事件的顺序与边沿.
     static std::optional<HostError> RefreshWindowInput(DeviceHostState &state)
     {
         // getter 补齐未送达回调的最新事实, 仅对差异追加事件. 不清除已到达的边沿或重写已发布 bank.
@@ -370,6 +380,7 @@ namespace Physara::Platform::Detail
         }
         return TakeInputFault(state);
     }
+    // 按原生首错, 输入终止故障的优先级归因, 再附上当前请求索引.
     static std::optional<HostError> TakeRequestFailure(DeviceHostState &state, std::size_t index)
     {
         // 原生首错优先; 回调终止故障必须先于可恢复的捕获拒绝报告.
@@ -384,6 +395,7 @@ namespace Physara::Platform::Detail
         }
         return error;
     }
+    // 事件泵收尾顺序固定为错误归因, 窗口补查, 捕获释放, 发布仍由上层 PollEvents 执行.
     static std::optional<HostError> FinishEvents(DeviceHostState &state)
     {
         // 原生主错优先, 然后检查回调故障/补查事实; 最后释放失焦 capture, 不提前发布事件.

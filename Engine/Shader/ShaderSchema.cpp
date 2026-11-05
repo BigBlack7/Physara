@@ -1,5 +1,8 @@
 #include "ShaderSchema.hpp"
 
+/// @file
+/// @brief 严格解析有限 Shader 声明, 计算 std140/std430 布局, 逻辑绑定和完整接口 ABI.
+
 #include <algorithm>
 #include <array>
 #include <set>
@@ -116,6 +119,7 @@ namespace Physara::Shader
         return static_cast<std::uint32_t>(value);
     }
 
+    // 已知类型规则提供正对齐, 用宽中间值向上取整并在返回前执行块预算约束.
     static std::uint32_t AlignData(std::uint32_t size, std::uint32_t alignment)
     {
         // alignment 仅来自固定 32 位类型规则, 数学中间值使用宽类型, 再按 block 预算收窄.
@@ -225,6 +229,7 @@ namespace Physara::Shader
         return *block;
     }
 
+    // 核对资源种类与块布局, 推导 canonical binding, 固定只读 record 数组还需容量预算.
     static BindingSchema ParseBinding(const Json &json, const InterfaceSchema &schema)
     {
         CheckFields(json, {"name", "kind", "set", "slot", "block", "capacity", "stages"}, "/resources");
@@ -286,6 +291,7 @@ namespace Physara::Shader
         return binding;
     }
 
+    // 用户 IO 限定为单 location 标量/向量, 阶段端点与跨阶段插值边分别校验.
     static IoSchema ParseIo(const Json &json)
     {
         CheckFields(json, {"stage", "direction", "name", "location", "type", "interpolation"}, "/io");

@@ -1,6 +1,7 @@
 #pragma once
 
-// 宿主各实现文件共享的实际状态和阶段入口; 原生窗口、输入 bank、回调与 RHI 根引用由同一 State 拥有.
+/// @file
+/// @brief 宿主实现之间共享的状态与阶段入口, 原生窗口, 输入和 RHI 根引用归同一 State.
 
 #include "DeviceHost.hpp"
 #include "InputState.hpp"
@@ -16,13 +17,17 @@
 
 namespace Physara::Platform::Detail
 {
+    /// @brief 将 RHI 消息写入诊断, 在创建/关闭区间额外保存首错和附加错误数.
+    /// @note 借用 Diagnostics, 同宿主一起存活; 捕获结果不用于推断 device loss.
     class RhiMessageAdapter final : public RHI::MessageCallback
     {
     public:
         explicit RhiMessageAdapter(Core::Diagnostics &diagnostics) noexcept : m_Diagnostics(diagnostics)
         {
         }
+        /// @brief 同步复制回调文本后转发诊断, 日志失败不覆盖捕获的首错.
         void Message(RHI::MessageSeverity severity, const char *message) noexcept override;
+        /// @brief 开始新的首错捕获区间; EndCapture 停止捕获但保留结果供宿主读取.
         void BeginCapture() noexcept;
         void EndCapture() noexcept;
         [[nodiscard]] const std::optional<Core::BoundedText> &First() const noexcept
@@ -43,6 +48,7 @@ namespace Physara::Platform::Detail
         bool m_Capturing = false;
     };
 
+    /// @brief 一次原生操作的首错和饱和计数, 全局 GLFW 错误回调在进程锁内写入.
     struct NativeCapture
     {
         std::optional<Core::ErrorContext> first;
@@ -50,6 +56,8 @@ namespace Physara::Platform::Detail
         std::source_location source = std::source_location::current();
     };
 
+    /// @brief 按取得阶段记录资源的宿主 owner, 支持初始化中途的逆序回滚.
+    /// @invariant stopped 仅在最终释放后置位; drain Pending 时保留窗口, adapter 和 Device 根引用.
     struct DeviceHostState
     {
         explicit DeviceHostState(Core::Diagnostics &log) noexcept : diagnostics(log), rhiMessages(log)
@@ -80,37 +88,63 @@ namespace Physara::Platform::Detail
         RHI::DeviceHandle validatedDevice;
     };
 
+    /// @brief 构造自持宿主错误, state 可空; 有状态时附上有效身份及已耗秒数.
     [[nodiscard]] HostError MakeError(const DeviceHostState *state, HostErrorReason reason, HostStage stage,
                                       std::string_view message,
                                       std::source_location source = std::source_location::current()) noexcept;
+    /// @brief 以原报告位置记录宿主错误, 诊断失败不改变领域结果.
     void ReportError(Core::Diagnostics &diagnostics, const HostError &error) noexcept;
+    /// @brief 保留主错并附加首个清理失败, 后续清理错误只累计饱和计数.
     void AttachCleanupFailure(HostError &primary, const HostError &cleanup) noexcept;
+    /// @brief 合并清理阶段错误, 保留首次错误的正文与上下文.
     void MergeCleanupError(std::optional<HostError> &first, std::optional<HostError> next) noexcept;
+    /// @brief 无法安全继续生命周期时输出有界原因并终止进程, 不伪造可恢复错误.
     [[noreturn]] void TerminateForContract(std::string_view message) noexcept;
 
+    /// @brief 取得进程唯一宿主 claim 并分配不回绕的窗口代, 不初始化 GLFW.
     [[nodiscard]] std::optional<HostError> ReserveProcess(DeviceHostState &state);
+    /// @brief 在进程锁内开始新的 GLFW 错误捕获区间, 不消费窗口输入事件.
     void BeginNativeOperation(DeviceHostState &state, std::source_location source = std::source_location::current());
+    /// @brief 将当前捕获复制为宿主错误, 捕获内容保留至下一次 BeginNativeOperation.
     [[nodiscard]] std::optional<HostError> TakeNativeError(DeviceHostState &state, HostErrorReason reason,
                                                            HostStage stage);
+    /// @brief 安装可恢复的进程错误回调并初始化 GLFW, 记录已取得阶段供回滚.
     [[nodiscard]] std::optional<HostError> InitializeGlfw(DeviceHostState &state);
+    /// @brief 按固定 GL 4.6 Core profile 创建窗口, 将回调 user pointer 绑定到 state.
     [[nodiscard]] std::optional<HostError> CreateGlfwWindow(DeviceHostState &state, const HostDesc &desc);
+    /// @brief 在 owner 线程激活窗口 context 并核对实际 current 状态.
     [[nodiscard]] std::optional<HostError> ActivateContext(DeviceHostState &state);
+    /// @brief 通过 current context 加载固定 GL 入口, 拒绝缺少必要查询入口的环境.
     [[nodiscard]] std::optional<HostError> LoadGlEntries(DeviceHostState &state);
+    /// @brief 查询并验证实际 profile/默认 framebuffer/限制, 写入自持启动快照.
     [[nodiscard]] std::optional<HostError> InspectEnvironment(DeviceHostState &state);
+    /// @brief 请求交换间隔并记录请求值, 不测量或保证驱动实际等待行为.
     [[nodiscard]] std::optional<HostError> RequestSwapInterval(DeviceHostState &state, bool vsync);
+    /// @brief 在原生 context 上建立 raw Device, 再建立持有它的 Validation 包装.
     [[nodiscard]] std::optional<HostError> InitializeResourceDevice(DeviceHostState &state);
+    /// @brief 预检已知根引用之外的 owner, 调用前使用者须已停止, 不承担并发停止协议.
     [[nodiscard]] bool HasExternalRhiOwners(const DeviceHostState &state) noexcept;
+    /// @brief 收拢设备工作后释放两层根引用; Pending 时保留全部原生环境供关闭重试.
     [[nodiscard]] std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state);
+    /// @brief 执行分阶段幂等退出, 外部 owner 拒绝或 drain Pending 时不销毁原生环境.
     [[nodiscard]] std::optional<HostError> ReleaseNativeState(DeviceHostState &state);
+    /// @brief 读取初始窗口事实后启用输入回调, 再补查安装期间的状态变化.
     [[nodiscard]] std::optional<HostError> InitializeWindowInput(DeviceHostState &state);
+    /// @brief 停止输入写入, 解除相对捕获并解绑回调, 合并清理错误.
     [[nodiscard]] std::optional<HostError> ReleaseWindowInput(DeviceHostState &state);
+    /// @brief 请求 Normal 光标模式并查询确认, 仅确认后清除待释放标记.
     [[nodiscard]] std::optional<HostError> ReleaseRelativeCursor(DeviceHostState &state);
+    /// @brief 分发原生事件并在安全边界补查事实与解除捕获, 不发布 bank.
     [[nodiscard]] std::optional<HostError> PollNativeInput(DeviceHostState &state);
+    /// @brief 校验有限正秒后等待事件, 使用与 poll 相同的事实和故障收尾.
     [[nodiscard]] std::optional<HostError> WaitNativeInput(DeviceHostState &state, double timeoutSeconds);
+    /// @brief 先整批预检再顺序执行平台请求, 运行期失败保留已生效的前缀.
     [[nodiscard]] std::optional<HostError> ApplyNativeRequests(DeviceHostState &state,
                                                                std::span<const HostRequest> requests);
+    /// @brief 将累积器首错复制成宿主错误, 不清除已锁存的终止故障.
     [[nodiscard]] std::optional<HostError> TakeInputFault(DeviceHostState &state);
 
+    /// @brief 仅负责私有构造权限与失败回滚的装配入口, 不增加另一份宿主状态.
     struct DeviceHostFactory
     {
         [[nodiscard]] static DeviceHost::CreateResult Create(const HostDesc &desc,

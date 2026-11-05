@@ -2,6 +2,9 @@
 #include "Interface.hpp"
 #include "Package.hpp"
 
+/// @file
+/// @brief Shader 构建命令入口, 协调接口生成, 编译, 包检查与辅助文件的完成时间.
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -14,6 +17,7 @@ namespace Physara::Shader
 {
     static const char *FatalOperation = "startup";
 
+    // 为第三方 noexcept 致命失败提供无需分配的进程诊断, 不尝试继续使用编译环境.
     static void FailTerminatedBuild() noexcept
     {
         // 只在此构建进程安装. noexcept 内的 OOM 无法返回 Failure, 诊断不构造 string 或日志后端.
@@ -23,6 +27,7 @@ namespace Physara::Shader
         std::_Exit(1);
     }
 
+    // 在私有驱动中将显式失败转成 BuildError, 统一由最外层退出码边界消费.
     template <typename T> static T TakeResult(Result<T> result)
     {
         if (const auto *failure = std::get_if<Failure>(&result))
@@ -32,6 +37,7 @@ namespace Physara::Shader
         return std::move(std::get<T>(result));
     }
 
+    // 将路径转为 depfile 的绝对路径拼写, 转义 Make 语法中的特殊字符.
     static std::string DepfilePath(const std::filesystem::path &path)
     {
         std::string escaped;
@@ -53,6 +59,7 @@ namespace Physara::Shader
         return escaped;
     }
 
+    // 仅供接口生成规则标记已求值状态, 不替代 manifest 的完整产物核对.
     static void WriteStamp(const std::filesystem::path &path, std::string_view identity)
     {
         // stamp 只表示规则已评估当前输入, 每次成功运行都刷新. 数据产物由各自的原子发布保护.
@@ -68,6 +75,7 @@ namespace Physara::Shader
         }
     }
 
+    // generate 发布接口与完成标记; build 先辅助文件后包; check 仅完整读取校验, 用法错误返回 2.
     static int RunBuildDriver(int count, wchar_t **arguments)
     {
         if (count == 5 && std::wstring_view(arguments[1]) == L"generate")

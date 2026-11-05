@@ -1,5 +1,8 @@
 #include "SourceGraph.hpp"
 
+/// @file
+/// @brief 扫描受支持的源指令并迭代建立依赖图, 将静态声明边与编译器实际展开的边区分记录.
+
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -11,6 +14,7 @@ namespace Physara::Shader
         return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(text.data()), text.size()));
     }
 
+    // 仅裁掉指令周边空白, 返回仍借用原输入的视图.
     static std::string_view TrimSource(std::string_view text)
     {
         const auto begin = text.find_first_not_of(" \t\r");
@@ -21,6 +25,7 @@ namespace Physara::Shader
         return text.substr(begin, text.find_last_not_of(" \t\r") - begin + 1);
     }
 
+    // 保留原文件坐标的源指令, 用于 profile 预检和声明图, 不替代预处理器求值.
     struct Directive
     {
         std::string word;
@@ -28,6 +33,8 @@ namespace Physara::Shader
         std::uint32_t line = 0;
     };
 
+    // 先拼接续行并维护原行号, 再屏蔽字符串外注释, 最后提取 include/version/extension/line.
+    // 不判断条件分支或展开宏, 因而未活动 include 也参加静态依赖与环检查.
     static std::vector<Directive> ScanDirectives(std::string_view source)
     {
         // 这里只识别声明边和 profile 指令, 不展开宏或判断条件分支. 先处理续行, 再屏蔽注释.

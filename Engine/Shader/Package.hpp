@@ -1,6 +1,7 @@
 #pragma once
 
-// 版本化包的 CPU 文件边界, 不把 Engine 包类型传给公开 RHI.
+/// @file
+/// @brief 版本化 Shader 包的 CPU 文件边界, 独立核对声明与 IR, 不创建 RHI 对象.
 
 #include <filesystem>
 #include <string_view>
@@ -9,11 +10,14 @@
 
 namespace Physara::Shader
 {
-    // 调用期间借用预期 ABI. 从完整声明快照重算 ABI, 核对 IR/元数据与消费者所需身份后交付拥有值.
+    /// @brief 读取并重算声明 ABI, 核对最终 IR, 元数据与文件完整性后交付自持值.
+    /// @param expectedAbiHash 消费者期望的接口 ABI, 必须与重算结果一致.
+    /// @return 完整 ShaderPackage 或 Failure, 不交付部分校验结果.
     [[nodiscard]] Result<ShaderPackage> ReadPackage(const std::filesystem::path &path,
                                                     std::string_view expectedAbiHash) noexcept;
 
-    // 原子替换同目录文件. 成功 true 表示内容改变, false 表示旧文件内容完全相同.
-    // 失败保留旧完整包并返回 Failure; 路径与包只在调用期间借用.
+    /// @brief 通过同目录临时文件原子发布 Shader 包.
+    /// @return true 表示内容改变, false 表示与旧文件相同; 失败返回 Failure.
+    /// @note 发布失败时保留旧包, 输入仅在调用期间借用.
     [[nodiscard]] Result<bool> WritePackage(const std::filesystem::path &path, const ShaderPackage &package) noexcept;
 }

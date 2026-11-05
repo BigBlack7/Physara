@@ -1,12 +1,14 @@
 #include "CommandList.hpp"
 
-// 实现受检 Buffer 区间和整纹理子资源上传. 先准备资源保活/状态/容量, 再消费 CPU 源并发出即时 GL 命令.
+/// @file
+/// @brief 受检 Buffer 区间与整纹理子资源上传, 先准备 lease/状态/容量, 再消费源并发出即时 GL.
 
 #include <cstring>
 #include <limits>
 
 namespace Physara::RHI::OpenGL
 {
+    // 校验区间与预算后建立 lease/CopyDest, 小写用 subdata, 大写先拷贝至包独有映射区再 GPU copy.
     void OpenGLCommandList::WriteBuffer(Buffer *buffer, const void *data, size_t size, uint64_t offset)
     {
         auto *packet = Recording("WriteBuffer");
@@ -80,6 +82,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 先确定合法 footprint 和紧凑 PBO 容量, 逐行只复制 texel, 最后按实际 target 发出上传, 不翻转或转色.
     void OpenGLCommandList::WriteTexture(Texture *texture, uint32_t arraySlice, uint32_t mipLevel, const void *data,
                                          size_t rowPitch, size_t depthPitch)
     {

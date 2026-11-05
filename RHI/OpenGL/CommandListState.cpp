@@ -1,6 +1,7 @@
 #include "CommandList.hpp"
 
-// 对同一资源取得去重 lease 并消费 Common transfer 依赖. 自动/显式模式共用 tracker, 不维护第二份资源状态.
+/// @file
+/// @brief 去重保活资源并消费 Common transfer 依赖, 自动与显式模式共享一份 tracker.
 
 #include <new>
 
@@ -56,6 +57,7 @@ namespace Physara::RHI::OpenGL
         return native;
     }
 
+    // 当前只支持 Common/CopyDest 及 keepInitialState 恢复, 元数据允许值不扩大真实命令能力.
     static bool TransferStateSupported(ResourceStates state, ResourceStates initial, bool keepInitial) noexcept
     {
         // 普通 GPU 用途目前只可作为 keepInitialState 的恢复元数据; 本入口不交付这些用途的原生命令.

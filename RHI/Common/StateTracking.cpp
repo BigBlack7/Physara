@@ -22,7 +22,8 @@
 
 #include "StateTracking.hpp"
 
-// 在来源算法上校验 recording 输入并保留 sticky error. 声明已知前态、请求依赖、提交发布和放弃分别执行.
+/// @file
+/// @brief 在固定来源算法上校验 recording 输入并锁存失败, 将本地依赖计算与接受提交后的发布分开.
 
 #include <algorithm>
 #include <bit>
@@ -180,6 +181,7 @@ namespace Physara::RHI
         return true;
     }
 
+    // 已通过范围与表长度检查后, 将 layer/mip 展平成与存储一致的索引.
     static size_t CalcSubresource(MipLevel mipLevel, ArraySlice arraySlice, const TextureDesc &desc)
     {
         return size_t(mipLevel) + size_t(arraySlice) * desc.mipLevels;

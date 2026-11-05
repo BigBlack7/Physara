@@ -1,5 +1,6 @@
-// 唯一产品入口: 先解析启动参数, 再装配诊断与宿主, 消费事件并按依赖逆序关闭.
-// 当前只推进已实现的窗口生命周期, 没有绘制或呈现阶段.
+/// @file
+/// @brief 唯一产品入口: 参数解析, 诊断/宿主装配, 事件消费和逆序关闭.
+/// 当前只推进已实现的窗口生命周期, 尚无绘制或呈现阶段.
 
 #include <charconv>
 #include <cstdio>
@@ -23,6 +24,7 @@ namespace Physara::Runtime
         "Dimensions are unsigned 32-bit logical units. Poll limit is a positive unsigned 64-bit value.\n"
         "The current runtime has no renderer or editor. Hidden mode still requires a real graphics context.\n";
 
+    // 参数解析的纯值结果, 在原生初始化之前完整验证, 不保留 argv 的借用.
     struct StartupOptions
     {
         Platform::HostDesc host;
@@ -30,6 +32,7 @@ namespace Physara::Runtime
         bool help = false;
     };
 
+    // 必须消费整个十进制字段, 拒绝空值, 符号, 溢出或尾随字符.
     template <typename Integer>
     static bool ParseUnsigned(std::string_view text, Integer &value) noexcept
     {
@@ -41,6 +44,7 @@ namespace Physara::Runtime
         return result.ec == std::errc{} && result.ptr == text.data() + text.size();
     }
 
+    // 逐项拒绝未知/重复参数; help 仍须通过整批语法检查, 宿主负责尺寸的原生范围约束.
     static std::variant<StartupOptions, Core::BoundedText> ParseOptions(int argc, char **argv) noexcept
     {
         // 每种选项占一位以拒绝重复; 所有参数都检查完后, main 才解释 help 或创建原生状态.
@@ -93,6 +97,7 @@ namespace Physara::Runtime
         return options;
     }
 
+    // 最后退路只向 stderr 写有界正文, 不依赖诊断设施已成功构造.
     static void PrintError(const Core::BoundedText &text) noexcept
     {
         // 输出不是错误形成的前置; stderr 失败时仍保留原来的进程结果.
@@ -101,6 +106,7 @@ namespace Physara::Runtime
     }
 }
 
+// 退出码: 参数错误为 2, 初始化/运行/关闭失败为 1, 帮助或完整正常关闭为 0.
 int main(int argc, char **argv)
 {
     using namespace Physara;

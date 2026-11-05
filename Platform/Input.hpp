@@ -1,6 +1,8 @@
 #pragma once
 
-// 窗口事实、输入事件和平台请求的值合同. 逻辑坐标/像素/滚轮单位独立, 原生枚举不穿过此边界.
+/// @file
+/// @brief 窗口事实, 输入事件和平台请求的值合同, 原生枚举不穿过此边界.
+/// 逻辑坐标, framebuffer 像素和滚轮 offset 使用各自单位, 消费者按目标空间转换.
 
 #include <array>
 #include <cstddef>
@@ -13,25 +15,28 @@ namespace Physara::Platform
 {
     inline constexpr std::size_t InputEventCapacity = 4096;
 
-    // 逻辑尺寸与像素尺寸按字段名区分; 不把 contentScale 当两者的比例.
+    /// @brief 无符号宽高, 所在字段名决定逻辑单位或像素; 零尺寸是可观察的暂停状态.
     struct WindowExtent
     {
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         bool operator==(const WindowExtent &) const = default;
     };
+    /// @brief 二维输入值, 光标使用左上原点, x 向右/y 向下的逻辑单位, 滚轮字段另用原生 offset 单位.
     struct LogicalPoint
     {
         double x = 0.0;
         double y = 0.0;
         bool operator==(const LogicalPoint &) const = default;
     };
+    /// @brief 原生内容缩放观察值, 不保证等于 framebuffer 尺寸与逻辑尺寸的比值.
     struct ContentScale
     {
         float x = 1.0f;
         float y = 1.0f;
         bool operator==(const ContentScale &) const = default;
     };
+    /// @brief 发布边界的窗口状态, metricsRevision 标识尺寸或内容缩放的变化.
     struct WindowState
     {
         WindowExtent clientSizeLogical;
@@ -41,13 +46,14 @@ namespace Physara::Platform
         bool iconified = false;
         bool closeRequested = false;
         std::uint64_t metricsRevision = 0;
+        /// @brief 窗口未最小化且 framebuffer 两维非零时可渲染, 与是否有焦点独立.
         [[nodiscard]] bool Renderable() const noexcept
         {
             return !iconified && framebufferSizePixels.width > 0 && framebufferSizePixels.height > 0;
         }
     };
 
-    // 键集合对应固定 GLFW 公共协议, 数值为项目自己的紧凑索引, 不暴露原生码.
+    /// @brief 对应固定 GLFW 公共协议的键集合, 数值为项目自己的紧凑索引, 不暴露原生码.
     enum class Key : std::uint16_t
     {
         Unknown,
@@ -216,12 +222,14 @@ namespace Physara::Platform
     {
         return button < MouseButton::Count;
     }
+    /// @brief 发布间隔末的 held 值及区间内边沿, 同一区间 pressed/released 可以同时为真.
     struct ButtonState
     {
         bool down = false;
         bool pressed = false;
         bool released = false;
     };
+    /// @brief 一次发布的按键末值与区间累计量, 有序事件用于恢复区间内的实际顺序.
     struct InputSnapshot
     {
         // 同一发布间隔的 press/release 可同时为真; down 表示间隔末值, events 保留实际到达顺序.
@@ -234,6 +242,7 @@ namespace Physara::Platform
         LogicalPoint scrollOffset;
         bool cursorInside = false;
         CursorMode cursorMode = CursorMode::Normal;
+        /// @brief 按项目枚举查询按键/鼠标状态, 未知或越界值返回未按下的空状态.
         [[nodiscard]] ButtonState KeyState(Key key) const noexcept
         {
             return IsKnown(key) ? keys[static_cast<std::size_t>(key) - 1] : ButtonState{};
@@ -244,6 +253,7 @@ namespace Physara::Platform
         }
     };
 
+    /// @brief 物理按键事实; Unknown 仍保留 scanCode, 文本输入由独立 CharEvent 表达.
     struct KeyEvent
     {
         Key key = Key::Unknown;
@@ -252,6 +262,7 @@ namespace Physara::Platform
         Modifier modifiers = Modifier::None;
     };
 
+    /// @brief 单个 Unicode 标量值, 不以键盘布局或 Key 推导文本.
     struct CharEvent
     {
         char32_t codepoint = 0;
@@ -274,11 +285,13 @@ namespace Physara::Platform
         bool entered = false;
     };
 
+    /// @brief 原生滚轮 offset, 不是像素或逻辑距离, 不乘内容缩放.
     struct ScrollEvent
     {
         LogicalPoint offset;
     };
 
+    /// @brief 客户区逻辑尺寸变化, 与下一个事件类型中的 framebuffer 像素尺寸分开处理.
     struct ClientSizeEvent
     {
         WindowExtent size;
@@ -309,6 +322,7 @@ namespace Physara::Platform
         bool requested = false;
     };
 
+    /// @brief 回调按到达次序发布的自持事实; 小值载荷允许固定容量 bank 无分配地保存.
     using InputEvent = std::variant<KeyEvent, CharEvent, MouseButtonEvent, CursorPositionEvent, CursorEnterEvent,
                                     ScrollEvent, ClientSizeEvent, FramebufferSizeEvent, ContentScaleEvent, FocusEvent,
                                     IconifyEvent, CloseRequestedEvent>;
@@ -322,10 +336,12 @@ namespace Physara::Platform
     {
         bool requested = false;
     };
+    /// @brief 消费者交给宿主的意图, 与输入事实分开, 由宿主在安全边界顺序执行.
     using HostRequest = std::variant<SetCursorMode, SetCloseRequested>;
 
-    // 由 owner/main 线程发布. 值成员自持; events 只读借用到下一次接受的 owner poll 开始或关闭.
-    // Wait/Apply 不改写已发布 bank; 跨帧或线程保存 events 必须由消费者复制.
+    /// @brief owner/main 线程发布的一批输入, sequence 按成功发布递增.
+    /// @note 值成员自持; events 只读借用到下一次接受的 owner poll 开始或关闭.
+    /// Wait/Apply 不改写已发布 bank; 跨帧或线程保存 events 必须由消费者复制.
     struct HostFrameInput
     {
         std::uint64_t sequence = 0;

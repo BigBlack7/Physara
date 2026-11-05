@@ -22,8 +22,8 @@
 
 #include "Backend.hpp"
 
-// 保留完整 Device 方法闭包, 对当前资源/上传 profile 之外的入口显式诊断并返回既有失败形式.
-// 不解引用无关 payload, 不构造成功占位对象; 引用型 crash-helper 只能以异常报告不可用.
+/// @file
+/// @brief 保留完整 Device 方法闭包, 对当前 profile 之外的入口诊断并返回既有失败值, 不读取无关 payload.
 
 #include <stdexcept>
 
@@ -517,6 +517,7 @@ namespace Physara::RHI::OpenGL
         return false;
     }
 
+    // 引用返回值无法使用空句柄表达失败, 报告 Unsupported 后抛 logic_error, 不构造伪 helper.
     AftermathCrashDumpHelper &OpenGLDevice::GetAftermathCrashDumpHelper()
     {
         Report("GetAftermathCrashDumpHelper", "Unsupported: reference-only facility");

@@ -1,6 +1,7 @@
 #include "InputState.hpp"
 
-// 按到达顺序校验并累积输入, 发布时复制值状态并交换 bank; 故障不返回成功的部分批次.
+/// @file
+/// @brief 按序校验并累积输入, 发布时复制值状态和交换 bank, 故障时停止交付成功批次.
 
 #include <cmath>
 #include <limits>
@@ -15,6 +16,7 @@ namespace Physara::Platform::Detail
     {
         return std::isfinite(value.x) && std::isfinite(value.y) && value.x > 0.0f && value.y > 0.0f;
     }
+    // 按下/释放只合并区间边沿, Repeat 保留 held 且不伪造第二次 pressed.
     static void UpdateButton(Physara::Platform::ButtonState &button, Physara::Platform::KeyAction action) noexcept
     {
         using Physara::Platform::KeyAction;

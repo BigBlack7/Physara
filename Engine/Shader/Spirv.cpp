@@ -1,5 +1,8 @@
 #include "Spirv.hpp"
 
+/// @file
+/// @brief 用 SPIRV-Tools 验证最终字节码, 再由 SPIRV-Cross 对 profile, 布局和活动接口逐层核对.
+
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -36,6 +39,7 @@ namespace Physara::Shader
         }
     }
 
+    // 接口不一致统一保留为 ABI 失败, 调用方补充程序, 阶段与源路径上下文.
     static void RequireInterface(bool condition, std::string_view context)
     {
         if (!condition)
@@ -44,6 +48,7 @@ namespace Physara::Shader
         }
     }
 
+    // 核对 32 位基类型, 向量/矩阵形状及数组维数, 不以 GLSL 名称相同替代实际 IR 形状.
     static void CheckType(const spirv_cross::SPIRType &actual, std::string_view expected, bool array,
                           std::string_view context)
     {
@@ -60,6 +65,7 @@ namespace Physara::Shader
                              std::to_string(actual.columns) + "/" + std::to_string(actual.array.size()));
     }
 
+    // 从 IR 提取字段 offset/extent/stride 与矩阵方向, 和独立推导的完整块布局比较.
     static BufferLayout ReflectBuffer(const spirv_cross::Compiler &compiler, const spirv_cross::SPIRType &actual,
                                       const BufferLayout &expected)
     {
@@ -102,6 +108,7 @@ namespace Physara::Shader
         return reflected;
     }
 
+    // 全模块块类型须满足固定 record 形状与字节预算, 不因当前入口未活动而跳过 profile.
     static void CheckDataBlockProfile(const spirv_cross::Compiler &compiler, const spirv_cross::SPIRType &block)
     {
         if (block.basetype != spirv_cross::SPIRType::Struct || block.member_types.empty() ||
@@ -129,6 +136,7 @@ namespace Physara::Shader
         }
     }
 
+    // 先检查模块 capability, 执行模式和资源类别, 排除基线之外的扩展与数据访问形状.
     static void CheckProfile(spirv_cross::Compiler &compiler, Stage stage)
     {
         for (const auto capability : compiler.get_declared_capabilities())
@@ -229,6 +237,7 @@ namespace Physara::Shader
         }
     }
 
+    // 以最终 set/binding 定位声明, 核对资源名, 种类, 可见阶段和具体 IR 布局/图像形状.
     static ResourceReflection ReflectResource(const spirv_cross::Compiler &compiler,
                                               const spirv_cross::Resource &actual, ResourceKind kind,
                                               const InterfaceSchema &schema, Stage stage)
@@ -298,6 +307,7 @@ namespace Physara::Shader
         return result;
     }
 
+    // 按最终 location 收集活动 IO, 类型/名称/装饰与声明独立比较, 最后按 location 排序.
     static std::vector<IoReflection> ReflectIo(const spirv_cross::Compiler &compiler,
                                                const spirv_cross::SmallVector<spirv_cross::Resource> &actual,
                                                const InterfaceSchema &schema, Stage stage, bool input)

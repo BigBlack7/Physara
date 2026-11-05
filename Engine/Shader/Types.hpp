@@ -1,6 +1,7 @@
 #pragma once
 
-// Shader 的 CPU 值合同. 包拥有字节码/反射/源映射, 错误复用 Core 的无分配有界文本.
+/// @file
+/// @brief Shader 的 CPU 值合同, 包拥有字节码, 反射和源映射, 不依赖图形设备.
 
 #include <cstdint>
 #include <string>
@@ -25,13 +26,14 @@ namespace Physara::Shader
         OutOfMemory
     };
 
+    /// @brief Shader 公共边界的自持失败值, code 分类, context 保留有界诊断.
     struct Failure
     {
         ErrorCode code = ErrorCode::InvalidInput;
         Core::ErrorContext context;
     };
 
-    // 成功值和失败互斥. Failure 自持文本, 包括内存不足时也不需要分配诊断字符串.
+    /// @brief 成功值与失败互斥, Failure 自持有界文本, 报告 OOM 无需再次分配正文.
     template <typename T> using Result = std::variant<T, Failure>;
 
     enum class Stage : std::uint8_t
@@ -48,7 +50,8 @@ namespace Physara::Shader
         Sampler
     };
 
-    // 所有 offset/extent/stride 均为字节. type 使用版本 1 的规范类型名, 数组数量为正数.
+    /// @brief 字段的规范布局, offset/extent/stride 均为字节, type 使用版本 1 规范类型名.
+    /// @note extent 包含数组元素或矩阵列的 stride 占位; 非数组/非矩阵的对应 stride 为零.
     struct FieldLayout
     {
         std::string name;
@@ -60,6 +63,8 @@ namespace Physara::Shader
         std::uint32_t matrixStrideBytes = 0;
     };
 
+    /// @brief std140/std430 块布局, fields 保持声明顺序.
+    /// sizeBytes 是 extentBytes 向块对齐上取整的分配大小, 也是 record stride; extentBytes 不含块尾 padding.
     struct BufferLayout
     {
         std::string name;
@@ -70,8 +75,8 @@ namespace Physara::Shader
         std::vector<FieldLayout> fields;
     };
 
-    // 逻辑身份与 canonical binding 同时保留, 不表达 GL 原生绑定单元.
-    // structured buffer 的 recordStride/capacity 表达固定容量 record 数组, 其它资源为零.
+    /// @brief 活动资源信息, 逻辑 set/slot 与 canonical binding 同时保留, binding 不等同 GL 原生单元.
+    /// @note recordStride/capacity 仅表达固定只读 record 数组, 其他资源为零; buffer 仅对缓冲资源有效.
     struct ResourceReflection
     {
         std::string name;
@@ -84,6 +89,7 @@ namespace Physara::Shader
         BufferLayout buffer;
     };
 
+    /// @brief 用户 IO 的 location, 规范类型与最终 IR 插值, 不包含内建变量.
     struct IoReflection
     {
         std::string name;
@@ -92,13 +98,14 @@ namespace Physara::Shader
         std::uint32_t location = 0;
     };
 
-    // 声明可包含本程序未使用的资源/IO. stageMask 的 bit 0/1 分别表示 Vertex/Fragment.
+    /// @brief 完整资源声明, 可包含入口未使用的资源; stageMask 的 bit 0/1 表示 Vertex/Fragment.
     struct ResourceDeclaration
     {
         ResourceReflection resource;
         std::uint32_t stageMask = 0;
     };
 
+    /// @brief 带阶段与输入方向的完整 IO 声明, 与模块活动反射分开保存.
     struct StageIoDeclaration
     {
         Stage stage = Stage::Vertex;
@@ -106,7 +113,8 @@ namespace Physara::Shader
         IoReflection value;
     };
 
-    // 完整 ABI 快照独立于活动反射. 包读取以它重算 ABI 并核对 IR, 不单独信任一个身份字符串.
+    /// @brief 自持完整 ABI 声明, 与最终活动集合分开保存.
+    /// @note 消费者重算声明 ABI 并核对 IR, 不只比较两份外来哈希字符串.
     struct InterfaceDeclaration
     {
         std::string name;
@@ -115,12 +123,15 @@ namespace Physara::Shader
         std::vector<StageIoDeclaration> io;
     };
 
+    /// @brief 受控逻辑路径与原文件字节摘要, 不含机器绝对路径, 用于可重建内容身份.
     struct SourceDependency
     {
         std::string logicalPath;
         std::string contentHash;
     };
 
+    /// @brief 静态 include 声明, line 为原文件一基行号, 同目标不同行分别保存.
+    /// expanded 仅表示编译器实际成功处理过此边, 未活动条件分支保持 false.
     struct IncludeEdge
     {
         std::string includingPath;
@@ -129,7 +140,8 @@ namespace Physara::Shader
         bool expanded = false;
     };
 
-    // words 存储满足 uint32_t 对齐, 后续消费者可以在拥有者存活时借用其原始字节.
+    /// @brief 一阶段的最终 SPIR-V 与活动反射, entry/stage 必须和 IR 入口一致.
+    /// @note words 满足 uint32_t 对齐, 字节借用仅在拥有者存活且容器未失效期间有效.
     struct ShaderModule
     {
         Stage stage = Stage::Vertex;
@@ -141,7 +153,8 @@ namespace Physara::Shader
         std::vector<IoReflection> outputs;
     };
 
-    // 与编译环境寿命独立的完整 CPU 包. 发布文件有单独格式版本和完整性检查.
+    /// @brief 与编译环境寿命独立的 CPU 包, ABI 标识完整声明及布局, contentHash 标识完整构建输入.
+    /// compilerFingerprint 标识工具输入, 配置与选项; 文件另有格式版本和完整性摘要.
     struct ShaderPackage
     {
         std::string profile;

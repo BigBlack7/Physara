@@ -1,6 +1,7 @@
 #include "CommandList.hpp"
 
-// 管理逻辑列表的进入/关闭与唯一 recording claim. 未提交包的最终 Release 只交接给 Device, 不发 GL.
+/// @file
+/// @brief 管理列表 Open/Close 与唯一 recording claim, 未提交包的最终 Release 只交接给 Device, 不发 GL.
 
 #include <limits>
 #include <memory>

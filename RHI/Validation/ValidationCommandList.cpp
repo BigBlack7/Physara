@@ -22,7 +22,8 @@
 
 #include "ValidationBackend.hpp"
 
-// 包装列表的调用协议、状态/绑定输入检查和底层委托. 即时 claim 限制公共录制重叠, 不表示原生命令已经成功.
+/// @file
+/// @brief 列表调用协议, 状态/绑定输入检查与一次底层委托, 包装 claim 不表示原生命令成功.
 
 #include "Common/Misc.hpp"
 #include "Utils.hpp"
@@ -63,6 +64,7 @@ namespace Physara::RHI::Validation
         Report(m_MessageCallback, MessageSeverity::Warning, messageText, location);
     }
 
+    // 生命周期与队列名称只用于诊断, 返回静态文本, 不作为支持能力或状态转换依据.
     static const char *CommandListStateToString(CommandListState state)
     {
         switch (state)
@@ -434,6 +436,7 @@ namespace Physara::RHI::Validation
         m_CommandList->CopyTexture(dest, destSlice, src, srcSlice);
     }
 
+    // 校验目标与显式源 footprint 后转发, 最后一行/切片只要求实际 texel 字节, 不把 padding 当数据.
     void CommandListWrapper::WriteTexture(Texture *dest, uint32_t arraySlice, uint32_t mipLevel, const void *data,
                                           size_t rowPitch, size_t depthPitch)
     {
@@ -576,6 +579,7 @@ namespace Physara::RHI::Validation
         m_CommandList->ResolveTexture(dest, dstSubresources, src, srcSubresources);
     }
 
+    // 先检查 recording, 目标字节区间和非空源, 再一次委托; 不在包装中另存 CPU 源.
     void CommandListWrapper::WriteBuffer(Buffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes)
     {
         if (!RequireOpenState())
@@ -790,6 +794,7 @@ namespace Physara::RHI::Validation
         m_CommandList->SetPushConstants(data, byteSize);
     }
 
+    // 验证 recording, Pipeline/framebuffer, 绑定和顶点/索引输入后委托, 不在 Validation 复制原生状态缓存.
     void CommandListWrapper::SetGraphicsState(const GraphicsState &state)
     {
         if (state.shadingRateState.enabled && Profile::RejectOpenGL(m_Device))
@@ -879,6 +884,7 @@ namespace Physara::RHI::Validation
                 return;
             }
         }
+        // 在有符号/浮点边界检查 viewport 与 scissor, 先拒绝非有限区间和无法表示的宽高.
         for (const auto &viewport : state.viewport.viewports)
         {
             if (!std::isfinite(viewport.minX) || !std::isfinite(viewport.maxX) || !std::isfinite(viewport.minY) ||
@@ -985,6 +991,7 @@ namespace Physara::RHI::Validation
             return;
         }
 
+        // 输入和目标兼容性全部通过后才委托; 下层 void 的失败仍由原生诊断处理, 包装只更新调用协议.
         EvaluatePushConstantSize(state.pipeline->GetDesc().bindingLayouts);
 
         m_CommandList->SetGraphicsState(state);
@@ -1223,6 +1230,7 @@ namespace Physara::RHI::Validation
         m_CommandList->DrawIndexedIndirectCount(paramOffsetBytes, countOffsetBytes, maxDrawCount);
     }
 
+    // 校验计算 Pipeline, 绑定和间接输入, 设置后重新要求其 push constants.
     void CommandListWrapper::SetComputeState(const ComputeState &state)
     {
         if (state.pipeline && Profile::RejectComputePipeline(m_Device, state.pipeline->GetDesc()))
@@ -1377,6 +1385,7 @@ namespace Physara::RHI::Validation
         m_CommandList->DispatchIndirect(offsetBytes);
     }
 
+    // 通用 Meshlet 状态校验保留固定来源, GL 策略先拒绝, 不以公开类型存在推断支持.
     void CommandListWrapper::SetMeshletState(const MeshletState &state)
     {
         if (Profile::RejectOpenGL(m_Device))
@@ -1891,6 +1900,7 @@ namespace Physara::RHI::Validation
         return m_CommandList->GetBufferState(buffer);
     }
 
+    // 重置包装的图形/计算/网格/RT 状态和 push constants 前提, 再交由底层失效其实际缓存.
     void CommandListWrapper::ClearState()
     {
         if (!RequireOpenState())

@@ -22,8 +22,8 @@
 
 #pragma once
 
-// 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
-// 固定容量容器保留来源的标准容器协议及槽保留语义; 调用者必须满足容量/索引和元素操作前提.
+/// @file
+/// @brief 固定来源的定长容量容器及标准容器协议, 槽保留语义和元素操作前提见类型说明.
 
 #include <array>
 #include <assert.h>
@@ -35,8 +35,9 @@
 namespace Physara::RHI
 {
 
-    // 容量/索引和元素操作须满足前置条件; pop 不销毁保留槽, resize 按源合同重置槽.
     // a static vector is a vector with a capacity defined at compile-time
+    /// @brief 底层全部槽常驻的固定容量序列, pop 仅缩短逻辑长度, resize 对变化范围执行 T{} 赋值.
+    /// @pre 容量/索引合法, 元素操作满足各方法的异常前提; 外部输入在进入此内部容器前校验.
     template <typename T, uint32_t Capacity> struct StaticVector : private std::array<T, Capacity>
     {
         typedef std::array<T, Capacity> Base;

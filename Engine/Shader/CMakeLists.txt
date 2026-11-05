@@ -7,6 +7,7 @@ add_library(PhysaraShader STATIC
     SourceGraph.hpp SourceGraph.cpp Spirv.hpp Spirv.cpp Package.cpp
 )
 target_include_directories(PhysaraShader PUBLIC "${PROJECT_SOURCE_DIR}/Engine")
+# 公开结果含 Core 错误值, 因此传递 Core; RHI 仅用于私有布局推导, 编译库/JSON/CNG 均封闭在实现中.
 target_link_libraries(PhysaraShader PUBLIC PhysaraCore PRIVATE
     PhysaraRHI nlohmann_json glslang glslang-default-resource-limits
     SPIRV-Tools-static spirv-cross-core bcrypt
@@ -46,6 +47,7 @@ endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${shaderFingerprintInputs})
 string(SHA256 shaderInputHash "${shaderFingerprint}")
 set(shaderFlagHash)
+# 多配置生成器分别编码配置 flags, 生成头只在各自 Private/<config> 内可见, 不形成跨配置写入者.
 foreach(configuration IN LISTS CMAKE_CONFIGURATION_TYPES)
     string(TOUPPER "${configuration}" upperConfiguration)
     string(SHA256 flagHash "${CMAKE_CXX_FLAGS_${upperConfiguration}}")
@@ -58,6 +60,7 @@ string(APPEND shaderBuildIdentity "    inline constexpr std::string_view BuildCo
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>/BuildIdentity.hpp" CONTENT "${shaderBuildIdentity}")
 target_include_directories(PhysaraShader PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>")
 
+# 薄工具由核心库提供算法, 自身只处理命令行和文件发布顺序, 不消费自己产生的业务 Shader 包.
 add_executable(PhysaraShaderBuild BuildDriver.cpp)
 target_link_libraries(PhysaraShaderBuild PRIVATE PhysaraShader nlohmann_json)
 target_compile_options(PhysaraShaderBuild PRIVATE /W4 /WX /utf-8 /permissive-)
@@ -65,6 +68,7 @@ set_target_properties(PhysaraShaderBuild PROPERTIES CXX_EXTENSIONS OFF)
 
 # 调用方显式提供实际输入, 本模块不注册开发测试或默认样例.
 # 每个接口/配置只有一个命令写入全部产物; 消费者显式依赖其生成 target.
+# name 标识生成代目录, schema 相对调用方当前目录解析, <name>Outputs 返回本作用域的必要产物清单.
 function(physara_add_shader_interface name schema)
     get_filename_component(schema "${schema}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(outputRoot "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>/${name}")
@@ -85,6 +89,8 @@ function(physara_add_shader_interface name schema)
 endfunction()
 
 # 规范选项由核心的版本化 profile 决定; 请求是配置输入, 不透传无法进入身份的 flags.
+# interfaceName 必须已在同一调用作用域声明; 返回 <name>Package 数据路径与 <name>PackageTarget 共同前置.
+# 源的传递 include 由 depfile 追加, 接口完整输出与构建工具则始终是显式依赖.
 function(physara_add_shader_program name interfaceName program sourceRoot)
     get_filename_component(program "${program}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     get_filename_component(sourceRoot "${sourceRoot}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")

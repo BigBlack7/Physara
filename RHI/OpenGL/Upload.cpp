@@ -1,6 +1,7 @@
 #include "Upload.hpp"
 
-// 校验源行/体积布局并按设备总预算取得包独有的 coherent 映射区段, 不跨未完成包复用存储.
+/// @file
+/// @brief 检查源布局并按设备预算取得包独有 coherent 映射区段, 不跨未完成包复用存储.
 
 #include <algorithm>
 #include <cstdio>
@@ -58,6 +59,7 @@ namespace Physara::RHI::OpenGL
         return true;
     }
 
+    // 在读取外部 footprint 前检查尺寸乘法, false 时不写结果.
     static bool CheckedMultiply(std::size_t a, std::size_t b, std::size_t &result) noexcept
     {
         if (b != 0 && a > std::numeric_limits<std::size_t>::max() / b)
@@ -68,6 +70,7 @@ namespace Physara::RHI::OpenGL
         return true;
     }
 
+    // count 已由非零 mip 尺寸保证, 计算最后有效 texel 的末端, 不把末尾 padding 纳入可读范围.
     static bool CheckedFootprint(std::size_t count, std::size_t stride, std::size_t last, std::size_t &result) noexcept
     {
         std::size_t prefix = 0;

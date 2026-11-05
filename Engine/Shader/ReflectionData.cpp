@@ -1,7 +1,11 @@
 #include "ShaderSchema.hpp"
 
+/// @file
+/// @brief 接口元数据的固定 JSON 编码与受检解码, 解码后重算布局以拒绝自洽但伪造的派生值.
+
 namespace Physara::Shader
 {
+    // 各 to_json 重载只输出固定字段; 对应 from_json 先检查形状/范围, 再核对相关布局合同.
     void to_json(Json &json, const FieldLayout &value)
     {
         json = {{"name", value.name},
@@ -71,6 +75,7 @@ namespace Physara::Shader
             }
             fields.push_back(std::move(item));
         }
+        // 由字段声明独立重建布局, 避免只凭元数据内部范围检查接受错误 offset 或 stride.
         const auto canonical = ParseBlockLayout({{"name", value.name}, {"layout", value.layout}, {"fields", fields}});
         if (Json(canonical) != json)
         {

@@ -22,7 +22,8 @@
 
 #pragma once
 
-// Validation 实现文件间共享的输入/profile 规则和包装对象. 包装只拥有 CPU 引用, 不推断原生归属或 GPU 完成.
+/// @file
+/// @brief Validation 实现共享的无状态输入/profile 规则与包装对象, CPU 保活不推断原生归属或 GPU 完成.
 
 #include <atomic>
 #include <ostream>
@@ -36,19 +37,27 @@
 
 namespace Physara::RHI::Validation
 {
+    /// @brief 同步报告带源位置的有界诊断, 文本不跨 callback 返回保留, 回调不抛出或重入.
     void Report(MessageCallback *callback, MessageSeverity severity, std::string_view message,
                 std::source_location location = std::source_location::current());
+    /// @brief 当前 API 策略过滤, 通过仅表示可以继续委托, 不意味着底层支持操作.
     namespace Profile
     {
-        // API 策略只过滤当前禁止的族; 允许委托不意味着 backend 已实现或设备支持, 仍须保留下层失败结果.
+        /// @brief 从实际 Device 查询 API, 不以外部配置或资源地址猜测后端.
         bool IsOpenGL(Device *device);
+        /// @brief GL 上报告策略拒绝并返回 true, 其他 API 返回 false; 与 Check 系列的成功布尔值区分.
         bool RejectOpenGL(Device *device, std::source_location location = std::source_location::current());
+        /// @brief 检查队列枚举与 API 策略, 通过为 true, 不创建或缓存原生队列.
         bool CheckQueue(Device *device, CommandQueue queue,
                         std::source_location location = std::source_location::current());
+        /// @brief 先过滤已排除的能力, 其余查询委托设备, 不把策略允许提升为原生支持.
         bool QueryFeatureSupport(Device *device, Feature feature, void *info = nullptr, size_t infoSize = 0,
                                  std::source_location location = std::source_location::current());
+        /// @brief 检查 Shader/RenderState 是否携带当前 GL 策略排除的扩展, 无原生副作用.
         bool HasExcludedShaderExtensions(const ShaderDesc &desc);
         bool HasExcludedRenderExtensions(const RenderState &state);
+        /// @brief 检查集合/布局或 Pipeline 中的排除扩展, 只有实际拒绝才返回 true 并报告.
+        /// 后续 RejectBindingSet/RejectGraphicsPipeline/RejectComputePipeline 遵循同一返回约定.
         bool RejectBindingLayout(Device *device, BindingLayout *layout,
                                  std::source_location location = std::source_location::current());
         bool RejectBindingSet(Device *device, BindingSet *bindings,
@@ -64,33 +73,44 @@ namespace Physara::RHI::Validation
             uint32_t(ResourceStates::OpacityMicromapBuildInput) | uint32_t(ResourceStates::ConvertCoopVecMatrixInput) |
             uint32_t(ResourceStates::ConvertCoopVecMatrixOutput));
     }
+    /// @brief 创建与命令共同使用的无状态输入校验, 不保存资源地址或推断原生 Device 归属.
     namespace Input
     {
-        // 共享无状态的描述/range 检查, 同时供创建和命令消费使用; 不保存资源地址或推断原生 Device 归属.
+        /// @brief 报告输入拒绝并恒返回 false, 供 Check 系列在首错处直接退出.
         bool Reject(Device *device, const char *reason, const std::string *name = nullptr,
                     std::source_location location = std::source_location::current());
+        /// @brief 检查已知状态位及 API 策略, allowUnknown 只允许无已知前态, 不伪造初始化.
         bool CheckState(Device *device, ResourceStates state, bool allowUnknown = false,
                         std::source_location location = std::source_location::current());
+        /// @brief 检查维度/层/mip/样本及 CPU 子资源表可表示性, 按需查询设备用途支持.
         bool CheckTextureDesc(Device *device, const TextureDesc &desc, bool querySupport = false,
                               std::source_location location = std::source_location::current());
+        /// @brief 检查容量, 用途和互斥描述选项, querySupport 时才查询相关设备能力.
         bool CheckBufferDesc(Device *device, const BufferDesc &desc, bool querySupport = false,
                              std::source_location location = std::source_location::current());
+        /// @brief 验证解析交集非空与可选单 mip 约束, 显式 copy/write 范围另做完整检查.
         bool CheckTextureRange(Device *device, Texture *texture, const TextureSubresourceSet &range,
                                bool singleMip = false, std::source_location location = std::source_location::current());
+        /// @brief 检查显式 texel 区域, mip/layer 与原尺寸, 拒绝越界而不静默裁剪请求.
         bool CheckTextureSlice(Device *device, const TextureDesc &desc, const TextureSlice &slice,
                                std::source_location location = std::source_location::current());
+        /// @brief 核对两个显式区域的维度/格式/样本与大小兼容, 不在失败时发出底层复制.
         bool CheckTextureCopy(Device *device, const TextureDesc &dest, const TextureSlice &destSlice,
                               const TextureDesc &src, const TextureSlice &srcSlice,
                               std::source_location location = std::source_location::current());
+        /// @brief 使用剩余容量检查字节区间, 避免 offset+size 溢出, 零长度按命令合同解释.
         bool CheckBufferRange(Device *device, Buffer *buffer, uint64_t offset, uint64_t size,
                               std::source_location location = std::source_location::current());
+        /// @brief 核对资源/view 格式解释及请求用途, 保留 stencil-only 平面与完整深度资源的区别.
         bool CheckViewFormat(Device *device, const TextureDesc &desc, Format view, FormatSupport required,
                              std::source_location location = std::source_location::current());
+        /// @brief 检查可见阶段, 逻辑槽去重, 数组形状与 push constants 预算, 不建立原生布局.
         bool CheckBindingLayoutDesc(Device *device, const BindingLayoutDesc &desc,
                                     std::source_location location = std::source_location::current());
     }
     class DeviceWrapper;
 
+    /// @brief 粗粒度闭区间摘要, min>max 表示空, 用于快速判断同资源类的槽范围交叠.
     struct Range
     {
         uint32_t min = ~0u;
@@ -109,6 +129,7 @@ namespace Physara::RHI::Validation
         CB
     };
 
+    /// @brief 完整逻辑位置身份, 资源类/registerSpace/slot/arrayElement 共同参与相等与排序.
     struct BindingLocation
     {
         GraphicsResourceType type = GraphicsResourceType::SRV;
@@ -138,6 +159,7 @@ namespace Physara::RHI::Validation
     // MSVC Debug 的 hash 工作表在 noexcept 内分配 proxy; 有序集合使本地存储失败可传播到既定边界.
     using BindingLocationSet = std::set<BindingLocation>;
 
+    /// @brief 每阶段/布局的完整逻辑位置集与按资源类的粗范围, 用于缺项, 重复和冲突诊断.
     struct BindingSummary
     {
         BindingLocationSet locations;
@@ -160,8 +182,10 @@ namespace Physara::RHI::Validation
         Closed
     };
 
+    /// @brief 解包已知 Validation 资源 wrapper, 其他对象原样借出, 不增加引用或创建适配对象.
     Resource *UnwrapResource(Resource *resource);
 
+    /// @brief 记录通用 RT 构建协议的 CPU wrapper 并保活底层 AS, 不代表 GL 已交付 RT 支持.
     class AccelStructWrapper : public RefCounter<RT::AccelStruct>
     {
       public:
@@ -215,6 +239,8 @@ namespace Physara::RHI::Validation
         RT::AccelStructHandle m_AccelStruct;
     };
 
+    /// @brief 单写者公共调用协议与输入验证, 强持有父设备及底层列表.
+    /// @note Open/Closed 表示通过的调用顺序, 不证明 void 原生调用成功; 即时 claim 只限制录制重叠.
     class CommandListWrapper : public RefCounter<CommandList>
     {
         // 状态描述已通过的公共调用顺序; 底层 void 方法的原生失败仍由底层诊断/停止协议处理.
@@ -250,21 +276,29 @@ namespace Physara::RHI::Validation
         void Warning(const std::string &messageText,
                      std::source_location location = std::source_location::current()) const;
 
+        // 校验 recording 前提, 拒绝时不委托底层列表.
         bool RequireOpenState(std::source_location location = std::source_location::current()) const;
+        // 只有 Closed 可进入批提交预检, 不在这里消费状态.
         bool RequireExecuteState(std::source_location location = std::source_location::current()) const;
+        // 根据队列能力层级拒绝不适合当前列表的命令.
         bool RequireType(CommandQueue queueType, const char *operation) const;
         CommandList *GetUnderlyingCommandList() const
         {
             return m_CommandList;
         }
 
+        // 布局已校验重复项后提取唯一 push constants 字节数, 无声明时为零.
         void EvaluatePushConstantSize(const Physara::RHI::BindingLayoutVector &bindingLayouts);
+        // 每次设置 Pipeline 状态后必须重新提供所需 push constants, 不沿用上一代提交状态.
         bool ValidatePushConstants(const char *pipelineType, const char *stateFunctionName) const;
+        // 按位置核对集合与布局身份/种类, 普通 set 再校验完整资源内容, 不仅比较数量.
         bool ValidateBindingSetsAgainstLayouts(const StaticVector<BindingLayoutHandle, MaxBindingLayouts> &layouts,
                                                const StaticVector<BindingSet *, MaxBindingLayouts> &sets,
                                                std::source_location location = std::source_location::current()) const;
+        // 检查间接参数 Buffer 的用途与 offset/count/stride 所需字节范围.
         bool ValidateIndirectBuffer(Buffer *buffer, uint64_t offset, uint64_t count, size_t stride) const;
 
+        // 核对 TLAS 构建/更新条件与实例预算, 不修改 wrapper 的已构建状态.
         bool ValidateBuildTopLevelAccelStruct(AccelStructWrapper *wrapper, size_t numInstances,
                                               RT::AccelStructBuildFlags buildFlags) const;
 
@@ -374,6 +408,8 @@ namespace Physara::RHI::Validation
         const CommandListParameters &GetDesc() override;
     };
 
+    /// @brief 可组合的公共输入校验设备, 强持有底层 Device, 拒绝发生在底层工作之前.
+    /// @note 不缓存原生 caps 或维护资源地址注册表, 实际归属和 GPU 寿命仍由原生后端验证.
     class DeviceWrapper : public RefCounter<Device>
     {
       public:
@@ -391,16 +427,22 @@ namespace Physara::RHI::Validation
         void Warning(const std::string &messageText,
                      std::source_location location = std::source_location::current()) const;
 
+        // 先核对标签再读取活动 union, errorStream 为空可表示 Input 层已报告, 避免重复诊断.
         bool ValidateBindingSetItem(const BindingSetItem &binding, DescriptorTable *pOptDescriptorTable,
                                     std::stringstream &errorStream,
                                     std::source_location location = std::source_location::current());
+        // 按 profile, layout, 单项和完整位置集合核对, 数组元素各有身份, 顺序不能代替匹配.
         bool ValidateBindingSetDesc(const BindingSetDesc &desc, BindingLayout *layout,
                                     std::source_location location = std::source_location::current());
+        // 逐阶段汇总逻辑位置并核对集合映射与 push constants, 校验完成前不创建 Pipeline.
         bool ValidatePipelineBindingLayouts(const StaticVector<BindingLayoutHandle, MaxBindingLayouts> &bindingLayouts,
                                             const std::vector<Shader *> &shaders) const;
+        // 指定阶段必须匹配实际 Shader 描述, 不把非空句柄视为阶段正确.
         bool ValidateShaderType(ShaderType expected, const ShaderDesc &shaderDesc, const char *function) const;
+        // 对照 framebuffer 格式/样本信息检查固定状态及扩展能力.
         bool ValidateRenderState(const RenderState &renderState, FramebufferInfo const &fbinfo) const;
 
+        // 校验固定来源的 cluster 操作参数, 实际可执行能力仍须通过 profile 和底层设备.
         bool ValidateClusterOperationParams(const RT::Cluster::OperationParams &params) const;
 
       public:

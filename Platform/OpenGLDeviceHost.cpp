@@ -1,6 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
-// 在宿主 current context 上加载固定 GL 入口并查询实际环境; 观察值与创建偏好分开保存.
+/// @file
+/// @brief 在宿主 current context 加载 GL 入口并查询实际环境, 将观察值与创建偏好分开保存.
 
 #include <array>
 
@@ -14,6 +15,7 @@ namespace Physara::Platform::Detail
         return glfwGetProcAddress(name);
     }
 
+    // 将 GL 数值错误附到宿主阶段, 不以日志级别猜测 context 是否仍然可用.
     static HostError GlQueryError(const DeviceHostState &state, GLenum code, std::string_view description) noexcept
     {
         auto error = MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage, description);
@@ -22,6 +24,7 @@ namespace Physara::Platform::Detail
         return error;
     }
 
+    // 原生字符串立即拷贝到有界值, 空指针或空正文不作为有效环境信息.
     static bool ReadGlString(GLenum name, Physara::Core::BoundedText &destination) noexcept
     {
         const auto *text = glGetString(name);
@@ -33,6 +36,7 @@ namespace Physara::Platform::Detail
         return true;
     }
 
+    // 查询保留的 Win32 GLFW 平台及版本, 避免把构建配置当成运行期观察值.
     static std::optional<HostError> ReadGlfwEnvironment(DeviceHostState &state)
     {
         BeginNativeOperation(state);
@@ -57,6 +61,7 @@ namespace Physara::Platform::Detail
         return std::nullopt;
     }
 
+    // 原生有符号查询结果先集中保存, 验证后才窄化到公开无符号快照.
     struct GlObservations
     {
         GLint major = 0;
@@ -69,6 +74,7 @@ namespace Physara::Platform::Detail
         std::array<GLint, 6> limits{};
     };
 
+    // 核对实际 Core profile, 双缓冲默认目标和正数限制后, 才发布公开环境字段.
     static std::optional<HostError> ValidateObservations(DeviceHostState &state, const GlObservations &observed)
     {
         if (!(observed.major > 4 || (observed.major == 4 && observed.minor >= 6)) ||

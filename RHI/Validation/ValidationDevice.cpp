@@ -22,7 +22,8 @@
 
 #include "ValidationBackend.hpp"
 
-// Device 包装的输入/profile 校验和一次委托. 来源保留的算法与项目适配共存, 不在本层缓存原生能力或资源地址归属.
+/// @file
+/// @brief Device 输入/profile 校验与一次委托, 保留固定来源算法, 项目适配不缓存原生 caps 或地址归属.
 
 #include <algorithm>
 #include <array>
@@ -1574,6 +1575,7 @@ namespace Physara::RHI::Validation
         return m_Device->CreateFramebuffer(desc);
     }
 
+    // 将资源项映射到完整逻辑身份并累计各类范围, 保留 arrayElement 而非仅按 slot 去重.
     static void UpdateBindingSummaryWithLocation(MessageCallback *messageCallback, ResourceType type,
                                                  BindingLocation location, BindingSummary &bindings,
                                                  BindingLocationSet &duplicates)
@@ -1635,6 +1637,7 @@ namespace Physara::RHI::Validation
         }
     }
 
+    // 展开布局中声明的数组元素为逻辑位置, 与 set 侧摘要使用相同身份编码.
     static void FillBindingLayoutSummary(MessageCallback *messageCallback, BindingLayoutDesc const &desc,
                                          bool ignoreRegisterSpaces, BindingSummary &bindings,
                                          BindingLocationSet &duplicates)
@@ -1652,6 +1655,7 @@ namespace Physara::RHI::Validation
         }
     }
 
+    // 汇总实际 set 项的逻辑位置和 volatile 常量数, 供声明与实参的集合比较.
     static void FillBindingSetSummary(MessageCallback *messageCallback, BindingSetDesc const &desc,
                                       bool ignoreRegisterSpaces, uint32_t registerSpace, BindingSummary &bindings,
                                       BindingLocationSet &duplicates)
@@ -1667,6 +1671,7 @@ namespace Physara::RHI::Validation
     }
 
     template <typename ItemType, typename DescType>
+    // 按 ShaderType 从不同 Pipeline 描述中选择当前阶段, 不支持的阶段返回空.
     static const ItemType *SelectShaderStage(const DescType &desc, ShaderType stage)
     {
         switch (stage)
@@ -1690,6 +1695,7 @@ namespace Physara::RHI::Validation
     }
 
     template <typename ItemType, typename DescType>
+    // Graphics Pipeline 描述的固定阶段选择器, 与通用布局验证共用阶段遍历.
     static const ItemType *SelectGraphicsShaderStage(const DescType &desc, ShaderType stage)
     {
         switch (stage) // NOLINT(clang-diagnostic-switch-enum)
@@ -1711,6 +1717,7 @@ namespace Physara::RHI::Validation
     }
 
     template <typename ItemType, typename DescType>
+    // Meshlet Pipeline 的阶段选择适配, 保留通用接口但不扩大当前 GL 策略.
     static const ItemType *SelectMeshletShaderStage(const DescType &desc, ShaderType stage)
     {
         switch (stage) // NOLINT(clang-diagnostic-switch-enum)
@@ -1763,6 +1770,7 @@ namespace Physara::RHI::Validation
         std::stringstream ssDuplicateBindings;
         std::stringstream ssOverlappingBindings;
 
+        // 按实际阶段合并可见布局的完整位置身份, D3D11 忽略 register space 的规则仅影响此处身份解释.
         bool const ignoreRegisterSpaces = (m_Device->GetGraphicsAPI() == GraphicsAPI::D3D11);
 
         for (Shader *shader : shaders)
@@ -1903,6 +1911,7 @@ namespace Physara::RHI::Validation
             anyErrors = true;
         }
 
+        // 阶段内重复/覆盖检查完成后, 再核对整个 Pipeline 的 set 映射策略与唯一 push constants 声明.
         int pushConstantCount = 0;
         uint32_t pushConstantSize = 0;
         enum class RegisterSpaceIsDescriptorSet
@@ -2366,6 +2375,7 @@ namespace Physara::RHI::Validation
         return m_Device->CreateBindlessLayout(desc);
     }
 
+    // 检查纹理资源维度与 view 维度的来源兼容关系, 不证明原生格式 view class 兼容.
     static bool TextureDimensionsCompatible(TextureDimension resourceDimension, TextureDimension viewDimension)
     {
         if (resourceDimension == viewDimension)
@@ -2413,6 +2423,7 @@ namespace Physara::RHI::Validation
                 return false;
             }
         }
+        // 标签与分量映射先通过基础校验, 再由普通 set 或可变 descriptor table 的合同决定允许载荷.
         bool isDescriptorTable = pOptDescriptorTable != nullptr;
         BindingLayout *pBindingLayout = pOptDescriptorTable ? pOptDescriptorTable->GetLayout() : nullptr;
         const BindlessLayoutDesc *pBindlessLayoutDesc = pBindingLayout ? pBindingLayout->GetBindlessDesc() : nullptr;
@@ -2919,6 +2930,7 @@ namespace Physara::RHI::Validation
         BindingLocationSet declaredNotBound;
         BindingLocationSet boundNotDeclared;
 
+        // 双向差集分别指出缺项与额外项, 不能用数量相等或粗粒度槽范围代替完整位置匹配.
         declaredNotBound = SetDifference(layoutBindings.locations, setBindings.locations);
         boundNotDeclared = SetDifference(setBindings.locations, layoutBindings.locations);
 
@@ -3340,6 +3352,7 @@ namespace Physara::RHI::Validation
         return m_Device->BindAccelStructMemory(as, heap, offset);
     }
 
+    // 队列/profile 预检后取得底层列表, 再分配强持有父设备的包装, 包装分配失败不泄漏底层引用.
     CommandListHandle DeviceWrapper::CreateCommandList(const CommandListParameters &params)
     {
         if (!Profile::CheckQueue(m_Device, params.queueType))
@@ -3398,6 +3411,8 @@ namespace Physara::RHI::Validation
         }
     }
 
+    // 三阶段: 无副作用的整批校验和解包, 消费包装 Closed 状态, 一次委托底层.
+    // 委托返回零或抛异常都不重放已发即时工作, 成功票据仅来自原生设备.
     uint64_t DeviceWrapper::ExecuteCommandLists(CommandList *const *pCommandLists, size_t numCommandLists,
                                                 CommandQueue executionQueue)
     {

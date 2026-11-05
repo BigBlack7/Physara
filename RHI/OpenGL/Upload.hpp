@@ -1,6 +1,7 @@
 #pragma once
 
-// 物理上传包使用的预算、资源 lease、持久映射 chunk 和 CPU 源 footprint 合同; 退休由 Device owner 推进.
+/// @file
+/// @brief 上传预算, 资源 lease, 映射 chunk 和 CPU 源 footprint 合同, 退休由 Device owner 推进.
 
 #include "Backend.hpp"
 
@@ -13,7 +14,7 @@ namespace Physara::RHI::OpenGL
     inline constexpr std::size_t UploadItemLimit = 4096;
     inline constexpr std::size_t SmallBufferLimit = 256 * 1024;
 
-    // 此强引用的来源可精确核对. 只由 owner 创建/退休, worker 不销毁 lease.
+    /// @brief 可精确记账的内部强引用, 构造/退休均由 owner 执行, worker 不销毁 lease.
     class UploadResourceLease
     {
     public:
@@ -25,6 +26,7 @@ namespace Physara::RHI::OpenGL
         UploadResourceLease(const UploadResourceLease &) = delete;
         UploadResourceLease &operator=(const UploadResourceLease &) = delete;
         [[nodiscard]] Resource *Get() const noexcept;
+        /// @brief 使用者停止后核对 wrapper 的全部强引用是否都来自内部 lease, 不作为并发同步.
         [[nodiscard]] bool OnlyInternalOwners() const noexcept;
 
     private:
@@ -33,6 +35,7 @@ namespace Physara::RHI::OpenGL
         unsigned long *m_Holds = nullptr;
     };
 
+    /// @brief 包独有的 persistent/coherent 存储, used 单调增长, 退休前不覆写, capacity 计入设备总预算.
     struct UploadChunk
     {
         // 包独有的 persistent/coherent 存储. used 单调增长, 退休前不会覆写; capacity 计入 Device 总预算.
@@ -43,6 +46,7 @@ namespace Physara::RHI::OpenGL
         std::size_t used = 0;
     };
 
+    /// @brief chunk 中一段连续借用, cpu 用于同步复制, buffer/offset 用于 GL 发出, 不跨包退休保留.
     struct UploadSlice
     {
         GLuint buffer = 0;
@@ -50,6 +54,8 @@ namespace Physara::RHI::OpenGL
         std::byte *cpu = nullptr;
     };
 
+    /// @brief 已推导的源布局与紧凑上传大小, 所有跨度以字节计.
+    /// sourceBytes 包含行/切片间隙且不含尾 padding, tightBytes 仅含 texel, 两者服务不同的边界检查.
     struct TextureUploadLayout
     {
         std::size_t rowBytes = 0;
@@ -61,10 +67,11 @@ namespace Physara::RHI::OpenGL
         std::uint32_t height = 0;
         std::uint32_t depth = 0;
     };
-    // desc 已由 Device 创建验证且 format 已通过颜色上传筛选. false 时不读取源, layout 不可作为成功结果使用.
-    // sourceBytes 是含行/切片间隙的最小可读范围, tightBytes 是复制到 PBO 的 texel 字节数, 均不含末尾 padding.
+    /// @brief 校验子资源和源 footprint, 不读取 CPU 源; false 时 layout 不可当作成功结果使用.
+    /// @pre desc 已由 Device 创建验证且 format 已通过颜色上传筛选.
     [[nodiscard]] bool BuildUploadLayout(const TextureDesc &desc, std::uint32_t slice, std::uint32_t mip,
                                          std::size_t rowPitch, std::size_t depthPitch,
                                          TextureUploadLayout &layout) noexcept;
+    /// @brief 对正二次幂对齐执行受检上取整, 非法对齐或溢出返回 false 且不写 result.
     [[nodiscard]] bool CheckedAlign(std::size_t value, std::size_t alignment, std::size_t &result) noexcept;
 }

@@ -1,5 +1,8 @@
 #include "Compiler.hpp"
 
+/// @file
+/// @brief 配对管理 glslang 的进程初始化与唯一 claim, 失败路径和正常析构均归还初始化权.
+
 #include <new>
 
 #include <glslang/Public/ShaderLang.h>

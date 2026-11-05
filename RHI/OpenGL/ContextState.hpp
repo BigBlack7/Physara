@@ -1,17 +1,19 @@
 #pragma once
 
-// 上传路径当前拥有的原生 unpack 状态缓存; 资源用途跟踪与 GPU 完成不属于本缓存.
+/// @file
+/// @brief 上传路径拥有的 unpack 原生状态缓存, 与资源用途 tracker 和 GPU 完成分开.
 
 #include <glad/gl.h>
 
 namespace Physara::RHI::OpenGL
 {
-    // 唯一的 unpack 状态权威. 原生互操作后调用列表 ClearState, 不快照/恢复外部状态.
+    /// @brief unpack PBO/pixel-store 的唯一缓存, 外部互操作后失效, 不快照/恢复外部状态.
     class ContextState
     {
     public:
+        /// @brief 仅标记缓存未知, 不发出 GL 调用或修改资源状态.
         void Invalidate() noexcept;
-        // 只维护本后端拥有的 unpack PBO/pixel-store. 互操作后须先 Invalidate, 不查询/恢复外部 GL 状态.
+        /// @brief 建立紧凑 texel 的标准 unpack 状态并按需绑定 PBO, 调用者保证 current context.
         void ApplyUnpack(GLuint buffer) noexcept;
 
     private:

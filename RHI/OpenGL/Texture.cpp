@@ -1,7 +1,7 @@
 #include "Backend.hpp"
 
-// 校验纹理形状、实际 target/format 用途和样本集合, 创建 immutable storage 并设置独立的采样 swizzle.
-// initialState/clearValue 仅为描述元数据; 本文件不上传或清除 texel.
+/// @file
+/// @brief 按实际 target/format/样本能力创建纹理 immutable storage, initialState/clearValue 仅保存元数据.
 
 #include <algorithm>
 #include <bit>
@@ -22,6 +22,7 @@ namespace Physara::RHI::OpenGL
         m_Device->ReleaseAllocation(std::move(m_Deletion), m_Published);
     }
 
+    // 分别校验形状, 用途和设备能力, 取得存储后设置非 MS swizzle, 失败由未发布 wrapper 回滚.
     TextureHandle OpenGLDevice::CreateTexture(const TextureDesc &desc)
     {
         if (!RequireContext("CreateTexture"))

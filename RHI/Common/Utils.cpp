@@ -22,7 +22,8 @@
 
 #include "Utils.hpp"
 
-// 实现固定来源的描述构造、字符串诊断和固定容量索引分配. 不拥有 Device/context, 不建立原生资源缓存.
+/// @file
+/// @brief 固定来源的描述构造, 字符串诊断和固定容量索引分配, 不拥有 Device/context 或原生缓存.
 
 #include <algorithm>
 #include <cassert>
@@ -32,6 +33,7 @@
 
 namespace Physara::RHI::Utils
 {
+    // 索引接口返回 int, 在实际分配前拒绝无法表示的容量, 避免后续窄化造成身份混淆.
     static size_t CheckedIndexCapacity(size_t capacity)
     {
         if (capacity > static_cast<size_t>(std::numeric_limits<int>::max()))

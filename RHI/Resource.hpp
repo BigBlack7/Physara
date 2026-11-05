@@ -22,8 +22,8 @@
 
 #pragma once
 
-// 来源与受控差异见 RHI/README.md; 此头不代表后端能力已实现.
-// 定义原生互操作对象和 intrusive CPU 句柄. retain/copy 与 adoption/move 分别增加和转移拥有权.
+/// @file
+/// @brief 固定来源的原生互操作对象与 intrusive CPU 句柄, retain/copy 增加拥有权, adoption/move 转移拥有权.
 
 #include <atomic>
 #include <cassert>
@@ -95,6 +95,7 @@ namespace Physara::RHI
         constexpr ObjectType VK_ImageCreateInfo = 0x00030015;
     };
 
+    /// @brief 原生整数或指针的非拥有互操作值, 活动表示由 ObjectType 决定, 不增加原生引用.
     struct Object
     {
         union
@@ -118,7 +119,7 @@ namespace Physara::RHI
 
     struct MemoryRequirements;
 
-    // 引用仅管理 CPU 对象; 活跃资源内容/原生销毁须遵守所属设备和线程合同.
+    /// @brief CPU 引用计数对象的基础协议, 活跃内容与原生销毁仍遵守所属设备和线程合同.
     class Resource
     {
       protected:
@@ -158,7 +159,8 @@ namespace Physara::RHI
     // Mostly a copy of Microsoft::WRL::ComPtr<T>
     //////////////////////////////////////////////////////////////////////////
 
-    // Get/箭头借用; Attach/Create 接管已有引用, Detach 转交引用; CPU 引用不证明 GPU 完成.
+    /// @brief intrusive owning handle, 指针构造/复制 AddRef, 移动转交引用, Get/箭头仅借用.
+    /// @note Attach/Create 接管已有引用, Detach 转交引用, CPU 保活不证明 GPU 已完成.
     template <typename T> class RefCountPtr
     {
       public:
@@ -342,12 +344,14 @@ namespace Physara::RHI
             return &m_Pointer;
         }
 
+        /// @brief 先释放旧引用再借出内部指针槽供写入 owning 结果, operator& 使用同一语义.
         [[nodiscard]] T **ReleaseAndGetAddressOf() noexcept
         {
             InternalRelease();
             return &m_Pointer;
         }
 
+        /// @brief 转交已有引用并将本 handle 置空, 不调用 Release, 接收方负责归还引用.
         T *Detach() noexcept
         {
             T *ptr = m_Pointer;
@@ -394,6 +398,7 @@ namespace Physara::RHI
     // class Texture : public RefCounter<ITexture> { ... }
     //////////////////////////////////////////////////////////////////////////
 
+    /// @brief 初始计数为一的 CPU 引用实现, 原子计数只保护引用数, 不使对象的可变内容自动线程安全.
     template <class T> class RefCounter : public T
     {
       private:

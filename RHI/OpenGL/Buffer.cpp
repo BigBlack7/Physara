@@ -1,6 +1,7 @@
 #include "Backend.hpp"
 
-// 创建普通不可变 Buffer 存储. wrapper/删除节点先准备, 全部原生步骤成功后才发布句柄, 不初始化内容.
+/// @file
+/// @brief 创建普通不可变 Buffer 存储, 先取得 wrapper/删除节点再分配 GL 对象, 不初始化内容.
 
 #include <limits>
 #include <memory>
@@ -19,6 +20,7 @@ namespace Physara::RHI::OpenGL
         m_Device->ReleaseAllocation(std::move(m_Deletion), m_Published);
     }
 
+    // 先校验尺寸, usage 与当前 profile, 再分配 immutable storage, 全部成功后才发布 owning handle.
     BufferHandle OpenGLDevice::CreateBuffer(const BufferDesc &desc)
     {
         if (!RequireContext("CreateBuffer"))

@@ -1,6 +1,7 @@
 #include "Submission.hpp"
 
-// 管理即时上传的提交接受、真实完成与退出收拢. GL 工作不重放, CPU lease/chunk 到真实完成或受控退出才撤销.
+/// @file
+/// @brief 即时工作的提交接受, 真实完成与退出收拢, CPU lease/chunk 到完成或受控退出才撤销.
 
 #include <algorithm>
 #include <chrono>
@@ -34,6 +35,7 @@ namespace Physara::RHI::OpenGL
         return valid;
     }
 
+    // 全批预检后建 fence 并 flush, 两者成功才发布票据和 tracker metadata, 已发 GL 工作不会再次重放.
     uint64_t OpenGLDevice::ExecuteCommandLists(CommandList *const *lists, size_t count, CommandQueue queue)
     {
         if (count == 0)
@@ -303,6 +305,7 @@ namespace Physara::RHI::OpenGL
         return true;
     }
 
+    // 零超时收集已证明完成的包, 随后排空删除 FIFO; 失败保留未知完成的工作到显式退出.
     void OpenGLDevice::RunGarbageCollection()
     {
         if (RequireContext("RunGarbageCollection", true) && CheckNative("RunGarbageCollection"))
@@ -315,6 +318,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 临时 fence 覆盖当前命令流尾, 最多按一次五秒期限等待, 不把未提交 recording 伪装为已接受提交.
     bool OpenGLDevice::WaitForIdle()
     {
         // 临时 fence 仅证明调用时命令尾的物理完成; 不把仍由逻辑列表拥有的 recording 当作已接受提交.

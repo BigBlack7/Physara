@@ -1,5 +1,8 @@
 #include "Interface.hpp"
 
+/// @file
+/// @brief 由单份 schema 推导 CPU 数据, RHI 绑定及分阶段 GLSL, 先计算全部内容再最后发布清单.
+
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -9,6 +12,7 @@
 
 namespace Physara::Shader
 {
+    // 只为非零间隙生成具名字节占位, index 保证同一作用域内 padding 名称唯一.
     static void EmitPadding(std::ostringstream &output, std::uint32_t size, std::uint32_t &index,
                             std::string_view indent)
     {
@@ -18,6 +22,7 @@ namespace Physara::Shader
         }
     }
 
+    // 生成矩阵列和数组元素的 stride 包装, 返回可在字段声明中使用的 CPU 类型名.
     static std::string EmitFieldType(std::ostringstream &output, const FieldLayout &field)
     {
         const auto data = ParseDataType(field.type);
@@ -52,6 +57,7 @@ namespace Physara::Shader
         return type;
     }
 
+    // 先生成辅助类型再排字段和尾 padding, 以 sizeof/alignof/offsetof 断言约束 CPU ABI.
     static std::string GenerateDataHeader(const InterfaceSchema &schema)
     {
         std::ostringstream output;
@@ -111,6 +117,7 @@ namespace Physara::Shader
         return output.str();
     }
 
+    // 将已校验资源类映射为公开 RHI 描述构造器, 结构化缓冲固定为只读 SRV.
     static std::string_view RhiKind(ResourceKind kind) noexcept
     {
         switch (kind)
@@ -127,6 +134,7 @@ namespace Physara::Shader
         return "invalid";
     }
 
+    // 按集合生成逻辑 BindingLayout, visibility 取集合内声明的阶段并集.
     static std::string GenerateBindingHeader(const InterfaceSchema &schema)
     {
         // RHI 的 visibility 属于整个集合. 此处取并集, 每项各自的可见阶段仍由 schema 和分阶段 GLSL 表达.
@@ -177,6 +185,7 @@ namespace Physara::Shader
         return output.str();
     }
 
+    // 保持权威字段顺序并只显式生成固定数组长度, 布局规则由块限定与最终反射交叉核对.
     static void EmitGlslFields(std::ostringstream &output, const BufferLayout &block)
     {
         for (const auto &field : block.fields)
@@ -190,6 +199,7 @@ namespace Physara::Shader
         }
     }
 
+    // 先输出 record 类型, 再按阶段筛选资源与 IO; 插值限定只出现在 VS 输出/FS 输入边.
     static std::string GenerateGlsl(const InterfaceSchema &schema, Stage stage)
     {
         std::ostringstream output;

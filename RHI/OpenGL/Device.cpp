@@ -1,6 +1,7 @@
 #include "Backend.hpp"
 
-// 实现设备进入、线程/context 前提、原生故障锁存与删除 FIFO. 提交和上传预算由同一 Device 的其他文件推进.
+/// @file
+/// @brief 设备初始化, 线程/context 前提, 原生失败锁存和删除 FIFO, 提交与上传由同一 Device 的其他文件管理.
 
 #include <algorithm>
 #include <cstdio>
@@ -18,6 +19,7 @@ namespace Physara::RHI::OpenGL
     {
     }
 
+    // 最后 CPU 引用可在 worker 释放, 但显式退出必须已经撤销全部物理包, 内部 lease 和原生删除记录.
     OpenGLDevice::~OpenGLDevice()
     {
         if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr || m_UploadCapacity != 0 ||
@@ -170,6 +172,7 @@ namespace Physara::RHI::OpenGL
         {
             return false;
         }
+        // 原生资源使用前准备固定提交记录并查询限制, 后续 fence 建立后不再分配 FIFO 节点.
         m_Submissions = std::make_unique<SubmissionState>();
         glGetIntegerv(GL_MIN_MAP_BUFFER_ALIGNMENT, &m_Caps.minMapAlignment);
         if (!CheckNative("CreateDevice.MapAlignment") || m_Caps.minMapAlignment <= 0 ||
@@ -198,6 +201,7 @@ namespace Physara::RHI::OpenGL
         {
             return false;
         }
+        // 约定由设备入口唯一建立并查询确认, 不用默认 GL 状态推测渲染坐标空间.
         glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
         GLint origin = 0;
         GLint depth = 0;
@@ -397,12 +401,14 @@ namespace Physara::RHI::OpenGL
         return m_Desc.messageCallback;
     }
 
+    // 当前原生 Feature 入口统一返回 false 且不写调用方输出, 格式分配用途通过独立查询表达.
     bool OpenGLDevice::QueryFeatureSupport(Feature, void *, size_t)
     {
         static_cast<void>(RequireContext("QueryFeatureSupport"));
         return false;
     }
 
+    // 公共格式查询返回 2D 基线, 创建其他 target 时继续查对应维度的实际能力表.
     FormatSupport OpenGLDevice::QueryFormatSupport(Format format)
     {
         if (!RequireContext("QueryFormatSupport"))

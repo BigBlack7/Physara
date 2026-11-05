@@ -1,6 +1,7 @@
 #include "Backend.hpp"
 
-// 将单 mip/单层附件计划物化为完整 FBO. wrapper 保活附件, 自持必要的重解释 view, 退休顺序先于存储.
+/// @file
+/// @brief 将单 mip/单层附件计划物化为完整 FBO, 自有 view 与强引用按 FBO 到 storage 的顺序退休.
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 
 namespace Physara::RHI::OpenGL
 {
+    // 复制描述并取得全部附件强引用, 删除记录在任何原生 FBO/view 创建前就绪.
     OpenGLFramebuffer::OpenGLFramebuffer(OpenGLDevice *device, const FramebufferDesc &desc)
         : m_Device(device), m_Desc(desc), m_Info(desc),
           m_Deletion(std::make_unique<NativeDeletion>(NativeKind::Framebuffer))
@@ -32,6 +34,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 三阶段: 整组附件预检, 准备 CPU owner 并物化 FBO/view, 检查 COMPLETE 后发布, 任一步失败不交付句柄.
     FramebufferHandle OpenGLDevice::CreateFramebuffer(const FramebufferDesc &desc)
     {
         if (!RequireContext("CreateFramebuffer"))

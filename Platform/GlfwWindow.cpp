@@ -1,6 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
-// 独占进程 GLFW 生命周期与错误回调; 窗口/context 的取得和逆序释放都受同一宿主身份保护.
+/// @file
+/// @brief 管理进程 GLFW claim, 错误回调和窗口/context, 用已取得阶段驱动逆序释放.
 
 #include <limits>
 #include <mutex>
@@ -9,6 +10,7 @@
 
 namespace Physara::Platform::Detail
 {
+    // 仅此处拥有进程级 claim 和最后分配代; active 在窗口释放和回调恢复后才清除.
     struct GlfwProcessState
     {
         std::mutex mutex;
@@ -46,6 +48,7 @@ namespace Physara::Platform::Detail
         }
     }
 
+    // 只允许实际 claim owner 解除进程占用, 失败不触碰其他宿主的状态.
     static bool ReleaseProcess(DeviceHostState &state)
     {
         std::scoped_lock lock(s_Process.mutex);

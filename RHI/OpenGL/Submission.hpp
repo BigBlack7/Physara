@@ -1,6 +1,7 @@
 #pragma once
 
-// Device 独占的物理包和有界 fence FIFO. recordingId 与提交身份分开, orphan 的退休 fence 没有公开票据.
+/// @file
+/// @brief Device 独占的物理包与有界 fence FIFO, recording 身份和公开提交票据分开.
 
 #include "Upload.hpp"
 
@@ -20,7 +21,8 @@ namespace Physara::RHI::OpenGL
         Submitted
     };
 
-    // tracker/lease 地址稳定至提交或 owner 退休. 无逻辑列表强引用, 避免另一层寿命环.
+    /// @brief 持有 tracker, 资源 lease 和映射 chunk 的稳定物理包, 寿命跨逻辑列表与 GPU 完成.
+    /// @note 无逻辑列表强引用; orphaned 交接后只由 owner 处理, 避免内部寿命环.
     struct UploadWorkPacket
     {
         explicit UploadWorkPacket(MessageCallback *callback, std::uint64_t identity, std::size_t minimumChunk);
@@ -39,6 +41,7 @@ namespace Physara::RHI::OpenGL
         std::vector<std::unique_ptr<UploadChunk>> chunks;
     };
 
+    /// @brief 一个真实 fence 覆盖的物理包组, submissionId=0 用于 orphan 或失败前缀, 不作为公开成功票据.
     struct SubmissionRecord
     {
         GLsync sync = nullptr;
@@ -47,7 +50,7 @@ namespace Physara::RHI::OpenGL
         std::size_t count = 0;
     };
 
-    // 有界 FIFO 的记录在 Device 发布前分配, 发出 fence 后不再申请 CPU 内存.
+    /// @brief Device 发布前取得存储的有界 FIFO, 发出 fence 后不再为记录申请 CPU 内存.
     struct SubmissionState
     {
         std::array<SubmissionRecord, UploadPacketLimit> records{};

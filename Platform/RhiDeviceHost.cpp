@@ -1,6 +1,7 @@
 #include "DeviceHostInternal.hpp"
 
-// 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根引用, 捕获领域诊断并收拢上传/删除后释放.
+/// @file
+/// @brief 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根, 捕获领域诊断并收拢上传与删除.
 
 #include <limits>
 
@@ -42,12 +43,14 @@ namespace Physara::Platform::Detail
         m_Capturing = false;
     }
 
+    // 供原生后端在每次受限操作前确认 owner 线程与实际 current context.
     static bool IsResourceContextCurrent(void *user) noexcept
     {
         const auto &state = *static_cast<DeviceHostState *>(user);
         return state.ownerThread == std::this_thread::get_id() && glfwGetCurrentContext() == state.window;
     }
 
+    // 首个 RHI 回调优先于兜底正文, 原生错误码独立保存, 不依赖日志写入成功.
     static HostError ResourceError(DeviceHostState &state, HostErrorReason reason, std::string_view fallback,
                                    std::uint32_t nativeCode = 0) noexcept
     {
