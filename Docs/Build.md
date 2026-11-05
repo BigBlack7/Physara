@@ -1,6 +1,6 @@
 # 构建与运行
 
-需要 Windows x64、Visual Studio 2022/MSVC 的 C++ 桌面开发组件与 Windows SDK, 以及 CMake 3.24+. 第一方代码使用 C++20.
+需要 Windows x64、Visual Studio 2022/MSVC 的 C++ 桌面开发组件与 Windows SDK, 以及 CMake 3.24+. 第一方代码使用 C++20; Shader 编译依赖以精简源码和固定表快照直接编译, 普通配置/构建不需要 Python 或运行上游生成器. 获取/升级这些快照时才使用 Python 3, 复现说明见 [第三方来源](../ThirdParty/README.md#shader-固定生成源码).
 
 ## 构建
 
@@ -14,9 +14,29 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL 静态库和唯一 Physara 可执行程序. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义; PhysaraRHIOpenGL 单独封闭 loader/原生实现依赖. 当前可链接能力与后端边界见 [RHI 来源说明](../RHI/README.md). Runtime 仍只直接链接其实际使用的 Core/Platform. NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
+当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义; PhysaraRHIOpenGL 单独封闭 loader/原生实现依赖. 当前可链接能力与后端边界见 [RHI 来源说明](../RHI/README.md). Runtime 仍只直接链接其实际使用的 Core/Platform. NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、上传限定即时列表、持久映射存储、状态跟踪及真实提交/完成退休; 直接关闭还可使用 OpenGL.hpp 的预检/drain 入口. 实际支持和 CPU 源寿命见 RHI 说明与头合同, 当前产品事件循环尚不消费它们绘制.
+
+## Shader 构建
+
+PhysaraShader 是独立 CPU 库, PUBLIC 使用 Core 的有界错误值, 编译库/JSON/CNG 为私有实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动, 随正式默认构建产生, 不增加产品入口或 Runtime 图形依赖. 当前尚无业务 Shader 消费者, 默认构建不生成开发样例包. 声明格式和包合同见 [声明说明](../Engine/Shader/Interface/README.md).
+
+模块提供 `physara_add_shader_interface(name schema)` 和 `physara_add_shader_program(name interfaceName program sourceRoot)`. 调用方显式提供真实输入路径, 在同一 CMake 作用域先声明接口再声明程序. 后者返回 `<name>Package` 数据路径与 `<name>PackageTarget` 唯一生成 target. 每个消费者通过 `add_dependencies(consumer ${MainPackageTarget})` (以 name=Main 为例) 或 target DEPENDS 共享此前置, 再读取包路径; 不能只把包文件分别挂到多个独立生成消费者. 生成头消费者依赖 `PhysaraShaderInterface<name>`、包含生成头根, 使用绑定头时链接 PhysaraRHI. 编译核心不 include 自己的生成物.
+
+规则将接口写入 `<binary>/Generated/Shader/<Debug|Release>/<name>`, 包写入 `<binary>/Shaders/<Debug|Release>/<name>.pshader`. 全部必要输出、工具/请求依赖和源 DEPFILE 显式声明, 配置间没有共同写入者. 删除必要输出会重新生成, 不变输入不执行 Shader 编译.
+
+驱动提供下列命令, 路径参数由实际消费者指定:
+
+```text
+PhysaraShaderBuild generate <schema> <output-directory> <stamp>
+PhysaraShaderBuild build <program> <source-root> <interface-root> <package> <depfile> <stamp>
+PhysaraShaderBuild check <package> <expected-abi>
+```
+
+直接 build 始终执行编译/最终核对. 构建输入路径不允许目录联接、符号链接等 reparse point, 首次解析就拒绝, 不把联接切换留给增量时间戳猜测. 非 main/超 profile 输入、混合代、损坏包和不可写输出均非零退出. depfile/stamp 先原子写入, 在发布前就把辅助文件时间设为上一成功包的时间; 包最后发布, CMake 首输出与 depfile 左侧均为包. 辅助时间不会提前表示构建完成, stamp 即使被占用而无法清理, 解除失败条件后的 CMake 构建仍须重跑. 首次构建缺少包时始终未完成. 已成功核对的包若字节相同则只刷新求值时间, 不替换内容, 避免仅输入 mtime 改变后持续重编译; 普通无改动构建不运行驱动. 调用者只在命令成功后使用辅助输出. 可传播的异常返回有界 Failure, noexcept 内的致命 OOM 由构建进程有界报告后失败退出, 不承诺同进程恢复.
+
+开发测试代码、脚本、Shader/JSON 样例和临时 CMake 工程只放在 build 下归类目录, 不注册到正式工程或默认构建. 删除 build 后按上节命令重新配置/构建即可, 不需要也不自动恢复本地测试材料. 具体检查入口、实际运行/复用结果与限制保存在对应 change tasks; 验证预算遵循 [验证技能](../.agents/skills/physara-verification/SKILL.md).
 
 ## 运行
 
@@ -51,22 +71,8 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式使�
 
 项目方案见 [Architecture](Architecture.md), 当前阶段与工作包见 [Developments](Developments/Developments.md#current-stage); 每次实现的取舍和实际检查证据保存在对应 OpenSpec change. 开发约定见 [AGENTS.md](../AGENTS.md).
 
-## D02 资源一致性本地检查
+## 历史本地检查
 
-当前 [资源一致性 change](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/tasks.md) 沿用忽略的 `build/artifacts` 本地 fixture, 不作为产品入口或安装目标. 本机检查输入位于 `build/artifacts/establish-opengl-resource-conformance/checks`, 分别构建 ResourceChecks 与 UploadChecks, 两者的私有 accessor 不链接到同一程序. 新环境需要取得这些本地检查输入; 仅拉取仓库不会生成忽略的 fixture.
+D02 的实际命令、源码身份与资源/上传读回结果保存在 [资源一致性 change](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/tasks.md). 当时的本地 fixture 及其私有 accessor 是开发材料, 不属于当前工程入口. 2026-11-04 清理后, 正式 Core/Platform 不再保留测试故障宏, RHI 不再保留 ResourceChecks/UploadChecks 的测试 friend; 不能直接用旧 fixture 证明当前输入通过, 也不自动恢复它们.
 
-已具备输入时, 在仓库根目录执行 (本地 Python runner 记录命令、源码/fixture 标识和日志):
-
-```powershell
-python build/artifacts/establish-opengl-resource-conformance/Run.py configure
-python build/artifacts/establish-opengl-resource-conformance/Run.py build Debug native
-python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks conformance-fixture
-python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks conformance-matrix
-python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks depth-stencil
-python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug ResourceChecks multisample
-python build/artifacts/establish-opengl-resource-conformance/Run.py check Debug UploadChecks texture
-```
-
-Release 将上述配置名替换为 `Release`; `Run.py final-native <配置>` 运行两个检查程序全部分组、头消费者及预期失败的析构合同检查. generic、无检查宏 product 和集成检查各用独立 binary 目录, 实际复现命令与覆盖状态以 change tasks 为准. Runner 中 CMake/SDK 路径按本机工具位置选择, 它们不是生产 CMake 的依赖或唯一运行路径.
-
-深度/模板与多重采样内容由 fixture 在正式 RHI 创建的对象上进行原生 clear/同尺寸 resolve/分 aspect 读回. 这证明存储和附件寻址; 产品 clear/resolve、Shader/Draw、公共 staging/query 仍按对应工作包验收. 检查要求真实 OpenGL 4.6 Core 环境; 缺入口、构建失败或未覆盖不能计作通过.
+需要复现历史结论时按归档中的源码/fixture 身份取得实际输入. 当前变更优先使用受影响的正式构建与已有消费者, 按验证技能选择最小检查; 本地材料可随 build 清理.

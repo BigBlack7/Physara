@@ -3,7 +3,6 @@
 // 在宿主 current context 上加载固定 GL 入口并查询实际环境; 观察值与创建偏好分开保存.
 
 #include <array>
-#include <cstring>
 
 #include <glad/gl.h>
 
@@ -11,17 +10,7 @@ namespace Physara::Platform::Detail
 {
     static GLADapiproc ResolveGlEntry(void *user, const char *name)
     {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        const auto &checks = static_cast<DeviceHostState *>(user)->checks;
-        if ((checks.missingEntry == MissingEntry::VersionString && std::strcmp(name, "glGetString") == 0) ||
-            (checks.missingEntry == MissingEntry::BooleanQuery && std::strcmp(name, "glGetBooleanv") == 0) ||
-            (checks.missingEntry == MissingEntry::BufferStorage && std::strcmp(name, "glNamedBufferStorage") == 0))
-        {
-            return nullptr;
-        }
-#else
         static_cast<void>(user);
-#endif
         return glfwGetProcAddress(name);
     }
 
@@ -139,12 +128,6 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::EntryLoading, state.stage,
                              "GLAD failed to load the required OpenGL 4.6 Core query entries");
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage, "Injected stop after GL loading");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -182,42 +165,6 @@ namespace Physara::Platform::Detail
                                   ReadGlString(GL_RENDERER, state.info.renderer) &&
                                   ReadGlString(GL_VERSION, state.info.version) &&
                                   ReadGlString(GL_SHADING_LANGUAGE_VERSION, state.info.shadingLanguageVersion);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.queryError)
-        {
-            GLint unused = 0;
-            glGetIntegerv(0xFFFFFFFFu, &unused);
-        }
-        if (state.checks.lowerObservedVersion)
-        {
-            observed.major = 4;
-            observed.minor = 5;
-        }
-        if (state.checks.compatibilityObservedProfile)
-        {
-            observed.profile = GL_CONTEXT_COMPATIBILITY_PROFILE_BIT;
-        }
-        if (state.checks.linearObservedEncoding)
-        {
-            observed.encoding = GL_LINEAR;
-        }
-        if (state.checks.singleBufferedObserved)
-        {
-            observed.doubleBuffered = GL_FALSE;
-        }
-        if (state.checks.invalidObservedLimit)
-        {
-            observed.limits[0] = -1;
-        }
-        if (state.checks.unknownObservedEncoding)
-        {
-            observed.encoding = -1;
-        }
-        if (state.checks.nonDefaultObservedFramebuffer)
-        {
-            observed.drawFramebuffer = 1;
-        }
-#endif
         if (const auto code = glGetError(); code != GL_NO_ERROR)
         {
             return GlQueryError(state, code, "OpenGL environment query failed");
@@ -231,13 +178,6 @@ namespace Physara::Platform::Detail
         {
             return error;
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected stop after environment inspection");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -245,25 +185,12 @@ namespace Physara::Platform::Detail
     {
         state.stage = HostStage::SwapInterval;
         BeginNativeOperation(state);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.swapIntervalError)
-        {
-            glfwMakeContextCurrent(nullptr);
-        }
-#endif
         glfwSwapInterval(vsync ? 1 : 0);
         if (auto error = TakeNativeError(state, HostErrorReason::SwapInterval, state.stage))
         {
             return error;
         }
         state.info.requestedSwapInterval = vsync ? 1 : 0;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected stop after swap interval request");
-        }
-#endif
         return std::nullopt;
     }
 }

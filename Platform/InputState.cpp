@@ -297,18 +297,4 @@ namespace Physara::Platform::Detail
     {
         m_Window.closeRequested = event.requested;
     }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    void InputState::SetRejectedForChecks(std::uint64_t rejected) noexcept
-    {
-        if (m_Fault)
-        {
-            m_Fault->rejected = rejected;
-        }
-    }
-    void InputState::SetCountersForChecks(std::uint64_t sequence, std::uint64_t revision) noexcept
-    {
-        m_Sequence = sequence;
-        m_Window.metricsRevision = revision;
-    }
-#endif
 }

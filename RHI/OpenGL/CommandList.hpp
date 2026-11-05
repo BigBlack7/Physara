@@ -129,6 +129,5 @@ namespace Physara::RHI::OpenGL
         const CommandListParameters m_Desc;
         UploadWorkPacket *m_Packet = nullptr;
         friend class OpenGLDevice;
-        friend struct UploadChecks;
     };
 }

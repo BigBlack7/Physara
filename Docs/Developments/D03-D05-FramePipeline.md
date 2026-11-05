@@ -14,13 +14,13 @@
 
 **职责位置：** Engine/Shader、Engine/Shader/Interface、Shaders/Common、相关 CMakeLists。**前置：** 本阶段入口满足。**架构依据：** [1.3](../Architecture.md#shader-build)、[8.1](../Architecture.md#shader-runtime)。
 
-- [ ] 以单一 schema 生成 C++/GLSL 布局，校验尺寸、offset、矩阵、数组和固定宽度字段；生成物进入 build。
-- [ ] 在 Shader 模块及其 CMake 中接入所需编译步骤，处理 include、入口、选项、工具版本与依赖 hash，输出 canonical Vulkan SPIR-V、反射和可定位错误。
-- [ ] 从一个真实常量/纹理测试程序建立增量构建、干净构建和 ABI 不匹配失败测试。
+- [x] 以单一 schema 生成 C++/GLSL 布局，校验尺寸、offset、矩阵、数组和固定宽度字段；生成物进入 build。
+- [x] 在 Shader 模块及其 CMake 中接入所需编译步骤，处理 include、入口、选项、工具版本与依赖 hash，输出 canonical Vulkan SPIR-V、反射和可定位错误。
+- [x] 在 build 下用真实常量/纹理程序验证增量构建、干净构建和 ABI 不匹配失败；开发测试材料不进入正式源码或默认构建。
 
 **完成条件：** 生成/编译步骤不依赖消费其结果的 Renderer，业务不手写另一份 CPU/GPU 布局。
 
-**当前状态** 已建立提案，实施与验收进度见 [establish-shader-interface-build](../../openspec/changes/establish-shader-interface-build/tasks.md)。
+**当前状态** 已完成并归档；实现、独立审查与最终验证记录见 [establish-shader-interface-build](../../openspec/changes/archive/2026-11-05-establish-shader-interface-build/tasks.md)。
 
 <a id="d03-t02"></a>
 ### D03-T02 · 实现 GL Shader、绑定与 Pipeline lowering

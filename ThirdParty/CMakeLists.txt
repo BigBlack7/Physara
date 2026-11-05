@@ -87,3 +87,6 @@ endforeach()
 
 # MikkTSpace 在资产导入实际需要生成切线时接入, 目前仅保留源码.
 # NVRHI 仅供 RHI 开发参考, 不添加 target, include 路径或链接依赖.
+
+# 固定 Shader 编译/验证/反射依赖以精简源码直接组织, 目标与私有 flags 集中在本子目录.
+add_subdirectory(ShaderToolchain)

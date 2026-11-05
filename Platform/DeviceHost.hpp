@@ -31,7 +31,6 @@ namespace Physara::Platform
     {
         struct DeviceHostState;
         struct DeviceHostFactory;
-        struct DeviceHostChecks;
         struct GlfwAccess;
     }
 
@@ -198,7 +197,6 @@ namespace Physara::Platform
         explicit DeviceHost(std::unique_ptr<Detail::DeviceHostState> state) noexcept;
         std::unique_ptr<Detail::DeviceHostState> m_State;
         friend struct Detail::DeviceHostFactory;
-        friend struct Detail::DeviceHostChecks;
         friend struct Detail::GlfwAccess;
     };
 }

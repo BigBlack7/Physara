@@ -11,3 +11,5 @@ target_link_libraries(PhysaraCore PRIVATE spdlog)
 target_compile_features(PhysaraCore PUBLIC cxx_std_20)
 set_target_properties(PhysaraCore PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraCore PRIVATE /W4 /WX /utf-8 /permissive-)
+
+add_subdirectory(Shader)

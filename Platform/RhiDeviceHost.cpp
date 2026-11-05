@@ -70,13 +70,6 @@ namespace Physara::Platform::Detail
         state.rawDevice = RHI::OpenGL::CreateDevice(desc, &nativeError);
         if (state.rawDevice)
         {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            if (state.checks.failValidationComposition)
-            {
-                state.rhiMessages.Message(RHI::MessageSeverity::Error, "Injected validation composition failure");
-            }
-            else
-#endif
             {
                 state.validatedDevice = RHI::Validation::CreateValidationLayer(state.rawDevice.Get());
             }
@@ -87,13 +80,6 @@ namespace Physara::Platform::Detail
             return ResourceError(state, HostErrorReason::RhiCreation, "RHI device or validation creation failed",
                                  nativeError);
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected stop after RHI composition");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -119,9 +105,6 @@ namespace Physara::Platform::Detail
         BeginNativeOperation(state);
         if (state.window != nullptr && glfwGetCurrentContext() != state.window)
         {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            if (!state.checks.failRhiCurrentRestore)
-#endif
             {
                 glfwMakeContextCurrent(state.window);
             }
@@ -155,12 +138,4 @@ namespace Physara::Platform::Detail
         state.rhiMessages.EndCapture();
         return first;
     }
-
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    RHI::Device *DeviceHostChecks::BorrowRawDevice(DeviceHost &host) noexcept
-    {
-        const auto &state = *host.m_State;
-        return state.ownerThread == std::this_thread::get_id() && state.ready ? state.rawDevice.Get() : nullptr;
-    }
-#endif
 }

@@ -48,10 +48,6 @@ namespace Physara::Platform::Detail
         void ObserveCursorMode(CursorMode mode) noexcept;
         void ResetForFailure() noexcept;
         void Fail(InputFaultReason reason, std::source_location source = std::source_location::current()) noexcept;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        void SetCountersForChecks(std::uint64_t sequence, std::uint64_t revision) noexcept;
-        void SetRejectedForChecks(std::uint64_t rejected) noexcept;
-#endif
     private:
         void Apply(KeyEvent event) noexcept;
         void Apply(CharEvent event) noexcept;

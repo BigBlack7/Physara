@@ -80,12 +80,6 @@ namespace Physara::Platform::Detail
             state.ownsProcess = true;
             s_Process.active = &state;
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == HostStage::Reservation)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage, "Injected stop after reservation");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -126,12 +120,6 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::GlfwInitialization, state.stage,
                              "glfwInit returned false without an error description");
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage, "Injected stop after GLFW init");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -149,13 +137,6 @@ namespace Physara::Platform::Detail
         glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
         glfwWindowHint(GLFW_CONTEXT_DEBUG, desc.debugContext ? GLFW_TRUE : GLFW_FALSE);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.impossibleWindowVersion)
-        {
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 99);
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-        }
-#endif
         state.window = glfwCreateWindow(static_cast<int>(desc.clientWidthLogical),
                                         static_cast<int>(desc.clientHeightLogical), title.c_str(), nullptr, nullptr);
         if (auto error = TakeNativeError(state, HostErrorReason::WindowCreation, state.stage))
@@ -173,13 +154,6 @@ namespace Physara::Platform::Detail
         {
             return error;
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected stop after window creation");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -198,13 +172,6 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::ContextActivation, state.stage,
                              "Created context did not become current on the owner thread");
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.stopAfter == state.stage)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected stop after context activation");
-        }
-#endif
         return std::nullopt;
     }
 
@@ -235,20 +202,11 @@ namespace Physara::Platform::Detail
             MergeCleanupError(first, ReleaseWindowInput(state));
             BeginNativeOperation(state);
             glfwSetWindowUserPointer(state.window, nullptr);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            if (state.checks.cleanupError)
-            {
-                CaptureGlfwError(GLFW_PLATFORM_ERROR, "Injected cleanup error");
-            }
-#endif
             MergeCleanupError(first, TakeNativeError(state, HostErrorReason::Cleanup, state.stage));
             BeginNativeOperation(state);
             const auto current = glfwGetCurrentContext();
             if (current == state.window)
             {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-                if (!state.checks.detachFailure)
-#endif
                 {
                     glfwMakeContextCurrent(nullptr);
                 }
@@ -282,80 +240,4 @@ namespace Physara::Platform::Detail
         state.stopped = true;
         return first;
     }
-
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    void DeviceHostChecks::InjectInput(DeviceHost &host, const InputEvent &event)
-    {
-        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->stopped)
-        {
-            throw std::logic_error("Input checks require a live owner thread");
-        }
-        host.m_State->input.Record(event);
-    }
-
-    void DeviceHostChecks::SetInputCounters(DeviceHost &host, std::uint64_t sequence, std::uint64_t revision)
-    {
-        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->stopped)
-        {
-            throw std::logic_error("Input counter checks require a live owner thread");
-        }
-        host.m_State->input.SetCountersForChecks(sequence, revision);
-    }
-
-    InputSnapshot DeviceHostChecks::InspectInput(DeviceHost &host)
-    {
-        if (host.m_State->ownerThread != std::this_thread::get_id())
-        {
-            throw std::logic_error("Input inspection requires the owner thread");
-        }
-        return host.m_State->input.Snapshot();
-    }
-
-    int DeviceHostChecks::InspectCursorMode(DeviceHost &host)
-    {
-        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->window == nullptr)
-        {
-            throw std::logic_error("Native cursor inspection requires an owned window");
-        }
-        return glfwGetInputMode(host.m_State->window, GLFW_CURSOR);
-    }
-
-    bool DeviceHostChecks::InspectCloseFlag(DeviceHost &host)
-    {
-        if (host.m_State->ownerThread != std::this_thread::get_id() || host.m_State->window == nullptr)
-        {
-            throw std::logic_error("Native close inspection requires an owned window");
-        }
-        return glfwWindowShouldClose(host.m_State->window) == GLFW_TRUE;
-    }
-
-    std::uint64_t DeviceHostChecks::SetLastGenerationWhenIdle(std::uint64_t value)
-    {
-        std::scoped_lock lock(s_Process.mutex);
-        if (s_Process.active != nullptr)
-        {
-            throw std::logic_error("Generation checks require an idle process");
-        }
-        const auto previous = s_Process.lastGeneration;
-        s_Process.lastGeneration = value;
-        return previous;
-    }
-
-    bool DeviceHostChecks::RejectForeignRelease(Core::Diagnostics &diagnostics)
-    {
-        DeviceHostState foreign(diagnostics);
-        return !ReleaseProcess(foreign);
-    }
-
-    HostError DeviceHostChecks::CaptureTemporaryDescription(DeviceHost &host, std::string_view text)
-    {
-        auto &state = *host.m_State;
-        BeginNativeOperation(state);
-        {
-            const std::string temporary(text);
-            CaptureGlfwError(GLFW_PLATFORM_ERROR, temporary.c_str());
-        }
-        return *TakeNativeError(state, HostErrorReason::EnvironmentQuery, HostStage::EnvironmentQuery);
-    }
-#endif
 }

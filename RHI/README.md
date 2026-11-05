@@ -23,7 +23,7 @@ GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返�
 
 GL 4.6 Core 8.5 不允许 TEXTURE_3D 的深度/模板存储. 自有 `Formats.cpp` 在构建 target caps 时显式过滤 D16/D24S8/D32/D32S8 的此组合, 即使驱动 internal-format query 返回正向值也不发布支持, 创建在原生分配前拒绝. 这是保守能力交集的实现修正, 不修改固定 NVRHI 来源. 复现、来源依据与回归见 [资源一致性 design](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/design.md) 的局部修正; 其他合法 target 仍按实际用途和样本验证.
 
-资源一致性 fixture 复用同一正式 Host/Validation/backend; Buffer/颜色内容经产品上传和实际完成读回, 深度/模板/MS 存储由 fixture 保活资源并原生 clear/同尺寸 resolve/分 aspect 读取, 使用自己的真实 fence. 辅助状态显式保存/恢复, 不发布 RHI tracker 状态或产品票据. 该路径不提供公共 clear/resolve/readback 或绘制能力; 本机 UPPER_LEFT 原生区域观测和 D03 的待验收边界见上述 design, 本地运行入口见 [Build](../Docs/Build.md#d02-资源一致性本地检查).
+资源一致性 fixture 复用同一正式 Host/Validation/backend; Buffer/颜色内容经产品上传和实际完成读回, 深度/模板/MS 存储由 fixture 保活资源并原生 clear/同尺寸 resolve/分 aspect 读取, 使用自己的真实 fence. 辅助状态显式保存/恢复, 不发布 RHI tracker 状态或产品票据. 该路径不提供公共 clear/resolve/readback 或绘制能力; 本机 UPPER_LEFT 原生区域观测和 D03 的待验收边界见上述 design, 历史本地检查与复现条件见 [Build](../Docs/Build.md#历史本地检查).
 
 上传策略为设备总 mapped capacity 64 MiB、最多 64 物理包、每包最多 4096 非空写入/不同资源及 64 MiB 逻辑目标字节. 小于等于 256 KiB 的 Buffer 写入使用 DSA subdata, 更大写入使用包独有的 persistent/coherent chunk 和 GPU copy. 所有 Texture 上传使用同类 PBO chunk; 完成前不覆写或跨包复用, 完成即释放, 没有 idle cache. 耗尽报告 requested/retained/limit, 不隐式等待. 这些是初始有界策略, 不是设备显存或性能结论.
 

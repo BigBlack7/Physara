@@ -14,10 +14,6 @@
 
 #include <spdlog/details/circular_q.h>
 
-#if defined(PHYSARA_CORE_NATIVE_CHECKS)
-#include "DiagnosticsChecks.hpp"
-#endif
-
 namespace Physara::Core
 {
     static Physara::Core::BoundedText BuildPayload(double seconds, std::string_view message,
@@ -63,9 +59,6 @@ namespace Physara::Core
         mutable std::mutex mutex;
         DiagnosticStats stats;
         spdlog::details::circular_q<DiagnosticRecord> records{DiagnosticCapacity};
-#if defined(PHYSARA_CORE_NATIVE_CHECKS)
-        bool failNextWrite = false;
-#endif
     };
 
     Diagnostics::Diagnostics(std::unique_ptr<Impl> impl) noexcept : m_Impl(std::move(impl))
@@ -106,13 +99,6 @@ namespace Physara::Core
             {
                 if (!writeFailed)
                 {
-#if defined(PHYSARA_CORE_NATIVE_CHECKS)
-                    if (m_Impl->failNextWrite)
-                    {
-                        m_Impl->failNextWrite = false;
-                        throw std::bad_alloc();
-                    }
-#endif
                     m_Impl->records.push_back({severity, payload});
                 }
             }
@@ -191,19 +177,4 @@ namespace Physara::Core
         }
     }
 
-#if defined(PHYSARA_CORE_NATIVE_CHECKS)
-    void Detail::DiagnosticsChecks::FailNextWrite(Diagnostics &diagnostics)
-    {
-        std::scoped_lock lock(diagnostics.m_Impl->mutex);
-        diagnostics.m_Impl->failNextWrite = true;
-    }
-
-    void Detail::DiagnosticsChecks::SetLossCounters(Diagnostics &diagnostics, std::uint64_t value)
-    {
-        std::scoped_lock lock(diagnostics.m_Impl->mutex);
-        diagnostics.m_Impl->stats.evicted = value;
-        diagnostics.m_Impl->stats.truncated = value;
-        diagnostics.m_Impl->stats.writeFailed = value;
-    }
-#endif
 }

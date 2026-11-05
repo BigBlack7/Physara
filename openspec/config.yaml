@@ -4,7 +4,7 @@ context: |
   Reference explains verified upstream behavior; Architecture selects the project contracts; Docs/Developments/Developments.md routes to the active stage and work package. AGENTS.md routes to the relevant project skills.
   There is no animation playback, skeletal animation, skinning, morphing or dynamic deformation. Static render-content edits invalidate temporal histories; camera movement uses static depth reprojection.
   The current build uses Windows x64/MSVC and plain root/module CMakeLists.txt files.
-  ThirdParty contains fixed, curated upstream sources and licenses; records live in ThirdParty/README.md.
+  ThirdParty uses minimal fixed source snapshots, required transitive headers and licenses, organized explicitly by Physara CMake. Disabling upstream targets is not source trimming: omit unused implementations, tools, tests, examples and repository build/maintenance files. Record provenance, trimming and reproducible generated source snapshots in ThirdParty/README.md.
   Configuration does not download dependencies. ThirdParty/nvrhi is reference-only and never enters CMake.
   Keep the complete NVRHI public contract while implementing only verified backend capabilities. OpenGL 4.6 comes first; Vulkan native dependencies arrive with that backend.
   Model assets are read-only glTF/GLB in Assets/Models. Each editable scene is one JSON file in Assets/Scenes.
@@ -14,7 +14,8 @@ context: |
   Do not claim unimplemented runtime or GPU validation. Introduce queues, arenas and file watchers only with their real consumers.
   Use the official OpenSpec 1.13.2 CLI and its bundled spec-driven schema independently of the C++ build.
   Keep initialization lightweight. Do not add CI, tool-install targets, formatting gates or a test framework.
-  The maintainer will define test organization separately; perform checks appropriate to the actual change.
+  Development-only tests, scripts, fixtures and temporary projects live only in categorized build/ directories, outside version control and formal source/default targets. Deleting build/ must not break a fresh ordinary build; do not restore deleted tests automatically.
+  Validate real trust boundaries and changed risks with the smallest sufficient checks. Do not add repeated internal defenses, hypothetical recovery paths, exhaustive boundary matrices or redundant reruns; account for development time and token cost and stop when evidence is sufficient.
   Follow AGENTS.md for the mandatory independent Review/Annotation and correction/recheck loop before final verify and sync/archive. Docs/CodeReview.md is the reusable current review ledger, not an OpenSpec artifact or a substitute for verification evidence.
 rules:
   proposal:

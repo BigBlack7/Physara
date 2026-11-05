@@ -92,8 +92,6 @@ namespace Physara::RHI::OpenGL
         }
     };
 
-    struct ResourceChecks;
-    struct UploadChecks;
     struct UploadWorkPacket;
     struct UploadSlice;
     struct SubmissionState;
@@ -256,8 +254,6 @@ namespace Physara::RHI::OpenGL
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
         bool m_WorkFailed = false;
-        friend struct ResourceChecks;
-        friend struct UploadChecks;
         friend class OpenGLCommandList;
         friend class UploadResourceLease;
     };
@@ -295,8 +291,6 @@ namespace Physara::RHI::OpenGL
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
-        friend struct ResourceChecks;
-        friend struct UploadChecks;
         friend class OpenGLCommandList;
     };
 
@@ -335,8 +329,6 @@ namespace Physara::RHI::OpenGL
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
-        friend struct ResourceChecks;
-        friend struct UploadChecks;
         friend class OpenGLCommandList;
     };
 
@@ -360,7 +352,6 @@ namespace Physara::RHI::OpenGL
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
-        friend struct ResourceChecks;
     };
 
     class OpenGLFramebuffer final : public RefCounter<RHI::Framebuffer>
@@ -389,6 +380,5 @@ namespace Physara::RHI::OpenGL
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
-        friend struct ResourceChecks;
     };
 }

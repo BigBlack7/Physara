@@ -463,7 +463,7 @@ Platform 拥有的既有 RHI MessageCallback 适配器在设备存活期间有�
 | Dear ImGui docking、ImGuizmo | Editor | Engine、公共 RHI |
 | NVRHI 参考快照 | 公共层移植与将来的 Vulkan 来源 | 不同时链接一份原版和重命名版 RHI |
 
-ThirdParty 保留实际需要的上游源码、头文件和许可证。头文件库直接提供 include 路径，需要编译的源码随工程配置生成库，输出放在 build 树。版本/commit、来源、许可和必要裁剪说明统一记录在 [ThirdParty/README.md](../ThirdParty/README.md)，不另设配置清单或逐文件哈希清单。GLAD 使用固定版本生成的 loader 源码，普通构建不运行生成器。NVRHI 仅供源码参考，不加入 CMake target、include 或链接。新依赖在实际使用它的模块落地时引入。
+ThirdParty 采用精简源码直接入库，只保留当前消费者实际需要的上游源码、传递头、许可/NOTICE 及必要生成输入，由 Physara CMake 显式组织；关闭上游 target 不能代替裁剪未用实现、工具、测试、示例或仓库构建/维护文件。头文件库直接提供 include 路径，需要编译的源码随工程配置生成库，输出放在 build 树。版本/commit、来源、许可、裁剪与固定生成源码快照的复现说明统一记录在 [ThirdParty/README.md](../ThirdParty/README.md)，不另设配置清单或逐文件哈希清单。GLAD 使用固定版本生成的 loader 源码，普通构建不运行生成器。NVRHI 仅供源码参考，不加入 CMake target、include 或链接。新依赖在实际使用它的模块落地时引入。
 
 ```cmake
 add_subdirectory(ThirdParty)
@@ -3301,7 +3301,7 @@ Vulkan 还要处理呈现完成。初版一个进程一个 DeviceHost，GLFW 初
 <a id="stage-12"></a>
 ## 12. 验证、测量与变更闭环
 
-验证和测量随实际模块与变更需要开展，实施结果记录在对应工作包和 change 中。不预设测试目录结构、自动化平台或独立工具程序，不重新实现另一套渲染器，也不新增与原生 OpenSpec 重复的审批/文档步骤。
+验证和测量随实际模块与变更需要开展，实施结果记录在对应工作包和 change 中。开发测试的存放、范围与停止条件遵循 [开发约定](../AGENTS.md#workflow) 及其验证技能；不预设自动化平台或独立工具程序，不重新实现另一套渲染器，也不新增与原生 OpenSpec 重复的审批/文档步骤。
 
 <a id="tests"></a>
 ### 12.1 按合同验证行为

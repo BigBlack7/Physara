@@ -17,26 +17,6 @@
 
 namespace Physara::Platform
 {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    static std::optional<Detail::HostCheckConfig> &NextChecks()
-    {
-        static std::optional<Detail::HostCheckConfig> value;
-        return value;
-    }
-    using CheckObserver = void (*)(HostStage, Physara::Core::Diagnostics &);
-    static CheckObserver &ObserverSlot()
-    {
-        static CheckObserver observer = nullptr;
-        return observer;
-    }
-    static void ObserveOperation(HostStage stage, Physara::Core::Diagnostics &diagnostics)
-    {
-        if (auto observer = ObserverSlot())
-        {
-            observer(stage, diagnostics);
-        }
-    }
-#endif
 
     static constexpr std::array<std::string_view, 17> StageNames = {
         "Validation", "Reservation", "GlfwInitialization",
@@ -91,9 +71,6 @@ namespace Physara::Platform
         if (!error)
         {
             state.stage = HostStage::RhiCreation;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            ObserveOperation(state.stage, state.diagnostics);
-#endif
             error = Detail::InitializeResourceDevice(state);
         }
         if (!error)
@@ -185,9 +162,6 @@ namespace Physara::Platform
         std::optional<HostError> error;
         try
         {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            ObserveOperation(stage, state.diagnostics);
-#endif
             error = operation();
         }
         catch (const std::exception &failure)
@@ -310,12 +284,7 @@ namespace Physara::Platform::Detail
         std::terminate();
     }
 
-    DeviceHost::CreateResult DeviceHostFactory::Create(const HostDesc &desc, Core::Diagnostics &diagnostics
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-                                                       ,
-                                                       const HostCheckConfig *checks
-#endif
-                                                       ) noexcept
+    DeviceHost::CreateResult DeviceHostFactory::Create(const HostDesc &desc, Core::Diagnostics &diagnostics) noexcept
     {
         const auto started = std::chrono::steady_clock::now();
         std::unique_ptr<DeviceHost> host;
@@ -340,17 +309,6 @@ namespace Physara::Platform::Detail
             }
             auto state = std::make_unique<DeviceHostState>(diagnostics);
             state->started = started;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            if (checks != nullptr)
-            {
-                state->checks = *checks;
-            }
-            else if (NextChecks())
-            {
-                state->checks = *NextChecks();
-                NextChecks().reset();
-            }
-#endif
             host = std::unique_ptr<DeviceHost>(new DeviceHost(std::move(state)));
             if (auto error = ReserveProcess(*host->m_State))
             {
@@ -364,9 +322,6 @@ namespace Physara::Platform::Detail
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             host->m_State->stage = HostStage::Ready;
             host->m_State->ready = true;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            ObserveOperation(HostStage::Ready, diagnostics);
-#endif
             ReportReady(diagnostics, host->m_State->info);
             return host;
         }
@@ -398,21 +353,6 @@ namespace Physara::Platform::Detail
         return state.window;
     }
 
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    void DeviceHostChecks::SetNextCreateConfig(const HostCheckConfig &config)
-    {
-        NextChecks() = config;
-    }
-    void DeviceHostChecks::SetOperationObserver(void (*observer)(HostStage, Core::Diagnostics &))
-    {
-        ObserverSlot() = observer;
-    }
-    DeviceHost::CreateResult DeviceHostChecks::Create(const HostDesc &desc, Core::Diagnostics &diagnostics,
-                                                      const HostCheckConfig &config) noexcept
-    {
-        return DeviceHostFactory::Create(desc, diagnostics, &config);
-    }
-#endif
 }
 
 namespace Physara::Platform
@@ -492,12 +432,6 @@ namespace Physara::Platform
         OperationScope scope(*m_State, HostStage::Shutdown);
         try
         {
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            if (!m_State->stopped)
-            {
-                ObserveOperation(HostStage::Shutdown, m_State->diagnostics);
-            }
-#endif
             auto error = Detail::ReleaseNativeState(*m_State);
             if (error)
             {

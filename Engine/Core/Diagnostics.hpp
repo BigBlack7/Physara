@@ -14,11 +14,6 @@
 
 namespace Physara::Core
 {
-    namespace Detail
-    {
-        struct DiagnosticsChecks;
-    }
-
     inline constexpr std::size_t DiagnosticCapacity = 1024;
 
     enum class Severity : std::uint8_t
@@ -90,6 +85,5 @@ namespace Physara::Core
         struct Impl;
         explicit Diagnostics(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> m_Impl;
-        friend struct Detail::DiagnosticsChecks;
     };
 }

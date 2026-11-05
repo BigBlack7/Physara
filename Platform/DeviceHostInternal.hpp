@@ -14,10 +14,6 @@
 #include <Core/Diagnostics.hpp>
 #include <RHI.hpp>
 
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-#include "DeviceHostChecks.hpp"
-#endif
-
 namespace Physara::Platform::Detail
 {
     class RhiMessageAdapter final : public RHI::MessageCallback
@@ -82,9 +78,6 @@ namespace Physara::Platform::Detail
         RhiMessageAdapter rhiMessages;
         RHI::DeviceHandle rawDevice;
         RHI::DeviceHandle validatedDevice;
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        HostCheckConfig checks;
-#endif
     };
 
     [[nodiscard]] HostError MakeError(const DeviceHostState *state, HostErrorReason reason, HostStage stage,
@@ -120,11 +113,7 @@ namespace Physara::Platform::Detail
 
     struct DeviceHostFactory
     {
-        [[nodiscard]] static DeviceHost::CreateResult Create(const HostDesc &desc, Core::Diagnostics &diagnostics
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-                                                             ,
-                                                             const HostCheckConfig *checks = nullptr
-#endif
-                                                             ) noexcept;
+        [[nodiscard]] static DeviceHost::CreateResult Create(const HostDesc &desc,
+                                                             Core::Diagnostics &diagnostics) noexcept;
     };
 }

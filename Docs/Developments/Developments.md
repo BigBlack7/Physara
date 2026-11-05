@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前进入 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。本轮是 [D03-T01 · 权威 Shader 接口与编译步骤](D03-D05-FramePipeline.md#d03-t01)，已建立 [establish-shader-interface-build](../../openspec/changes/establish-shader-interface-build/proposal.md)，处于待实施状态。实施进度以其 [tasks](../../openspec/changes/establish-shader-interface-build/tasks.md) 为准。
+当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01 · 权威 Shader 接口与编译步骤](D03-D05-FramePipeline.md#d03-t01) 已完成并归档，记录见 [establish-shader-interface-build](../../openspec/changes/archive/2026-11-05-establish-shader-interface-build/tasks.md)。下一工作包为 [D03-T02 · GL Shader、绑定与 Pipeline lowering](D03-D05-FramePipeline.md#d03-t02)。
 
 ## 阅读与使用
 
@@ -27,7 +27,7 @@
 
 随后在已有画面上完善增量准备/预算、静态几何覆盖与相机历史、阴影、Forward+ 与 Deferred；再完成标准材质扩展、透明透射、屏幕效果、时域镜头和编辑工作流。资产、UI、RHI、Renderer 都随对应纵向能力一起集成，测试、失败退出和诊断随任务落地。
 
-Physara 只编辑和渲染静态场景，不实现动画播放、骨骼、Skin/Morph 或动态变形。模型资产统一使用 `Assets/Models` 中只读的 glTF/GLB；一个 `Assets/Scenes/*.scene.json` 保存 Assets 引用、静态实体/TRS/灯与物体参数、实例材质/纹理覆盖和主 View 相机及 requested 设置，重新打开后继续编辑保存。Asset 负责标准资产导入与校验，Scene 提供实例状态、快照和构建校验，Editor/Session 组合 JSON 文件读写及 Scene/View 的恢复，Renderer 消费已加载的数据。验证随功能安排，测试文件、框架和运行方式由后续实施统一确定，不预先建立目录或独立工具模块。
+Physara 只编辑和渲染静态场景，不实现动画播放、骨骼、Skin/Morph 或动态变形。模型资产统一使用 `Assets/Models` 中只读的 glTF/GLB；一个 `Assets/Scenes/*.scene.json` 保存 Assets 引用、静态实体/TRS/灯与物体参数、实例材质/纹理覆盖和主 View 相机及 requested 设置，重新打开后继续编辑保存。Asset 负责标准资产导入与校验，Scene 提供实例状态、快照和构建校验，Editor/Session 组合 JSON 文件读写及 Scene/View 的恢复，Renderer 消费已加载的数据。验证随功能安排；开发测试材料只在 build 下按工作包归类，具体范围与停止条件遵循 [开发约定](../../AGENTS.md#workflow) 和对应技能，不预先建立测试框架或独立工具模块。
 
 | 里程碑 | 达成阶段 | 可实际观察的结果 |
 |---|---|---|

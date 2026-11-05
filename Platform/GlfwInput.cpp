@@ -303,13 +303,6 @@ namespace Physara::Platform::Detail
     static std::variant<WindowFacts, HostError> ReadWindowFacts(DeviceHostState &state)
     {
         BeginNativeOperation(state);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.nativeObservationError == state.stage)
-        {
-            state.checks.nativeObservationError.reset();
-            static_cast<void>(glfwGetWindowAttrib(state.window, -1));
-        }
-#endif
         int width = 0, height = 0, pixelWidth = 0, pixelHeight = 0;
         WindowFacts facts;
         glfwGetWindowSize(state.window, &width, &height);
@@ -377,20 +370,6 @@ namespace Physara::Platform::Detail
         }
         return TakeInputFault(state);
     }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-    static bool StopSetup(DeviceHostState &state, int step)
-    {
-        return state.checks.failInputSetupStep == step;
-    }
-    static void InjectNativeError(DeviceHostState &state, HostStage stage)
-    {
-        if (state.checks.nativeInputError == stage)
-        {
-            state.checks.nativeInputError.reset();
-            static_cast<void>(glfwGetInputMode(state.window, -1));
-        }
-    }
-#endif
     static std::optional<HostError> TakeRequestFailure(DeviceHostState &state, std::size_t index)
     {
         // 原生首错优先; 回调终止故障必须先于可恢复的捕获拒绝报告.
@@ -467,136 +446,33 @@ namespace Physara::Platform::Detail
         {
             return error;
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 0))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage, "Injected input seed failure");
-        }
-#endif
         BeginNativeOperation(state);
         state.inputCallbacksInstalled = true;
         state.inputAccepting = true;
         glfwSetKeyCallback(state.window, OnKey);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 1))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetCharCallback(state.window, OnChar);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 2))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetMouseButtonCallback(state.window, OnMouseButton);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 3))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetCursorPosCallback(state.window, OnCursorPosition);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 4))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetCursorEnterCallback(state.window, OnCursorEnter);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 5))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetScrollCallback(state.window, OnScroll);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 6))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetWindowFocusCallback(state.window, OnFocus);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 7))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetWindowIconifyCallback(state.window, OnIconify);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 8))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetWindowCloseCallback(state.window, OnClose);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 9))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetWindowSizeCallback(state.window, OnClientSize);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 10))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetFramebufferSizeCallback(state.window, OnFramebufferSize);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 11))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
         glfwSetWindowContentScaleCallback(state.window, OnContentScale);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 12))
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage,
-                             "Injected partial callback installation failure");
-        }
-#endif
 
         glfwSetInputMode(state.window, GLFW_LOCK_KEY_MODS, GLFW_TRUE);
         if (auto error = TakeNativeError(state, HostErrorReason::EventProcessing, state.stage))
         {
             return error;
         }
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (StopSetup(state, 13) || state.checks.stopAfter == HostStage::InputSetup)
-        {
-            return MakeError(&state, HostErrorReason::InternalFailure, state.stage, "Injected input setup failure");
-        }
-#endif
         return RefreshWindowInput(state);
     }
 
     std::optional<HostError> ReleaseRelativeCursor(DeviceHostState &state)
     {
         BeginNativeOperation(state);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        if (state.checks.failCursorRelease)
-        {
-            state.checks.failCursorRelease = false;
-            static_cast<void>(glfwGetInputMode(state.window, -1));
-        }
-#endif
         glfwSetInputMode(state.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         const int observed = glfwGetInputMode(state.window, GLFW_CURSOR);
         auto error = TakeNativeError(state, HostErrorReason::Cleanup, state.stage);
@@ -650,9 +526,6 @@ namespace Physara::Platform::Detail
         }
         BeginNativeOperation(state);
         glfwPollEvents();
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        InjectNativeError(state, HostStage::EventPolling);
-#endif
         return FinishEvents(state);
     }
     std::optional<HostError> WaitNativeInput(DeviceHostState &state, double timeoutSeconds)
@@ -668,9 +541,6 @@ namespace Physara::Platform::Detail
         }
         BeginNativeOperation(state);
         glfwWaitEventsTimeout(timeoutSeconds);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-        InjectNativeError(state, HostStage::EventWait);
-#endif
         return FinishEvents(state);
     }
 
@@ -709,13 +579,6 @@ namespace Physara::Platform::Detail
         for (std::size_t index = 0; index < requests.size(); ++index)
         {
             BeginNativeOperation(state);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-            InjectNativeError(state, HostStage::RequestApplication);
-            if (state.checks.failRequestIndex == index)
-            {
-                static_cast<void>(glfwGetInputMode(state.window, -1));
-            }
-#endif
             if (auto error = TakeRequestFailure(state, index))
             {
                 return error;
@@ -730,12 +593,6 @@ namespace Physara::Platform::Detail
                 }
                 glfwSetInputMode(state.window, GLFW_CURSOR,
                                  cursor->mode == CursorMode::Relative ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
-#if defined(PHYSARA_PLATFORM_NATIVE_CHECKS)
-                if (cursor->mode == CursorMode::Relative && state.checks.loseFocusOnCapture)
-                {
-                    glfwIconifyWindow(state.window);
-                }
-#endif
                 const int observed = glfwGetInputMode(state.window, GLFW_CURSOR);
                 if (auto error = TakeRequestFailure(state, index))
                 {
