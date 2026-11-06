@@ -26,7 +26,7 @@ set=0/1/2/3 分别为 PerView/PerRenderable/PerMaterial/PerPass, slot=0..127. ki
 
 GraphicsBaselineV1 固定 Vulkan GLSL 450 core -> Vulkan 1.1 / SPIR-V 1.3. 不自动分配 binding/location, 不做源文本 patch 或 optimizer 重写, Debug/Release 的 Shader 语义选项相同. 仅接入 glslang、SPIRV-Tools validator 与 SPIRV-Cross core; 输出必须先通过 validator, 再从最终 IR 核对字段/资源/IO、活动子集及 FS 对 VS 的兼容性.
 
-不支持 compute、写 storage、push constant、descriptor indexing、subpass input、combined sampler 声明、specialization constant 或未知扩展. 源扩展白名单只有 GL_GOOGLE_include_directive 的 enable/require; IR 不接受扩展, capability 限 Shader/Matrix. 活动 VS builtin 限 Position/PointSize/VertexIndex/InstanceIndex, FS 限 FragCoord/PointCoord/FrontFacing/FragDepth, execution mode 限 FS OriginUpperLeft/DepthReplacing. 这些是 CPU 编译 profile, 不代表当前 GL 后端已支持 Draw/Pipeline/lowering.
+不支持 compute、写 storage、push constant、descriptor indexing、subpass input、combined sampler 声明、specialization constant 或未知扩展. 源扩展白名单允许 GL_GOOGLE_include_directive 与 GL_EXT_samplerless_texture_functions 的 enable/require; 后者只提供无逻辑 Sampler 的 texture-only fetch 源写法, 不改变 IR/包版本或数据/绑定 ABI. IR 不接受扩展, capability 仍限 Shader/Matrix. 活动 VS builtin 限 Position/PointSize/VertexIndex/InstanceIndex, FS 限 FragCoord/PointCoord/FrontFacing/FragDepth, execution mode 限 FS OriginUpperLeft/DepthReplacing. 这些是 CPU 编译 profile, 实际 GL 准备范围与验收另见 [RHI](../../../RHI/README.md#opengl-原生消费边界), 编译成功不能作为 Draw 或像素证据.
 
 include 只有两个唯一且互不重叠的虚拟根:
 

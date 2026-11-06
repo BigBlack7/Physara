@@ -1,15 +1,17 @@
 # Shader 核心不消费自己的生成头, 薄驱动与业务消费者只沿此单向依赖构建.
+# RhiProgram 只消费公共 Device/句柄, 原生 lowering 属于后端, 不成为包编译器的依赖.
 add_library(PhysaraShader STATIC
     Types.hpp Interface.hpp Compiler.hpp Package.hpp
     BuildSupport.hpp BuildSupport.cpp
     ShaderSchema.hpp ShaderSchema.cpp ReflectionData.cpp
     Interface.cpp CompilerEnvironment.cpp Compiler.cpp
     SourceGraph.hpp SourceGraph.cpp Spirv.hpp Spirv.cpp Package.cpp
+    RhiProgram.hpp RhiProgram.cpp
 )
 target_include_directories(PhysaraShader PUBLIC "${PROJECT_SOURCE_DIR}/Engine")
-# 公开结果含 Core 错误值, 因此传递 Core; RHI 仅用于私有布局推导, 编译库/JSON/CNG 均封闭在实现中.
-target_link_libraries(PhysaraShader PUBLIC PhysaraCore PRIVATE
-    PhysaraRHI nlohmann_json glslang glslang-default-resource-limits
+# 公开结果包含 Core 错误值和 RHI handles, 因而传递两者; 编译库/JSON/CNG 均封闭在实现中.
+target_link_libraries(PhysaraShader PUBLIC PhysaraCore PhysaraRHI PRIVATE
+    nlohmann_json glslang glslang-default-resource-limits
     SPIRV-Tools-static spirv-cross-core bcrypt
 )
 target_compile_features(PhysaraShader PUBLIC cxx_std_20)

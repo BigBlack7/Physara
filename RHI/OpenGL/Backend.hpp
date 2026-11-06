@@ -39,6 +39,7 @@
 
 #include "../Common/StateTracking.hpp"
 #include "ContextState.hpp"
+#include "ShaderCaps.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -54,7 +55,7 @@ namespace Physara::RHI::OpenGL
         std::uint32_t sampleMask = 0;
     };
 
-    /// @brief 创建时查询的设备限制及按实际维度区分的格式表, 不代表 Shader/Draw 已实现.
+    /// @brief 创建时查询的设备限制及格式表, 准备与执行能力仍由各工厂/命令入口明确限定.
     struct DeviceCaps
     {
         std::array<std::array<FormatCaps, TextureDimensionCount>, std::size_t(Format::COUNT)> formats{};
@@ -68,14 +69,18 @@ namespace Physara::RHI::OpenGL
         GLfloat maxAnisotropy = 0;
         GLfloat maxLodBias = 0;
         GLint minMapAlignment = 0;
+        ShaderCaps shader;
     };
 
+    /// @brief 删除 FIFO 的原生对象类别, Program 与临时 GL Shader 不等同于公共 CPU Shader 对象.
     enum class NativeKind : std::uint8_t
     {
         Buffer,
         Texture,
         Sampler,
-        Framebuffer
+        Framebuffer,
+        Program,
+        Shader
     };
     /// @brief 创建前预留的原生删除节点, final Release 只转交节点, owner 才执行 GL 删除.
     struct NativeDeletion
@@ -131,11 +136,15 @@ namespace Physara::RHI::OpenGL
                     std::source_location location = std::source_location::current()) const noexcept;
         /// @brief 未发布分配可在所属 context 回滚; 已发布对象仅入删除 FIFO, 不等待 GPU.
         void ReleaseAllocation(std::unique_ptr<NativeDeletion> record, bool published) noexcept;
+        /// @brief 只读查询指定格式/target 的能力, 非法或未映射项返回零能力, 不调用 GL.
         [[nodiscard]] const FormatCaps &GetFormatCaps(Format format, TextureDimension dimension) const noexcept;
         [[nodiscard]] const DeviceCaps &GetCaps() const noexcept
         {
             return m_Caps;
         }
+        /// @brief 按需准备设备自有 nearest/clamp sampler, 失败返回零, 不持有反向 Device 引用.
+        /// @pre 调用点已通过 BeginNative, 仅在 owner/current context 的准备阶段使用.
+        [[nodiscard]] GLuint PrepareDummySampler();
         [[nodiscard]] GLenum GetFirstNativeError() const noexcept
         {
             return m_FirstNativeError;
@@ -168,11 +177,13 @@ namespace Physara::RHI::OpenGL
         MemoryRequirements GetBufferMemoryRequirements(Buffer *buffer) override;
         bool BindBufferMemory(Buffer *buffer, Heap *heap, uint64_t offset) override;
         BufferHandle CreateHandleForNativeBuffer(ObjectType objectType, Object buffer, const BufferDesc &desc) override;
+        /// @brief 复制 canonical VS/FS 字节并解析入口反射, 失败返回空, 不在此编译 GL Shader.
         ShaderHandle CreateShader(const ShaderDesc &d, const void *binary, size_t binarySize) override;
         ShaderHandle CreateShaderSpecialization(Shader *baseShader, const ShaderSpecialization *constants,
                                                 uint32_t numConstants) override;
         ShaderLibraryHandle CreateShaderLibrary(const void *binary, size_t binarySize) override;
         SamplerHandle CreateSampler(const SamplerDesc &d) override;
+        /// @brief 保存按顺序展开的属性描述; 可选 VS 只核对归属/阶段, 不决定另一套 location ABI.
         InputLayoutHandle CreateInputLayout(const VertexAttributeDesc *d, uint32_t attributeCount,
                                             Shader *vertexShader) override;
         EventQueryHandle CreateEventQuery() override;
@@ -186,6 +197,8 @@ namespace Physara::RHI::OpenGL
         void ResetTimerQuery(TimerQuery *query) override;
         GraphicsAPI GetGraphicsAPI() override;
         FramebufferHandle CreateFramebuffer(const FramebufferDesc &desc) override;
+        /// @brief 按格式/样本兼容信息核对单样本状态与 IO, 生成绑定计划并事务式链接 Program.
+        /// @note framebuffer 重载先核对本设备归属再取兼容信息; 两者均不保活具体附件或执行 Draw.
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc,
                                                       FramebufferInfo const &fbinfo) override;
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc, Framebuffer *fb) override;
@@ -194,8 +207,10 @@ namespace Physara::RHI::OpenGL
                                                     FramebufferInfo const &fbinfo) override;
         MeshletPipelineHandle CreateMeshletPipeline(const MeshletPipelineDesc &desc, Framebuffer *fb) override;
         RT::PipelineHandle CreateRayTracingPipeline(const RT::PipelineDesc &desc) override;
+        /// @brief 保存常规逻辑布局, 不占用 GL 单元; 非基线类别/数组/可见阶段明确失败.
         BindingLayoutHandle CreateBindingLayout(const BindingLayoutDesc &desc) override;
         BindingLayoutHandle CreateBindlessLayout(const BindlessLayoutDesc &desc) override;
+        /// @brief 全量预检后物化自有二维视图并发布集合, 集合强持有布局/资源, 不改全局绑定.
         BindingSetHandle CreateBindingSet(const BindingSetDesc &desc, BindingLayout *layout) override;
         DescriptorTableHandle CreateDescriptorTable(BindingLayout *layout) override;
         void ResizeDescriptorTable(DescriptorTable *descriptorTable, uint32_t newSize,
@@ -236,32 +251,32 @@ namespace Physara::RHI::OpenGL
             Draining,
             Stopped
         };
-        // 摘走删除 FIFO 后在锁外清理, context 不可用或删除失败时由最终 context 销毁回收原生存储.
+        /// @brief 摘走删除 FIFO 后在锁外清理, context 不可用或删除失败时由最终 context 销毁回收原生存储.
         void Drain(bool nativeAvailable) noexcept;
-        // 先删对象再删其自有 view, 原生错误后停止后续未知 GL 清理.
+        /// @brief 先删对象再删其自有 view, 原生错误后停止后续未知 GL 清理.
         [[nodiscard]] bool DeleteNative(NativeDeletion &record) noexcept;
-        // 记录首个 GL 错误并停止新工作, 仅依据原生 loss/reset 事实更新 context 健康.
+        /// @brief 记录首个 GL 错误并停止新工作, 仅依据原生 loss/reset 事实更新 context 健康.
         void NativeFailure(const char *operation, GLenum error, const char *resource,
                            std::source_location location) noexcept;
-        // 先构造物理包和 tracker, 再取得唯一 recording claim, 成功后发布不回绕身份.
+        /// @brief 先构造物理包和 tracker, 再取得唯一 recording claim, 成功后发布不回绕身份.
         [[nodiscard]] UploadWorkPacket *OpenPacket(std::size_t minimumChunk);
-        // 解除本包 recording claim 后 release 交接 orphan, worker 此后不再访问包或 lease.
+        /// @brief 解除本包 recording claim 后 release 交接 orphan, worker 此后不再访问包或 lease.
         void AbandonPacket(UploadWorkPacket &packet) noexcept;
-        // 只解除与 recordingId 匹配的 claim, 不影响后继录制.
+        /// @brief 只解除与 recordingId 匹配的 claim, 不影响后继录制.
         void ReleaseClaim(std::uint64_t recordingId) noexcept;
-        // 完成或退出边界统一清 tracker, chunk, lease 后销毁包, 由 owner 独占执行.
+        /// @brief 完成或退出边界统一清 tracker, chunk, lease 后销毁包, 由 owner 独占执行.
         void RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept;
-        // acquire 接收交接包, 有已发工作时建立内部 fence, 不发布公开票据或 tracker metadata.
+        /// @brief acquire 接收交接包, 有已发工作时建立内部 fence, 不发布公开票据或 tracker metadata.
         [[nodiscard]] bool SealOrphans();
-        // 按 FIFO 收集真实完成, wait 共享一次五秒截止点; false 由失败标记区分 Pending 与故障.
+        /// @brief 按 FIFO 收集真实完成, wait 共享一次五秒截止点; false 由失败标记区分 Pending 与故障.
         [[nodiscard]] bool CollectWork(bool wait);
-        // 分段等待至统一截止点, 只将实际 signaled 视为成功, WAIT_FAILED 锁存停止.
+        /// @brief 分段等待至统一截止点, 只将实际 signaled 视为成功, WAIT_FAILED 锁存停止.
         [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
-        // 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
+        /// @brief 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
         [[nodiscard]] bool CheckCompletionFence(GLsync sync, const char *operation) noexcept;
-        // 从当前包尾部或新 coherent chunk 分配, 受设备总预算约束, 不隐式等待其他包退休.
+        /// @brief 从当前包尾部或新 coherent chunk 分配, 受设备总预算约束, 不隐式等待其他包退休.
         [[nodiscard]] bool AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice);
-        // 输出 requested/retained/limit, 让容量拒绝可归因, 不伪装成硬件显存不足.
+        /// @brief 输出 requested/retained/limit, 让容量拒绝可归因, 不伪装成硬件显存不足.
         void ReportBudget(const char *operation, std::size_t requested, std::size_t retained,
                           std::size_t limit) const noexcept;
         DeviceDesc m_Desc;
@@ -282,6 +297,7 @@ namespace Physara::RHI::OpenGL
         std::size_t m_UploadCapacity = 0;
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
+        std::unique_ptr<NativeDeletion> m_DummySampler;
         bool m_WorkFailed = false;
         friend class OpenGLCommandList;
         friend class UploadResourceLease;
@@ -289,6 +305,8 @@ namespace Physara::RHI::OpenGL
 
     /// @brief 查询限制和每 target 的格式/样本集合, 再验证必需的 2D 基线.
     [[nodiscard]] bool BuildCaps(OpenGLDevice &device, DeviceCaps &caps);
+    /// @brief 核对图形准备所需入口并查询 VS/FS 与原生全局限额.
+    [[nodiscard]] bool BuildShaderCaps(OpenGLDevice &device, ShaderCaps &caps);
     /// @brief 按 RHI 维度取得原生 target, Unknown 或非法值返回零.
     [[nodiscard]] GLenum TextureTarget(TextureDimension dimension) noexcept;
     /// @brief 检查普通状态元数据与 keepInitialState 的一致性, 不推导 texel 初始化或命令支持.
@@ -310,6 +328,14 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] GpuVirtualAddress GetGpuVirtualAddress() const override
         {
             return 0;
+        }
+        [[nodiscard]] OpenGLDevice *Owner() const noexcept
+        {
+            return m_Device.Get();
+        }
+        [[nodiscard]] GLuint Name() const noexcept
+        {
+            return m_Deletion->name;
         }
         void Publish() noexcept
         {
@@ -376,6 +402,14 @@ namespace Physara::RHI::OpenGL
         {
             return m_Desc;
         }
+        [[nodiscard]] OpenGLDevice *Owner() const noexcept
+        {
+            return m_Device.Get();
+        }
+        [[nodiscard]] GLuint Name() const noexcept
+        {
+            return m_Deletion->name;
+        }
         void Publish() noexcept
         {
             m_Published = true;
@@ -402,6 +436,10 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] const FramebufferInfoEx &GetFramebufferInfo() const override
         {
             return m_Info;
+        }
+        [[nodiscard]] OpenGLDevice *Owner() const noexcept
+        {
+            return m_Device.Get();
         }
         void Publish() noexcept
         {

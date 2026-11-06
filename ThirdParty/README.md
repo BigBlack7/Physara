@@ -17,7 +17,7 @@
 | mikktspace | 固定源码快照 / [3e895b49d05ea07e4c2133156cfa94369e19e409](https://github.com/mmikk/MikkTSpace/tree/3e895b49d05ea07e4c2133156cfa94369e19e409) | Zlib，见源码头 | .c/.h；资产导入需要生成切线时再接入构建 |
 | nvrhi | 参考快照 / [6b96fb03e07539f08327aea76c56d55f1de9d906](https://github.com/NVIDIA-RTX/NVRHI/tree/6b96fb03e07539f08327aea76c56d55f1de9d906) | MIT，见 LICENSE.txt、ThirdPartyLicenses.txt | include/src/doc、README 和许可；只供源码参考，不加入 CMake |
 | spdlog | v1.17.0 / [79524ddd08a4ec981b7fea76afd08ee05f83755d](https://github.com/gabime/spdlog/tree/79524ddd08a4ec981b7fea76afd08ee05f83755d) | MIT，含配套 fmt 许可 | include 头文件及内置 fmt |
-| spirv-cross | vulkan-sdk-1.4.363.0 / [f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7](https://github.com/KhronosGroup/SPIRV-Cross/tree/f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7) | Apache-2.0 或 MIT 及所附第三方许可, 见 LICENSE、LICENSES | core 反射的 4 个实现文件及实际传递头/许可, 无上游工程、版本脚本、其他语言后端、CLI 或测试语料 |
+| spirv-cross | vulkan-sdk-1.4.363.0 / [f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7](https://github.com/KhronosGroup/SPIRV-Cross/tree/f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7) | Apache-2.0 或 MIT 及所附第三方许可, 见 LICENSE、LICENSES | core 反射的 4 个实现、GLSL lowering 的 spirv_glsl.cpp/.hpp 及实际传递头/许可, 无上游工程、版本脚本、其他语言后端、CLI 或测试语料 |
 | spirv-headers | 固定源码快照 / [496543121ce6419f23d6fa5d7194ba66c36212d2](https://github.com/KhronosGroup/SPIRV-Headers/tree/496543121ce6419f23d6fa5d7194ba66c36212d2) | MIT 及 LICENSE 列出的例外, 保留 REUSE 归属声明 | validator 实际包含的 unified1 头及许可; 语法 JSON 只在更新固定表快照时从同 commit 的完整归档取得 |
 | spirv-tools | 固定源码快照 / [ef96ed763b43b59b33b31b362f09a02b729fa1c9](https://github.com/KhronosGroup/SPIRV-Tools/tree/ef96ed763b43b59b33b31b362f09a02b729fa1c9) | Apache-2.0, 见 LICENSE | 基础解析/validator、必要 util/val 头与六份固定表/版本快照, 无 optimizer/fuzz/reduce/link/lint/diff、未用 option 实现、上游工程、脚本、测试或示例 |
 | stb | 固定源码快照 / [a7d4c2175630e1ea5b6f8dd00ab96fed0b97b96d](https://github.com/nothings/stb/tree/a7d4c2175630e1ea5b6f8dd00ab96fed0b97b96d) | MIT 或公有领域，见 LICENSE | stb_image.h、stb_image_write.h |
@@ -26,12 +26,14 @@
 
 ## 使用约定
 
+2026-11-06 为 D03-T02 从同一固定 commit 的 raw 源补入原样 `spirv_glsl.cpp` (SHA256 `7f211747e8e879700119baa7bdd05dc2103e70b5aec297bf751ecc5a3ba3e1c5`) 与 `spirv_glsl.hpp` (`c3580710895edfabda19e4e70efa818b42a71460451ca024b747ebfd335ca43b`). 其 Windows include 闭包完全使用已保留的 core、GLSL 枚举和标准库头; 无新的生成步骤或本地上游源码改动. GL 4.6 builtin 规则在第一方适配中实现.
+
 - stb 仅提供头文件路径。首次实现图像解码时，在实际承担该职责的一个 cpp 中定义 STB_IMAGE_IMPLEMENTATION；需要图像写出时同样只定义一次 STB_IMAGE_WRITE_IMPLEMENTATION。实现宏不放公开头，不传播到所有消费者。
 - TinyGLTF 3 使用 C API。模型解析与编辑器场景 JSON 是两条独立的数据入口，不通过 TinyGLTF 保存编辑器场景。
 - ImGuizmo 的头文件要求先包含 imgui.h；其公开依赖由 CMake 的 PUBLIC 链接关系传递。
 - NVRHI 只供后续 RHI 开发参考，没有 target、include 路径或链接关系。移植时在第一方 RHI 中记录来源与差异。
 - MikkTSpace 暂不编译。后续遇到缺少切线且使用法线贴图的模型时，再由资产导入接入。
-- Shader 工具链的 Tools/Headers 固定输入取自上述 glslang commit 的 known_good.json, 当前由 ShaderToolchain/CMakeLists.txt 直接声明四个必要静态目标, 不加载上游 CMake 或调用获取脚本. MSVC 对这些目标及 Shader 核心使用 /EHs, 允许 C ABI 桥接中的 C++ 分配异常正确展开, 保持 RTTI 与 Debug 迭代器检查; Tools 的 context 检查仅在 Debug 启用, PCH 为目标私有. SPIRV-Cross 当前只编译 core, 不导出尚未接入的语言后端.
+- Shader 工具链的 Tools/Headers 固定输入取自上述 glslang commit 的 known_good.json, 当前由 ShaderToolchain/CMakeLists.txt 直接声明五个必要静态目标: glslang、默认资源限制、SPIRV-Tools-static、spirv-cross-core 和 spirv-cross-glsl, 不加载上游 CMake 或调用获取脚本. MSVC 对这些目标及 Shader 核心使用 /EHs, 允许 C ABI 桥接中的 C++ 分配异常正确展开, 保持 RTTI 与 Debug 迭代器检查; Tools 的 context 检查仅在 Debug 启用, PCH 为目标私有. SPIRV-Cross 编译 core 与当前 GL 准备消费的 GLSL backend, 不导出其它语言后端.
 - 保留的上游实现与头文件不修改算法, build_info.h 与 Tools 六份生成源码的来源见下节. 普通配置/构建不需要 Python、语法 JSON、生成脚本、Git 或 Vulkan SDK. 上次上游 source/CMakeLists.txt 与 update_build_version.py 的构建适配已随未使用的上游构建流程移除.
 - glslang 有两项 Physara 私有协议适配: Public/ShaderLang.h 声明 IsReservedIdentifier 并为 Includer 增加默认空操作 RecordInclude; MachineIndependent/Scan.cpp 只读查询原 KeywordMap/ReservedSet, preprocessor/Pp.cpp 在成功 include 处报告原文件/行. 第一方据此提前拒绝词法器关键字及准确记录展开边. 三处源码保留原版权, 不改变语法、搜索、条件处理或 IR 算法. 第一方将源文件的 CRLF/CR 统一为 LF 编译视图以保持行号, 原始字节仍参与身份; 具体合同见 [Interface 说明](../Engine/Shader/Interface/README.md). 该私有头/库须一起重建, 指纹包含实际适配字节.
 

@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "Submission.hpp"
+#include "InputLayout.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -197,7 +198,7 @@ namespace Physara::RHI::OpenGL
             Report("CreateDevice", "Unsupported: OpenGL 4.6 Core is required");
             return false;
         }
-        if (!BuildCaps(*this, m_Caps))
+        if (!BuildCaps(*this, m_Caps) || !BuildShaderCaps(*this, m_Caps.shader))
         {
             return false;
         }
@@ -242,9 +243,15 @@ namespace Physara::RHI::OpenGL
             case NativeKind::Framebuffer:
                 glDeleteFramebuffers(1, &record.name);
                 break;
+            case NativeKind::Program:
+                glDeleteProgram(record.name);
+                break;
+            case NativeKind::Shader:
+                glDeleteShader(record.name);
+                break;
             }
             record.name = 0;
-            constexpr const char *Kinds[] = {"Buffer", "Texture", "Sampler", "Framebuffer"};
+            constexpr const char *Kinds[] = {"Buffer", "Texture", "Sampler", "Framebuffer", "Program", "Shader"};
             if (!CheckNative("DeleteNative", name, Kinds[std::size_t(record.kind)]))
             {
                 return false;
@@ -401,21 +408,26 @@ namespace Physara::RHI::OpenGL
         return m_Desc.messageCallback;
     }
 
-    // 当前原生 Feature 入口统一返回 false 且不写调用方输出, 格式分配用途通过独立查询表达.
-    bool OpenGLDevice::QueryFeatureSupport(Feature, void *, size_t)
+    // 常量子范围已有实际 BindingSet 消费者, 其它未交付 Feature 仍拒绝且不写调用方输出.
+    bool OpenGLDevice::QueryFeatureSupport(Feature feature, void *, size_t)
     {
-        static_cast<void>(RequireContext("QueryFeatureSupport"));
-        return false;
+        return RequireContext("QueryFeatureSupport") && feature == Feature::ConstantBufferRanges;
     }
 
-    // 公共格式查询返回 2D 基线, 创建其他 target 时继续查对应维度的实际能力表.
+    // 纹理用途返回 2D 基线, 顶点用途叠加独立的 core 格式映射, 两者不互相推导支持.
     FormatSupport OpenGLDevice::QueryFormatSupport(Format format)
     {
         if (!RequireContext("QueryFormatSupport"))
         {
             return FormatSupport::None;
         }
-        return GetFormatCaps(format, TextureDimension::Texture2D).support;
+        auto support = GetFormatCaps(format, TextureDimension::Texture2D).support;
+        VertexInput input;
+        if (VertexFormat(format, input))
+        {
+            support = support | FormatSupport::VertexBuffer;
+        }
+        return support;
     }
 
     const FormatCaps &OpenGLDevice::GetFormatCaps(Format format, TextureDimension dimension) const noexcept

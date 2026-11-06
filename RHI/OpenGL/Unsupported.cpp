@@ -29,6 +29,8 @@
 
 namespace Physara::RHI::OpenGL
 {
+    // 以下简单入口共用同一合同: 检查 context 后只报告 Unsupported, 不解引用专有输入或改写输出.
+    // 已交付的 Shader/Bindings/InputLayout/GraphicsPipeline 工厂位于各自实现文件, 不属于此拒绝表.
     HeapHandle OpenGLDevice::CreateHeap(const HeapDesc &)
     {
         if (RequireContext("CreateHeap"))
@@ -181,14 +183,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    ShaderHandle OpenGLDevice::CreateShader(const ShaderDesc &, const void *, size_t)
-    {
-        if (RequireContext("CreateShader"))
-        {
-            Report("CreateShader", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
     ShaderHandle OpenGLDevice::CreateShaderSpecialization(Shader *, const ShaderSpecialization *, uint32_t)
     {
@@ -208,14 +202,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    InputLayoutHandle OpenGLDevice::CreateInputLayout(const VertexAttributeDesc *, uint32_t, Shader *)
-    {
-        if (RequireContext("CreateInputLayout"))
-        {
-            Report("CreateInputLayout", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
     EventQueryHandle OpenGLDevice::CreateEventQuery()
     {
@@ -294,23 +280,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    GraphicsPipelineHandle OpenGLDevice::CreateGraphicsPipeline(const GraphicsPipelineDesc &, FramebufferInfo const &)
-    {
-        if (RequireContext("CreateGraphicsPipeline"))
-        {
-            Report("CreateGraphicsPipeline", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
-    GraphicsPipelineHandle OpenGLDevice::CreateGraphicsPipeline(const GraphicsPipelineDesc &, Framebuffer *)
-    {
-        if (RequireContext("CreateGraphicsPipeline"))
-        {
-            Report("CreateGraphicsPipeline", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
     ComputePipelineHandle OpenGLDevice::CreateComputePipeline(const ComputePipelineDesc &)
     {
@@ -348,14 +318,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    BindingLayoutHandle OpenGLDevice::CreateBindingLayout(const BindingLayoutDesc &)
-    {
-        if (RequireContext("CreateBindingLayout"))
-        {
-            Report("CreateBindingLayout", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
     BindingLayoutHandle OpenGLDevice::CreateBindlessLayout(const BindlessLayoutDesc &)
     {
@@ -366,14 +328,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    BindingSetHandle OpenGLDevice::CreateBindingSet(const BindingSetDesc &, BindingLayout *)
-    {
-        if (RequireContext("CreateBindingSet"))
-        {
-            Report("CreateBindingSet", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
 
     DescriptorTableHandle OpenGLDevice::CreateDescriptorTable(BindingLayout *)
     {

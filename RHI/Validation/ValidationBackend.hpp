@@ -24,6 +24,7 @@
 
 /// @file
 /// @brief Validation 实现共享的无状态输入/profile 规则与包装对象, CPU 保活不推断原生归属或 GPU 完成.
+/// Device 负责创建前的公共合同, CommandList 负责调用顺序; 两者共用规则, 不复制后端的原生能力表.
 
 #include <atomic>
 #include <ostream>
@@ -130,6 +131,7 @@ namespace Physara::RHI::Validation
     };
 
     /// @brief 完整逻辑位置身份, 资源类/registerSpace/slot/arrayElement 共同参与相等与排序.
+    /// @note registerSpace 是调用点解释后的空间; GL 顺序 Pipeline 使用布局位置, 单独 Set 比较使用自身描述.
     struct BindingLocation
     {
         GraphicsResourceType type = GraphicsResourceType::SRV;
@@ -276,29 +278,29 @@ namespace Physara::RHI::Validation
         void Warning(const std::string &messageText,
                      std::source_location location = std::source_location::current()) const;
 
-        // 校验 recording 前提, 拒绝时不委托底层列表.
+        /// @brief 校验 recording 前提, 拒绝时不委托底层列表.
         bool RequireOpenState(std::source_location location = std::source_location::current()) const;
-        // 只有 Closed 可进入批提交预检, 不在这里消费状态.
+        /// @brief 只有 Closed 可进入批提交预检, 不在这里消费状态.
         bool RequireExecuteState(std::source_location location = std::source_location::current()) const;
-        // 根据队列能力层级拒绝不适合当前列表的命令.
+        /// @brief 根据队列能力层级拒绝不适合当前列表的命令.
         bool RequireType(CommandQueue queueType, const char *operation) const;
         CommandList *GetUnderlyingCommandList() const
         {
             return m_CommandList;
         }
 
-        // 布局已校验重复项后提取唯一 push constants 字节数, 无声明时为零.
+        /// @brief 布局已校验重复项后提取唯一 push constants 字节数, 无声明时为零.
         void EvaluatePushConstantSize(const Physara::RHI::BindingLayoutVector &bindingLayouts);
-        // 每次设置 Pipeline 状态后必须重新提供所需 push constants, 不沿用上一代提交状态.
+        /// @brief 每次设置 Pipeline 状态后必须重新提供所需 push constants, 不沿用上一代提交状态.
         bool ValidatePushConstants(const char *pipelineType, const char *stateFunctionName) const;
-        // 按位置核对集合与布局身份/种类, 普通 set 再校验完整资源内容, 不仅比较数量.
+        /// @brief 按位置核对集合与布局身份/种类, 普通 set 再校验完整资源内容, 不仅比较数量.
         bool ValidateBindingSetsAgainstLayouts(const StaticVector<BindingLayoutHandle, MaxBindingLayouts> &layouts,
                                                const StaticVector<BindingSet *, MaxBindingLayouts> &sets,
                                                std::source_location location = std::source_location::current()) const;
-        // 检查间接参数 Buffer 的用途与 offset/count/stride 所需字节范围.
+        /// @brief 检查间接参数 Buffer 的用途与 offset/count/stride 所需字节范围.
         bool ValidateIndirectBuffer(Buffer *buffer, uint64_t offset, uint64_t count, size_t stride) const;
 
-        // 核对 TLAS 构建/更新条件与实例预算, 不修改 wrapper 的已构建状态.
+        /// @brief 核对 TLAS 构建/更新条件与实例预算, 不修改 wrapper 的已构建状态.
         bool ValidateBuildTopLevelAccelStruct(AccelStructWrapper *wrapper, size_t numInstances,
                                               RT::AccelStructBuildFlags buildFlags) const;
 
@@ -410,6 +412,7 @@ namespace Physara::RHI::Validation
 
     /// @brief 可组合的公共输入校验设备, 强持有底层 Device, 拒绝发生在底层工作之前.
     /// @note 不缓存原生 caps 或维护资源地址注册表, 实际归属和 GPU 寿命仍由原生后端验证.
+    /// 校验只借用输入, 返回对象的所有权沿底层合同; 普通 CPU 分配异常可传播, 不承诺全部转换为空句柄.
     class DeviceWrapper : public RefCounter<Device>
     {
       public:
@@ -427,22 +430,27 @@ namespace Physara::RHI::Validation
         void Warning(const std::string &messageText,
                      std::source_location location = std::source_location::current()) const;
 
-        // 先核对标签再读取活动 union, errorStream 为空可表示 Input 层已报告, 避免重复诊断.
+        /// @brief 先核对标签再读取活动 union, errorStream 为空可表示 Input 层已报告, 避免重复诊断.
         bool ValidateBindingSetItem(const BindingSetItem &binding, DescriptorTable *pOptDescriptorTable,
                                     std::stringstream &errorStream,
                                     std::source_location location = std::source_location::current());
-        // 按 profile, layout, 单项和完整位置集合核对, 数组元素各有身份, 顺序不能代替匹配.
+        /// @brief 按 profile, layout, 单项和完整位置集合核对, 数组元素各有身份, 顺序不能代替匹配.
         bool ValidateBindingSetDesc(const BindingSetDesc &desc, BindingLayout *layout,
                                     std::source_location location = std::source_location::current());
-        // 逐阶段汇总逻辑位置并核对集合映射与 push constants, 校验完成前不创建 Pipeline.
+        /// @brief 逐阶段汇总逻辑位置并核对集合映射与 push constants, 校验完成前不创建 Pipeline.
+        /// @note GL 顺序模式按布局位置区分 set, 显式模式用 registerSpace; 其它 API 保留原空间语义.
         bool ValidatePipelineBindingLayouts(const StaticVector<BindingLayoutHandle, MaxBindingLayouts> &bindingLayouts,
                                             const std::vector<Shader *> &shaders) const;
-        // 指定阶段必须匹配实际 Shader 描述, 不把非空句柄视为阶段正确.
+        /// @brief 指定阶段必须匹配实际 Shader 描述, 不把非空句柄视为阶段正确.
         bool ValidateShaderType(ShaderType expected, const ShaderDesc &shaderDesc, const char *function) const;
-        // 对照 framebuffer 格式/样本信息检查固定状态及扩展能力.
+        /// @brief 对照 framebuffer 格式/样本信息检查固定状态及扩展能力.
         bool ValidateRenderState(const RenderState &renderState, FramebufferInfo const &fbinfo) const;
+        /// @brief 两种图形工厂共用的描述校验, 不丢弃 framebuffer 对象身份或创建原生 Program.
+        /// @pre 调用方已通过 profile 检查, 原生归属由最终委托的对应工厂检查.
+        bool ValidateGraphicsPipelineDesc(const GraphicsPipelineDesc &pipelineDesc,
+                                          FramebufferInfo const &fbinfo) const;
 
-        // 校验固定来源的 cluster 操作参数, 实际可执行能力仍须通过 profile 和底层设备.
+        /// @brief 校验固定来源的 cluster 操作参数, 实际可执行能力仍须通过 profile 和底层设备.
         bool ValidateClusterOperationParams(const RT::Cluster::OperationParams &params) const;
 
       public:
@@ -452,6 +460,8 @@ namespace Physara::RHI::Validation
 
         // IDevice implementation
 
+        /// @brief 创建型入口先校验公共输入并按需补诊断名, 通过后只向底层委托一次.
+        /// @note 后续资源工厂遵守同一规则; 不支持的 GL 扩展在读取专有载荷前拒绝.
         HeapHandle CreateHeap(const HeapDesc &d) override;
 
         TextureHandle CreateTexture(const TextureDesc &d) override;
@@ -487,6 +497,7 @@ namespace Physara::RHI::Validation
 
         BufferHandle CreateHandleForNativeBuffer(ObjectType objectType, Object buffer, const BufferDesc &desc) override;
 
+        /// @brief 检查单一阶段与字节借用, 模块解析和实际支持范围由底层 Shader 工厂确认.
         ShaderHandle CreateShader(const ShaderDesc &d, const void *binary, size_t binarySize) override;
         ShaderHandle CreateShaderSpecialization(Shader *baseShader, const ShaderSpecialization *constants,
                                                 uint32_t numConstants) override;
@@ -494,6 +505,7 @@ namespace Physara::RHI::Validation
 
         SamplerHandle CreateSampler(const SamplerDesc &d) override;
 
+        /// @brief 核对属性展开数量, 格式和共享 Buffer 的 stride/频率, 不在本层生成原生 location.
         InputLayoutHandle CreateInputLayout(const VertexAttributeDesc *d, uint32_t attributeCount,
                                             Shader *vertexShader) override;
 
@@ -512,8 +524,11 @@ namespace Physara::RHI::Validation
 
         GraphicsAPI GetGraphicsAPI() override;
 
+        /// @brief 核对附件用途, 子资源和共同尺寸/样本后委托, 归属与原生完整性仍由底层检查.
         FramebufferHandle CreateFramebuffer(const FramebufferDesc &desc) override;
 
+        /// @brief 公共描述校验后按兼容值委托; framebuffer 重载保留实际对象到对应底层工厂.
+        /// @note 两入口共用校验, 不在本层把 framebuffer 对象转换成纯值后改走另一个创建入口.
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc,
                                                       FramebufferInfo const &fbinfo) override;
 
@@ -531,6 +546,7 @@ namespace Physara::RHI::Validation
         BindingLayoutHandle CreateBindingLayout(const BindingLayoutDesc &desc) override;
         BindingLayoutHandle CreateBindlessLayout(const BindlessLayoutDesc &desc) override;
 
+        /// @brief 完整校验布局与实参后在描述副本中解包资源, 不改变调用方描述或取得原生归属证明.
         BindingSetHandle CreateBindingSet(const BindingSetDesc &desc, BindingLayout *layout) override;
         DescriptorTableHandle CreateDescriptorTable(BindingLayout *layout) override;
 
@@ -544,7 +560,9 @@ namespace Physara::RHI::Validation
         RT::Cluster::OperationSizeInfo GetClusterOperationSizeInfo(const RT::Cluster::OperationParams &params) override;
         bool BindAccelStructMemory(RT::AccelStruct *as, Heap *heap, uint64_t offset) override;
 
+        /// @brief 检查队列/profile 后创建底层列表并包装, 包装失败释放本次底层句柄.
         CommandListHandle CreateCommandList(const CommandListParameters &params = CommandListParameters()) override;
+        /// @brief 全批校验及解包成功后消费 Closed 状态并委托一次, 返回零或异常均不自动重放.
         uint64_t ExecuteCommandLists(CommandList *const *pCommandLists, size_t numCommandLists,
                                      CommandQueue executionQueue = CommandQueue::Graphics) override;
         void QueueWaitForCommandList(CommandQueue waitQueue, CommandQueue executionQueue, uint64_t instance) override;

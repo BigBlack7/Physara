@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01 · 权威 Shader 接口与编译步骤](D03-D05-FramePipeline.md#d03-t01) 已完成并归档，记录见 [establish-shader-interface-build](../../openspec/changes/archive/2026-11-05-establish-shader-interface-build/tasks.md)。下一工作包为 [D03-T02 · GL Shader、绑定与 Pipeline lowering](D03-D05-FramePipeline.md#d03-t02)。
+当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01](D03-D05-FramePipeline.md#d03-t01) 与 [D03-T02](D03-D05-FramePipeline.md#d03-t02) 均已完成并归档，最近一次交付记录见 [establish-opengl-shader-pipelines](../../openspec/changes/archive/2026-11-06-establish-opengl-shader-pipelines/tasks.md)。下一工作包为 [D03-T03 · 单即时列表与基础 Draw 状态](D03-D05-FramePipeline.md#d03-t03)，尚未创建 change，实施未开始。
 
 ## 阅读与使用
 

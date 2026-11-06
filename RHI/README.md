@@ -4,20 +4,23 @@
 
 ## OpenGL 原生消费边界
 
-OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL PUBLIC 链接通用 PhysaraRHI, PRIVATE 使用固定 glad; 根工程显式接入, 只 add_subdirectory(RHI) 的通用消费者不配置或链接 loader. 后端根据公共接口实现, 不存在可直接移植的 NVRHI GL backend; 新原生代码的签名与固定公开合同对应, 第三方参考仍不编译.
+OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL PUBLIC 链接通用 PhysaraRHI, PRIVATE 使用固定 glad 与 spirv-cross-glsl; 根工程显式接入, 只 add_subdirectory(RHI) 的通用消费者不配置或链接 loader/Shader 工具链. 后端根据公共接口实现, 不存在可直接移植的 NVRHI GL backend; 新原生代码的签名与固定公开合同对应, 第三方参考仍不编译.
 
 后端已实现实际工厂/caps/clip convention、四类基础分配、无分配退休及正式 Host 的 raw/Validation 装配, 验证结果和实际环境见 [归档任务](../openspec/changes/archive/2026-10-27-establish-opengl-device-resources/tasks.md). 固定公共来源和完整声明不随本后端裁剪.
 
 | 当前入口 | 支持和边界 |
 |---|---|
-| Device | 68 项 override 保留; 原生 Feature 全 false/output 不变, 格式 flags 仅说明资源用途. clip 为 upper-left/zero-to-one, 未作为绘制图像验收 |
+| Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 未作为绘制图像验收 |
 | Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入, 公共 Map/Copy 仍拒绝 |
 | Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建; 3D 深度/模板存储拒绝. 公共格式 flags 表示 2D 基线. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 3D/layered/空/shading-rate/只读颜色拒绝; 深度只读为后续写检查 metadata |
+| Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
+| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图与独立 Sampler, 不绑定全局单元. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
+| InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持 Open/Close/ClearState、Buffer/颜色 Texture 写入及受限 transfer tracker; 其余方法在读取 payload 前 Unsupported |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放写入. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, orphan 由 owner 建内部 fence 退休 |
-| 其余 Device 操作 | Shader/Binding/Pipeline/公共 copy/readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
+| 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 copy/readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
 
@@ -95,6 +98,8 @@ D02-T02 的十个实际输入如下. 本表登记固定来源, 当前定义归�
 8. 经维护者确认, initializer-list 构造补 Base() 初始化, 与默认/尺寸构造一致; 防止部分填充的标量/指针容器在整数组 swap 中读未初始化槽. 布局、逻辑内容和容量不变, 不作性能结论.
 
 上述非机械差异的原因、范围、替代方案和验证见 [design](../openspec/changes/archive/2026-10-25-establish-rhi-public-contract/design.md). 不据此普遍允许重写来源算法.
+
+D03-T02 对同一 Validation 增加三个 GL 准备适配: 顺序布局按 Pipeline 位置解释有效 set, 显式布局沿 registerSpace; Texture_SRV 允许受支持 array/cube storage 的显式二维单层 view, 仍检查范围/格式并由 backend 落实原生兼容性; 两种图形工厂共用描述校验, framebuffer 重载保留实际对象到 backend 归属检查. 其它 API 的寄存器空间与维度规则不变, 不增加对象 registry. 修正与复核状态见 [Shader/Pipeline change](../openspec/changes/archive/2026-11-06-establish-opengl-shader-pipelines/tasks.md#review-retention).
 
 D02-T02 的当前有限差异及前提:
 

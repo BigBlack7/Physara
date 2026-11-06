@@ -24,6 +24,7 @@
 
 /// @file
 /// @brief Device 输入/profile 校验与一次委托, 保留固定来源算法, 项目适配不缓存原生 caps 或地址归属.
+/// Input/Profile 处理公共边界, 绑定摘要解释逻辑身份, 工厂完成预检后交给底层处理原生归属和设备限制.
 
 #include <algorithm>
 #include <array>
@@ -618,6 +619,7 @@ namespace Physara::RHI::Validation
                       location.line());
         callback->Message(severity, text);
     }
+    // 完整位置集的差集用于区分布局缺项与集合多项, 不以槽范围或元素数量代替身份.
     template <typename T>
     static std::set<T> SetDifference(std::set<T> const &a, std::set<T> const &b)
     {
@@ -629,6 +631,7 @@ namespace Physara::RHI::Validation
         return result;
     }
 
+    // 跨布局交集只保留完整身份相同的位置, 用于当前 Shader 阶段的重复绑定诊断.
     template <typename T>
     static std::set<T> SetIntersection(std::set<T> const &a, std::set<T> const &b)
     {
@@ -643,6 +646,7 @@ namespace Physara::RHI::Validation
         return result;
     }
 
+    // 原地积累已见位置或重复位置, 分配异常按普通 CPU 校验合同向调用方传播.
     template <typename T> static void SetUnionInplace(std::set<T> &a, std::set<T> const &b)
     {
         for (T const &item : b)
@@ -1637,15 +1641,15 @@ namespace Physara::RHI::Validation
         }
     }
 
-    // 展开布局中声明的数组元素为逻辑位置, 与 set 侧摘要使用相同身份编码.
+    // 展开布局中声明的数组元素, registerSpace 已由调用方按当前 API/set 策略解释.
     static void FillBindingLayoutSummary(MessageCallback *messageCallback, BindingLayoutDesc const &desc,
-                                         bool ignoreRegisterSpaces, BindingSummary &bindings,
+                                         uint32_t registerSpace, BindingSummary &bindings,
                                          BindingLocationSet &duplicates)
     {
         for (const auto &item : desc.bindings)
         {
             BindingLocation location;
-            location.registerSpace = ignoreRegisterSpaces ? 0 : desc.registerSpace;
+            location.registerSpace = registerSpace;
             location.slot = item.slot;
             uint32_t arraySize = item.GetArraySize();
             for (location.arrayElement = 0; location.arrayElement < arraySize; ++location.arrayElement)
@@ -1770,7 +1774,8 @@ namespace Physara::RHI::Validation
         std::stringstream ssDuplicateBindings;
         std::stringstream ssOverlappingBindings;
 
-        // 按实际阶段合并可见布局的完整位置身份, D3D11 忽略 register space 的规则仅影响此处身份解释.
+        // 先按 API/set 策略解释有效空间, 再按实际阶段合并可见布局的完整位置身份.
+        // 单独 BindingSet 没有 Pipeline 位置, 在其本地声明/实参比较时继续使用自身布局空间.
         bool const ignoreRegisterSpaces = (m_Device->GetGraphicsAPI() == GraphicsAPI::D3D11);
 
         for (Shader *shader : shaders)
@@ -1803,7 +1808,13 @@ namespace Physara::RHI::Validation
                         }
 
                         BindingLocationSet duplicates;
-                        FillBindingLayoutSummary(m_MessageCallback, *layoutDesc, ignoreRegisterSpaces,
+                        // GL 顺序布局的 set 来自 Pipeline 位置, 其它 API 保留既有 register space 语义.
+                        const uint32_t registerSpace =
+                            ignoreRegisterSpaces ? 0u
+                            : (Profile::IsOpenGL(m_Device) && !layoutDesc->registerSpaceIsDescriptorSet)
+                                ? uint32_t(layoutIndex)
+                                : layoutDesc->registerSpace;
+                        FillBindingLayoutSummary(m_MessageCallback, *layoutDesc, registerSpace,
                                                  bindingsPerLayout[layoutIndex], duplicates);
 
                         // Layouts with duplicates should not have passed validation in createBindingLayout
@@ -2126,25 +2137,21 @@ namespace Physara::RHI::Validation
         return true;
     }
 
-    GraphicsPipelineHandle DeviceWrapper::CreateGraphicsPipeline(const GraphicsPipelineDesc &pipelineDesc,
-                                                                 FramebufferInfo const &fbinfo)
+    bool DeviceWrapper::ValidateGraphicsPipelineDesc(const GraphicsPipelineDesc &pipelineDesc,
+                                                     FramebufferInfo const &fbinfo) const
     {
-        if (Profile::RejectGraphicsPipeline(m_Device, pipelineDesc))
-        {
-            return nullptr;
-        }
-
         if (pipelineDesc.primType > PrimitiveType::PatchList ||
             (pipelineDesc.primType == PrimitiveType::PatchList && pipelineDesc.patchControlPoints == 0))
         {
             Error("InvalidArgument: invalid primitive/patch count");
-            return nullptr;
+            return false;
         }
         if (!pipelineDesc.VS)
         {
             Error("InvalidArgument: graphics pipeline requires a vertex shader");
-            return nullptr;
+            return false;
         }
+        // 按阶段核对 Shader, 再检查布局和固定状态; 此 helper 不创建 Pipeline 或改写输入.
         // count 构造允许 MSVC Debug proxy 的分配失败沿普通 CPU 异常边界传播.
         std::vector<Shader *> shaders(0);
 
@@ -2157,17 +2164,24 @@ namespace Physara::RHI::Validation
 
                 if (!ValidateShaderType(stage, shader->GetDesc(), "createGraphicsPipeline"))
                 {
-                    return nullptr;
+                    return false;
                 }
             }
         }
 
         if (!ValidatePipelineBindingLayouts(pipelineDesc.bindingLayouts, shaders))
         {
-            return nullptr;
+            return false;
         }
 
-        if (!ValidateRenderState(pipelineDesc.renderState, fbinfo))
+        return ValidateRenderState(pipelineDesc.renderState, fbinfo);
+    }
+
+    GraphicsPipelineHandle DeviceWrapper::CreateGraphicsPipeline(const GraphicsPipelineDesc &pipelineDesc,
+                                                                 FramebufferInfo const &fbinfo)
+    {
+        if (Profile::RejectGraphicsPipeline(m_Device, pipelineDesc) ||
+            !ValidateGraphicsPipelineDesc(pipelineDesc, fbinfo))
         {
             return nullptr;
         }
@@ -2189,7 +2203,21 @@ namespace Physara::RHI::Validation
             return nullptr;
         }
 
-        return CreateGraphicsPipeline(pipelineDesc, fb->GetFramebufferInfo());
+        if (!ValidateGraphicsPipelineDesc(pipelineDesc, fb->GetFramebufferInfo()))
+        {
+            return nullptr;
+        }
+
+        // 保留实际对象到原生工厂, 由 owner 检查归属后再提取兼容值, 不在包装层丢失身份.
+        // Device 的 framebuffer 重载仍是保留的兼容协议, 这里只抑制适配该已弃用声明的单次 MSVC 警告.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+        return m_Device->CreateGraphicsPipeline(pipelineDesc, fb);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
     }
 
     ComputePipelineHandle DeviceWrapper::CreateComputePipeline(const ComputePipelineDesc &pipelineDesc)
@@ -2578,7 +2606,16 @@ namespace Physara::RHI::Validation
 
             if (binding.dimension != TextureDimension::Unknown)
             {
-                if (!TextureDimensionsCompatible(desc.dimension, binding.dimension))
+                // 仅 GL 的普通采样 SRV 允许数组/cube storage 选择二维单层; 范围/格式仍沿原边界检查.
+                // 此处允许继续委托, 不证明原生 view 已有效; 精确范围和 view class 仍由后端确认.
+                const bool singleLayerOpenGLSrv = Profile::IsOpenGL(m_Device) &&
+                                                  binding.type == ResourceType::Texture_SRV &&
+                                                  binding.dimension == TextureDimension::Texture2D &&
+                                                  desc.sampleCount == 1 && subresources.numArraySlices == 1 &&
+                                                  (desc.dimension == TextureDimension::Texture2DArray ||
+                                                   desc.dimension == TextureDimension::TextureCube ||
+                                                   desc.dimension == TextureDimension::TextureCubeArray);
+                if (!singleLayerOpenGLSrv && !TextureDimensionsCompatible(desc.dimension, binding.dimension))
                 {
                     errorStream << "Requested binding dimension (" << Utils::TextureDimensionToString(binding.dimension)
                                 << ") "
@@ -2918,7 +2955,8 @@ namespace Physara::RHI::Validation
         BindingSummary layoutBindings;
         BindingLocationSet layoutDuplicates;
 
-        FillBindingLayoutSummary(m_MessageCallback, *layoutDesc, ignoreRegisterSpaces, layoutBindings,
+        FillBindingLayoutSummary(m_MessageCallback, *layoutDesc,
+                                 ignoreRegisterSpaces ? 0u : layoutDesc->registerSpace, layoutBindings,
                                  layoutDuplicates);
 
         BindingSummary setBindings;
@@ -2970,6 +3008,7 @@ namespace Physara::RHI::Validation
             return nullptr;
         }
         // Unwrap the resources
+        // 只修改本次描述副本, 布局与资源身份继续传到底层, 不把解包视为归属或原生准备成功.
         BindingSetDesc patchedDesc = desc;
         for (auto &binding : patchedDesc.bindings)
         {

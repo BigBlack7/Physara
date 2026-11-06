@@ -36,7 +36,8 @@ namespace Physara::Shader
     };
 
     /// @brief 同时保存静态 include 图与实际展开记录, 持有编译器借用的全部源字节.
-    /// @note 单请求串行使用, 不可移动; glslang 的 include 结果必须在图销毁前释放.
+        /// @note 单请求串行使用, 不可移动; glslang 的 include 结果必须在图销毁前释放.
+        /// 图构建失败会结束本次编译请求, 不将未完成的节点作为另一请求的缓存复用.
     class SourceGraph final : public glslang::TShader::Includer
     {
       public:
@@ -59,8 +60,8 @@ namespace Physara::Shader
         }
         /// @brief 本地 glslang 适配提供原引用行, 只把这一次实际处理的声明边标为展开.
         void RecordInclude(const char *target, const char *includer, std::size_t line) override;
-        // glslang::TShader::Includer 的固定虚函数名, 必须保留上游拼写才能 override.
-        // 这三个回调属于外部接口命名例外, 模块自己的函数仍使用 PascalCase.
+        /// @brief glslang::TShader::Includer 的固定回调, 保留上游拼写以满足 override 协议.
+        /// @note includeSystem/includeLocal 共用受控源图; releaseInclude 只结束结果借用, 不删除源节点.
         IncludeResult *includeSystem(const char *name, const char *includer, std::size_t depth) override;
         IncludeResult *includeLocal(const char *name, const char *includer, std::size_t depth) override;
         void releaseInclude(IncludeResult *result) override;
@@ -73,14 +74,14 @@ namespace Physara::Shader
         std::list<IncludeResult> m_Results;
         std::size_t m_TotalBytes = 0;
 
-        // 解析受控逻辑根与物理路径, 同一实际文件不允许多种逻辑身份.
+        /// @brief 解析受控逻辑根与物理路径, 同一实际文件不允许多种逻辑身份.
         std::pair<std::string, std::filesystem::path> Resolve(std::string_view operand, bool system,
                                                               std::string_view includer) const;
-        // 首次读取时保存字节, 扫描指令并记录声明边; 已有节点直接复用.
+        /// @brief 首次读取时保存字节, 扫描指令并记录声明边; 已有节点直接复用.
         SourceFile &ReadFile(const std::string &logical, const std::filesystem::path &path);
-        // 用显式 DFS 完成静态声明图, complete 只在全部子边完成后发布.
+        /// @brief 用显式 DFS 完成静态声明图, complete 只在全部子边完成后发布.
         const SourceFile &Load(const std::string &logical, const std::filesystem::path &path);
-        // 为编译器分配借用已加载节点的 include 结果, 不动态发现声明图以外的文件.
+        /// @brief 为编译器分配借用已加载节点的 include 结果, 不动态发现声明图以外的文件.
         IncludeResult *Expand(const char *name, const char *includer, std::size_t depth, bool system);
     };
 }

@@ -12,6 +12,7 @@
 
 namespace Physara::RHI::OpenGL
 {
+    // 物理包先建立可失败的 CPU 容器和 tracker, 后续取得 recording claim 才向列表发布.
     UploadWorkPacket::UploadWorkPacket(MessageCallback *callback, std::uint64_t identity, std::size_t minimum)
         : tracker(callback), recordingId(identity), minimumChunk(minimum), resources(0), chunks(0)
     {
@@ -454,6 +455,8 @@ namespace Physara::RHI::OpenGL
                 nativeAvailable = nativeAvailable && m_NativeUsable && m_Phase != Phase::Faulted;
             }
         }
+        // 设备自有 dummy sampler 没有 wrapper/反向引用, 与普通退休记录一起在正确 context 收拢.
+        ReleaseAllocation(std::move(m_DummySampler), true);
         Drain(nativeAvailable);
         m_Phase = Phase::Stopped;
         if (nativeError != nullptr)

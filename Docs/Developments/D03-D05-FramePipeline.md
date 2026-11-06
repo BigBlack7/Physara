@@ -27,11 +27,13 @@
 
 **职责位置：** RHI/OpenGL Shader/Bindings/Pipeline、Engine/Shader。**前置：** [D03-T01](#d03-t01)。**架构依据：** [7.3](../Architecture.md#opengl)、[7.2](../Architecture.md#rhi-objects)、[1.3](../Architecture.md#shader-build)。
 
-- [ ] 通过 SPIRV-Cross 把 canonical IR lowering 为 GLSL 460，映射 builtin、clip 与资源布局，完成 native program link。
-- [ ] 按活动资源反射建立 PipelineBindingPlan，合并 Texture/Sampler 采样对并紧凑分配 UBO/SSBO/image/texture 单元，校验真实 limits。
-- [ ] 实现 BindingLayout/BindingSet、GraphicsPipeline、基础 framebuffer 兼容检查；以共享纹理不同 sampler 等用例校验 lowering。
+- [x] 通过 SPIRV-Cross 把 D03-T01 当前 canonical graphics profile lowering 为 GLSL 460，映射 builtin、clip 与资源布局，完成 native program link。
+- [x] 按活动资源反射建立 PipelineBindingPlan，合并 Texture/Sampler 采样对并紧凑分配当前 profile 的 UBO、只读 SSBO 和 texture 单元，校验真实 limits；image/UAV 随 D08-T04 扩充，当前明确拒绝且不预占单元。
+- [x] 实现 BindingLayout/BindingSet、GraphicsPipeline、基础 framebuffer 兼容检查；以共享纹理不同 sampler 等用例校验 lowering。
 
 **完成条件：** 逻辑 set/binding 与原生单元映射可诊断，合法接口不因全项目预留大量固定 binding 而误判设备不足。
+
+**当前状态** 已完成并归档；范围、证据与后续任务见 [establish-opengl-shader-pipelines](../../openspec/changes/archive/2026-11-06-establish-opengl-shader-pipelines/tasks.md)。本包沿 D03-T01 的当前 graphics profile 交付准备能力，volatile/push 消费仍归 D08-T02，Draw、在途绘制与像素门槛仍归 D03-T03/T04/T05。
 
 <a id="d03-t03"></a>
 ### D03-T03 · 实现单即时列表与基础 Draw 状态

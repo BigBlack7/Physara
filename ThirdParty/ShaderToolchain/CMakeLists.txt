@@ -134,6 +134,13 @@ add_library(spirv-cross-core STATIC
     ../spirv-cross/spirv_cfg.cpp
 )
 
+# GL 后端只需同一固定版本的 GLSL 实现, 不加载上游工程或其它语言 backend.
+# GLSL 的公开头使用 core 声明, 因而传递 core 的 include/链接合同; 公共 RHI 不消费这两个 target.
+add_library(spirv-cross-glsl STATIC ../spirv-cross/spirv_glsl.cpp)
+target_link_libraries(spirv-cross-glsl PUBLIC spirv-cross-core)
+target_compile_features(spirv-cross-glsl PRIVATE cxx_std_11)
+target_compile_options(spirv-cross-glsl PRIVATE /wd4267 /wd4996 $<$<CONFIG:Debug>:/bigobj>)
+
 # 公共 include 只提供当前库接口, SYSTEM 将第三方诊断与第一方门槛隔离.
 target_include_directories(glslang SYSTEM PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../glslang")
 target_include_directories(glslang-default-resource-limits SYSTEM PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../glslang")
@@ -161,7 +168,7 @@ set_target_properties(SPIRV-Tools-static PROPERTIES OUTPUT_NAME SPIRV-Tools)
 
 target_compile_features(spirv-cross-core PRIVATE cxx_std_11)
 target_compile_options(spirv-cross-core PRIVATE /wd4267 /wd4996 $<$<CONFIG:Debug>:/bigobj>)
-foreach(target IN ITEMS glslang glslang-default-resource-limits SPIRV-Tools-static spirv-cross-core)
+foreach(target IN ITEMS glslang glslang-default-resource-limits SPIRV-Tools-static spirv-cross-core spirv-cross-glsl)
     target_compile_options(${target} PRIVATE /EHs /GR /utf-8)
     set_target_properties(${target} PROPERTIES CXX_EXTENSIONS OFF)
 endforeach()

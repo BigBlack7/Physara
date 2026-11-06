@@ -9,6 +9,7 @@
 
 namespace Physara::Shader
 {
+    // 按 UTF-8 原字节构造 Windows 路径, 不经当前系统代码页解释逻辑源名.
     static std::filesystem::path Utf8Path(std::string_view text)
     {
         return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(text.data()), text.size()));
@@ -239,8 +240,10 @@ namespace Physara::Shader
             else if (directive.word == "extension")
             {
                 const auto colon = directive.operand.find(':');
+                const auto extension = TrimSource(std::string_view(directive.operand).substr(0, colon));
+                // samplerless 仅开放已规划 fetch 的源写法, 最终 IR 仍由原有 profile/ABI 边界核对.
                 if (colon == std::string::npos ||
-                    TrimSource(std::string_view(directive.operand).substr(0, colon)) != "GL_GOOGLE_include_directive" ||
+                    (extension != "GL_GOOGLE_include_directive" && extension != "GL_EXT_samplerless_texture_functions") ||
                     (TrimSource(std::string_view(directive.operand).substr(colon + 1)) != "require" &&
                      TrimSource(std::string_view(directive.operand).substr(colon + 1)) != "enable"))
                 {
