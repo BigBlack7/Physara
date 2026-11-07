@@ -209,12 +209,21 @@ namespace Physara::RHI::OpenGL
         for (std::size_t index = 0; index < info.colorFormats.size(); ++index)
         {
             const auto &target = state.blendState.targets[index];
+            // 枚举合法不等于本 profile 能执行; inactive 因子仍保留在描述中, 应用时再统一为无害值.
             RequirePreparation(validFactor(target.srcBlend) && validFactor(target.destBlend) &&
                                    validFactor(target.srcBlendAlpha) && validFactor(target.destBlendAlpha) &&
                                    target.blendOp >= BlendOp::Add && target.blendOp <= BlendOp::Max &&
                                    target.blendOpAlpha >= BlendOp::Add && target.blendOpAlpha <= BlendOp::Max &&
                                    (std::uint32_t(target.colorWriteMask) & ~0xfu) == 0,
                                "InvalidArgument: blend state");
+            const auto use = GetBlendFactorUse(target, info.colorFormats[index]);
+            const auto dualSource = [](BlendFactor value)
+            { return value >= BlendFactor::Src1Color && value <= BlendFactor::InvSrc1Alpha; };
+            // 基线没有 index=1 的第二颜色输出, 只拒绝本次真正需要该输入的配置.
+            RequirePreparation(
+                (!use.color || (!dualSource(target.srcBlend) && !dualSource(target.destBlend))) &&
+                    (!use.alpha || (!dualSource(target.srcBlendAlpha) && !dualSource(target.destBlendAlpha))),
+                "Unsupported: active dual-source blend requires a second shader color output");
         }
     }
 

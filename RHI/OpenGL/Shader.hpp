@@ -90,10 +90,18 @@ namespace Physara::RHI::OpenGL
         {
             return m_Outputs;
         }
+        /// @brief 活动 PointSize 输出决定原生点光栅是否消费 Shader 大小, 不改变 canonical 模块.
+        [[nodiscard]] bool WritesPointSize() const noexcept
+        {
+            return m_WritesPointSize;
+        }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         ShaderDesc m_Desc;
+        bool m_WritesPointSize = false;
         std::vector<std::uint32_t> m_Words;
         std::vector<ShaderResource> m_Resources;
         std::vector<ShaderSamplingPair> m_Pairs;

@@ -4269,6 +4269,7 @@ namespace Physara::RHI
     typedef StaticVector<BindingSet *, MaxBindingLayouts> BindingSetVector;
 
     /// @brief 一次录制中的动态图形状态, 使用具体 framebuffer/bindings/buffer, 不替代 Pipeline 固定配置.
+    /// @note 对象指针均为借用; 使用值初始化再填写字段, 包保活与 BindingSet.trackLiveness 由后端合同决定.
     struct GraphicsState
     {
         GraphicsPipeline *pipeline = nullptr;
@@ -4344,6 +4345,7 @@ namespace Physara::RHI
     };
 
     /// @brief 绘制范围与实例偏移, indexed 调用沿用 vertexCount 字段表示索引数.
+    /// @note startIndexLocation 以索引元素计, indexBuffer.offset 以字节计; indexed 的 startVertexLocation 是 baseVertex.
     struct DrawArguments
     {
         uint32_t vertexCount = 0;
@@ -5107,7 +5109,7 @@ namespace Physara::RHI
     // - Vulkan: The command list objects don't own the VkCommandBuffer-s but request available ones from the queue
     //   instead. The upload and scratch buffers behave the same way they do on DX12.
     /// @brief 单写者命令录制接口, 方法须满足 Open/Close 协议及实际队列能力.
-    /// @note GL 当前为上传限定的即时子集, 录制时发出工作, Execute 不重放, 不支持项明确拒绝.
+    /// @note GL 当前提供基线图形/传输即时子集, 录制时发出工作, Execute 不重放, 不支持项明确拒绝.
     class CommandList : public Resource
     {
       public:
@@ -5127,6 +5129,7 @@ namespace Physara::RHI
         // Resets the NVRHI state cache associated with the command list, clears some of the underlying API state.
         // This method is mostly useful when switching from recording commands to the open command list using
         // non-NVRHI code - see getNativeObject(...) - to recording further commands using NVRHI.
+        /// @note OpenGL 同时清除逻辑图形状态, 保留已发工作/用途/保活, 后续 Draw 须重新 SetGraphicsState.
         virtual void ClearState() = 0;
 
         // Clears some or all subresources of the given color texture using the provided color.
@@ -5135,10 +5138,12 @@ namespace Physara::RHI
         // - Vulkan: vkCmdClearColorImage is always used with the Float32 color fields set.
         // At least one of the 'isRenderTarget' and 'isUAV' flags must be set, and the format of the texture
         // must be of a color type.
+        /// @note OpenGL 基线仅完整二维选层, RenderTarget 的 float/归一化颜色, 不继承 Draw 区域或写 mask.
         virtual void ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor) = 0;
 
         // Clears some or all subresources of the given depth-stencil texture using the provided depth and/or stencil
         // values. The texture must have the isRenderTarget flag set, and its format must be of a depth-stencil type.
+        /// @note OpenGL 清除完整二维选层的指定 aspect, 不受 Draw 的区域或写 mask 影响, 未选 aspect 保留.
         virtual void ClearDepthStencilTexture(Texture *t, TextureSubresourceSet subresources, bool clearDepth,
                                               float depth, bool clearStencil, uint8_t stencil) = 0;
 
@@ -5147,6 +5152,7 @@ namespace Physara::RHI
         //   Otherwise, the clear value is converted to a float, and the texture is cleared as an RTV with all 4
         //   color components using the same value.
         // - Vulkan: vkCmdClearColorImage is always used with the UInt32 and Int32 color fields set.
+        /// @note OpenGL 当前仅整数 RenderTarget 的完整二维选层, 同一 32-bit 载荷按目标 signedness 解释.
         virtual void ClearTextureUInt(Texture *t, TextureSubresourceSet subresources, uint32_t clearColor) = 0;
 
         // Copies a single 2D or 3D region of texture data from texture 'src' into texture 'dst'.
@@ -5154,6 +5160,7 @@ namespace Physara::RHI
         // they must be equal, and for reinterpret copies between compressed and uncompressed textures, they must differ
         // by a factor equal to the block size. The function does not resize textures, only 1:1 pixel copies are
         // supported.
+        /// @note OpenGL 当前只接受同 format, 单样本二维选层的 1:1 copy, 拒绝越界/重叠及 staging/resolve.
         virtual void CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
                                  const TextureSlice &srcSlice) = 0;
 
@@ -5256,6 +5263,8 @@ namespace Physara::RHI
         // operations made through NVRHI and through direct access to the command list, state caching may lead to
         // incomplete or incorrect state being set on the underlying API because of cache mismatch with the actual
         // state. To avoid these issues, call clearState() when switching from direct command list access to NVRHI.
+        /// @note OpenGL 核对完整同设备候选后应用, 空 viewport/scissor 保留本 recording 已设置值.
+        /// @note 新 Open/ClearState 后须先建立实际 Draw 所需区域; 非法候选不替换上一有效图形状态.
         virtual void SetGraphicsState(const GraphicsState &state) = 0;
 
         // Draws non-indexed primitives using the current graphics state.
@@ -5266,12 +5275,14 @@ namespace Physara::RHI
         // which may be before or after setGraphicsState(...).
         // - DX11/12: Maps to DrawInstanced.
         // - Vulkan: Maps to vkCmdDraw.
+        /// @note OpenGL 在合法 recording 即时发出, Execute 不重放; 零 vertex/instance count 不发 Draw.
         virtual void Draw(const DrawArguments &args) = 0;
 
         // Draws indexed primitives using the current graphics state.
         // See the comment to draw(...) for state information.
         // - DX11/12: Maps to DrawIndexedInstanced.
         // - Vulkan: Maps to vkCmdDrawIndexed.
+        /// @note OpenGL 按 byte offset + first index * 元素宽度定位 IB, baseVertex/baseInstance 各由原生命令应用一次.
         virtual void DrawIndexed(const DrawArguments &args) = 0;
 
         // Draws one or multiple sets of non-indexed primitives using the parameters provided in the indirect buffer

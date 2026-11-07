@@ -77,6 +77,8 @@ namespace Physara::RHI::OpenGL
         input.storage = storage;
         input.normalized = info.kind == FormatKind::Normalized;
         input.components = std::uint32_t(info.hasRed) + info.hasGreen + info.hasBlue + info.hasAlpha;
+        // Draw 的 CPU 范围检查按存储宽度计算, 不能用转换后 Shader 标量的四字节宽度替代.
+        input.byteSize = info.bytesPerBlock;
         return true;
     }
 

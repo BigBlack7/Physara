@@ -5,44 +5,6 @@
 
 namespace Physara::RHI::OpenGL
 {
-    void OpenGLCommandList::ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor)
-    {
-        static_cast<void>(t);
-        static_cast<void>(subresources);
-        static_cast<void>(clearColor);
-        Unsupported("ClearTextureFloat");
-    }
-
-    void OpenGLCommandList::ClearDepthStencilTexture(Texture *t, TextureSubresourceSet subresources, bool clearDepth,
-                                                     float depth, bool clearStencil, uint8_t stencil)
-    {
-        static_cast<void>(t);
-        static_cast<void>(subresources);
-        static_cast<void>(clearDepth);
-        static_cast<void>(depth);
-        static_cast<void>(clearStencil);
-        static_cast<void>(stencil);
-        Unsupported("ClearDepthStencilTexture");
-    }
-
-    void OpenGLCommandList::ClearTextureUInt(Texture *t, TextureSubresourceSet subresources, uint32_t clearColor)
-    {
-        static_cast<void>(t);
-        static_cast<void>(subresources);
-        static_cast<void>(clearColor);
-        Unsupported("ClearTextureUInt");
-    }
-
-    void OpenGLCommandList::CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
-                                        const TextureSlice &srcSlice)
-    {
-        static_cast<void>(dest);
-        static_cast<void>(destSlice);
-        static_cast<void>(src);
-        static_cast<void>(srcSlice);
-        Unsupported("CopyTexture");
-    }
-
     void OpenGLCommandList::CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
                                         const TextureSlice &srcSlice)
     {
@@ -80,17 +42,6 @@ namespace Physara::RHI::OpenGL
         Unsupported("ClearBufferUInt");
     }
 
-    void OpenGLCommandList::CopyBuffer(Buffer *dest, uint64_t destOffsetBytes, Buffer *src, uint64_t srcOffsetBytes,
-                                       uint64_t dataSizeBytes)
-    {
-        static_cast<void>(dest);
-        static_cast<void>(destOffsetBytes);
-        static_cast<void>(src);
-        static_cast<void>(srcOffsetBytes);
-        static_cast<void>(dataSizeBytes);
-        Unsupported("CopyBuffer");
-    }
-
     void OpenGLCommandList::ClearSamplerFeedbackTexture(SamplerFeedbackTexture *texture)
     {
         static_cast<void>(texture);
@@ -118,24 +69,6 @@ namespace Physara::RHI::OpenGL
         static_cast<void>(data);
         static_cast<void>(byteSize);
         Unsupported("SetPushConstants");
-    }
-
-    void OpenGLCommandList::SetGraphicsState(const GraphicsState &state)
-    {
-        static_cast<void>(state);
-        Unsupported("SetGraphicsState");
-    }
-
-    void OpenGLCommandList::Draw(const DrawArguments &args)
-    {
-        static_cast<void>(args);
-        Unsupported("Draw");
-    }
-
-    void OpenGLCommandList::DrawIndexed(const DrawArguments &args)
-    {
-        static_cast<void>(args);
-        Unsupported("DrawIndexed");
     }
 
     void OpenGLCommandList::DrawIndirect(uint32_t offsetBytes, uint32_t drawCount)
@@ -312,12 +245,6 @@ namespace Physara::RHI::OpenGL
         Unsupported("EndMarker");
     }
 
-    void OpenGLCommandList::SetResourceStatesForBindingSet(BindingSet *bindingSet)
-    {
-        static_cast<void>(bindingSet);
-        Unsupported("SetResourceStatesForBindingSet");
-    }
-
     void OpenGLCommandList::SetEnableUavBarriersForTexture(Texture *texture, bool enableBarriers)
     {
         static_cast<void>(texture);
@@ -353,4 +280,4 @@ namespace Physara::RHI::OpenGL
         Unsupported("SetPermanentBufferState");
     }
 
-}
+} // namespace Physara::RHI::OpenGL

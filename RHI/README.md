@@ -10,29 +10,35 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 
 | 当前入口 | 支持和边界 |
 |---|---|
-| Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 未作为绘制图像验收 |
-| Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入, 公共 Map/Copy 仍拒绝 |
+| Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 有限离屏直接绘制不代表稳定图像/呈现阶段出口 |
+| Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入和普通 byte copy, 公共 Map/readback 与 UInt clear 仍拒绝 |
 | Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建; 3D 深度/模板存储拒绝. 公共格式 flags 表示 2D 基线. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
-| Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 3D/layered/空/shading-rate/只读颜色拒绝; 深度只读为后续写检查 metadata |
+| Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
 | BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图与独立 Sampler, 不绑定全局单元. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
-| CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持 Open/Close/ClearState、Buffer/颜色 Texture 写入及受限 transfer tracker; 其余方法在读取 payload 前 Unsupported |
-| 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放写入. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, orphan 由 owner 建内部 fence 退休 |
-| 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 copy/readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
+| CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
+| 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy 或 Draw. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 新绘制依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
+| 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
 
 GL 4.6 Core 8.5 不允许 TEXTURE_3D 的深度/模板存储. 自有 `Formats.cpp` 在构建 target caps 时显式过滤 D16/D24S8/D32/D32S8 的此组合, 即使驱动 internal-format query 返回正向值也不发布支持, 创建在原生分配前拒绝. 这是保守能力交集的实现修正, 不修改固定 NVRHI 来源. 复现、来源依据与回归见 [资源一致性 design](../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/design.md) 的局部修正; 其他合法 target 仍按实际用途和样本验证.
 
-资源一致性 fixture 复用同一正式 Host/Validation/backend; Buffer/颜色内容经产品上传和实际完成读回, 深度/模板/MS 存储由 fixture 保活资源并原生 clear/同尺寸 resolve/分 aspect 读取, 使用自己的真实 fence. 辅助状态显式保存/恢复, 不发布 RHI tracker 状态或产品票据. 该路径不提供公共 clear/resolve/readback 或绘制能力; 本机 UPPER_LEFT 原生区域观测和 D03 的待验收边界见上述 design, 历史本地检查与复现条件见 [Build](../Docs/Build.md#历史本地检查).
+历史资源一致性 fixture 复用同一正式 Host/Validation/backend; 当时的辅助 native clear/resolve/readback 不等于公共执行能力. 本机 UPPER_LEFT 原生区域 clear 的历史观测见上述 design, 当前执行边界以本节为准, 历史本地检查与复现条件见 [Build](../Docs/Build.md#历史本地检查).
 
 上传策略为设备总 mapped capacity 64 MiB、最多 64 物理包、每包最多 4096 非空写入/不同资源及 64 MiB 逻辑目标字节. 小于等于 256 KiB 的 Buffer 写入使用 DSA subdata, 更大写入使用包独有的 persistent/coherent chunk 和 GPU copy. 所有 Texture 上传使用同类 PBO chunk; 完成前不覆写或跨包复用, 完成即释放, 没有 idle cache. 耗尽报告 requested/retained/limit, 不隐式等待. 这些是初始有界策略, 不是设备显存或性能结论.
 
 颜色上传沿唯一 FormatMapping 扩充 external format/type, 支持 R8_UNORM/R8_UINT/RG8_UNORM/RGBA8_UNORM/RGBA8_UINT/SRGBA8_UNORM、R16/RG16/RGBA16_FLOAT、R32_UINT/R32/RG32/RGBA32_FLOAT, 覆盖七种非 MS 维度. 每次写完整选定 mip/layer/face 或 3D volume; row/depth footprint 检查后逐行紧凑复制, 不读取 padding 为 texel, 不翻转或做 gamma 转换. 单行允许 rowPitch=0, 单 depth 忽略 depthPitch; caller 须保证源指针覆盖计算出的可读 footprint. Write 返回后源可释放. 深度/模板/MS 仍可按原分配 profile 创建, 上传拒绝; 已知有限 half/float 值的存储行为不扩展为任意 NaN 位模式保证.
 
-ContextState 仅拥有 unpack PBO 与相关 pixel-store 的一份状态缓存; 外部原生互操作后须在 recording 中 ClearState. transfer tracker 复用 Common, 支持 Common/CopyDest 及 keepInitialState 的原始 ordinary 状态恢复, 不提供 shader-write lowering. 只有 fence/flush 接受后才发布 tracker metadata; 它不代表 texel 已初始化或 GPU 已完成. 预算、租约和 tracker 都由设备物理包持有, 逻辑列表最终 Release 可在已停止的 worker 上只交接, 不执行 GL 或新分配.
+ContextState 统一拥有 unpack、Program/FBO、ranges、采样对、VAO 输入及普通固定/动态状态缓存, 只有一个辅助 VAO 和完整子资源 clear FBO. 逻辑 Graphics 状态与 Common 用途 tracker 另由同一物理包拥有; 外部原生互操作后在 recording 中 ClearState 并重新设置图形状态, 已发工作和引用仍保留. Automatic 在每次实际消费建立用途; 显式模式由调用方请求并 Commit. 缓存命中不能跳过依赖, Close 同样恢复 keepInitialState; 当前只读 Shader profile 不发无依据的全域 barrier/等待. 只有 fence/flush 接受后才发布 tracker metadata, 不表示 texel 初始化或 GPU 完成.
+
+GL 的有效图形快照与本次 IB 范围检查统一由 owning recording 保存/消费; Validation 不把 void 设置委托当作候选生效, 其他 API 保留上游快照规则. 基线没有第二颜色输出, 准备阶段拒绝活动双源 blend 因子; inactive 因子按关闭 blend、附件类型/分量、Min/Max 和写 mask 判定, 原生使用无害值. 缓存包含颜色格式, 切换附件格式时重新应用实际使用的通路. 只读深度拒绝测试和写入均启用的组合, 不因关闭测试时未使用的 write flag 拒绝合法颜色 Pass; stencil 写入仍检查.
+
+完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, 不改变 clip origin; depth-only/stencil-only 保留另一 aspect. copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序只在后端适配, viewport/scissor 不额外翻转; Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. staging/resolve、1D/3D clear/copy、Buffer UInt clear、MSAA 执行、多 viewport、indirect、Compute/UAV 仍明确拒绝.
+
+默认保活的 Pipeline、集合、Framebuffer 及其实际子引用接入同一包 lease; 内部复合边只记一次, 真正外部 owner 继续阻止破坏性关闭. trackLiveness=false 时调用方负责集合及其依赖到完成前的寿命. 包/辅助缓存不形成增长的资源组合表, native 删除前解除旧绑定. worker 最终释放列表只交接 orphan, owner 完成收集或受控退出后才销毁. 当前有限执行和验收记录随 [D03-T03](../Docs/Developments/D03-D05-FramePipeline.md#d03-t03) 引用, 不代替 T04 完整在途矩阵、T05 稳定图像或 Runtime Renderer.
 
 ContextAccess 的 user/isCurrent 和 MessageCallback 借用到所有 Device CPU 引用结束; 直接工厂调用方保留根 owner, 收拢资源和额外引用后在 owner 线程 ShutdownDevice. CPU final Release 只转移创建时预留的删除记录, 真正 glDelete 由 owning/current 线程收集. Normal 与 ContextUnavailable 明确区分当前 context 删除和外部 owner 随后销毁不可用 context 的退出; 后者不发布 GPU 完成. 普通缺少 current 不自动切换模式.
 
@@ -136,7 +142,7 @@ View 检查保留来源已有的 typeless stencil SRV 对: D24S8→X24G8_UINT �
 | Utils 的自由函数、BitSetAllocator 构造/Allocate/Release | `Common/Utils.cpp`, 已实现 |
 | Validation::CreateValidationLayer 及完整 Device/CommandList 包装 | `Validation/ValidationDevice.cpp` / `ValidationCommandList.cpp`, 仅通用层 |
 | Device 纯虚方法 | OpenGL/Backend.hpp 及其 cpp 的完整 68 项闭包, 已实现资源与明确拒绝见上表 |
-| 上传 CommandList | OpenGL/CommandList*.cpp 的 61 项闭包; 正向子集与明确拒绝见上表 |
+| 即时 CommandList | OpenGL/CommandList*.cpp 的 61 项闭包; 正向子集与明确拒绝见上表 |
 | 其它未交付对象、AftermathCrashDumpHelper | 后续实际执行/可选能力工作包; 当前工厂拒绝, 不提供占位实例 |
 
 ScopedMarker 和 descriptor 的头内转发仍需满足其调用对象/外部定义前提, 不因函数体在头里就保证所有使用方式可链接. 公共头不依赖 Core、Platform、Editor、GLFW、GLAD、ImGui 或 Vulkan SDK. 构建/运行说明集中在 [Build](../Docs/Build.md), 当前工作包状态见 [Developments](../Docs/Developments/D00-D02-Foundation.md#d02-t02).

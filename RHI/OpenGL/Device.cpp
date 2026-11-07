@@ -16,7 +16,7 @@
 
 namespace Physara::RHI::OpenGL
 {
-    OpenGLDevice::OpenGLDevice(const DeviceDesc &desc) noexcept : m_Desc(desc)
+    OpenGLDevice::OpenGLDevice(const DeviceDesc &desc) : m_Desc(desc)
     {
     }
 
@@ -217,7 +217,10 @@ namespace Physara::RHI::OpenGL
             Report("CreateDevice", "NativeFailure: clip convention was not established");
             return false;
         }
-        return true;
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, m_Caps.maxViewportDimensions.data());
+        glGetFloatv(GL_VIEWPORT_BOUNDS_RANGE, m_Caps.viewportBounds.data());
+        // 可失败的缓存存储和唯一 VAO/FBO 在工厂发布 Device 前准备, Draw 不再查询这些 limits.
+        return CheckNative("CreateDevice.ViewportLimits") && m_ContextState.Initialize(*this);
     }
 
     bool OpenGLDevice::DeleteNative(NativeDeletion &record) noexcept
@@ -228,6 +231,12 @@ namespace Physara::RHI::OpenGL
         }
         if (record.name != 0)
         {
+            // 名称可能被后续创建复用, 删除前解除 VAO/单元等 native 引用并撤销全部相关缓存事实.
+            m_ContextState.ReleaseBindings();
+            if (!CheckNative("DeleteNative.ReleaseBindings"))
+            {
+                return false;
+            }
             const GLuint name = record.name;
             switch (record.kind)
             {

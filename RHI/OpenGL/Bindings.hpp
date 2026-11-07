@@ -30,7 +30,9 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         BindingLayoutDesc m_Desc;
     };
 
@@ -43,9 +45,12 @@ namespace Physara::RHI::OpenGL
         GLuint name = 0;
         BufferRange range;
         std::uint32_t recordStride = 0;
+        Resource *resource = nullptr;       ///< 借用集合强持有的实际 storage/sampler, 不以 view 名称推断资源身份.
+        TextureSubresourceSet subresources; ///< SRV 已解析的 mip/layer 范围, 供实际用途和 feedback 检查.
     };
 
-    /// @brief 集合拥有布局/资源与其自有 view, trackLiveness 只影响未来列表的自动保活.
+    /// @brief 集合拥有布局/资源与其自有 view, trackLiveness 只影响即时列表是否自动保活整个集合.
+    /// @note trackLiveness=false 不改变集合自身的依赖所有权, 调用方须将集合及依赖保留到工作完成.
     /// @note 描述与解析记录均只读, 按集合输入顺序保存; 取项时以 type/slot 解释, 不借用布局项的序号.
     /// 发布后 CPU 最终 Release 可在 worker 执行, 自有 view 仅交给 Device 的 owner-context 删除队列.
     class OpenGLBindingSet final : public RefCounter<RHI::BindingSet>
@@ -72,7 +77,9 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         BindingSetDesc m_Desc;
         RefCountPtr<OpenGLBindingLayout> m_Layout;
         std::vector<ResourceHandle> m_Resources;

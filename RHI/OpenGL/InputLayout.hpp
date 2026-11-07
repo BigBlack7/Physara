@@ -15,10 +15,11 @@ namespace Physara::RHI::OpenGL
         std::uint32_t bufferIndex = 0;
         std::uint32_t offset = 0;
         std::uint32_t stride = 0;
-        bool instanced = false;
+        bool instanced = false; ///< true 对应 divisor=1, 取数偏移还包含本次 Draw 的 base instance.
         GLenum scalar = 0;
         GLenum storage = 0;
         std::uint32_t components = 0;
+        std::uint32_t byteSize = 0; ///< 一个属性元素的实际存储宽度, 不等于 Shader 标量类型宽度.
         bool normalized = false;
     };
 
@@ -46,7 +47,9 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         std::vector<VertexAttributeDesc> m_Attributes;
         std::vector<VertexInput> m_Inputs;
     };

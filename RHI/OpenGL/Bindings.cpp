@@ -202,9 +202,12 @@ namespace Physara::RHI::OpenGL
                 auto &record = set->m_Bindings[index];
                 record.slot = item.slot;
                 record.type = item.type;
+                record.resource = item.resourceHandle;
                 if (item.type == ResourceType::Texture_SRV)
                 {
                     views[index] = InspectTexture(*this, item);
+                    // 保存 storage 空间中的实际范围, view 的 mip/layer 重编号不能用于用途或 feedback 判断.
+                    record.subresources = views[index].range;
                 }
                 else if (item.type == ResourceType::Sampler)
                 {

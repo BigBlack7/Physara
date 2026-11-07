@@ -43,7 +43,7 @@ namespace Physara::RHI::OpenGL
             m_Device->ReportBudget("WriteBuffer", size, packet->logicalBytes, UploadCapacityLimit);
             return;
         }
-        if (!Retain(native, native->m_InternalUploadHolds) || !TransferState(*native))
+        if (!Retain(native, native->m_InternalOwners) || !TransferState(*native))
         {
             return;
         }
@@ -127,7 +127,7 @@ namespace Physara::RHI::OpenGL
         subresources.numMipLevels = 1;
         subresources.baseArraySlice = arraySlice;
         subresources.numArraySlices = 1;
-        if (!Retain(native, native->m_InternalUploadHolds) || !TransferState(*native, subresources))
+        if (!Retain(native, native->m_InternalOwners) || !TransferState(*native, subresources))
         {
             return;
         }

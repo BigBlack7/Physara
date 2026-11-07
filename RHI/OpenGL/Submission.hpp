@@ -14,6 +14,7 @@
 
 namespace Physara::RHI::OpenGL
 {
+    /// @brief 物理包的录制/待提交/已接受阶段, Closed 不等于 GPU 完成, orphaned 是另一条交接事实.
     enum class PacketPhase : std::uint8_t
     {
         Recording,
@@ -35,6 +36,12 @@ namespace Physara::RHI::OpenGL
         bool issuedWork = false;
         bool invalid = false;
         bool automaticBarriers = true;
+        // 图形快照中的指针只借用, 默认由 resources 保活; trackLiveness=false 的集合归调用方保活.
+        // 区域标记只记录本 recording 的显式输入, 不从跨 recording 的 native 缓存推定已设置.
+        GraphicsState graphics;
+        bool graphicsSet = false;
+        bool viewportSet = false;
+        bool scissorSet = false;
         std::size_t writes = 0;
         std::size_t logicalBytes = 0;
         std::vector<UploadResourceLease> resources;

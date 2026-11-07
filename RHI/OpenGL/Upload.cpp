@@ -1,7 +1,7 @@
 #include "Upload.hpp"
 
 /// @file
-/// @brief 检查源布局并按设备预算取得包独有 coherent 映射区段, 不跨未完成包复用存储.
+/// @brief 维护包资源 lease/复合引用账目, 检查源布局并取得有界 coherent 区段, 不跨未完成包复用.
 
 #include <algorithm>
 #include <cstdio>
@@ -14,27 +14,38 @@
 
 namespace Physara::RHI::OpenGL
 {
-    UploadResourceLease::UploadResourceLease(OpenGLDevice &device, Resource *resource, unsigned long &holds) noexcept
-        : m_Device(&device), m_Resource(resource), m_Holds(&holds)
+    UploadResourceLease::UploadResourceLease(OpenGLDevice &device, Resource *resource, InternalOwnership &owners,
+                                             std::vector<InternalOwnership *> dependencies)
+        : m_Device(&device), m_Resource(resource), m_Owners(&owners), m_Dependencies(std::move(dependencies))
     {
-        if (holds++ == 0)
+        if (owners.packetHolds++ == 0)
         {
             ++device.m_InternallyRetainedWrappers;
+            // 复合对象本身只有一组子对象强引用, 跨多个包保活时不能重复计算这组边.
+            for (auto *dependency : m_Dependencies)
+            {
+                ++dependency->dependencyHolds;
+            }
         }
     }
 
     UploadResourceLease::UploadResourceLease(UploadResourceLease &&other) noexcept
         : m_Device(other.m_Device), m_Resource(std::move(other.m_Resource)),
-          m_Holds(std::exchange(other.m_Holds, nullptr))
+          m_Owners(std::exchange(other.m_Owners, nullptr)), m_Dependencies(std::move(other.m_Dependencies))
     {
     }
 
     UploadResourceLease::~UploadResourceLease()
     {
         // 先撤销内部记账, 随后 m_Resource 的成员析构才 Release wrapper, 防止最后引用释放时仍被计作内部 owner.
-        if (m_Holds != nullptr && --*m_Holds == 0)
+        // 每包都保存父对象的相同依赖边, 但只有最后一个包退出才撤销边, 不依赖多个包的退休先后.
+        if (m_Owners != nullptr && --m_Owners->packetHolds == 0)
         {
             --m_Device->m_InternallyRetainedWrappers;
+            for (auto *dependency : m_Dependencies)
+            {
+                --dependency->dependencyHolds;
+            }
         }
     }
 
@@ -45,7 +56,8 @@ namespace Physara::RHI::OpenGL
 
     bool UploadResourceLease::OnlyInternalOwners() const noexcept
     {
-        return m_Resource->GetRefCount() == *m_Holds;
+        // 引用数包含本对象的所有包 lease 和已保活父对象的真实边; 任何额外引用仍视为外部 owner.
+        return m_Resource->GetRefCount() == m_Owners->packetHolds + m_Owners->dependencyHolds;
     }
 
     bool CheckedAlign(std::size_t value, std::size_t alignment, std::size_t &result) noexcept

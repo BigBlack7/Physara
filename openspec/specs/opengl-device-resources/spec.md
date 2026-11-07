@@ -196,10 +196,13 @@ Creation SHALL publish a handle only after all CPU and native steps succeed. Fai
 - **THEN** new resource work is rejected and controlled cleanup follows the actual context condition without inferring device loss solely from diagnostic severity
 
 ### Requirement: Reject unavailable operations without fictitious GPU work
-The delivered device SHALL preserve the complete public interface and distinguish the documented resource/upload subset and baseline Shader, BindingLayout/BindingSet, InputLayout and GraphicsPipeline preparation from unavailable command execution, query and extension operations. The preparation subset SHALL be limited to the profile specified by opengl-shader-pipelines; successful creation or native program link SHALL NOT enable Draw, Dispatch, graphics-state execution or full rendering acceptance. Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, issue work or tickets, or wait for invented GPU work. Enabling either subset SHALL NOT imply general rendering support.
+
+The delivered device SHALL preserve the complete public interface and distinguish documented resource/upload operations, baseline Shader, BindingLayout/BindingSet, InputLayout and GraphicsPipeline preparation, and the limited immediate graphics execution specified by opengl-immediate-draw from unavailable command, query and extension operations. Preparation SHALL remain limited to opengl-shader-pipelines; successful creation or native program link alone SHALL NOT establish execution support or full rendering acceptance. Supported direct graphics commands SHALL require the documented immediate execution profile and valid executable state.
+
+Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, issue work or tickets, or wait for invented GPU work. Enabling these subsets SHALL NOT imply Compute/UAV/indirect, query/readback extensions, multisample rendering, presentation or general rendering support beyond their documented profiles.
 
 #### Scenario: Request a command list or submission
-- **WHEN** a caller requests a list or submission mode outside the documented upload profile
+- **WHEN** a caller requests a list or submission mode outside the documented upload and immediate graphics profiles
 - **THEN** the operation fails with no list, replay, issued work or positive submission result
 
 #### Scenario: Request an excluded family with unused payload
@@ -211,8 +214,12 @@ The delivered device SHALL preserve the complete public interface and distinguis
 - **THEN** the reason is reported and the documented logic-error failure occurs without returning a fake reference
 
 #### Scenario: Separate supported preparation from unavailable drawing
-- **WHEN** a baseline Shader, binding or graphics Pipeline is successfully prepared and the caller attempts a still-unimplemented graphics command
+- **WHEN** a baseline Shader, binding or graphics Pipeline is successfully prepared and the caller attempts a still-unimplemented graphics command such as indirect drawing
 - **THEN** the prepared object is real while the command fails visibly without a Draw, replay or fictitious submission ticket
+
+#### Scenario: Execute only the delivered direct graphics profile
+- **WHEN** a caller uses the documented single-sample direct graphics operations with valid prepared objects and an owning open immediate list
+- **THEN** the operations perform real native work under opengl-immediate-draw while other command families remain explicitly unavailable
 
 ### Requirement: Consume native and generic capabilities independently
 The existing generic RHI target and headers SHALL remain independently consumable without a GL loader, window library, native SDK or business dependency. Native integration SHALL use the documented backend consumer entry and retain one-direction dependencies. Neither consumer SHALL require the fixed reference sources to be compiled or introduce a second product entry.
@@ -230,12 +237,17 @@ The existing generic RHI target and headers SHALL remain independently consumabl
 - **THEN** native types remain inside interoperability boundaries, existing public values and layouts remain intact and the reference snapshot stays outside the build
 
 ### Requirement: Report allocation separately from completed rendering
-Delivery SHALL distinguish allocation, verified uploads and completed rendering, identify its tested profile, native environment and observed results, and keep deferred acceptance explicit. Allocation or CPU validation alone SHALL NOT establish upload, raster, synchronization or presentation behavior. Upload evidence SHALL cover only implemented data paths. A prerequisite exception SHALL stay limited to its explicitly approved work package and SHALL NOT close deferred acceptance.
+
+Delivery SHALL distinguish allocation, verified uploads, baseline program preparation and verified limited immediate graphics execution from full completed rendering. It SHALL identify the tested profile, native environment and observed results, and keep deferred acceptance explicit. Allocation, link success or CPU validation alone SHALL NOT establish raster, synchronization, in-flight lifetime or presentation behavior. Each evidence set SHALL cover only its implemented and actually observed data paths. A prerequisite exception SHALL stay limited to its explicitly approved work package and SHALL NOT close deferred acceptance.
 
 #### Scenario: Report successful resource verification
-- **WHEN** allocation checks or the separately scoped native upload checks and affected builds pass
-- **THEN** completion identifies the capability actually verified and leaves excluded content modes, full-stage acceptance, drawing and presentation with their remaining work packages
+- **WHEN** allocation, separately scoped upload/preparation or limited immediate graphics checks and their affected builds pass
+- **THEN** completion identifies the capability actually verified and leaves excluded content/command modes, full-stage acceptance and presentation with their remaining work packages
 
 #### Scenario: Encounter an unmet implementation prerequisite
 - **WHEN** D01 still lacks its required cross-display acceptance or stage exit
 - **THEN** only an explicitly approved exception for the current change permits its documented work, including this change's limited initial uploads, necessary immediate submission/lifetime/shutdown and minimum native readback, while D01 acceptance, full T05/D03, presentation and stage exits remain incomplete without inheriting earlier generic or T03 resource exceptions
+
+#### Scenario: Separate the work-package and stage exits
+- **WHEN** D03-T03 has satisfied its direct graphics, coordinate, data and minimum retirement-integration checks
+- **THEN** D03-T04's full drawing-in-flight acceptance and D03-T05's stable image gate remain pending until their own requirements are satisfied, and no presentation or D03 stage-exit completion is inferred

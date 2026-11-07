@@ -202,6 +202,8 @@ namespace Physara::RHI::OpenGL
                            "InvalidArgument: shader entry/stage mismatch");
         compiler.set_entry_point(desc.entryName, model);
         CheckProfile(compiler, desc.shaderType);
+        // 只记录活动 builtin 的事实, 原生点大小开关由实际执行该 VS 的 ContextState 建立.
+        m_WritesPointSize = compiler.has_active_builtin(spv::BuiltInPointSize, spv::StorageClassOutput);
         // 全部声明都须满足 profile, 但只有当前入口活动的资源进入 Pipeline 的限额预算.
         const auto activeVariables = compiler.get_active_interface_variables();
         const auto active = compiler.get_shader_resources(activeVariables);

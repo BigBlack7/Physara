@@ -21,18 +21,25 @@ add_library(PhysaraRHIOpenGL STATIC
     InputLayout.hpp
     InputLayout.cpp
     Pipeline.cpp
-    # 即时列表/上传数据与提交退休分别拥有其状态, 共享唯一 Common tracker.
+    # 即时列表按候选组合, 依赖保活, Draw 和传输拆分; 资源用途仍共用一份 Common tracker.
     CommandList.hpp
     CommandList.cpp
     CommandListState.cpp
+    CommandListOwnership.cpp
+    CommandListGraphics.cpp
+    Graphics.cpp
+    CommandListDraw.cpp
     CommandListUpload.cpp
+    CommandListTransfer.cpp
     CommandListUnsupported.cpp
     Upload.hpp
     Upload.cpp
     Submission.hpp
     Submission.cpp
+    # native 绑定/顶点格式与固定光栅 lowering 同属唯一 ContextState, 不形成另一套逻辑图形状态.
     ContextState.hpp
     ContextState.cpp
+    ContextGraphics.cpp
 )
 
 # OpenGL.hpp 的公开签名使用 RHI 类型, 因而传递通用合同; glad 与 GLSL lowering 只供后端私有实现使用.

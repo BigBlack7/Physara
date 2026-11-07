@@ -455,7 +455,10 @@ namespace Physara::RHI::OpenGL
                 nativeAvailable = nativeAvailable && m_NativeUsable && m_Phase != Phase::Faulted;
             }
         }
+        // 包依赖已退休后才释放唯一 VAO/清除 FBO, 随后排空 wrapper 的原生删除记录.
         // 设备自有 dummy sampler 没有 wrapper/反向引用, 与普通退休记录一起在正确 context 收拢.
+        m_ContextState.Shutdown(*this, nativeAvailable);
+        nativeAvailable = nativeAvailable && m_NativeUsable;
         ReleaseAllocation(std::move(m_DummySampler), true);
         Drain(nativeAvailable);
         m_Phase = Phase::Stopped;

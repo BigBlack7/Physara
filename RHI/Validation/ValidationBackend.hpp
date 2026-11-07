@@ -243,6 +243,7 @@ namespace Physara::RHI::Validation
 
     /// @brief 单写者公共调用协议与输入验证, 强持有父设备及底层列表.
     /// @note Open/Closed 表示通过的调用顺序, 不证明 void 原生调用成功; 即时 claim 只限制录制重叠.
+    /// GL 的图形生效状态与 IB 范围由底层 owning recording 统一维护, 包装仍负责公共输入和录制协议.
     class CommandListWrapper : public RefCounter<CommandList>
     {
         // 状态描述已通过的公共调用顺序; 底层 void 方法的原生失败仍由底层诊断/停止协议处理.
@@ -261,6 +262,7 @@ namespace Physara::RHI::Validation
         CommandQueue m_QueueType;
 
         CommandListState m_State = CommandListState::Initial;
+        // 图形标记/快照仅供非 GL 的上游验证路径; GL 由实际 recording 检查已接受状态和索引.
         bool m_GraphicsStateSet = false;
         bool m_ComputeStateSet = false;
         bool m_MeshletStateSet = false;
@@ -341,11 +343,15 @@ namespace Physara::RHI::Validation
                                           Physara::RHI::Format format) override;
         void SetSamplerFeedbackTextureState(SamplerFeedbackTexture *texture, ResourceStates stateBits) override;
 
+        /// @brief GL 先按 profile 拒绝; 其余 API 验证当前 Pipeline 所需的完整 push constants 载荷后委托.
         void SetPushConstants(const void *data, size_t byteSize) override;
 
+        /// @brief 公共候选预检后委托一次; GL 不将 void 委托视为候选生效, 不保存第二份图形快照.
         void SetGraphicsState(const GraphicsState &state) override;
+        /// @brief 验证录制/队列后发起直接绘制; GL 的有效状态与索引范围校验交给实际 recording.
         void Draw(const DrawArguments &args) override;
         void DrawIndexed(const DrawArguments &args) override;
+        /// @brief 间接绘制在 GL 上先按 profile 拒绝, 其余 API 使用上游快照校验参数及索引前提.
         void DrawIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
         void DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
         void DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,

@@ -24,6 +24,7 @@
 
 /// @file
 /// @brief 列表调用协议, 状态/绑定输入检查与一次底层委托, 包装 claim 不表示原生命令成功.
+/// GL 的直接绘制消费底层已接受状态, 其余 API 保留上游图形/push 快照; 原生归属和完成均由后端负责.
 
 #include "Common/Misc.hpp"
 #include "Utils.hpp"
@@ -224,6 +225,7 @@ namespace Physara::RHI::Validation
         m_PipelinePushConstantSize = 0;
     }
 
+    // typed clear 共用公开范围/用途检查, 各入口核对数值类别或实际 aspect, 原生子集限制仍由后端检查.
     void CommandListWrapper::ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor)
     {
         if (!RequireOpenState())
@@ -376,6 +378,7 @@ namespace Physara::RHI::Validation
         m_CommandList->ClearTextureUInt(t, subresources, clearColor);
     }
 
+    // 三种 copy 重载共用显式 slice 的格式/尺寸边界, 不把 staging 对象存在解释为后端已支持 staging copy.
     void CommandListWrapper::CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
                                          const TextureSlice &srcSlice)
     {
@@ -746,6 +749,11 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::SetPushConstants(const void *data, size_t byteSize)
     {
+        // GL 不维护用于执行的候选快照且尚未交付 push, 在读取载荷或检查候选协议前直接拒绝.
+        if (Profile::RejectOpenGL(m_Device))
+        {
+            return;
+        }
         if (!RequireOpenState())
         {
             return;
@@ -991,7 +999,15 @@ namespace Physara::RHI::Validation
             return;
         }
 
-        // 输入和目标兼容性全部通过后才委托; 下层 void 的失败仍由原生诊断处理, 包装只更新调用协议.
+        // GL 的 void 设置可能因活动范围, profile 或 CPU 准备失败而保留旧状态.
+        // 由实际 owning recording 统一保存和消费图形状态, 不在包装层发布未经确认的第二份快照.
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->SetGraphicsState(state);
+            return;
+        }
+
+        // 其余 API 保留上游包装的图形/push 调用协议和索引范围快照.
         EvaluatePushConstantSize(state.pipeline->GetDesc().bindingLayouts);
 
         m_CommandList->SetGraphicsState(state);
@@ -1013,6 +1029,13 @@ namespace Physara::RHI::Validation
 
         if (!RequireType(CommandQueue::Graphics, "draw"))
         {
+            return;
+        }
+
+        // GL 检查实际生效状态, 包括被拒绝候选后仍保留的旧 recording 状态.
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->Draw(args);
             return;
         }
 
@@ -1040,6 +1063,13 @@ namespace Physara::RHI::Validation
 
         if (!RequireType(CommandQueue::Graphics, "drawIndexed"))
         {
+            return;
+        }
+
+        // IB 存在性和本次索引区间必须依据后端已接受状态, 不能依据最后一次候选.
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->DrawIndexed(args);
             return;
         }
 
@@ -1074,6 +1104,7 @@ namespace Physara::RHI::Validation
     bool CommandListWrapper::ValidateIndirectBuffer(Buffer *buffer, uint64_t offset, uint64_t count,
                                                     size_t stride) const
     {
+        // 使用完整记录宽度和受检乘法证明间接参数区间, 不依靠最后一个字节偏移的溢出结果判断容量.
         if (offset % 4 != 0 || (count != 0 && stride > std::numeric_limits<uint64_t>::max() / count))
         {
             Error("InvalidArgument: indirect offset/record size is invalid");
@@ -1094,6 +1125,10 @@ namespace Physara::RHI::Validation
                   sizeof(DispatchIndirectArguments) == 12);
     void CommandListWrapper::DrawIndirect(uint32_t offsetBytes, uint32_t drawCount)
     {
+        if (Profile::RejectOpenGL(m_Device))
+        {
+            return;
+        }
         if (!RequireOpenState())
         {
             return;
@@ -1133,6 +1168,10 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount)
     {
+        if (Profile::RejectOpenGL(m_Device))
+        {
+            return;
+        }
         if (!RequireOpenState())
         {
             return;
@@ -1178,6 +1217,10 @@ namespace Physara::RHI::Validation
     void CommandListWrapper::DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,
                                                       uint32_t maxDrawCount)
     {
+        if (Profile::RejectOpenGL(m_Device))
+        {
+            return;
+        }
         if (!RequireOpenState())
         {
             return;
@@ -2066,6 +2109,7 @@ namespace Physara::RHI::Validation
     void CommandListWrapper::BuildBottomLevelAccelStruct(RT::AccelStruct *as, const RT::GeometryDesc *pGeometries,
                                                          size_t numGeometries, RT::AccelStructBuildFlags buildFlags)
     {
+        // 保留上游几何/更新一致性检查, GL 在读取几何载荷前拒绝; wrapper 构建标记不证明 GPU 完成.
         if (Profile::RejectOpenGL(m_Device))
         {
             return;
@@ -2532,6 +2576,7 @@ namespace Physara::RHI::Validation
     void CommandListWrapper::BuildTopLevelAccelStruct(RT::AccelStruct *as, const RT::InstanceDesc *pInstances,
                                                       size_t numInstances, RT::AccelStructBuildFlags buildFlags)
     {
+        // 复制实例并解包 BLAS 引用后委托, 不修改调用方数组; GL 在读取实例载荷前按 profile 拒绝.
         if (Profile::RejectOpenGL(m_Device))
         {
             return;

@@ -46,6 +46,13 @@ namespace Physara::RHI::OpenGL
     // 接口签名来源见 RHI/README; GL 实现与下列私有状态由本项目定义.
     inline constexpr std::size_t TextureDimensionCount = 10;
     inline constexpr std::size_t UploadPacketLimit = 64;
+    /// @brief owner 线程维护的内部引用账目, 包 lease 与内部复合对象的实际强引用分别计数.
+    /// @note 关闭预检前调用方已停止用户; 不替代 Resource 自身的原子引用计数.
+    struct InternalOwnership
+    {
+        unsigned long packetHolds = 0;     ///< 各物理包持有本 wrapper 的 lease 数.
+        unsigned long dependencyHolds = 0; ///< 已由包保活的父对象对本 wrapper 的实际强引用边数.
+    };
     /// @brief 单个格式/target 的实际用途交集, sampleMask 的第 n 位表示支持 n 个样本.
     struct FormatCaps
     {
@@ -69,6 +76,8 @@ namespace Physara::RHI::OpenGL
         GLfloat maxAnisotropy = 0;
         GLfloat maxLodBias = 0;
         GLint minMapAlignment = 0;
+        std::array<GLint, 2> maxViewportDimensions{};
+        std::array<GLfloat, 2> viewportBounds{};
         ShaderCaps shader;
     };
 
@@ -112,7 +121,7 @@ namespace Physara::RHI::OpenGL
     class OpenGLDevice final : public RefCounter<RHI::Device>
     {
     public:
-        explicit OpenGLDevice(const DeviceDesc &desc) noexcept;
+        explicit OpenGLDevice(const DeviceDesc &desc);
         ~OpenGLDevice() override;
         /// @brief 核对实际入口和环境, 查询 caps 并建立 upper-left/zero-to-one clip 约定.
         [[nodiscard]] bool Initialize();
@@ -295,6 +304,7 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_LastSubmissionId = 0;
         std::uint64_t m_CompletedSubmissionId = 0;
         std::size_t m_UploadCapacity = 0;
+        // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
         std::unique_ptr<NativeDeletion> m_DummySampler;
@@ -344,9 +354,9 @@ namespace Physara::RHI::OpenGL
 
     private:
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         BufferDesc m_Desc;
         BufferStateExtension m_State{m_Desc};
-        unsigned long m_InternalUploadHolds = 0;
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
@@ -383,9 +393,9 @@ namespace Physara::RHI::OpenGL
 
     private:
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         TextureDesc m_Desc;
         TextureStateExtension m_State{m_Desc};
-        unsigned long m_InternalUploadHolds = 0;
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
@@ -416,7 +426,9 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         SamplerDesc m_Desc;
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
@@ -441,13 +453,19 @@ namespace Physara::RHI::OpenGL
         {
             return m_Device.Get();
         }
+        [[nodiscard]] GLuint Name() const noexcept
+        {
+            return m_Deletion->name;
+        }
         void Publish() noexcept
         {
             m_Published = true;
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         FramebufferDesc m_Desc;
         FramebufferInfoEx m_Info;
         std::array<TextureHandle, MaxRenderTargets + 1> m_Textures{};

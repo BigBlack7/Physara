@@ -31,6 +31,7 @@ namespace Physara::RHI::OpenGL
 
     /// @brief 描述实际 IR 活动集合, 同一物理位置可被两 stage 使用, combined 数量仍分别计数.
     /// @note resources/pairs 按完整逻辑 key 稳定排序; textureCounts 统计采样对, 不是 Texture 声明数.
+    /// 执行时每次按本计划解释集合, 不因集合指针与上一个 Pipeline 相同而沿用旧的物理 unit.
     struct PipelineBindingPlan
     {
         std::vector<PlannedResource> resources;
@@ -99,7 +100,9 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
+        friend class OpenGLCommandList;
         RefCountPtr<OpenGLDevice> m_Device;
+        InternalOwnership m_InternalOwners;
         GraphicsPipelineDesc m_Desc;
         FramebufferInfo m_Info;
         PipelineBindingPlan m_Plan;

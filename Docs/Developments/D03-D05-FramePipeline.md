@@ -40,15 +40,17 @@
 
 **职责位置：** RHI/OpenGL CommandList/Graphics/ContextState。**前置：** [D03-T02](#d03-t02)。**架构依据：** [7.6](../Architecture.md#command-execution)、[7.5](../Architecture.md#barriers)。
 
-- [ ] 实现 open/close、clear、vertex/index 绑定、动态 viewport/scissor、raster/depth/blend、draw/indexed/instanced 和必要 copy。
-- [ ] 区分 ContextState、访问 tracker 与数据 revision；为实际消费发出最小必要同步，clear 的用途先于后续 draw 用途建立。
-- [ ] 用非对称图验证 CCW/负缩放、Reverse-Z、scissor、sRGB、GL_InstanceID+baseInstance 和已含 baseVertex 的顶点索引。
+- [x] 实现 open/close、clear、vertex/index 绑定、动态 viewport/scissor、raster/depth/blend、draw/indexed/instanced 和必要 copy。
+- [x] 区分 ContextState、访问 tracker 与数据 revision；为实际消费发出最小必要同步，clear 的用途先于后续 draw 用途建立。
+- [x] 用非对称图验证 CCW/负缩放、Reverse-Z、scissor、sRGB、GL_InstanceID+baseInstance 和已含 baseVertex 的顶点索引。
 
 **完成条件：** 原生 Draw 在即时列表调用时发出，Execute 不重放；基本状态及索引语义通过像素/已知数据检查。
 
-**与 D02-T04 的交付衔接：** 上传限定列表的 open/close、owner/唯一 claim 和一次提交基础已在 [上传 change](../../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md) 建立. 本包在同一列表上扩展 clear/Graphics/Draw、原生状态与实际访问 lowering, 不复制第二套列表; 上传基础不是本包绘制验收, 上述任务继续未完成.
+**当前状态** 已完成并归档；独立 B 代码/注释验收、最终 verify、规范同步与归档记录见 [establish-opengl-immediate-draw](../../openspec/changes/archive/2026-11-07-establish-opengl-immediate-draw/tasks.md#final-verification)。D03-T04/T05 继续待实施。
 
-**原生坐标待定位：** D02-T05 在 Intel 32.0.101.6129 观察到 UPPER_LEFT 下具名 FBO 的区域 depth clear 与原生读回行位置失配, 复现及规范依据见 [资源一致性 design](../../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/design.md) 决策 12. T05 的辅助存储检查显式保存/使用 LOWER_LEFT 并恢复原值, 没有修改产品 clip 合同; 本包接入实际 clear/Draw 时必须复现并解决该组合, 通过上述非对称坐标验收后才退出, 不能沿用辅助检查结果宣称 UPPER_LEFT 已通过.
+**与 D02-T04 的交付衔接：** 上传限定列表的 open/close、owner/唯一 claim 和一次提交基础已在 [上传 change](../../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md) 建立. 本包已在同一列表上完成基础图形执行验收, 未复制第二套列表; 完整在途与稳定图像门槛继续归 D03-T04/T05.
+
+**坐标验收前置：** D02-T05 的 UPPER_LEFT 区域 depth clear 历史观测见 [资源一致性 design](../../openspec/changes/archive/2026-10-29-establish-opengl-resource-conformance/design.md) 决策 12. 本包已满足定位与产品 UPPER_LEFT clear/Draw 验收前置, 输入、路径决定及结果留存在归档 change; 独立 B 复核与最终 verify 均通过.
 
 <a id="d03-t04"></a>
 ### D03-T04 · 实现提交票据、在途引用与完成回收

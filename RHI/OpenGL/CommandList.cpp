@@ -36,7 +36,7 @@ namespace Physara::RHI::OpenGL
     {
         if (m_Device->RequireContext(operation))
         {
-            m_Device->Report(operation, "Unsupported: upload-only command list");
+            m_Device->Report(operation, "Unsupported: outside immediate graphics/transfer profile");
         }
     }
 
@@ -116,6 +116,7 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::ReleaseClaim(std::uint64_t recordingId) noexcept
     {
+        // 仅释放本包的身份, 迟到的旧列表不能解除后来列表的 recording claim.
         static_cast<void>(m_ActiveRecording.compare_exchange_strong(recordingId, 0));
     }
 
@@ -128,6 +129,7 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLCommandList::Open()
     {
+        // 物理包在先前提交接受后脱离列表; Closed 尚未提交时不可覆盖它.
         if (!m_Device->RequireContext("Open"))
         {
             return;
@@ -142,6 +144,7 @@ namespace Physara::RHI::OpenGL
 
     UploadWorkPacket *OpenGLCommandList::Recording(const char *operation)
     {
+        // 所有实际命令共用此入口, CPU 预检也不能绕开 owner/context 和 sticky tracker 错误.
         if (!m_Device->RequireContext(operation))
         {
             return nullptr;
@@ -158,7 +161,7 @@ namespace Physara::RHI::OpenGL
     void OpenGLCommandList::Close()
     {
         // Faulted 仍允许结束逻辑录制并释放 claim, 但不会让错误包恢复为可正常提交.
-        // 当前 transfer 子集没有 shader-write lowering; 清空的是已由有序 transfer 满足的抽象依赖.
+        // Close 与实际消费共享依赖入口; 只有接受提交才发布持久 metadata.
         if (!m_Device->RequireContext("Close", true))
         {
             return;
@@ -172,7 +175,7 @@ namespace Physara::RHI::OpenGL
         {
             m_Packet->tracker.KeepBufferInitialStates();
             m_Packet->tracker.KeepTextureInitialStates();
-            m_Packet->tracker.ClearBarriers();
+            static_cast<void>(ConsumeBarriers());
         }
         m_Packet->phase = PacketPhase::Closed;
         m_Device->ReleaseClaim(m_Packet->recordingId);
@@ -180,8 +183,13 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLCommandList::ClearState()
     {
+        // 取消逻辑可绘制条件并使 native 事实未知, 资源用途和已发前缀的 lease 继续属于同一包.
         if (Recording("ClearState") != nullptr)
         {
+            m_Packet->graphics = {};
+            m_Packet->graphicsSet = false;
+            m_Packet->viewportSet = false;
+            m_Packet->scissorSet = false;
             m_Device->m_ContextState.Invalidate();
         }
     }
