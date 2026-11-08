@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01](D03-D05-FramePipeline.md#d03-t01)、[D03-T02](D03-D05-FramePipeline.md#d03-t02) 与 [D03-T03](D03-D05-FramePipeline.md#d03-t03) 均已完成并归档，最近一次交付记录见 [establish-opengl-immediate-draw](../../openspec/changes/archive/2026-11-07-establish-opengl-immediate-draw/tasks.md)。下一工作包为 [D03-T04 · 提交票据、在途引用与完成回收](D03-D05-FramePipeline.md#d03-t04)，尚未创建 change 或开始实施；T05、呈现及 D03 阶段出口保持待验收。
+当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01](D03-D05-FramePipeline.md#d03-t01)、[D03-T02](D03-D05-FramePipeline.md#d03-t02)、[D03-T03](D03-D05-FramePipeline.md#d03-t03) 与 [D03-T04](D03-D05-FramePipeline.md#d03-t04) 均已完成并归档，最近一次交付记录见 [establish-opengl-submission-retirement](../../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md#final-verification)。下一工作包为 [D03-T05 · 首个稳定原生绘制门槛](D03-D05-FramePipeline.md#d03-t05)，尚未创建 change 或开始实施；呈现及 D03 阶段出口保持待验收。
 
 ## 阅读与使用
 

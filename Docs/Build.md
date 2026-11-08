@@ -16,7 +16,7 @@ cmake --build build --config Release --parallel
 
 当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义; PhysaraRHIOpenGL 单独封闭 loader/原生实现依赖. 当前可链接能力与后端边界见 [RHI 来源说明](../RHI/README.md). Runtime 仍只直接链接其实际使用的 Core/Platform. NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
 
-Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、状态跟踪及真实提交/完成退休; 直接关闭还可使用 OpenGL.hpp 的预检/drain 入口. 实际支持和 CPU 源寿命见 RHI 说明与头合同, 当前产品事件循环尚不消费它们绘制.
+Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休; 直接关闭还可使用 OpenGL.hpp 的预检/drain 入口. 查询不增加第三方或默认测试目标, 公共 staging/map/异步读回仍待后续工作包. 实际支持和 CPU 源寿命见 RHI 说明与头合同, 当前产品事件循环尚不消费它们绘制.
 
 ## Shader 构建
 

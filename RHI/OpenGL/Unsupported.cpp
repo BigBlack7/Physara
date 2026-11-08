@@ -30,7 +30,7 @@
 namespace Physara::RHI::OpenGL
 {
     // 以下简单入口共用同一合同: 检查 context 后只报告 Unsupported, 不解引用专有输入或改写输出.
-    // 已交付的 Shader/Bindings/InputLayout/GraphicsPipeline 工厂位于各自实现文件, 不属于此拒绝表.
+    // 已交付资源/Shader/Bindings/InputLayout/GraphicsPipeline 工厂及 Event/Timer 位于各自文件, 不在此拒绝表.
     HeapHandle OpenGLDevice::CreateHeap(const HeapDesc &)
     {
         if (RequireContext("CreateHeap"))
@@ -183,7 +183,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-
     ShaderHandle OpenGLDevice::CreateShaderSpecialization(Shader *, const ShaderSpecialization *, uint32_t)
     {
         if (RequireContext("CreateShaderSpecialization"))
@@ -201,86 +200,6 @@ namespace Physara::RHI::OpenGL
         }
         return nullptr;
     }
-
-
-    EventQueryHandle OpenGLDevice::CreateEventQuery()
-    {
-        if (RequireContext("CreateEventQuery"))
-        {
-            Report("CreateEventQuery", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
-    void OpenGLDevice::SetEventQuery(EventQuery *, CommandQueue)
-    {
-        if (RequireContext("SetEventQuery"))
-        {
-            Report("SetEventQuery", "Unsupported: resource-only device");
-        }
-    }
-
-    bool OpenGLDevice::PollEventQuery(EventQuery *)
-    {
-        if (RequireContext("PollEventQuery"))
-        {
-            Report("PollEventQuery", "Unsupported: resource-only device");
-        }
-        return false;
-    }
-
-    void OpenGLDevice::WaitEventQuery(EventQuery *)
-    {
-        if (RequireContext("WaitEventQuery"))
-        {
-            Report("WaitEventQuery", "Unsupported: resource-only device");
-        }
-    }
-
-    void OpenGLDevice::ResetEventQuery(EventQuery *)
-    {
-        if (RequireContext("ResetEventQuery"))
-        {
-            Report("ResetEventQuery", "Unsupported: resource-only device");
-        }
-    }
-
-    TimerQueryHandle OpenGLDevice::CreateTimerQuery()
-    {
-        if (RequireContext("CreateTimerQuery"))
-        {
-            Report("CreateTimerQuery", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
-    bool OpenGLDevice::PollTimerQuery(TimerQuery *)
-    {
-        if (RequireContext("PollTimerQuery"))
-        {
-            Report("PollTimerQuery", "Unsupported: resource-only device");
-        }
-        return false;
-    }
-
-    float OpenGLDevice::GetTimerQueryTime(TimerQuery *)
-    {
-        if (RequireContext("GetTimerQueryTime"))
-        {
-            Report("GetTimerQueryTime", "Unsupported: resource-only device");
-        }
-        return 0;
-    }
-
-    void OpenGLDevice::ResetTimerQuery(TimerQuery *)
-    {
-        if (RequireContext("ResetTimerQuery"))
-        {
-            Report("ResetTimerQuery", "Unsupported: resource-only device");
-        }
-    }
-
-
 
     ComputePipelineHandle OpenGLDevice::CreateComputePipeline(const ComputePipelineDesc &)
     {
@@ -318,7 +237,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-
     BindingLayoutHandle OpenGLDevice::CreateBindlessLayout(const BindlessLayoutDesc &)
     {
         if (RequireContext("CreateBindlessLayout"))
@@ -327,7 +245,6 @@ namespace Physara::RHI::OpenGL
         }
         return nullptr;
     }
-
 
     DescriptorTableHandle OpenGLDevice::CreateDescriptorTable(BindingLayout *)
     {
@@ -478,4 +395,4 @@ namespace Physara::RHI::OpenGL
         throw std::logic_error("OpenGL crash helper is unavailable");
     }
 
-}
+} // namespace Physara::RHI::OpenGL

@@ -89,7 +89,8 @@ namespace Physara::RHI::OpenGL
         Sampler,
         Framebuffer,
         Program,
-        Shader
+        Shader,
+        Query
     };
     /// @brief 创建前预留的原生删除节点, final Release 只转交节点, owner 才执行 GL 删除.
     struct NativeDeletion
@@ -115,6 +116,7 @@ namespace Physara::RHI::OpenGL
     struct SubmissionState;
     class OpenGLCommandList;
     class UploadResourceLease;
+    class OpenGLTimerQuery;
     /// @brief 原生设备状态的唯一 owner, 跨实现文件管理能力, 上传, 提交与删除.
     /// @invariant Active 接受新工作, Faulted 保留未知完成前缀, Draining 仅推进退出, Stopped 后才可最终析构.
     /// @note context 健康与阶段独立, CPU 引用释放不能代替 GPU 完成证明.
@@ -195,14 +197,26 @@ namespace Physara::RHI::OpenGL
         /// @brief 保存按顺序展开的属性描述; 可选 VS 只核对归属/阶段, 不决定另一套 location ABI.
         InputLayoutHandle CreateInputLayout(const VertexAttributeDesc *d, uint32_t attributeCount,
                                             Shader *vertexShader) override;
+        /// @brief 创建强持本 Device 的零快照观察者, 无额外原生 fence.
         EventQueryHandle CreateEventQuery() override;
+        /// @brief 捕获 Graphics 最后已接受 ID; 非零旧快照须先 Reset, 拒绝时保留原快照.
         void SetEventQuery(EventQuery *query, CommandQueue queue) override;
+        /// @brief 非阻塞观察捕获前缀; 零快照为 true, 不证明任何未提交即时工作完成.
         bool PollEventQuery(EventQuery *query) override;
+        /// @brief 只等捕获前缀, 共用单次五秒期限; 超时诊断后保留身份/未完成引用.
         void WaitEventQuery(EventQuery *query) override;
+        /// @brief 清除观察身份, 可放弃 Pending 观察, 不取消提交或改变完成值.
         void ResetEventQuery(EventQuery *query) override;
+        /// @brief 创建有界 GPU timestamp 对, 入口或有效 counter 位宽不足/预算耗尽时返回空.
+        /// @note 以下查询操作均要求本 Device 的实际实现及 owner/current context, 由既有回调报告失败.
         TimerQueryHandle CreateTimerQuery() override;
+        /// @brief 两点 available 才缓存结果并返回 true; Pending 不等待或读取可能阻塞的数值.
         bool PollTimerQuery(TimerQuery *query) override;
+        /// @brief 取缓存秒值, 完整 Pending 区间允许一次五秒应用层等待, 超时/失败返回 0 并诊断.
+        /// @note 合法计时间隔小于实际 counter 周期; 正常帧先 Poll, true 后 Get, 零秒可以是有效结果.
         float GetTimerQueryTime(TimerQuery *query) override;
+        /// @brief 丢弃 Idle/Ready 或已退休 Failed 的结果, 未解析/未退休失败使用保持原状态并拒绝.
+        /// @note 不清最近 recording 身份; Ready 也不证明原包完成, 后继 Begin 可消费 Ready 并复用.
         void ResetTimerQuery(TimerQuery *query) override;
         GraphicsAPI GetGraphicsAPI() override;
         FramebufferHandle CreateFramebuffer(const FramebufferDesc &desc) override;
@@ -278,7 +292,12 @@ namespace Physara::RHI::OpenGL
         /// @brief acquire 接收交接包, 有已发工作时建立内部 fence, 不发布公开票据或 tracker metadata.
         [[nodiscard]] bool SealOrphans();
         /// @brief 按 FIFO 收集真实完成, wait 共享一次五秒截止点; false 由失败标记区分 Pending 与故障.
-        [[nodiscard]] bool CollectWork(bool wait);
+        /// @param stopAt 零表示收集全部并接收 orphan; 非零只观察该已接受 ID, 不为之后的 orphan 建 fence.
+        [[nodiscard]] bool CollectWork(bool wait, std::uint64_t stopAt = 0);
+        /// @brief owner 收拢当前包关联的查询, 退休前断开借用; 迟到旧包不修改后继 recording.
+        void ReconcileQueries(UploadWorkPacket &packet, bool retired) noexcept;
+        /// @brief 只获取已 available 的完整时间戳并缓存秒值, Pending 不触发阻塞结果读取.
+        [[nodiscard]] bool ResolveTimer(OpenGLTimerQuery &query);
         /// @brief 分段等待至统一截止点, 只将实际 signaled 视为成功, WAIT_FAILED 锁存停止.
         [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
         /// @brief 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
@@ -304,6 +323,7 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_LastSubmissionId = 0;
         std::uint64_t m_CompletedSubmissionId = 0;
         std::size_t m_UploadCapacity = 0;
+        std::size_t m_TimerNames = 0; ///< 实际存活/待删除名字, 只有原生删除或最终失效退出归还.
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;

@@ -46,7 +46,7 @@
 
 **完成条件：** 原生 Draw 在即时列表调用时发出，Execute 不重放；基本状态及索引语义通过像素/已知数据检查。
 
-**当前状态** 已完成并归档；独立 B 代码/注释验收、最终 verify、规范同步与归档记录见 [establish-opengl-immediate-draw](../../openspec/changes/archive/2026-11-07-establish-opengl-immediate-draw/tasks.md#final-verification)。D03-T04/T05 继续待实施。
+**当前状态** 已完成并归档；独立 B 代码/注释验收、最终 verify、规范同步与归档记录见 [establish-opengl-immediate-draw](../../openspec/changes/archive/2026-11-07-establish-opengl-immediate-draw/tasks.md#final-verification)。完整在途验收见 [D03-T04](#d03-t04)，稳定图像门槛见 [D03-T05](#d03-t05)。
 
 **与 D02-T04 的交付衔接：** 上传限定列表的 open/close、owner/唯一 claim 和一次提交基础已在 [上传 change](../../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md) 建立. 本包已在同一列表上完成基础图形执行验收, 未复制第二套列表; 完整在途与稳定图像门槛继续归 D03-T04/T05.
 
@@ -57,13 +57,15 @@
 
 **职责位置：** RHI/OpenGL 提交/queries/删除。**前置：** [D03-T03](#d03-t03)。**架构依据：** [11.1](../Architecture.md#retirement)、[7.4](../Architecture.md#uploads)、[11.3](../Architecture.md#readbacks)。
 
-- [ ] Execute 为已发出的列表建立 submission/fence/flush 与 in-flight 引用批次，区分 recording、submitted、completed；fence 创建失败不返回有效 ticket，未获票据的引用保留到受控退出。
-- [ ] 用实际完成值控制上传数据、查询和资源删除；初始同步读回仅可用于明确的测试/冷路径，正常帧不等待全设备。
-- [ ] 检查关闭后提交、重复执行拒绝、提交后立即释放 CPU 句柄、在途退出和未提交即时工作退出；区分 poll 的 Complete/Pending/Failed，只有 Complete 推进完成值。Fatal 停止新渲染而不等于 device lost，可用 context 的无 fence 工作在退出收拢，失效 context 不等待失败 ID。
+- [x] Execute 为已发出的列表建立 submission/fence/flush 与 in-flight 引用批次，区分 recording、submitted、completed；fence 创建失败不返回有效 ticket，未获票据的引用保留到受控退出。
+- [x] 用实际完成值控制上传数据、查询和资源删除；初始同步读回仅可用于明确的测试/冷路径，正常帧不等待全设备。
+- [x] 检查关闭后提交、重复执行拒绝、提交后立即释放 CPU 句柄、在途退出和未提交即时工作退出；区分 poll 的 Complete/Pending/Failed，只有 Complete 推进完成值。Fatal 停止新渲染而不等于 device lost，可用 context 的无 fence 工作在退出收拢，失效 context 不等待失败 ID。
 
 **完成条件：** 像素读回和资源退休由真实完成驱动，CPU 释放不导致 GPU 或上传区段提前复用。
 
 **与 D02-T04 的交付衔接：** 上传 change 已实现其必要的真实 fence/flush、完成收集、内部引用/预算和无 fence 退出基础. 本包在同一 Device/packet/删除协议上覆盖真实 Draw、后续上传版本、查询及其它在途消费者, 完整验收既有票据/失败合同; 不因有限子集交付而提前勾选本包或 D03 出口.
+
+**当前状态：** 已完成并归档；A/B 审查、最终 verify、主规范同步与交付边界见 [establish-opengl-submission-retirement](../../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md#final-verification)。D03-T05 稳定图像门槛、呈现及 D03 阶段出口保持后续验收。
 
 <a id="d03-t05"></a>
 ### D03-T05 · 形成首个稳定原生绘制门槛

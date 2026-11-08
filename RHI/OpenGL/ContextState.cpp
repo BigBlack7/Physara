@@ -64,6 +64,7 @@ namespace Physara::RHI::OpenGL
     {
         // 只撤销已知性, 保留名称以便真正删除前仍能解除原生引用; 不查询或保存外部 GL 状态.
         m_Known = false;
+        m_QueryReadKnown = false;
         m_ProgramKnown = m_FramebufferKnown = m_InputKnown = m_IndexKnown = m_VertexArrayKnown = false;
         m_RenderKnown = m_ViewportKnown = m_ScissorKnown = m_SrgbKnown = false;
         for (auto &range : m_UniformRanges)
@@ -130,6 +131,16 @@ namespace Physara::RHI::OpenGL
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         m_Program = m_Framebuffer = m_IndexBuffer = 0;
         Invalidate();
+    }
+
+    void ContextState::ApplyQueryRead() noexcept
+    {
+        // 不查询/恢复外部绑定, 只在缓存未知时建立客户端输出指针所需状态, 不扰动其它图形缓存.
+        if (!m_QueryReadKnown)
+        {
+            glBindBuffer(GL_QUERY_BUFFER, 0);
+            m_QueryReadKnown = true;
+        }
     }
 
     void ContextState::ApplyProgram(GLuint program, bool pointSize) noexcept

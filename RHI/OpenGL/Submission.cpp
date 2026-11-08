@@ -14,7 +14,7 @@ namespace Physara::RHI::OpenGL
 {
     // 物理包先建立可失败的 CPU 容器和 tracker, 后续取得 recording claim 才向列表发布.
     UploadWorkPacket::UploadWorkPacket(MessageCallback *callback, std::uint64_t identity, std::size_t minimum)
-        : tracker(callback), recordingId(identity), minimumChunk(minimum), resources(0), chunks(0)
+        : tracker(callback), recordingId(identity), minimumChunk(minimum), resources(0), timers(0), chunks(0)
     {
     }
 
@@ -117,7 +117,8 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept
     {
-        // 只由完成收集或最终退出调用. 先释放 tracker 借用和 chunk, 再释放资源 lease, 最后销毁包本身.
+        // 只由完成收集或最终退出调用. 先收拢查询并断开包借用, 再释放 tracker/chunk, lease 和包.
+        ReconcileQueries(packet, true);
         packet.tracker.Reset();
         for (auto &chunk : packet.chunks)
         {
@@ -181,6 +182,8 @@ namespace Physara::RHI::OpenGL
             }
             else
             {
+                // 放弃不提供有效计时结果, 但时间点与 Draw 前缀一起等内部 fence, 不能就地解除 lease.
+                ReconcileQueries(*slot, false);
                 issued[count++] = slot.get();
             }
         }
@@ -248,10 +251,16 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    bool OpenGLDevice::CollectWork(bool wait)
+    bool OpenGLDevice::CollectWork(bool wait, std::uint64_t stopAt)
     {
         // false 同时表示 Pending 或失败, 由 m_WorkFailed/设备 phase 区分. 只按 FIFO 中已证明的完成退休.
-        if (m_WorkFailed || !SealOrphans())
+        if (stopAt != 0 && m_CompletedSubmissionId >= stopAt)
+        {
+            // 已完成快照可重复观察, 不重复查询/删除 fence 或退休其它较晚记录.
+            return true;
+        }
+        // Event 只等待已接受前缀, 不为之后的未提交 orphan 创建新 fence 或延长观察目标.
+        if (m_WorkFailed || (stopAt == 0 && !SealOrphans()))
         {
             return false;
         }
@@ -302,8 +311,12 @@ namespace Physara::RHI::OpenGL
                 m_WorkFailed = true;
                 return false;
             }
+            if (stopAt != 0 && m_CompletedSubmissionId >= stopAt)
+            {
+                return true;
+            }
         }
-        return true;
+        return stopAt == 0 || m_CompletedSubmissionId >= stopAt;
     }
 
     // 零超时收集已证明完成的包, 随后排空删除 FIFO; 失败保留未知完成的工作到显式退出.
@@ -461,6 +474,8 @@ namespace Physara::RHI::OpenGL
         nativeAvailable = nativeAvailable && m_NativeUsable;
         ReleaseAllocation(std::move(m_DummySampler), true);
         Drain(nativeAvailable);
+        // 原生删除失败或 context 不可用时, 剩余名字交确切 context 的最终销毁, 不恢复 Active 预算.
+        m_TimerNames = 0;
         m_Phase = Phase::Stopped;
         if (nativeError != nullptr)
         {

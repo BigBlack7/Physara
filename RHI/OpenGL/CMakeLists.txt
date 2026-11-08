@@ -9,6 +9,10 @@ add_library(PhysaraRHIOpenGL STATIC
     Texture.cpp
     Sampler.cpp
     Framebuffer.cpp
+    # Queries 拥有对象/Device 查询入口, CommandListQueries 发出即时点; 共用提交完成/lease/删除 owner.
+    Queries.hpp
+    Queries.cpp
+    CommandListQueries.cpp
     ShaderCaps.hpp
     ShaderCaps.cpp
     Shader.hpp

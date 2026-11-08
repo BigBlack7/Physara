@@ -9,9 +9,11 @@
 
 #include "InputLayout.hpp"
 #include "Pipeline.hpp"
+#include "Queries.hpp"
 
 namespace Physara::RHI::OpenGL
 {
+    // 将已验证对象的实际强引用树接入包账目, CPU 准备失败可以留下额外 lease, 不发出本次原生操作.
     InternalOwnership *OpenGLCommandList::RetainResource(Resource *resource)
     {
         // 本包已保活的根不再展开; 依赖记录描述父对象已有的强引用边, 不增加第二组子引用.
@@ -52,6 +54,11 @@ namespace Physara::RHI::OpenGL
             else if (auto *sampler = dynamic_cast<OpenGLSampler *>(resource))
             {
                 owners = &sampler->m_InternalOwners;
+            }
+            else if (auto *timer = dynamic_cast<OpenGLTimerQuery *>(resource))
+            {
+                // Timer 是叶对象, 名字由 wrapper 的删除节点管理, 不增加另一份原生寿命队列.
+                owners = &timer->m_InternalOwners;
             }
             else if (auto *shader = dynamic_cast<OpenGLShader *>(resource))
             {

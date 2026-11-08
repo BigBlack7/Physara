@@ -24,8 +24,10 @@ namespace Physara::RHI::OpenGL
 
     /// @brief 持有 tracker, 资源 lease 和映射 chunk 的稳定物理包, 寿命跨逻辑列表与 GPU 完成.
     /// @note 无逻辑列表强引用; orphaned 交接后只由 owner 处理, 避免内部寿命环.
+    /// Timer 结果与包完成分别推进, 销毁 tracker/lease 前先按 recording 身份收拢关联查询.
     struct UploadWorkPacket
     {
+        /// @brief 准备可失败的 tracker/容器; Device 取得唯一 claim 后才发布本包.
         explicit UploadWorkPacket(MessageCallback *callback, std::uint64_t identity, std::size_t minimumChunk);
         CommandListResourceStateTracker tracker;
         const std::uint64_t recordingId;
@@ -45,6 +47,7 @@ namespace Physara::RHI::OpenGL
         std::size_t writes = 0;
         std::size_t logicalBytes = 0;
         std::vector<UploadResourceLease> resources;
+        std::vector<OpenGLTimerQuery *> timers; ///< 借用 resources 保活的 query, 配对与退休时核对 recording 身份.
         std::vector<std::unique_ptr<UploadChunk>> chunks;
     };
 

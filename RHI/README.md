@@ -19,8 +19,9 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图与独立 Sampler, 不绑定全局单元. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
-| 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy 或 Draw. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 新绘制依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
-| 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 readback/query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
+| 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy、Draw 或时间戳. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
+| Event/Timer | Event 捕获最后已接受的 Graphics ID, Poll 不阻塞, Wait 只等待该前缀, 单次 5 秒期限. Timer 使用可重叠的 timestamp 对, available 后读取完整 GPU 数值并转换为秒; 显式 Get 可冷路径有界等待, Ready 不退休整个提交包 |
+| 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 staging/map/readback 和其它 query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
 
@@ -38,7 +39,11 @@ GL 的有效图形快照与本次 IB 范围检查统一由 owning recording 保�
 
 完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, 不改变 clip origin; depth-only/stencil-only 保留另一 aspect. copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序只在后端适配, viewport/scissor 不额外翻转; Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. staging/resolve、1D/3D clear/copy、Buffer UInt clear、MSAA 执行、多 viewport、indirect、Compute/UAV 仍明确拒绝.
 
-默认保活的 Pipeline、集合、Framebuffer 及其实际子引用接入同一包 lease; 内部复合边只记一次, 真正外部 owner 继续阻止破坏性关闭. trackLiveness=false 时调用方负责集合及其依赖到完成前的寿命. 包/辅助缓存不形成增长的资源组合表, native 删除前解除旧绑定. worker 最终释放列表只交接 orphan, owner 完成收集或受控退出后才销毁. 当前有限执行和验收记录随 [D03-T03](../Docs/Developments/D03-D05-FramePipeline.md#d03-t03) 引用, 不代替 T04 完整在途矩阵、T05 稳定图像或 Runtime Renderer.
+默认保活的 Pipeline、集合、Framebuffer 及其实际子引用接入同一包 lease; 内部复合边只记一次, 真正外部 owner 继续阻止破坏性关闭. trackLiveness=false 时调用方负责集合及其依赖到完成前的寿命. 包/辅助缓存不形成增长的资源组合表, native 删除前解除旧绑定. worker 最终释放列表只交接 orphan, owner 完成收集或受控退出后才销毁. 有限绘制记录随 [D03-T03](../Docs/Developments/D03-D05-FramePipeline.md#d03-t03) 引用, 查询/完整在途检查见 [D03-T04 change](../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md); 各自状态不代替 T05 稳定图像或 Runtime Renderer.
+
+Event 新建/Reset 的零快照 Poll 为 true、Wait 无工作返回, 只表示未捕获待等待提交, 不证明未提交即时前缀完成. 非零快照重新 Set 前先 Reset; Reset 可丢弃 Pending 观察, 不取消提交或撤销其引用. Timer Begin/End 必须在同一 recording, 同 query 同 recording 不重复使用. 未配对 Close 拒绝正常提交, 失败/放弃点仍保留到原包退休, 之后才可 Reset. 已解析结果保持稳定, 显式 Reset 或下一次合法 recording Begin 才消费旧结果; Pending 使用不得覆盖.
+
+计时存储预算为每 Device 512 个实际名字/256 对, 包引用和待删除名字仍占容量, owner 实际删除或最终失效退出才归还. 64 位读取不代表硬件必有 64 个有效位: 创建时核对实际 counter bits, 时间差按其模周期解释, 合法区间小于该设备 counter 的一个周期, 不支持零有效位计时. 正常帧先 Poll 后 Get, Pending 不是 0 ms; Get 到期通过诊断区分失败占位 0 和合法零测量, 不把 timeout 当 device lost. 客户端取值由唯一 ContextState 解绑 query buffer, 互操作后仍须沿 ClearState 失效合同重新建立状态.
 
 ContextAccess 的 user/isCurrent 和 MessageCallback 借用到所有 Device CPU 引用结束; 直接工厂调用方保留根 owner, 收拢资源和额外引用后在 owner 线程 ShutdownDevice. CPU final Release 只转移创建时预留的删除记录, 真正 glDelete 由 owning/current 线程收集. Normal 与 ContextUnavailable 明确区分当前 context 删除和外部 owner 随后销毁不可用 context 的退出; 后者不发布 GPU 完成. 普通缺少 current 不自动切换模式.
 

@@ -43,7 +43,8 @@ namespace Physara::RHI::OpenGL
         ~OpenGLCommandList() override;
         /// @brief 取得唯一 recording claim 与物理包; Close 后须成功 Execute 或释放列表才能重新 Open.
         void Open() override;
-        /// @brief 结束逻辑录制并保留待提交包, 故障时仍可释放 claim, 不恢复错误包为合法提交.
+        /// @brief 结束逻辑录制并保留待提交包, 未配对 Timer 使该包失效, 不自动补结束点.
+        /// @note 可用 context 上的故障 Close 仍释放 claim; context 已不可用时由列表 Release 交接退出.
         void Close() override;
         /// @brief 清空逻辑图形状态并失效唯一原生缓存, 保留 tracker 和已经发出工作的引用.
         void ClearState() override;
@@ -110,7 +111,11 @@ namespace Physara::RHI::OpenGL
                                                 uint64_t instanceBufferOffset, size_t numInstances,
                                                 RT::AccelStructBuildFlags buildFlags) override;
         void ConvertCoopVecMatrices(CoopVec::ConvertMatrixLayoutDesc const *convertDescs, size_t numDescs) override;
+        /// @brief 同 recording 的时间戳对可与其它 Timer 重叠; 同 query 一次 recording 只使用一次.
+        /// @note 新使用只接受 Idle/Ready; 后继 recording 的 Begin 消费 Ready, 不释放旧包的 lease.
+        /// 未解析使用不可覆盖, 未配对 Begin 使 Close 后的正常提交无效, 已发点仍保活.
         void BeginTimerQuery(TimerQuery *query) override;
+        /// @brief 只结束本 recording 已成功 Begin 的查询; 错误配对在新时间点之前拒绝.
         void EndTimerQuery(TimerQuery *query) override;
         void BeginMarker(const char *name) override;
         void EndMarker() override;

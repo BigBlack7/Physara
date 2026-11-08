@@ -7,6 +7,8 @@
 #include <memory>
 #include <new>
 
+#include "Queries.hpp"
+
 namespace Physara::RHI::OpenGL
 {
     OpenGLCommandList::OpenGLCommandList(OpenGLDevice *device, const CommandListParameters &params) noexcept
@@ -32,6 +34,7 @@ namespace Physara::RHI::OpenGL
         return m_Desc;
     }
 
+    // 未交付命令共用的诊断出口, 不修改 recording 或把失败入口替换成 GPU 空操作.
     void OpenGLCommandList::Unsupported(const char *operation)
     {
         if (m_Device->RequireContext(operation))
@@ -40,6 +43,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 创建逻辑句柄前核对即时 Graphics profile 与 chunk 策略, 实际物理包留到 Open 才准备.
     CommandListHandle OpenGLDevice::CreateCommandList(const CommandListParameters &params)
     {
         if (!RequireContext("CreateCommandList"))
@@ -173,11 +177,26 @@ namespace Physara::RHI::OpenGL
         }
         if (!m_Packet->invalid && !m_Packet->tracker.HasErrors())
         {
+            // 不自动补齐计时区间. 已复用到其它包的 query 不归本包当前状态检查所有.
+            for (auto *query : m_Packet->timers)
+            {
+                if (query->m_Packet == m_Packet && query->m_Phase == OpenGLTimerQuery::Phase::Begun)
+                {
+                    m_Packet->invalid = true;
+                    m_Device->Report("Close", "InvalidState: unmatched BeginTimerQuery retains issued prefix");
+                    break;
+                }
+            }
+        }
+        if (!m_Packet->invalid && !m_Packet->tracker.HasErrors())
+        {
             m_Packet->tracker.KeepBufferInitialStates();
             m_Packet->tracker.KeepTextureInitialStates();
             static_cast<void>(ConsumeBarriers());
         }
         m_Packet->phase = PacketPhase::Closed;
+        // Close 同步结果有效性但不撤销查询/Draw 引用, 后者仍等提交完成或 orphan/退出退休.
+        m_Device->ReconcileQueries(*m_Packet, false);
         m_Device->ReleaseClaim(m_Packet->recordingId);
     }
 

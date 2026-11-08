@@ -24,7 +24,7 @@ namespace Physara::RHI::OpenGL
     OpenGLDevice::~OpenGLDevice()
     {
         if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr || m_UploadCapacity != 0 ||
-            m_InternallyRetainedWrappers != 0 || (m_Submissions && m_Submissions->count != 0) ||
+            m_InternallyRetainedWrappers != 0 || m_TimerNames != 0 || (m_Submissions && m_Submissions->count != 0) ||
             std::any_of(m_Packets.begin(), m_Packets.end(), [](const auto &packet) { return packet != nullptr; }))
         {
             // 原生 owner 必须先显式收拢; Stopped 后只剩 CPU 状态, 最后引用可跨线程释放.
@@ -232,10 +232,14 @@ namespace Physara::RHI::OpenGL
         if (record.name != 0)
         {
             // 名称可能被后续创建复用, 删除前解除 VAO/单元等 native 引用并撤销全部相关缓存事实.
-            m_ContextState.ReleaseBindings();
-            if (!CheckNative("DeleteNative.ReleaseBindings"))
+            // timestamp 名字没有绑定关系, 不为删除一个 query 撤销全部图形绑定.
+            if (record.kind != NativeKind::Query)
             {
-                return false;
+                m_ContextState.ReleaseBindings();
+                if (!CheckNative("DeleteNative.ReleaseBindings"))
+                {
+                    return false;
+                }
             }
             const GLuint name = record.name;
             switch (record.kind)
@@ -258,12 +262,21 @@ namespace Physara::RHI::OpenGL
             case NativeKind::Shader:
                 glDeleteShader(record.name);
                 break;
+            case NativeKind::Query:
+                glDeleteQueries(1, &record.name);
+                break;
             }
             record.name = 0;
-            constexpr const char *Kinds[] = {"Buffer", "Texture", "Sampler", "Framebuffer", "Program", "Shader"};
+            constexpr const char *Kinds[] = {"Buffer",  "Texture", "Sampler", "Framebuffer",
+                                             "Program", "Shader",  "Query"};
             if (!CheckNative("DeleteNative", name, Kinds[std::size_t(record.kind)]))
             {
                 return false;
+            }
+            if (record.kind == NativeKind::Query)
+            {
+                // 入队/CPU wrapper 析构不归还预算, 只有实际删除成功才减少活名字数.
+                --m_TimerNames;
             }
         }
         // FBO 已解除原生附件引用, 才撤销该 FBO 自己拥有的 view.

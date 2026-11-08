@@ -45,6 +45,9 @@ namespace Physara::RHI::OpenGL
         void ReleaseBindings() noexcept;
         /// @brief 建立紧凑 texel 的标准 unpack 状态并按需绑定 PBO, 调用者保证 current context.
         void ApplyUnpack(GLuint buffer) noexcept;
+        /// @brief 冷路径客户端查询结果必须使用指针语义, 外部互操作失效后重新解绑 query buffer.
+        /// @pre 调用方已通过 BeginNative, 随后仍须 CheckNative 确认本批状态/结果读取.
+        void ApplyQueryRead() noexcept;
         /// @brief 绑定 Program, 按活动 PointSize 输出选择 Shader 点大小, 否则恢复单位点大小.
         void ApplyProgram(GLuint program, bool pointSize) noexcept;
         /// @brief 同时建立读/写 FBO 绑定; 本 profile 的 DSA clear/copy 不另建一份绑定缓存.
@@ -137,5 +140,6 @@ namespace Physara::RHI::OpenGL
         Rect m_Scissor;
         bool m_Known = false;
         GLuint m_UnpackBuffer = 0;
+        bool m_QueryReadKnown = false; ///< true 只表示已建立 GL_QUERY_BUFFER=0, 不表示任何查询已 ready.
     };
 }
