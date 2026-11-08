@@ -10,6 +10,7 @@
 
 namespace Physara::RHI::OpenGL
 {
+    // 先按资源类别选择 canonical offset, 再与逻辑 slot 合成 binding; 此值尚不是 GL 物理单元.
     std::uint32_t CanonicalBinding(const BindingLayoutDesc &desc, const BindingLayoutItem &item)
     {
         std::uint32_t offset = 0;
@@ -33,6 +34,7 @@ namespace Physara::RHI::OpenGL
         return offset + item.slot;
     }
 
+    // 布局只准备不可变 CPU 描述; 这里拒绝类别合成后的冲突, 实际 set 解释和单元分配留给 Pipeline.
     BindingLayoutHandle OpenGLDevice::CreateBindingLayout(const BindingLayoutDesc &desc)
     {
         if (!RequireContext("CreateBindingLayout"))
@@ -62,6 +64,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 按输入顺序取得依赖并预留解析记录和 view 删除节点; 原生名称随后由工厂填写, 构造时不绑定 GL 状态.
     OpenGLBindingSet::OpenGLBindingSet(OpenGLDevice *device, const BindingSetDesc &desc, OpenGLBindingLayout *layout)
         : m_Device(device), m_Desc(desc), m_Layout(layout)
     {
@@ -79,6 +82,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    // 发布与否决定立即回滚或排队退休; 两条路径都先交出自有 view, 再撤销实际 storage 的强引用.
     OpenGLBindingSet::~OpenGLBindingSet()
     {
         for (auto &view : m_Views)
@@ -89,7 +93,7 @@ namespace Physara::RHI::OpenGL
         m_Resources.clear();
     }
 
-    /// @brief 将显式或 whole-buffer 范围解析为精确范围, 不截断调用方给出的越界输入.
+    /// @brief 将显式、零长度或全一哨兵范围解析为精确范围, 不截断调用方给出的越界输入.
     /// @note 此处只证明资源用途与设备 range 合法, 不证明它覆盖任意 Shader 所需的块 extent.
     static BufferRange ResolveBuffer(const BindingSetItem &item, OpenGLBuffer &buffer, const ShaderCaps &caps)
     {
@@ -99,7 +103,10 @@ namespace Physara::RHI::OpenGL
                            "InvalidArgument: buffer binding usage");
         const auto offset = item.range.byteOffset;
         RequirePreparation(offset < desc.byteSize, "InvalidArgument: buffer binding offset");
-        const auto size = item.range.byteSize == ~0ull ? desc.byteSize - offset : item.range.byteSize;
+        // 零长度与全一哨兵均表示剩余范围; 显式长度不经公共 Resolve 的 clamp, 留给下面拒绝越界.
+        const auto size = (item.range.byteSize == 0 || item.range.byteSize == ~0ull)
+                              ? desc.byteSize - offset
+                              : item.range.byteSize;
         const auto alignment = constant ? caps.uniformAlignment : caps.storageAlignment;
         const auto maximum = constant ? caps.uniformBlockBytes : caps.storageBlockBytes;
         // 公共 RHI 对 partial CBV 的 offset/size 另有 256-byte 合同, 不能只按较小的 GL 对齐放宽.
@@ -173,6 +180,8 @@ namespace Physara::RHI::OpenGL
         return result;
     }
 
+    // 先准备完整 owner 并解析全部输入, 再物化采样 view, 最后发布不可变集合.
+    // 中途失败只撤销本次未发布集合; 资源实际可用于哪个 Shader block 仍由图形候选组合边界确认.
     BindingSetHandle OpenGLDevice::CreateBindingSet(const BindingSetDesc &desc, BindingLayout *layout)
     {
         if (!RequireContext("CreateBindingSet"))

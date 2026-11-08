@@ -40,6 +40,8 @@ PhysaraShaderBuild check <package> <expected-abi>
 
 开发测试代码、脚本、Shader/JSON 样例和临时 CMake 工程只放在 build 下归类目录, 不注册到正式工程或默认构建. 删除 build 后按上节命令重新配置/构建即可, 不需要也不自动恢复本地测试材料. 具体检查入口、实际运行/复用结果与限制保存在对应 change tasks; 验证预算遵循 [验证技能](../.agents/skills/physara-verification/SKILL.md).
 
+D03-T05 的固定原生图案消费者、实际命令及最终验收见 [图像门槛归档](../openspec/changes/archive/2026-11-08-establish-opengl-native-draw-gate/tasks.md#final-verification). 它复用正式 Shader/RHI 与非零提交后的 Event 完成链, 仅在 build 冷路径读回; 不提供公共 staging/map/异步读回接口, 本地材料不是 Runtime 的绘制入口或普通构建前提.
+
 ## 运行
 
 ```powershell

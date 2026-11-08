@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前处于 [D03 · Shader ABI 与首次原生绘制](D03-D05-FramePipeline.md#dev-d03)。[D03-T01](D03-D05-FramePipeline.md#d03-t01)、[D03-T02](D03-D05-FramePipeline.md#d03-t02)、[D03-T03](D03-D05-FramePipeline.md#d03-t03) 与 [D03-T04](D03-D05-FramePipeline.md#d03-t04) 均已完成并归档，最近一次交付记录见 [establish-opengl-submission-retirement](../../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md#final-verification)。下一工作包为 [D03-T05 · 首个稳定原生绘制门槛](D03-D05-FramePipeline.md#d03-t05)，尚未创建 change 或开始实施；呈现及 D03 阶段出口保持待验收。
+当前阶段为 [D04 · 建立带编辑器的可呈现程序](D03-D05-FramePipeline.md#dev-d04)，下一工作包为 [D04-T01 · EditorSession、面板和输入路由](D03-D05-FramePipeline.md#d04-t01)，尚未创建 change 或开始实现。[D03](D03-D05-FramePipeline.md#dev-d03) 的五个工作包及阶段出口均已完成；最近交付的 [establish-opengl-native-draw-gate](../../openspec/changes/archive/2026-11-08-establish-opengl-native-draw-gate/tasks.md#final-verification) 与关联存量修正 [fix-opengl-binding-buffer-ranges](../../openspec/changes/archive/2026-11-08-fix-opengl-binding-buffer-ranges/tasks.md#final-verification) 已完成独立审查、最终 verify、规范同步和归档。
 
 ## 阅读与使用
 

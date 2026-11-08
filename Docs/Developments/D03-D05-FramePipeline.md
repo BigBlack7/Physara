@@ -33,7 +33,7 @@
 
 **完成条件：** 逻辑 set/binding 与原生单元映射可诊断，合法接口不因全项目预留大量固定 binding 而误判设备不足。
 
-**当前状态** 已完成并归档；范围、证据与后续任务见 [establish-opengl-shader-pipelines](../../openspec/changes/archive/2026-11-06-establish-opengl-shader-pipelines/tasks.md)。本包沿 D03-T01 的当前 graphics profile 交付准备能力，volatile/push 消费仍归 D08-T02，Draw、在途绘制与像素门槛仍归 D03-T03/T04/T05。
+**当前状态** 已完成并归档；范围、证据与后续任务见 [establish-opengl-shader-pipelines](../../openspec/changes/archive/2026-11-06-establish-opengl-shader-pipelines/tasks.md)。本包沿 D03-T01 的当前 graphics profile 交付准备能力，volatile/push 消费仍归 D08-T02，Draw、在途绘制与像素门槛分别归 D03-T03/T04/T05。T05 审查发现的零长度绑定范围存量缺陷已由 [fix-opengl-binding-buffer-ranges](../../openspec/changes/archive/2026-11-08-fix-opengl-binding-buffer-ranges/tasks.md#final-verification) 修正并独立验收归档。
 
 <a id="d03-t03"></a>
 ### D03-T03 · 实现单即时列表与基础 Draw 状态
@@ -65,20 +65,24 @@
 
 **与 D02-T04 的交付衔接：** 上传 change 已实现其必要的真实 fence/flush、完成收集、内部引用/预算和无 fence 退出基础. 本包在同一 Device/packet/删除协议上覆盖真实 Draw、后续上传版本、查询及其它在途消费者, 完整验收既有票据/失败合同; 不因有限子集交付而提前勾选本包或 D03 出口.
 
-**当前状态：** 已完成并归档；A/B 审查、最终 verify、主规范同步与交付边界见 [establish-opengl-submission-retirement](../../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md#final-verification)。D03-T05 稳定图像门槛、呈现及 D03 阶段出口保持后续验收。
+**当前状态：** 已完成并归档；A/B 审查、最终 verify、主规范同步与交付边界见 [establish-opengl-submission-retirement](../../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md#final-verification)。稳定图像门槛与 D03 出口见下方 D03-T05，产品呈现仍归 D04。
 
 <a id="d03-t05"></a>
 ### D03-T05 · 形成首个稳定原生绘制门槛
 
 **职责位置：** RHI、Renderer、Shaders/Passes。**前置：** [D03-T03](#d03-t03)、[D03-T04](#d03-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[conventions](../Architecture.md#conventions)、[8.1](../Architecture.md#shader-runtime)。
 
-- [ ] 把四角色块/标记、深度梯度、非零实例及索引偏移组织为固定测试输入，验证真实后端输出。
-- [ ] 覆盖 clear→draw→copy/readback、不同 Framebuffer、纹理采样和实例范围；增加 Validation 失败用例。
-- [ ] 清理只为验证产生的重复生产代码，测试使用正式 Shader/RHI 链；不新增产品 Viewer 或直接 GL 的 Renderer。
+- [x] 把四角色块/标记、深度梯度、非零实例及索引偏移组织为固定测试输入，验证真实后端输出。
+- [x] 覆盖 clear→draw→copy/readback、不同 Framebuffer、纹理采样和实例范围；增加 Validation 失败用例。
+- [x] 清理只为验证产生的重复生产代码，测试使用正式 Shader/RHI 链；不新增产品 Viewer 或直接 GL 的 Renderer。
 
 **完成条件：** 第一次图像成功可重现且可自动判定，后续阶段能够复用同一编译、绑定、提交和完成链。
 
+**当前状态：** 已完成并归档；[establish-opengl-native-draw-gate](../../openspec/changes/archive/2026-11-08-establish-opengl-native-draw-gate/tasks.md#final-verification) 与关联存量修正 [fix-opengl-binding-buffer-ranges](../../openspec/changes/archive/2026-11-08-fix-opengl-binding-buffer-ranges/tasks.md#final-verification) 均已通过 B 代码/注释复核、A 最终 verify 和主规范同步，验收结论及边界分别留存在归档 tasks。
+
 **D03 阶段出口：** 已知图案经 canonical Shader→GL lowering→公共 RHI Draw→真实完成→读回通过；非零 base instance/base vertex、方向、深度、颜色验证有效。
+
+**出口状态：** 已通过；最终输入、实际运行/复用结果和边界见上方两份 change 的最终验收留存。下一工作包为 [D04-T01](#d04-t01)，尚未开始。
 
 <a id="dev-d04"></a>
 ## D04 · 建立带编辑器的可呈现程序
