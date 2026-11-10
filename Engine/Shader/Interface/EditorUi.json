@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "EditorUi",
+  "blocks": [
+    {
+      "name": "UiProjection",
+      "layout": "std140",
+      "fields": [
+        { "name": "scale", "type": "float2" },
+        { "name": "bias", "type": "float2" }
+      ]
+    }
+  ],
+  "resources": [
+    { "name": "uiProjection", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["vertex"], "block": "UiProjection" },
+    { "name": "uiImage", "kind": "texture2d", "set": 3, "slot": 0, "stages": ["fragment"] },
+    { "name": "uiSampler", "kind": "sampler", "set": 3, "slot": 0, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "vertex", "direction": "in", "name": "inPosition", "location": 0, "type": "float2" },
+    { "stage": "vertex", "direction": "in", "name": "inUv", "location": 1, "type": "float2" },
+    { "stage": "vertex", "direction": "in", "name": "inColor", "location": 2, "type": "float4" },
+    { "stage": "vertex", "direction": "out", "name": "uv", "location": 0, "type": "float2" },
+    { "stage": "vertex", "direction": "out", "name": "linearColor", "location": 1, "type": "float4" },
+    { "stage": "fragment", "direction": "in", "name": "uv", "location": 0, "type": "float2" },
+    { "stage": "fragment", "direction": "in", "name": "linearColor", "location": 1, "type": "float4" },
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

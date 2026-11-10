@@ -6,6 +6,7 @@
 #include "DeviceHost.hpp"
 #include "InputState.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <source_location>
 #include <thread>
@@ -17,19 +18,24 @@
 
 namespace Physara::Platform::Detail
 {
-    /// @brief 将 RHI 消息写入诊断, 在创建/关闭区间额外保存首错和附加错误数.
-    /// @note 借用 Diagnostics, 同宿主一起存活; 捕获结果不用于推断 device loss.
+    /// @brief 先记录 RHI 失败序号, 再写入诊断. 创建/关闭区间额外保存首错和附加错误数.
+    /// @note 借用 Diagnostics, 同宿主一起存活. 捕获结果不用于推断 device loss.
     class RhiMessageAdapter final : public RHI::MessageCallback
     {
     public:
         explicit RhiMessageAdapter(Core::Diagnostics &diagnostics) noexcept : m_Diagnostics(diagnostics)
         {
         }
-        /// @brief 同步复制回调文本后转发诊断, 日志失败不覆盖捕获的首错.
+        /// @brief 记录 Error/Fatal 后转发诊断. 首错捕获区间还会复制首条失败正文.
         void Message(RHI::MessageSeverity severity, const char *message) noexcept override;
-        /// @brief 开始新的首错捕获区间; EndCapture 停止捕获但保留结果供宿主读取.
+        /// @brief 开始本次创建或关闭的首错捕获. EndCapture 后保留结果供宿主读取.
         void BeginCapture() noexcept;
         void EndCapture() noexcept;
+        /// @brief 借用贯穿宿主寿命的失败计数, 供同步命令区间取样.
+        [[nodiscard]] const std::atomic<std::uint64_t> &ErrorCount() const noexcept
+        {
+            return m_ErrorCount;
+        }
         [[nodiscard]] const std::optional<Core::BoundedText> &First() const noexcept
         {
             return m_First;
@@ -40,9 +46,9 @@ namespace Physara::Platform::Detail
         }
 
     private:
-        // Begin/EndCapture 只包围创建或关闭操作, 不构成逐帧图形成功状态或 device-loss 判定.
-        // 普通 RHI 消费者仍须按公开失败结果和诊断处理操作失败.
         Core::Diagnostics &m_Diagnostics;
+        std::atomic<std::uint64_t> m_ErrorCount{0}; ///< Error/Fatal 的累计计数, 饱和后保持最大值.
+        // 创建和关闭阶段独立保留首错正文与附加错误数.
         std::optional<Core::BoundedText> m_First;
         std::uint64_t m_Additional = 0;
         bool m_Capturing = false;

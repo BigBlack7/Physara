@@ -13,7 +13,20 @@ namespace Physara::Platform::Detail
     void RhiMessageAdapter::Message(RHI::MessageSeverity severity, const char *message) noexcept
     {
         const std::string_view text = message != nullptr ? message : "RHI diagnostic without text";
-        if (m_Capturing && severity == RHI::MessageSeverity::Error)
+        const bool failed = severity == RHI::MessageSeverity::Error || severity == RHI::MessageSeverity::Fatal;
+        if (failed)
+        {
+            // 日志写入或诊断环挤出不影响录制方发现失败. 计数饱和后区间直接拒绝继续.
+            auto count = m_ErrorCount.load(std::memory_order_relaxed);
+            while (count != std::numeric_limits<std::uint64_t>::max())
+            {
+                if (m_ErrorCount.compare_exchange_weak(count, count + 1, std::memory_order_relaxed))
+                {
+                    break;
+                }
+            }
+        }
+        if (m_Capturing && failed)
         {
             if (!m_First)
             {
@@ -25,7 +38,8 @@ namespace Physara::Platform::Detail
             }
         }
         // 先保存有界主错, 日志写入失败不能替换原始 RHI 结果.
-        const auto level = severity == RHI::MessageSeverity::Error     ? Core::Severity::Error
+        const auto level = severity == RHI::MessageSeverity::Fatal     ? Core::Severity::Critical
+                           : severity == RHI::MessageSeverity::Error   ? Core::Severity::Error
                            : severity == RHI::MessageSeverity::Warning ? Core::Severity::Warning
                                                                        : Core::Severity::Info;
         static_cast<void>(m_Diagnostics.Write(level, text));
@@ -33,6 +47,7 @@ namespace Physara::Platform::Detail
 
     void RhiMessageAdapter::BeginCapture() noexcept
     {
+        // 生命周期操作重新捕获首错, 贯穿宿主寿命的计数继续累积.
         m_First.reset();
         m_Additional = 0;
         m_Capturing = true;

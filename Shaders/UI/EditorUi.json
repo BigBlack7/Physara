@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "EditorUi",
+  "interface": "EditorUi",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "UI/EditorUi.vert", "entry": "main" },
+    { "stage": "fragment", "source": "UI/EditorUi.frag", "entry": "main" }
+  ],
+  "defines": []
+}

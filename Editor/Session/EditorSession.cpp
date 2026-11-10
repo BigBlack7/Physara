@@ -1,26 +1,33 @@
 #include "EditorSession.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <imgui.h>
 
+#include <DeviceHost.hpp>
+
 #include "ActionRouter.hpp"
 #include "ImGui/GlfwPlatform.hpp"
+#include "ImGui/UiRenderer.hpp"
 #include "Panels/Workspace.hpp"
 
 /// @file
 /// @brief 将宿主发布推进为一次 Editor 轮次. 先识别输入失效边界, 再按窗口状态构建布局.
-/// 可渲染轮次封存 CPU 绘制数据, 宿主请求随结果按值交给 Runtime.
+/// 可渲染轮次封存 CPU 绘制数据及同批像素范围, 供可选的离屏 renderer 消费.
 
 namespace Physara::Editor
 {
-    /// @brief 会话的 UI 状态及两种上一轮状态, 分别用于输入门控和恢复时钟.
+    /// @brief 会话内的 context 依赖, 输入恢复状态和本轮 DrawData 借用.
     struct EditorSession::State
     {
-        // 平台适配最后析构, 使 UI context 覆盖工作区和选择状态的寿命.
+        // 平台适配最后析构, renderer 先结束借用并解除纹理关联, 再销毁 UI context.
         Detail::GlfwPlatform platform;
+        std::unique_ptr<Detail::UiRenderer> renderer;
         Detail::Workspace workspace;
         std::optional<Detail::SelectionId> selection;
+        const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
+        Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
         // 上一轮是否可接收交互, 与本批次的窗口事实合用.
         bool inputAvailable = true;
         // 上一轮是否跳过 UI 帧, 用于恢复时重建时间基线.
@@ -35,11 +42,41 @@ namespace Physara::Editor
 
     EditorSession::CreateResult EditorSession::Create(Platform::DeviceHost &host)
     {
-        // 由会话先持有适配的清理责任. 接入返回错误时局部 owner 随即析构.
+        return CreateImpl(host, nullptr);
+    }
+
+    EditorSession::CreateResult EditorSession::Create(Platform::DeviceHost &host, const UiRendererDesc &renderer)
+    {
+        return CreateImpl(host, &renderer);
+    }
+
+    // 两种消费方式共享平台接入. 资源准备失败时, 会话局部 owner 负责逆序清理.
+    EditorSession::CreateResult EditorSession::CreateImpl(Platform::DeviceHost &host, const UiRendererDesc *renderer)
+    {
+        // 录制通过宿主回调观察失败, 因此 renderer 只接入该宿主借出的 Device.
+        if (renderer != nullptr && host.GetDevice() != &renderer->device)
+        {
+            return Core::BoundedText("Editor UI renderer requires the ready host device on its owner thread");
+        }
         auto session = std::unique_ptr<EditorSession>(new EditorSession());
-        if (auto error = session->m_State->platform.Attach(host))
+        auto &state = *session->m_State;
+        if (auto error = state.platform.Attach(host))
         {
             return *error;
+        }
+        // RHI 路径由 ImGui 动态生成 atlas. CPU 路径在首帧前预建 atlas 以满足固定版本的合同.
+        if (renderer != nullptr)
+        {
+            auto created = Detail::UiRenderer::Create(host, *renderer);
+            if (const auto *error = std::get_if<Core::BoundedText>(&created))
+            {
+                return *error;
+            }
+            state.renderer = std::get<std::unique_ptr<Detail::UiRenderer>>(std::move(created));
+        }
+        else if (!ImGui::GetIO().Fonts->Build())
+        {
+            return Core::BoundedText("Editor CPU font atlas initialization failed");
         }
         return session;
     }
@@ -47,6 +84,12 @@ namespace Physara::Editor
     EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input)
     {
         auto &state = *m_State;
+        if (state.renderer)
+        {
+            // ImGui 可在下一次 NewFrame 覆写状态或释放旧 atlas 元数据.
+            state.renderer->CancelPending();
+        }
+        state.drawData = nullptr;
         const bool renderable = input.window.Renderable();
         const bool inputAvailable = renderable && input.window.focused;
         // 即使发布末值已恢复, 批次中的失焦, 最小化或零像素边沿仍会使本批失效.
@@ -82,8 +125,11 @@ namespace Physara::Editor
                     .viewportHit = viewportHit};
                 state.workspace.ApplyShortcuts(input.events, claims);
             }
+            // 封存时一并记住同次宿主发布的像素范围, 后续准备以它校验调用者目标.
             ImGui::Render();
-            frame.hasDrawData = ImGui::GetDrawData() != nullptr;
+            state.drawData = ImGui::GetDrawData();
+            state.extentPixels = input.window.framebufferSizePixels;
+            frame.hasDrawData = state.drawData != nullptr;
         }
         // 普通模式的恢复批次可在本轮结束时建立基线. 相对模式保持门控, 等宿主确认归还.
         if (discard && inputAvailable && !frame.hostRequest)
@@ -93,6 +139,37 @@ namespace Physara::Editor
         state.inputAvailable = inputAvailable;
         state.suspended = !renderable;
         return frame;
+    }
+
+    PrepareUiResult EditorSession::PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels)
+    {
+        auto &state = *m_State;
+        // 暂停或零像素范围直接返回, 待处理纹理请求留给下一次有效准备.
+        if (state.drawData == nullptr || extentPixels.width == 0 || extentPixels.height == 0)
+        {
+            return std::monostate{};
+        }
+        if (!state.renderer || extentPixels != state.extentPixels)
+        {
+            return Core::BoundedText("Editor UI prepare requires a renderer and the sealed frame's pixel extent");
+        }
+        return state.renderer->Prepare(*state.drawData, target, extentPixels);
+    }
+
+    UiTextureResult EditorSession::RegisterUiTexture(RHI::Texture &texture)
+    {
+        auto &renderer = m_State->renderer;
+        if (!renderer)
+        {
+            return Core::BoundedText("Editor UI texture registration requires an attached renderer");
+        }
+        return renderer->RegisterResident(texture);
+    }
+
+    bool EditorSession::UnregisterUiTexture(UiTextureId id) noexcept
+    {
+        auto &renderer = m_State->renderer;
+        return renderer && renderer->UnregisterResident(id);
     }
 
     void EditorSession::CompleteCursorRelease()

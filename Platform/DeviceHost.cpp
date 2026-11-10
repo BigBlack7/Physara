@@ -472,6 +472,24 @@ namespace Physara::Platform
         return m_State->validatedDevice.Get();
     }
 
+    bool RhiErrorScope::IsClear() const noexcept
+    {
+        // 同步回调在命令返回前更新计数. 区间只比较这一原子值, 使用 relaxed 读取即可.
+        return m_ErrorCount != nullptr && m_InitialCount != std::numeric_limits<std::uint64_t>::max() &&
+               m_ErrorCount->load(std::memory_order_relaxed) == m_InitialCount;
+    }
+
+    RhiErrorScope DeviceHost::CaptureRhiErrors() const noexcept
+    {
+        RhiErrorScope scope;
+        if (GetDevice() != nullptr)
+        {
+            scope.m_ErrorCount = &m_State->rhiMessages.ErrorCount();
+            scope.m_InitialCount = scope.m_ErrorCount->load(std::memory_order_relaxed);
+        }
+        return scope;
+    }
+
     DeviceHost::PollResult DeviceHost::PollEvents() noexcept
     {
         // 先完成原生事件分发及事实补查, 再一次发布. 任何失败都返回 HostError, 不暴露部分事件 bank.

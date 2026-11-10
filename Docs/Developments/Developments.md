@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 D04 · 建立带编辑器的可呈现程序。D04-T01 的 EditorSession、面板和输入路由已验收归档，当前工作包 D04-T02 · ImGui 公共 RHI 绘制与纹理协议待立项。D03 的五个工作包及阶段出口均已完成。 [D04 阶段](D03-D05-FramePipeline.md#dev-d04) · [D04-T02](D03-D05-FramePipeline.md#d04-t02) · [D04-T01 验收](../../openspec/changes/archive/2026-11-10-establish-editor-session-input/tasks.md#final-verification) · [D03 阶段](D03-D05-FramePipeline.md#dev-d03)
+当前阶段为 D04 · 建立带编辑器的可呈现程序。D04-T01 的 EditorSession、面板和输入路由，以及 D04-T02 的 ImGui 公共 RHI 绘制与纹理协议均已验收归档。当前工作包为 D04-T03 · 接入 PresentColor 和正确窗口提交，待立项。D03 的五个工作包及阶段出口均已完成。 [D04 阶段](D03-D05-FramePipeline.md#dev-d04) · [D04-T03](D03-D05-FramePipeline.md#d04-t03) · [D04-T02 验收](../../openspec/changes/archive/2026-11-10-establish-imgui-rhi-renderer/tasks.md#final-verification) · [D04-T01 验收](../../openspec/changes/archive/2026-11-10-establish-editor-session-input/tasks.md#final-verification) · [D03 阶段](D03-D05-FramePipeline.md#dev-d03)
 
 ## 阅读与使用
 

@@ -109,11 +109,13 @@
 
 **职责位置：** Editor/ImGui、Shaders/UI。**前置：** [D04-T01](#d04-t01)。**架构依据：** [10.2](../Architecture.md#imgui-renderer)、[10.1](../Architecture.md#editor-output)。
 
-- [ ] 实现 UI VB/IB 上传、clip/scissor、DPI、Idx/VtxOffset、reset-state callback 和 draw commands，全部走公共 RHI；callback 命令完成后跳过普通纹理解析与绘制。
-- [ ] 实现当前 ImGui 纹理 create/update/destroy 协议、字体与稳定 UiTextureId/generation，绑定引用受提交完成保护；像素/更新矩形有独立所有权，实际执行并有效提交才确认更新，失败保留请求重试。
-- [ ] 按线性域 straight-alpha 合成，处理 sRGB 创作配色、图标纹理和字体覆盖率；验证图像与文本边缘。
+- [x] 实现 UI VB/IB 上传、clip/scissor、DPI、Idx/VtxOffset、reset-state callback 和 draw commands，全部走公共 RHI；callback 命令完成后跳过普通纹理解析与绘制。
+- [x] 实现当前 ImGui 纹理 create/update/destroy 协议、字体与稳定 UiTextureId/generation，绑定引用受提交完成保护；像素/更新矩形有独立所有权，实际执行并有效提交才确认更新，失败保留请求重试。
+- [x] 按线性域 straight-alpha 合成，处理 sRGB 创作配色、图标纹理和字体覆盖率；验证图像与文本边缘。
 
 **完成条件：** UI 不使用 ImGui 原生 OpenGL renderer；纹理销毁或重建不会留下悬空 draw-data 引用。
+
+**当前状态** 已完成验收并归档。 [establish-imgui-rhi-renderer](../../openspec/changes/archive/2026-11-10-establish-imgui-rhi-renderer/tasks.md#final-verification)
 
 <a id="d04-t03"></a>
 ### D04-T03 · 接入 PresentColor 和正确窗口提交

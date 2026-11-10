@@ -64,9 +64,10 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    // 按输入顺序取得依赖并预留解析记录和 view 删除节点; 原生名称随后由工厂填写, 构造时不绑定 GL 状态.
+    // 按输入顺序保活资源, 准备解析记录和删除节点. 原生 view 由工厂随后创建.
+    // 空向量用可抛的 count 构造. Debug 代理分配失败时已构造成员随展开释放, 由工厂报告.
     OpenGLBindingSet::OpenGLBindingSet(OpenGLDevice *device, const BindingSetDesc &desc, OpenGLBindingLayout *layout)
-        : m_Device(device), m_Desc(desc), m_Layout(layout)
+        : m_Device(device), m_Desc(desc), m_Layout(layout), m_Resources(0), m_Bindings(0), m_Views(0)
     {
         m_Resources.reserve(desc.bindings.size());
         m_Bindings.reserve(desc.bindings.size());

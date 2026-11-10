@@ -3,6 +3,7 @@
 /// @file
 /// @brief Platform 的宿主边界: 发布窗口与输入事实, 借出 RHI Device, 在 owner 线程推进生命周期.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -164,6 +165,21 @@ namespace Physara::Platform
     /// @brief 无分配地格式化自持错误描述, 不执行原生操作, 返回后可跨线程读取.
     [[nodiscard]] Core::BoundedText DescribeHostError(const HostError &error) noexcept;
 
+    /// @brief 从取样时刻起观察同一宿主 Device 的 Error/Fatal, 供同步命令决定是否继续.
+    /// @note 借用宿主回调中的计数. 在 owner 线程使用并在 Shutdown 前结束.
+    class RhiErrorScope final
+    {
+    public:
+        /// @brief 取样有效且此后未观察到 Error/Fatal 时为 true. 计数耗尽视为失败.
+        /// @note 结果独立于日志写入, 提交是否接受及 GPU 是否完成由调用者另行确认.
+        [[nodiscard]] bool IsClear() const noexcept;
+
+    private:
+        friend class DeviceHost;
+        const std::atomic<std::uint64_t> *m_ErrorCount = nullptr;
+        std::uint64_t m_InitialCount = 0;
+    };
+
     /// @brief 独占进程 GLFW 生命周期, 拥有窗口, context, 输入与 raw/Validation Device.
     /// @par 线程与寿命
     /// 首次 Create 从进程 main 线程调用; 活跃操作限创建线程且不可重入.
@@ -195,6 +211,9 @@ namespace Physara::Platform
         /// @brief 仅在 owner/Ready 状态借出 Validation Device, 其他情况返回空指针.
         /// @note 不增加引用, 借用止于成功 Shutdown; 构造 owning handle 取得的额外引用须先释放.
         [[nodiscard]] RHI::Device *GetDevice() const noexcept;
+        /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
+        /// @return 无法取样时返回 IsClear 为 false 的值.
+        [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;
 
         /// @brief 消费原生事件并发布一批有序输入; 接受的 poll 开始即结束上批 events 借用.
         /// @return 完整输入批次或 HostError, 输入故障不发布成功的部分批次.

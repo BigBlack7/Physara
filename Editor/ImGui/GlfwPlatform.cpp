@@ -14,7 +14,7 @@
 
 /// @file
 /// @brief 接合官方 GLFW backend, 同步窗口事实并推进 ImGui 的帧准备.
-/// 原生回调恢复早于 ImGui context 销毁, 窗口寿命仍由宿主管理.
+/// Session 在平台接入后选择字体准备方式. 析构先恢复原生回调, 再销毁借用宿主窗口的 UI context.
 
 namespace Physara::Editor::Detail
 {
@@ -59,11 +59,6 @@ namespace Physara::Editor::Detail
         if (!ImGui_ImplGlfw_InitForOther(window, true))
         {
             return Core::BoundedText("Editor GLFW input adapter initialization failed");
-        }
-        // D04-T02 接入纹理协议前, 固定版本要求先准备 CPU 字体 atlas 才能开始 UI 帧.
-        if (!io.Fonts->Build())
-        {
-            return Core::BoundedText("Editor CPU font atlas initialization failed");
         }
         m_Window = window;
         return std::nullopt;
@@ -117,6 +112,7 @@ namespace Physara::Editor::Detail
             // backend 已更新自己的时钟, 恢复首帧沿用它的启动步长.
             io.DeltaTime = 1.0f / 60.0f;
         }
+        // 使用 Session 已选定的 atlas 模式, 在布局之前推进固定 ImGui 的帧内状态.
         ImGui::NewFrame();
     }
 }
