@@ -11,14 +11,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# 先定义固定第三方源码的 target, 供第一方模块按需链接.
 add_subdirectory(ThirdParty)
 
-# Core 先于 Platform 定义; 模块按实际源文件声明标准, 警告与单向依赖.
-# Runtime 只装配已有 Core/Platform; 尚无实现的模块不创建空库.
+# 通用 RHI 与原生 GL 分开. 单独消费通用 RHI 时只需进入 RHI 目录.
 add_subdirectory(RHI)
-# 原生组件只在完整工程接入, 独立 generic 消费者无需配置 loader.
 add_subdirectory(RHI/OpenGL)
+# Engine 提供 Core 与 Shader. Platform 先建立宿主合同, Editor 再消费其窗口和输入值.
 add_subdirectory(Engine)
 add_subdirectory(Platform)
 add_subdirectory(Editor)
+# 最后由 Runtime 装配各模块的唯一产品入口.
 add_subdirectory(Runtime)

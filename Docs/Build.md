@@ -14,7 +14,7 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义; PhysaraRHIOpenGL 单独封闭 loader/原生实现依赖. 当前可链接能力与后端边界见 [RHI 来源说明](../RHI/README.md). Runtime 仍只直接链接其实际使用的 Core/Platform. NVRHI 参考源码不加入构建, CMake 不安装或运行 OpenSpec、格式化器或测试框架.
+当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 直接链接实际使用的 Core、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [RHI 来源说明](../RHI/README.md)
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休; 直接关闭还可使用 OpenGL.hpp 的预检/drain 入口. 查询不增加第三方或默认测试目标, 公共 staging/map/异步读回仍待后续工作包. 实际支持和 CPU 源寿命见 RHI 说明与头合同, 当前产品事件循环尚不消费它们绘制.
 
@@ -50,7 +50,7 @@ D03-T05 的固定原生图案消费者、实际命令及最终验收见 [图像�
 ./build/bin/Debug/Physara.exe --hidden --poll-limit=3
 ```
 
-Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式使用同一真实窗口/GL 宿主, 都需要窗口系统和支持 OpenGL 4.6 Core 的驱动.
+Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装配同一真实窗口/GL 宿主和 CPU 编辑器会话, 都需要窗口系统和支持 OpenGL 4.6 Core 的驱动.
 
 | 选项 | 含义 |
 |---|---|
@@ -64,14 +64,14 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式使�
 | 返回码 | 含义 |
 |---|---|
 | 0 | 帮助、正常关闭或达到 poll limit, 且关闭成功 |
-| 1 | Diagnostics/宿主创建、运行或关闭失败; 通过有界 stderr 文本报告 |
+| 1 | Diagnostics、宿主或 Editor 创建失败, 或运行及关闭失败, 通过有界 stderr 文本报告 |
 | 2 | 参数语法错误, 在原生初始化前退出 |
 
-当前程序运行窗口事件循环, 尚无 Renderer、Editor、绘制或交换缓冲. 因此客户区不输出确定画面, 拖动尺寸后出现的空白或黑白区域不作为渲染结果验收. 最小化和零 framebuffer 状态仍处理事件与关闭, 空闲时使用有限事件等待.
+当前程序在继续运行的可渲染轮次生成主窗口停靠区、面板和 CPU DrawData. 最小化或 framebuffer 为零时清理交互, 继续接收事件并使用有限等待. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出. D04-T02 接入 UI 绘制, D04-T03 接入窗口交换. [阶段计划](Developments/D03-D05-FramePipeline.md#dev-d04)
 
 ## 接口与开发资料
 
-宿主公开合同见 [DeviceHost.hpp](../Platform/DeviceHost.hpp), 输入单位与事件借用寿命见 [Input.hpp](../Platform/Input.hpp). 以公开头为准, 不在此复制实现或内部 API 使用规则.
+宿主、输入值和 CPU 编辑器会话的合同见公开头. [DeviceHost.hpp](../Platform/DeviceHost.hpp) · [Input.hpp](../Platform/Input.hpp) · [EditorSession.hpp](../Editor/Session/EditorSession.hpp)
 
 项目方案见 [Architecture](Architecture.md), 当前阶段与工作包见 [Developments](Developments/Developments.md#current-stage); 每次实现的取舍和实际检查证据保存在对应 OpenSpec change. 开发约定见 [AGENTS.md](../AGENTS.md).
 

@@ -1,0 +1,43 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Provide one real product entry
+
+The project SHALL build one product executable that composes the diagnostic owner, native host and editor session on the process main thread. Default startup SHALL create a verified visible native window. Hidden startup SHALL use the same verified host and editor setup. Each renderer or graphics-device owner SHALL serve an implemented role. The product SHALL distinguish CPU UI readiness from rendered or presented output.
+
+#### Scenario: Start the default product
+- **WHEN** the product starts without options on a supported system
+- **THEN** it enters the event lifecycle with a verified visible host and an initialized editor session on the owner thread, and continuing renderable polls produce CPU UI frames
+
+#### Scenario: Start a hidden bounded run
+- **WHEN** the product starts with hidden mode and a valid poll limit
+- **THEN** it initializes the editor through the same verified hidden host path and exits successfully after the specified number of successful polls
+
+### Requirement: Separate event decisions from idle waiting
+
+The product SHALL consume each successful input publication before choosing whether to continue. It SHALL handle close intent and the configured poll limit before another UI frame or idle wait. Iconified or zero-pixel windows SHALL continue event, input cleanup and close processing while suspending normal UI frame construction. The idle wait for both renderable and suspended windows SHALL be a finite platform event wait. On recovery the editor SHALL consume current observations.
+
+#### Scenario: Consume a close request
+- **WHEN** the product receives published native close intent
+- **THEN** it chooses orderly exit before another UI frame or idle wait, and explicit shutdown releases the window
+
+#### Scenario: Remain responsive while suspended
+- **WHEN** the window is iconified or its framebuffer extent is zero and later recovers or receives close intent
+- **THEN** event processing and interaction cleanup continue with finite waits, no replacement target is allocated or submitted, and a recovered UI frame uses current window facts
+
+#### Scenario: Reach the configured poll limit
+- **WHEN** the requested number of successful publications has been consumed
+- **THEN** the product proceeds to shutdown without another UI frame or wait, and callbacks processed during earlier waits do not count as additional polls
+
+### Requirement: Exit in ownership order with meaningful results
+
+Normal close and poll-limit completion SHALL return status 0 after successful shutdown. Diagnostic creation, host or editor creation, runtime processing and explicit shutdown failures SHALL return status 1 with a bounded observable diagnostic. On the owner thread the editor SHALL release its input adapter and session state before host shutdown, which SHALL precede diagnostic-owner destruction. Cleanup or diagnostic-output failure SHALL NOT replace an earlier operation's failure or falsely imply that acquired state was ready.
+
+#### Scenario: Complete normal shutdown
+- **WHEN** a normal run exits and the same product is subsequently launched again
+- **THEN** each process releases the editor callbacks before the host and diagnostics, and the later process can initialize normally
+
+#### Scenario: Fail after startup has begun
+- **WHEN** editor setup or another startup or runtime operation fails, including failure while reporting or cleaning up the original error
+- **THEN** the product preserves the original failure, releases every acquired owner in dependency order and returns status 1

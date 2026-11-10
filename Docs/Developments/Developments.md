@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 [D04 · 建立带编辑器的可呈现程序](D03-D05-FramePipeline.md#dev-d04)，下一工作包为 [D04-T01 · EditorSession、面板和输入路由](D03-D05-FramePipeline.md#d04-t01)，尚未创建 change 或开始实现。[D03](D03-D05-FramePipeline.md#dev-d03) 的五个工作包及阶段出口均已完成；最近交付的 [establish-opengl-native-draw-gate](../../openspec/changes/archive/2026-11-08-establish-opengl-native-draw-gate/tasks.md#final-verification) 与关联存量修正 [fix-opengl-binding-buffer-ranges](../../openspec/changes/archive/2026-11-08-fix-opengl-binding-buffer-ranges/tasks.md#final-verification) 已完成独立审查、最终 verify、规范同步和归档。
+当前阶段为 D04 · 建立带编辑器的可呈现程序。D04-T01 的 EditorSession、面板和输入路由已验收归档，当前工作包 D04-T02 · ImGui 公共 RHI 绘制与纹理协议待立项。D03 的五个工作包及阶段出口均已完成。 [D04 阶段](D03-D05-FramePipeline.md#dev-d04) · [D04-T02](D03-D05-FramePipeline.md#d04-t02) · [D04-T01 验收](../../openspec/changes/archive/2026-11-10-establish-editor-session-input/tasks.md#final-verification) · [D03 阶段](D03-D05-FramePipeline.md#dev-d03)
 
 ## 阅读与使用
 

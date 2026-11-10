@@ -58,6 +58,8 @@ add_library(imgui STATIC
     imgui/backends/imgui_impl_glfw.cpp
 )
 target_include_directories(imgui SYSTEM PUBLIC imgui imgui/backends)
+# 保留原生文本的 Unicode 标量. ImGui 及含其头文件的消费者必须使用同一 ImWchar 布局.
+target_compile_definitions(imgui PUBLIC IMGUI_USE_WCHAR32)
 target_compile_definitions(imgui PRIVATE GLFW_INCLUDE_NONE)
 target_link_libraries(imgui PRIVATE glfw)
 

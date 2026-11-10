@@ -82,7 +82,7 @@
 
 **D03 阶段出口：** 已知图案经 canonical Shader→GL lowering→公共 RHI Draw→真实完成→读回通过；非零 base instance/base vertex、方向、深度、颜色验证有效。
 
-**出口状态：** 已通过；最终输入、实际运行/复用结果和边界见上方两份 change 的最终验收留存。下一工作包为 [D04-T01](#d04-t01)，尚未开始。
+**出口状态** 已通过。最终输入、实际运行/复用结果和边界见上方两份 change 的最终验收留存。后续工作包状态由[当前阶段](Developments.md#current-stage)记录。
 
 <a id="dev-d04"></a>
 ## D04 · 建立带编辑器的可呈现程序
@@ -96,11 +96,13 @@
 
 **职责位置：** Editor/Session、Panels、ImGui、Runtime。**前置：** 本阶段入口满足。**架构依据：** [2.2](../Architecture.md#editor-input)、[1.4](../Architecture.md#runtime)。
 
-- [ ] 接入固定版本 Dear ImGui docking 与官方 GLFW 输入适配，私有适配文件负责回调链和 GlfwAccess。
-- [ ] 建立 Session、面板注册/布局、选择身份及编辑意图入口；此时无领域数据的控件保持未启用。
-- [ ] 统一文本/模态、Gizmo、相机的输入优先级和 focus/capture 清理，禁止各面板直接接管 GLFW 回调。
+- [x] 接入固定版本 Dear ImGui docking 与官方 GLFW 输入适配，私有适配文件负责回调链和 GlfwAccess。
+- [x] 建立 Session、面板注册/布局、选择身份及编辑意图入口；此时无领域数据的控件保持未启用。
+- [x] 统一文本/模态、Gizmo、相机的输入优先级和 focus/capture 清理，禁止各面板直接接管 GLFW 回调。
 
 **完成条件：** 面板可以组合/隐藏，Engine 不反向依赖 Editor，Editor 通过领域窄入口访问数据，不承担宿主 context 所有权。
+
+**当前状态** 已完成验收并归档。 [establish-editor-session-input](../../openspec/changes/archive/2026-11-10-establish-editor-session-input/tasks.md#final-verification)
 
 <a id="d04-t02"></a>
 ### D04-T02 · 实现 ImGui 公共 RHI 绘制与纹理协议
