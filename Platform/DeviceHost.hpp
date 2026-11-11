@@ -13,6 +13,7 @@
 #include <variant>
 
 #include "Input.hpp"
+#include "Presentation.hpp"
 
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
@@ -36,9 +37,6 @@ namespace Physara::Platform
         struct GlfwAccess;
     }
 
-    struct WindowIdentityTag;
-    using WindowId = Core::Identity<WindowIdentityTag>;
-
     /// @brief 创建一个窗口及 OpenGL context 的配置, 尺寸使用窗口逻辑单位.
     struct HostDesc
     {
@@ -57,6 +55,7 @@ namespace Physara::Platform
         Win32
     };
 
+    /// @brief 创建时查询的默认后缓冲颜色编码, 供末端复制选择转换方式.
     enum class FramebufferEncoding : std::uint8_t
     {
         Unverified,
@@ -115,7 +114,8 @@ namespace Physara::Platform
         EventWait,
         RequestApplication,
         RhiCreation,
-        RhiShutdown
+        RhiShutdown,
+        Presentation
     };
 
     enum class HostErrorReason : std::uint8_t
@@ -145,7 +145,8 @@ namespace Physara::Platform
         RhiCreation,
         RhiShutdown,
         ResourceInUse,
-        RhiDrainPending
+        RhiDrainPending,
+        PresentationFailed
     };
 
     /// @brief 一次宿主操作的首错及附加错误计数, 保留创建代与清理失败上下文.
@@ -201,8 +202,9 @@ namespace Physara::Platform
 
         /// @brief 收拢 RHI 后按逆序释放窗口/context/GLFW, owner 线程重复关闭成功.
         /// @pre 先停止并 join 资源使用者, 释放全部资源及额外 Device owner.
-        /// @return ResourceInUse 在 teardown 前拒绝且可重试; RhiDrainPending 保留 context/owner,
-        /// 停止新工作并要求重试至停止后再析构. 最终删除开始后即使带错也完成停止.
+        /// @return 宿主先释放自有呈现句柄. ResourceInUse 保留设备和窗口, 释放外部引用后可重试.
+        /// RhiDrainPending 停止新工作并保留 context/owner, 须重试至停止后再析构.
+        /// 最终删除开始后即使带错也完成停止.
         /// @note 无硬实时保证; 错误线程析构或析构前未收拢 owner 是致命合同违例.
         [[nodiscard]] std::optional<HostError> Shutdown() noexcept;
         [[nodiscard]] bool IsReady() const noexcept;
@@ -214,6 +216,28 @@ namespace Physara::Platform
         /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;
+
+        /// @brief 一次取得返回拥有型帧, 正常暂不可用状态或宿主错误.
+        using PresentationAcquire = std::variant<PresentationFrame, PresentationStatus, HostError>;
+        /// @brief 按宿主当前窗口像素取得单槽目标. 上一提交 Pending 时返回 Retry.
+        /// @pre 宿主就绪, 由 owner 线程调用. 可用的取得须经 Present 或 CancelPresentation 结束.
+        [[nodiscard]] PresentationAcquire BeginPresentation() noexcept;
+        /// @brief 关联本次取得和闭合 Graphics 列表. 颜色有效且尺寸仍匹配时发出末端复制.
+        /// @param frameSucceeded 表示本次录制已完整初始化颜色, 并且录制与 Close 区间均成功.
+        /// @pre commands 来自此宿主的验证设备. 准备成功后由 SubmitPresentation 消费同一次录制.
+        /// @return 空值表示可进入提交, 失败帧或尺寸过期时提交仅保护已发前缀.
+        /// RequestRejected 保留当前取得. 末端原生失败进入宿主关闭收拢.
+        [[nodiscard]] std::optional<HostError> PrepareSubmission(PresentationToken token, RHI::CommandList &commands,
+                                                                bool frameSucceeded) noexcept;
+        /// @brief 委托验证设备提交已关联的列表, 将接受票据绑定到槽的 Event 观察.
+        /// @return 接受结果可供 Present 消费. 提交或 Event 设置失败时停止新帧并保留已发工作供关闭.
+        [[nodiscard]] std::variant<PresentationSubmission, HostError> SubmitPresentation(PresentationToken token) noexcept;
+        /// @brief 结束本次已提交取得, 颜色和窗口仍有效时尝试一次交换.
+        /// @return 已接受票据始终关联该次提交. error 报告交换故障时仍可读实际尝试及等待区间.
+        [[nodiscard]] PresentationResult Present(PresentationToken token, std::optional<HostError> &error) noexcept;
+        /// @brief 退还尚未关联列表的取得, 供准备阶段取消.
+        /// @note 若已经发出命令, 调用者须在原列表上完成提交或沿设备退出合同收拢前缀.
+        [[nodiscard]] std::optional<HostError> CancelPresentation(PresentationToken token) noexcept;
 
         /// @brief 消费原生事件并发布一批有序输入; 接受的 poll 开始即结束上批 events 借用.
         /// @return 完整输入批次或 HostError, 输入故障不发布成功的部分批次.

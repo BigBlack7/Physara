@@ -61,7 +61,7 @@ namespace Physara::Editor
 
         /// @brief 在调用者已开放的 Graphics 列表中调用上传和绘制命令.
         /// @pre 列表使用 Automatic 资源状态跟踪, 且由会话的 Device 创建.
-        /// 目标及驻留纹理由调用者提供有效的跟踪前态.
+        /// 目标及驻留纹理由调用者提供有效的跟踪前态. 合成前须初始化底色, 可在同一列表先清屏.
         /// @return 空值表示 UI 录制区间无同步 Error/Fatal. 返回有界错误时取消准备值.
         /// @note 失败时已发前缀仍归调用者关闭并提交或受控收拢. Finish 只消费完整录制的回执.
         [[nodiscard]] std::optional<Core::BoundedText> Record(RHI::CommandList &commands);

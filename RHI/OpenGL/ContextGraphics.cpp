@@ -249,4 +249,15 @@ namespace Physara::RHI::OpenGL
         m_SrgbKnown = true;
         m_Srgb = srgb;
     }
+    void ContextState::ApplyWindowPresentation(bool srgb) noexcept
+    {
+        // DSA 只修改默认 FBO 的写附件选择. 当前读写 FBO 的绑定事实仍有效.
+        glNamedFramebufferDrawBuffer(0, GL_BACK_LEFT);
+        // 复制使用 viewport 0 的裁剪开关, 保留其 box. 固定光栅设置在下次 Draw 重新应用.
+        glDisablei(GL_SCISSOR_TEST, 0);
+        Enable(GL_FRAMEBUFFER_SRGB, srgb);
+        m_RenderKnown = false;
+        m_SrgbKnown = true;
+        m_Srgb = srgb;
+    }
 } // namespace Physara::RHI::OpenGL

@@ -124,6 +124,8 @@ namespace Physara::RHI::OpenGL
     {
     public:
         explicit OpenGLDevice(const DeviceDesc &desc);
+        /// @brief 校验闭合包和源附件后, 在原包登记末端 FBO lease 并委托 ContextState 建立复制条件.
+        [[nodiscard]] bool PrepareWindowPresentation(CommandList *commands, Framebuffer *source, bool srgb);
         ~OpenGLDevice() override;
         /// @brief 核对实际入口和环境, 查询 caps 并建立 upper-left/zero-to-one clip 约定.
         [[nodiscard]] bool Initialize();
@@ -201,7 +203,8 @@ namespace Physara::RHI::OpenGL
         EventQueryHandle CreateEventQuery() override;
         /// @brief 捕获 Graphics 最后已接受 ID; 非零旧快照须先 Reset, 拒绝时保留原快照.
         void SetEventQuery(EventQuery *query, CommandQueue queue) override;
-        /// @brief 非阻塞观察捕获前缀; 零快照为 true, 不证明任何未提交即时工作完成.
+        /// @brief 非阻塞观察捕获前缀. 零快照表示没有需观察的已接受提交.
+        /// @note 观察可退休已完成的包. wrapper 的原生删除 FIFO 由 RunGarbageCollection 或关闭处理.
         bool PollEventQuery(EventQuery *query) override;
         /// @brief 只等捕获前缀, 共用单次五秒期限; 超时诊断后保留身份/未完成引用.
         void WaitEventQuery(EventQuery *query) override;
@@ -250,6 +253,7 @@ namespace Physara::RHI::OpenGL
         void QueueWaitForCommandList(CommandQueue waitQueue, CommandQueue executionQueue, uint64_t instance) override;
         bool WaitForIdle() override;
         CommandListLifetimeTrackerHandle CreateCommandListLifetimeTracker(CommandQueue executionQueue) override;
+        /// @brief 零超时收集已完成的工作, 并在 owning context 排空已交接的原生删除节点.
         void RunGarbageCollection() override;
         bool QueryFeatureSupport(Feature feature, void *pInfo = nullptr, size_t infoSize = 0) override;
         FormatSupport QueryFormatSupport(Format format) override;

@@ -249,6 +249,8 @@ namespace Physara::RHI::Validation
         // 状态描述已通过的公共调用顺序; 底层 void 方法的原生失败仍由底层诊断/停止协议处理.
       public:
         friend class DeviceWrapper;
+        /// @brief 允许宿主互操作在不消费包装提交资格的情况下短借原生列表.
+        friend CommandList *BorrowClosedCommandList(Device *device, CommandList *commands);
 
         CommandListWrapper(DeviceWrapper *device, CommandList *commandList, bool isImmediate, CommandQueue queueType);
         ~CommandListWrapper() override;
@@ -282,10 +284,11 @@ namespace Physara::RHI::Validation
 
         /// @brief 校验 recording 前提, 拒绝时不委托底层列表.
         bool RequireOpenState(std::source_location location = std::source_location::current()) const;
-        /// @brief 只有 Closed 可进入批提交预检, 不在这里消费状态.
+        /// @brief 批提交与窗口互操作共用的只读阶段检查. 包装 Closed 后仍须由后端确认物理包可用.
         bool RequireExecuteState(std::source_location location = std::source_location::current()) const;
         /// @brief 根据队列能力层级拒绝不适合当前列表的命令.
         bool RequireType(CommandQueue queueType, const char *operation) const;
+        /// @brief 借出包装所持列表. 调用方负责维持包装的持有与当前录制身份.
         CommandList *GetUnderlyingCommandList() const
         {
             return m_CommandList;

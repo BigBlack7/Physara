@@ -16,13 +16,13 @@ cmake --build build --config Release --parallel
 
 当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 直接链接实际使用的 Core、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [RHI 来源说明](../RHI/README.md)
 
-Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休; 直接关闭还可使用 OpenGL.hpp 的预检/drain 入口. 查询不增加第三方或默认测试目标, 公共 staging/map/异步读回仍待后续工作包. 实际支持和 CPU 源寿命见 RHI 说明与头合同, 当前产品事件循环尚不消费它们绘制.
+Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休. Platform 用闭合包的末端复制入口消费窗口颜色, 在同一包 Execute 后检查 Win32 交换结果, 源资源沿真实完成保活. [RHI 支持范围](../RHI/README.md#opengl-原生消费边界)
 
 ## Shader 构建
 
-PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库/JSON/CNG 为私有实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认构建为 PhysaraEditor 生成 EditorUi 接口及 `Shaders/<Debug|Release>/EditorUi.pshader`. 接入 RHI 绘制的调用者按当前配置传入该包路径, 产品事件循环仍沿 CPU Editor 入口运行. [声明说明](../Engine/Shader/Interface/README.md)
+PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库/JSON/CNG 为私有实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认构建为 PhysaraEditor 生成 EditorUi 接口及 `Shaders/<Debug|Release>/EditorUi.pshader`. Runtime 共享该包的唯一生成目标, CMake 按配置生成从产品目录到包的相对路径, 运行时从实际 exe 位置解析. 从其他工作目录启动也使用同一配置的包. 缺失或不匹配的包使启动返回 1. [声明说明](../Engine/Shader/Interface/README.md)
 
-运行期消费使用 [RhiProgram.hpp](../Engine/Shader/RhiProgram.hpp) 的 `LoadRhiProgram(device, packagePath, expectedAbiHash)`, 通常从生成 Data.hpp 的 `AbiHash` 传入期望值. 成功结果拥有 VS/PS RHI 句柄和包身份, 包原始 CPU 存储可释放; 返回前任一阶段失败不交付部分集合. 此入口只链接通用 RHI, 不反向依赖 native backend; 所用 Device 的 owner/context 前提由实际消费者满足. 原生 GL 的绑定展平、GLSL 460 编译/link 在 `CreateGraphicsPipeline` 中发生, 随后通过公共集合/Framebuffer、SetGraphicsState 和直接 Draw/DrawIndexed 消费. 当前普通单样本执行范围见 [RHI](../RHI/README.md#opengl-原生消费边界), Dispatch、间接命令及呈现未交付.
+运行期消费使用 [RhiProgram.hpp](../Engine/Shader/RhiProgram.hpp) 的 `LoadRhiProgram(device, packagePath, expectedAbiHash)`, 通常从生成 Data.hpp 的 `AbiHash` 传入期望值. 成功结果拥有 VS/PS RHI 句柄和包身份, 包原始 CPU 存储可释放; 返回前任一阶段失败不交付部分集合. 此入口只链接通用 RHI, 不反向依赖 native backend; 所用 Device 的 owner/context 前提由实际消费者满足. 原生 GL 的绑定展平、GLSL 460 编译/link 在 `CreateGraphicsPipeline` 中发生, 随后通过公共集合/Framebuffer、SetGraphicsState 和直接 Draw/DrawIndexed 消费. 当前普通单样本执行范围见 [RHI](../RHI/README.md#opengl-原生消费边界), Dispatch、间接命令仍待后续工作包.
 
 模块提供 `physara_add_shader_interface(name schema)` 和 `physara_add_shader_program(name interfaceName program sourceRoot)`. 调用方显式提供真实输入路径, 在同一 CMake 作用域先声明接口再声明程序. 后者返回 `<name>Package` 数据路径与 `<name>PackageTarget` 唯一生成 target. 每个消费者通过 `add_dependencies(consumer ${MainPackageTarget})` (以 name=Main 为例) 或 target DEPENDS 共享此前置, 再读取包路径; 不能只把包文件分别挂到多个独立生成消费者. 生成头消费者依赖 `PhysaraShaderInterface<name>`、包含生成头根, 使用绑定头时链接 PhysaraRHI. 编译核心不 include 自己的生成物.
 
@@ -50,7 +50,7 @@ D03-T05 的固定原生图案消费者、实际命令及最终验收见 [图像�
 ./build/bin/Debug/Physara.exe --hidden --poll-limit=3
 ```
 
-Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装配同一真实窗口/GL 宿主和 CPU 编辑器会话, 都需要窗口系统和支持 OpenGL 4.6 Core 的驱动.
+Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装配同一真实窗口/GL 宿主和 RHI 编辑器会话, 都需要窗口系统和支持 OpenGL 4.6 Core 的驱动.
 
 | 选项 | 含义 |
 |---|---|
@@ -67,7 +67,7 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 | 1 | Diagnostics、宿主或 Editor 创建失败, 或运行及关闭失败, 通过有界 stderr 文本报告 |
 | 2 | 参数语法错误, 在原生初始化前退出 |
 
-当前程序在继续运行的可渲染轮次生成主窗口停靠区、面板和 CPU DrawData. 最小化或 framebuffer 为零时清理交互, 继续接收事件并使用有限等待. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出. D04-T02 接入 UI 绘制, D04-T03 接入窗口交换. [阶段计划](Developments/D03-D05-FramePipeline.md#dev-d04)
+当前程序在继续运行的可渲染轮次生成主窗口停靠区和面板, 在单个 PresentColor 槽中通过公共 RHI 初始化底色并合成 UI. 列表关闭后由宿主复制有效颜色, 接受提交后交换窗口缓冲. 槽按 Event 观察到的真实完成复用, 记录的 PresentWait 秒值来自实际交换调用. 最小化或 framebuffer 为零时清理交互, 继续接收事件并使用有限等待. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出. [阶段计划](Developments/D03-D05-FramePipeline.md#dev-d04)
 
 ## 接口与开发资料
 

@@ -40,6 +40,8 @@ add_library(PhysaraRHIOpenGL STATIC
     Upload.cpp
     Submission.hpp
     Submission.cpp
+    # 闭合列表的窗口末端复制与正常提交共用设备的保活和完成路径.
+    WindowPresentation.cpp
     # native 绑定/顶点格式与固定光栅 lowering 同属唯一 ContextState, 不形成另一套逻辑图形状态.
     ContextState.hpp
     ContextState.cpp

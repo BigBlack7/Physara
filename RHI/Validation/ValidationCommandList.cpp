@@ -21,10 +21,12 @@
 */
 
 #include "ValidationBackend.hpp"
+#include "CommandListInterop.hpp"
 
 /// @file
 /// @brief 列表调用协议, 状态/绑定输入检查与一次底层委托, 包装 claim 不表示原生命令成功.
-/// GL 的直接绘制消费底层已接受状态, 其余 API 保留上游图形/push 快照; 原生归属和完成均由后端负责.
+/// GL 的直接绘制消费底层已接受状态. 闭合列表可供宿主短借, 原生包检查和完成由后端负责.
+/// 其余 API 沿用上游图形和 push constants 快照.
 
 #include "Common/Misc.hpp"
 #include "Utils.hpp"
@@ -36,6 +38,19 @@
 
 namespace Physara::RHI::Validation
 {
+    // 与 Execute 共享 Closed 前置. 原生复制借用底层列表, 正式提交仍沿验证设备入口.
+    CommandList *BorrowClosedCommandList(Device *device, CommandList *commands)
+    {
+        auto *wrapper = dynamic_cast<CommandListWrapper *>(commands);
+        if (!wrapper || wrapper->m_Device.Get() != device || wrapper->m_QueueType != CommandQueue::Graphics)
+        {
+            Report(device ? device->GetMessageCallback() : nullptr, MessageSeverity::Error,
+                   "Presentation requires the device's validated Graphics list");
+            return nullptr;
+        }
+        return wrapper->RequireExecuteState() ? wrapper->GetUnderlyingCommandList() : nullptr;
+    }
+
 
     CommandListWrapper::CommandListWrapper(DeviceWrapper *device, CommandList *commandList, bool isImmediate,
                                            CommandQueue queueType)
@@ -51,7 +66,7 @@ namespace Physara::RHI::Validation
             --m_Device->m_NumOpenImmediateCommandLists;
             m_HasImmediateClaim = false;
         }
-        // 底层列表的释放可能访问设备; 父包装及其 Device 引用此时仍存活.
+        // 底层列表释放时可能向原生设备交接未提交前缀. 此时父包装及其 Device 引用仍存活.
         m_CommandList.Reset();
     }
 

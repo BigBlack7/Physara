@@ -62,6 +62,32 @@ namespace Physara::Platform::Detail
         std::source_location source = std::source_location::current();
     };
 
+    /// @brief 取得的 CPU 阶段. Idle 仍可保有等待 Event 的上一笔提交.
+    enum class PresentationPhase : std::uint8_t
+    {
+        Idle,
+        Acquired,
+        Prepared,
+        Submitted
+    };
+
+    /// @brief owner 线程维护的单槽目标, 取得状态和完成观察.
+    /// @note Prepared 阶段强持验证列表, 成功设置 Event 后释放该持有. 在途引用归原生包.
+    /// lastSubmission 保留至 Event 确认完成. 发生故障时, 交设备关闭路径收拢.
+    struct PresentationState
+    {
+        PresentTarget target;
+        RHI::EventQueryHandle event;
+        RHI::CommandListHandle commands;
+        PresentationToken token;
+        PresentationPhase phase = PresentationPhase::Idle;
+        std::uint64_t targetGeneration = 0;
+        std::uint64_t acquisition = 0;
+        std::uint64_t lastSubmission = 0;
+        bool colorValid = false;
+        bool stopped = false;
+    };
+
     /// @brief 按取得阶段记录资源的宿主 owner, 支持初始化中途的逆序回滚.
     /// @invariant stopped 仅在最终释放后置位; drain Pending 时保留窗口, adapter 和 Device 根引用.
     struct DeviceHostState
@@ -92,6 +118,7 @@ namespace Physara::Platform::Detail
         RhiMessageAdapter rhiMessages;
         RHI::DeviceHandle rawDevice;
         RHI::DeviceHandle validatedDevice;
+        PresentationState presentation;
     };
 
     /// @brief 构造自持宿主错误, state 可空; 有状态时附上有效身份及已耗秒数.
@@ -134,6 +161,18 @@ namespace Physara::Platform::Detail
     [[nodiscard]] std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state);
     /// @brief 执行分阶段幂等退出, 外部 owner 拒绝或 drain Pending 时不销毁原生环境.
     [[nodiscard]] std::optional<HostError> ReleaseNativeState(DeviceHostState &state);
+    // 呈现阶段入口由 DeviceHost 的线程, 重入和就绪检查统一包围.
+    [[nodiscard]] DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state);
+    [[nodiscard]] std::optional<HostError> PrepareSubmission(DeviceHostState &state, PresentationToken token,
+                                                            RHI::CommandList &commands, bool frameSucceeded);
+    [[nodiscard]] std::variant<PresentationSubmission, HostError> SubmitPresentation(DeviceHostState &state,
+                                                                                   PresentationToken token);
+    [[nodiscard]] PresentationResult Present(DeviceHostState &state, PresentationToken token,
+                                              std::optional<HostError> &error);
+    [[nodiscard]] std::optional<HostError> CancelPresentation(DeviceHostState &state, PresentationToken token);
+    /// @brief 在外部 owner 预检前撤销宿主的目标, 观察者和列表持有.
+    /// 已发前缀及其依赖仍由设备的原生包和退出流程保活.
+    void ReleasePresentation(DeviceHostState &state) noexcept;
     /// @brief 读取初始窗口事实后启用输入回调, 再补查安装期间的状态变化.
     [[nodiscard]] std::optional<HostError> InitializeWindowInput(DeviceHostState &state);
     /// @brief 停止输入写入, 解除相对捕获并解绑回调, 合并清理错误.

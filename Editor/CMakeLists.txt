@@ -21,6 +21,9 @@ add_library(PhysaraEditor STATIC
 )
 # 编译 renderer 前先生成绑定头和匹配的包. 只有 Editor 实现包含这些生成头.
 add_dependencies(PhysaraEditor PhysaraShaderInterfaceEditorUi ${EditorUiPackageTarget})
+# Runtime 通过目标属性共享同一个生成前置和按配置区分的包路径.
+set_property(TARGET PhysaraEditor PROPERTY PHYSARA_UI_PACKAGE "${EditorUiPackage}")
+set_property(TARGET PhysaraEditor PROPERTY PHYSARA_UI_PACKAGE_TARGET "${EditorUiPackageTarget}")
 target_include_directories(PhysaraEditor PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
 # Session 公开 Platform 输入和 RHI 绘制值. Shader 加载及 ImGui/GLFW 留在私有实现.

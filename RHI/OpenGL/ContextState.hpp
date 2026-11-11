@@ -71,6 +71,10 @@ namespace Physara::RHI::OpenGL
         void ApplyScissor(const Rect &rect) noexcept;
         /// @brief 为完整子资源 typed clear 建立无 scissor/完整 mask 状态, 下次 Draw 重新应用固定状态.
         void ApplyClearState(bool srgb) noexcept;
+        /// @brief 选择默认后缓冲的写附件, 关闭裁剪并设置 sRGB 开关.
+        /// @pre 调用方拥有 current context, 并已确认默认后缓冲编码.
+        /// @note 后续 Draw 重建固定状态. 调用方检查同步 GL 错误并在失败时撤销已知性.
+        void ApplyWindowPresentation(bool srgb) noexcept;
         [[nodiscard]] GLuint ClearFramebuffer() const noexcept
         {
             return m_ClearFramebuffer;

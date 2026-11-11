@@ -63,6 +63,15 @@ namespace Physara::RHI::OpenGL
     /// @return 成功 owning handle, 参数/环境不支持或 bad_alloc 时为空.
     [[nodiscard]] DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError = nullptr);
 
+    /// @brief 复制当前帧的 SDR 颜色到默认后缓冲. 源 FBO 及附件依赖归入同一闭合物理包.
+    /// @pre owner 线程上 owning context current, 无开放录制. source 属于同一设备, 已由该帧初始化,
+    /// 为与后缓冲等大的单层, 单 mip, 单样本 SRGBA8_UNORM 颜色 FBO. 列表导出 ShaderResource.
+    /// @param srgbBackBuffer 为当前默认后缓冲的实测编码, true 表示 sRGB, false 表示线性.
+    /// @return true 表示复制成功, 随后须 Execute 同次录制并取得有效票据才可交换.
+    /// false 时, 已发前缀由调用者沿有效提交或受控退出协议收拢.
+    [[nodiscard]] bool PrepareWindowPresentation(Device *device, CommandList *closedCommands,
+                                                  Framebuffer *source, bool srgbBackBuffer);
+
     /// @brief 收拢并停止仅保留一个根引用的设备, 调用前须释放外部资源, 列表和额外 Device 引用.
     /// @return 预检拒绝不改设备; Pending 返回 false 并保留根/context 供重试.
     /// @note Normal 需要 owning/current; ContextUnavailable 不调用 GL. Ready 后删除带错也须由 owner 销毁 context.

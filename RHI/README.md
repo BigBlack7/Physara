@@ -21,6 +21,7 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy、Draw 或时间戳. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
 | Event/Timer | Event 捕获最后已接受的 Graphics ID, Poll 不阻塞, Wait 只等待该前缀, 单次 5 秒期限. Timer 使用可重叠的 timestamp 对, available 后读取完整 GPU 数值并转换为秒; 显式 Get 可冷路径有界等待, Ready 不退休整个提交包 |
+| 窗口末端复制 | OpenGL.hpp 的 PrepareWindowPresentation 消费同设备闭合 Graphics 包及单层单 mip 单样本 SRGBA8 FBO, 核对 ShaderResource 出口. 源 FBO/附件先登记到原包, 同尺寸复制至默认后缓冲, 按实测编码控制 sRGB 并在此处适配行序. 后续 Execute 才插 fence/flush, 窗口交换由 Platform 拥有 |
 | 其余 Device 操作 | compute/Shader library/specialization、bindless、公共 staging/map/readback 和其它 query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.

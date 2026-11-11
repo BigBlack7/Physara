@@ -7,6 +7,8 @@ add_library(PhysaraRHI STATIC
     Common/StateTracking.hpp
     Common/StateTracking.cpp
     Validation/ValidationBackend.hpp
+    # 宿主短借验证列表的私有声明. 实现与包装阶段检查同属 Validation.
+    Validation/CommandListInterop.hpp
     Validation/ValidationDevice.cpp
     Validation/ValidationCommandList.cpp
 )

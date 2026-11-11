@@ -1,4 +1,4 @@
-# Platform 独占 GLFW/window/context 和 RHI 装配寿命; 公开头仅前置声明 Device.
+# Platform 拥有 GLFW 窗口, context, RHI 装配和窗口呈现的寿命.
 add_library(PhysaraPlatform STATIC
     DeviceHost.hpp
     DeviceHost.cpp
@@ -6,6 +6,8 @@ add_library(PhysaraPlatform STATIC
     GlfwAccess.hpp
     GlfwWindow.cpp
     OpenGLDeviceHost.cpp
+    Presentation.hpp
+    Presentation.cpp
     RhiDeviceHost.cpp
     Input.hpp
     InputState.hpp
@@ -13,8 +15,8 @@ add_library(PhysaraPlatform STATIC
     GlfwInput.cpp
 )
 target_include_directories(PhysaraPlatform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-# DeviceHost/Input 的公开值合同使用 Core, 必须传递; RHI 装配和原生 window/context 只在 Platform 私有实现中出现.
-target_link_libraries(PhysaraPlatform PUBLIC PhysaraCore PRIVATE PhysaraRHIOpenGL glfw glad)
+# 公开宿主值包含 Core 和 RHI 句柄. 私有宿主实现消费 GL 后端, GLFW 和 Win32 交换入口.
+target_link_libraries(PhysaraPlatform PUBLIC PhysaraCore PhysaraRHI PRIVATE PhysaraRHIOpenGL glfw glad opengl32 gdi32)
 target_compile_definitions(PhysaraPlatform PRIVATE GLFW_INCLUDE_NONE)
 target_compile_features(PhysaraPlatform PUBLIC cxx_std_20)
 set_target_properties(PhysaraPlatform PROPERTIES CXX_EXTENSIONS OFF)

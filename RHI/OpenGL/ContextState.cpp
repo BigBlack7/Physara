@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief 创建有界 context 辅助对象, 统一缓存绑定与顶点格式, 删除前解除 native 引用.
+/// 普通绘制, 传输和窗口末端复制共用此状态管理器.
 
 #include <algorithm>
 #include <span>
@@ -13,6 +14,7 @@ namespace Physara::RHI::OpenGL
 {
     bool ContextState::Initialize(OpenGLDevice &device)
     {
+        // 先核对该 profile 实际使用的图形和末端复制入口, 再分配缓存和辅助对象.
         if (!glCreateVertexArrays || !glDeleteVertexArrays || !glBindVertexArray || !glVertexArrayAttribFormat ||
             !glVertexArrayAttribIFormat || !glVertexArrayAttribBinding || !glEnableVertexArrayAttrib ||
             !glDisableVertexArrayAttrib || !glVertexArrayVertexBuffer || !glVertexArrayBindingDivisor ||
@@ -23,7 +25,8 @@ namespace Physara::RHI::OpenGL
             !glBlendFuncSeparatei || !glBlendEquationSeparatei || !glBlendColor || !glColorMaski || !glPolygonMode ||
             !glFrontFace || !glCullFace || !glProvokingVertex || !glPolygonOffsetClamp || !glClearNamedFramebufferfv ||
             !glClearNamedFramebufferiv || !glClearNamedFramebufferuiv || !glClearNamedFramebufferfi ||
-            !glCopyImageSubData || !glDrawArraysInstancedBaseInstance || !glDrawElementsInstancedBaseVertexBaseInstance)
+            !glCopyImageSubData || !glBlitNamedFramebuffer || !glNamedFramebufferDrawBuffer ||
+            !glDrawArraysInstancedBaseInstance || !glDrawElementsInstancedBaseVertexBaseInstance)
         {
             device.Report("CreateDevice.Graphics", "Unsupported: required graphics execution entry missing");
             return false;

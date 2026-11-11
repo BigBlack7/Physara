@@ -57,7 +57,8 @@ namespace Physara::Editor
 
         /// @brief 为本轮封存帧准备离屏绘制, 持有目标及本轮几何和上传数据.
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸时不使用 target.
-        /// @pre 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer, 须已初始化底色.
+        /// @pre 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer.
+        /// @see PreparedUiFrame::Record
         /// @return 无工作, 可录制的准备值或有界原因. 同时只允许一份活动准备值.
         [[nodiscard]] PrepareUiResult PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels);
 

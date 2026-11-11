@@ -137,6 +137,7 @@ namespace Physara::Platform::Detail
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+        // 优先选择 sRGB 像素格式. InspectEnvironment 按实际默认附件编码决定末端复制方式.
         glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
         glfwWindowHint(GLFW_CONTEXT_DEBUG, desc.debugContext ? GLFW_TRUE : GLFW_FALSE);
@@ -180,19 +181,20 @@ namespace Physara::Platform::Detail
 
     std::optional<HostError> ReleaseNativeState(DeviceHostState &state)
     {
-        // 三个退出边界: 外部 owner 尚存时保持原状; drain Pending 时保留原生环境;
-        // 可以最终释放后, 才按 RHI -> 输入/窗口/context -> GLFW -> 进程 claim 逆序退出.
+        // 先撤销宿主自有的呈现引用, 再预检外部 owner. 外部 owner 或 drain Pending 时保留原生环境.
+        // 最终退出按 RHI, 输入/窗口/context, GLFW, 进程 claim 的顺序释放.
         if (state.stopped)
         {
             return std::nullopt;
         }
+        ReleasePresentation(state);
         if (HasExternalRhiOwners(state))
         {
             return MakeError(&state, HostErrorReason::ResourceInUse, HostStage::RhiShutdown,
                              "Release all resources and extra Device owners before host shutdown");
         }
         state.ready = false;
-        // 外部 owner 预检成功后才停止新工作. Pending 必须保留整套原生环境, 由调用方重试.
+        // 外部 owner 预检成功后关闭宿主和输入入口. Pending 时由调用方保留 owner 并重试关闭.
         state.inputAccepting = false;
         auto first = ReleaseResourceDevice(state);
         if (first && first->reason == HostErrorReason::RhiDrainPending)

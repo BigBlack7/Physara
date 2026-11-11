@@ -122,11 +122,13 @@
 
 **职责位置：** Platform/OpenGLDeviceHost、RHI/OpenGL 互操作、Runtime。**前置：** [D04-T02](#d04-t02)。**架构依据：** [10.3](../Architecture.md#present)、[11.1](../Architecture.md#retirement)、[conventions](../Architecture.md#conventions)。
 
-- [ ] 按帧槽创建非零尺寸 PresentColor，Runtime 只把 RHI 目标送入绘制；默认 framebuffer 不伪装为普通纹理。
-- [ ] 列表关闭后进行 host 末端原生复制，维护同一 ContextState 并显式保活源，然后 Execute 插 fence、flush，最后 SwapBuffers。
-- [ ] 核对窗口 sRGB 能力与行序，验证颜色只编码一次；失败目标不复制/交换，末端复制本身失败也进入取消；单独统计 PresentWait 与 GPU 工作完成。
+- [x] 按帧槽创建非零尺寸 PresentColor，Runtime 只把 RHI 目标送入绘制；默认 framebuffer 不伪装为普通纹理。
+- [x] 列表关闭后进行 host 末端原生复制，维护同一 ContextState 并显式保活源，然后 Execute 插 fence、flush，最后 SwapBuffers。
+- [x] 核对窗口 sRGB 能力与行序，验证颜色只编码一次；失败目标不复制/交换，末端复制本身失败也进入取消；单独统计 PresentWait 与 GPU 工作完成。
 
 **完成条件：** 最终窗口源访问在本帧 tracking fence 之前，呈现互操作不会污染下一帧 RHI 状态缓存。
+
+**当前状态** 已完成验收并归档。 [establish-opengl-window-presentation](../../openspec/changes/archive/2026-11-11-establish-opengl-window-presentation/tasks.md#final-verification)
 
 <a id="d04-t04"></a>
 ### D04-T04 · 接入有界 FrameSlot 与最小视口资源身份
@@ -138,6 +140,8 @@
 - [ ] 覆盖窗口/视口连续 resize、最小化恢复、最后一帧在途退出和字体/目标重建；请求不在 GPU execute 中修改。
 
 **完成条件：** 入口始终为带编辑器的程序，测试图与真实场景能力状态可区分，帧槽不会凭 CPU 帧号复用。
+
+**当前状态** 前置已满足，待立项。
 
 <a id="d04-t05"></a>
 ### D04-T05 · 建立领域编辑命令与渲染配置请求边界

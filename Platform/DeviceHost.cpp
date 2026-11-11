@@ -19,12 +19,12 @@
 namespace Physara::Platform
 {
 
-    static constexpr std::array<std::string_view, 17> StageNames = {
+    static constexpr std::array<std::string_view, 18> StageNames = {
         "Validation", "Reservation", "GlfwInitialization",
         "WindowCreation", "ContextActivation", "EntryLoading",
         "EnvironmentQuery", "SwapInterval", "Ready",
         "Shutdown", "InputSetup", "EventPolling",
-        "EventWait", "RequestApplication", "RhiCreation", "RhiShutdown", "Unknown"};
+        "EventWait", "RequestApplication", "RhiCreation", "RhiShutdown", "Presentation", "Unknown"};
 
     // 将槽索引与分配代写入同一有界正文, 不为诊断建立动态字符串.
     static void AppendIdentity(Physara::Core::BoundedText &text, WindowId identity) noexcept
@@ -132,9 +132,9 @@ namespace Physara::Platform
         Detail::DeviceHostState &m_State;
     };
 
-    // 输入操作共用的失败边界: 预检拒绝可重试, 进入原生操作后的故障锁存并解除捕获.
+    // 输入和呈现共用线程及重入检查. 身份或配置拒绝可恢复, 操作故障锁存并解除光标捕获.
     template <typename Operation>
-    static std::optional<HostError> RunInputOperation(Detail::DeviceHostState &state, HostStage stage,
+    static std::optional<HostError> RunHostOperation(Detail::DeviceHostState &state, HostStage stage,
                                                       Operation &&operation) noexcept
     {
         // 先拒绝错误线程/重入/停止状态, 再进入原生边界. 参数预检拒绝可恢复, 输入或原生故障则终止该输入寿命.
@@ -147,7 +147,7 @@ namespace Physara::Platform
         };
         if (state.ownerThread != std::this_thread::get_id())
         {
-            return reject(HostErrorReason::WrongThread, "Input operation requires the owner thread");
+            return reject(HostErrorReason::WrongThread, "Host operation requires the owner thread");
         }
         if (state.operationActive)
         {
@@ -155,7 +155,7 @@ namespace Physara::Platform
         }
         if (state.stopped)
         {
-            return reject(HostErrorReason::Stopped, "Input operation requires a live host");
+            return reject(HostErrorReason::Stopped, "Host operation requires a live host");
         }
         if (state.inputFailure)
         {
@@ -163,7 +163,7 @@ namespace Physara::Platform
         }
         if (!state.ready)
         {
-            return reject(HostErrorReason::Stopped, "Host is not ready for input");
+            return reject(HostErrorReason::Stopped, "Host is not ready for operations");
         }
         OperationScope scope(state, stage);
         std::optional<HostError> error;
@@ -178,7 +178,7 @@ namespace Physara::Platform
         catch (...)
         {
             error =
-                Detail::MakeError(&state, HostErrorReason::InternalFailure, stage, "Unknown input operation failure");
+                Detail::MakeError(&state, HostErrorReason::InternalFailure, stage, "Unknown host operation failure");
         }
         if (!error)
         {
@@ -189,7 +189,8 @@ namespace Physara::Platform
                               !error->cleanupError;
         if (!rejected)
         {
-            // 原生或输入故障终止本次输入寿命. 先禁回调写入并保存主错, 再尝试解除 capture.
+            // 操作故障关闭就绪入口. 先禁回调写入并保存主错, 再解除光标捕获.
+            // 已发图形工作及其引用保留给关闭路径收拢.
             state.ready = false;
             state.inputAccepting = false;
             if (error->context.nativeCode)
@@ -490,11 +491,68 @@ namespace Physara::Platform
         return scope;
     }
 
+    // 呈现包装层统一执行宿主操作检查. Suspended 和 Retry 沿值结果返回, 域错误走宿主诊断.
+    DeviceHost::PresentationAcquire DeviceHost::BeginPresentation() noexcept
+    {
+        PresentationAcquire result = PresentationStatus::Retry;
+        auto error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
+        {
+            result = Detail::BeginPresentation(*m_State);
+            if (const auto *failure = std::get_if<HostError>(&result))
+            {
+                return *failure;
+            }
+            return std::nullopt;
+        });
+        return error ? PresentationAcquire{*error} : std::move(result);
+    }
+
+    std::optional<HostError> DeviceHost::PrepareSubmission(PresentationToken token, RHI::CommandList &commands,
+                                                         bool frameSucceeded) noexcept
+    {
+        return RunHostOperation(*m_State, HostStage::Presentation,
+                                [&] { return Detail::PrepareSubmission(*m_State, token, commands, frameSucceeded); });
+    }
+
+    std::variant<PresentationSubmission, HostError> DeviceHost::SubmitPresentation(PresentationToken token) noexcept
+    {
+        std::variant<PresentationSubmission, HostError> result;
+        auto error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
+        {
+            result = Detail::SubmitPresentation(*m_State, token);
+            if (const auto *failure = std::get_if<HostError>(&result))
+            {
+                return *failure;
+            }
+            return std::nullopt;
+        });
+        return error ? std::variant<PresentationSubmission, HostError>{*error} : std::move(result);
+    }
+
+    PresentationResult DeviceHost::Present(PresentationToken token, std::optional<HostError> &error) noexcept
+    {
+        // 交换错误经宿主边界锁存. 已接受的票据和实际交换区间仍通过 result 交付.
+        PresentationResult result;
+        error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
+        {
+            std::optional<HostError> failure;
+            result = Detail::Present(*m_State, token, failure);
+            return failure;
+        });
+        return result;
+    }
+
+    std::optional<HostError> DeviceHost::CancelPresentation(PresentationToken token) noexcept
+    {
+        return RunHostOperation(*m_State, HostStage::Presentation,
+                                [&] { return Detail::CancelPresentation(*m_State, token); });
+    }
+
     DeviceHost::PollResult DeviceHost::PollEvents() noexcept
     {
         // 先完成原生事件分发及事实补查, 再一次发布. 任何失败都返回 HostError, 不暴露部分事件 bank.
         std::optional<HostFrameInput> frame;
-        auto error = RunInputOperation(*m_State, HostStage::EventPolling,
+        auto error = RunHostOperation(*m_State, HostStage::EventPolling,
                                        [&]() -> std::optional<HostError>
                                        {
                                            if (auto failure = Detail::PollNativeInput(*m_State))
@@ -522,13 +580,13 @@ namespace Physara::Platform
     }
     std::optional<HostError> DeviceHost::WaitForEvents(double timeoutSeconds) noexcept
     {
-        return RunInputOperation(*m_State, HostStage::EventWait,
+        return RunHostOperation(*m_State, HostStage::EventWait,
                                  [&]
                                  { return Detail::WaitNativeInput(*m_State, timeoutSeconds); });
     }
     std::optional<HostError> DeviceHost::ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept
     {
-        return RunInputOperation(*m_State, HostStage::RequestApplication,
+        return RunHostOperation(*m_State, HostStage::RequestApplication,
                                  [&]
                                  { return Detail::ApplyNativeRequests(*m_State, requests); });
     }
