@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief 私有 ImGui 纹理表和帧内上传协议.
-/// 将稳定身份解析为采样绑定, 将像素及复制区域交给准备值. RHI 提交包保活已发工作.
+/// 驻留条目拥有纹理及绑定. 逻辑 View 条目在本帧解析颜色代, 已发工作由提交包保活.
 
 #include <array>
 #include <cstddef>
@@ -62,11 +62,15 @@ namespace Physara::Editor::Detail
         None,
         InvalidIdentity,
         MissingOutput,
-        UploadPending
+        UploadPending,
+        InvalidExtent,
+        TextureSizeLimit,
+        DiagnosticBudget
     };
 
-    /// @brief 在本帧准备期间借用一个 View 输出. 解析后的 binding 由普通 draw 持有.
-    /// viewportDraw 指向封存的图像命令. viewportFallback 同时决定该命令的占位绑定和可见标签.
+    /// @brief 当前准备期间的诊断颜色及占位解析状态.
+    /// @note output 和 viewportDraw 仅在准备期间借用. 普通 draw 持有解析后的 binding.
+    /// viewportFallback 同时决定图像命令的占位绑定和状态标签.
     /// uploadPending 供同一逻辑 View 的其它引用解释颜色代为何缺失.
     struct UiFrameBindings
     {

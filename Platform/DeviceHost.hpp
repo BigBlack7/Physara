@@ -1,7 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 发布窗口和输入事实, 借出 RHI Device, 并在 owner 线程推进索引呈现与关闭.
+/// @brief 发布窗口与输入事实及实时设置, 借出 RHI Device.
+/// 原生请求, 索引呈现和关闭均由宿主 owner 线程串行推进.
 
 #include <atomic>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 
@@ -176,6 +178,37 @@ namespace Physara::Platform
     /// @brief 无分配地格式化自持错误描述, 不执行原生操作, 返回后可跨线程读取.
     [[nodiscard]] Core::BoundedText DescribeHostError(const HostError &error) noexcept;
 
+    inline constexpr std::size_t MaxWindowTitleBytes = 255;
+
+    /// @brief 自持的标题意图, 目标为本次宿主创建代.
+    /// @note 运行期标题使用最多 MaxWindowTitleBytes 字节的 UTF-8, 正文中禁止 NUL.
+    struct SetWindowTitle
+    {
+        WindowId window;
+        std::string title;
+    };
+
+    /// @brief 指定窗口的交换区间意图. enabled 为 true 时请求 1, 否则请求 0.
+    struct SetWindowVSync
+    {
+        WindowId window;
+        bool enabled;
+    };
+
+    /// @brief 实时窗口设置, 标题与交换区间各自保存请求, 确认值和拒绝原因.
+    /// @note 运行期合法值可成为 requested, effective 仅在原生确认后更新.
+    /// 原生拒绝保留该字段上次确认值, 首次无法确认时为空.
+    struct WindowSettings
+    {
+        WindowId window;
+        std::string requestedTitle;
+        std::optional<std::string> effectiveTitle;
+        std::optional<Core::BoundedText> titleFailure;
+        int requestedSwapInterval = 0;
+        std::optional<int> effectiveSwapInterval;
+        std::optional<Core::BoundedText> swapIntervalFailure;
+    };
+
     /// @brief 从取样时刻起观察同一宿主 Device 的 Error/Fatal, 供同步命令决定是否继续.
     /// @note 借用宿主回调中的计数. 在 owner 线程使用并在 Shutdown 前结束.
     class RhiErrorScope final
@@ -270,6 +303,19 @@ namespace Physara::Platform
         /// @brief 顺序应用本次借用的请求, 不保存队列; 原生失败允许此前缀已经生效.
         /// @return 成功为空; 失败的 HostError 通过 requestIndex 定位首个失败项.
         [[nodiscard]] std::optional<HostError> ApplyDeferredRequests(std::span<const HostRequest> requests) noexcept;
+
+        /// @brief 在就绪 owner 线程借用实时设置, 内容随下次设置应用更新.
+        /// @return 其它线程或宿主已停止接收操作时为空.
+        /// @note 借用仅在当前宿主寿命内使用. 跨请求保留的内容应先拷贝.
+        [[nodiscard]] const WindowSettings *GetWindowSettings() const noexcept;
+
+        /// @brief 回调与录制之外分别应用窗口设置, 只在原生确认后更新有效值.
+        /// @pre 由宿主 owner 线程在本轮 CPU 请求边界调用, 目标身份来自活动窗口.
+        /// @return RequestRejected 表示字段拒绝, 宿主仍可用. 其它失败沿宿主合同处理.
+        [[nodiscard]] std::optional<HostError> ApplyWindowTitle(const SetWindowTitle &request) noexcept;
+        /// @brief 在同一请求边界更新当前 WGL drawable 的交换区间, 以原生读回作为确认.
+        /// @see ApplyWindowTitle
+        [[nodiscard]] std::optional<HostError> ApplyWindowVSync(SetWindowVSync request) noexcept;
 
     private:
         explicit DeviceHost(std::unique_ptr<Detail::DeviceHostState> state) noexcept;

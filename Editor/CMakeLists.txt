@@ -3,8 +3,11 @@
 physara_add_shader_interface(EditorUi "../Engine/Shader/Interface/EditorUi.json")
 physara_add_shader_program(EditorUi EditorUi "../Shaders/UI/EditorUi.json" "../Shaders")
 
-# Editor 拥有 UI 会话, 工作区, 原生输入适配及公共 RHI 绘制入口.
+# Editor 拥有 UI 会话, 编辑历史, 工作区, 原生输入适配及公共 RHI 绘制入口.
+# Commands 随会话编译, 通过 Renderer 的公开 View 入口应用及重放比例.
 add_library(PhysaraEditor STATIC
+    Commands/EditHistory.hpp
+    Commands/EditHistory.cpp
     Session/EditorSession.hpp
     Session/EditorSession.cpp
     Session/UiFrame.hpp

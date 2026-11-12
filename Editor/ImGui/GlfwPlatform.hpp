@@ -7,15 +7,9 @@
 #include <optional>
 
 #include <Core/Error.hpp>
+#include <GlfwAccess.hpp>
 
-struct GLFWwindow;
 struct ImGuiContext;
-
-namespace Physara::Platform
-{
-    class DeviceHost;
-    struct WindowState;
-}
 
 namespace Physara::Editor::Detail
 {
@@ -32,6 +26,11 @@ namespace Physara::Editor::Detail
         /// @brief 借用已就绪的宿主窗口, 创建 context 并接入官方 GLFW 回调链.
         /// @return 成功返回空值. 失败返回有界正文, 已取得的 UI 资源由适配析构释放.
         [[nodiscard]] std::optional<Core::BoundedText> Attach(Platform::DeviceHost &host);
+        /// @brief 从本宿主的发布中借用接入后到达的事件, 保持其顺序与原有借用期.
+        /// @pre 已完成接入, input 来自同一宿主的有效发布.
+        /// @return 已在接入前发布的批次为空. 首个新批次略过旧前缀, 后续可借用整批.
+        [[nodiscard]] std::span<const Platform::InputEvent> EventsSinceAttach(const Platform::HostFrameInput &input)
+            const noexcept;
         /// @brief 暂停接收键鼠和文本, 清理队列, 当前键鼠状态, 点击历史, 活动项及拖放载荷.
         /// @param focused 宿主当前发布的焦点末值, 用于同步 ImGui 焦点状态.
         void DiscardInput(bool focused);
@@ -45,5 +44,6 @@ namespace Physara::Editor::Detail
     private:
         GLFWwindow *m_Window = nullptr; ///< 借用自宿主, 仅在输入适配寿命内使用.
         ImGuiContext *m_Context = nullptr;
+        Platform::Detail::GlfwAccess::InputBoundary m_InputBoundary;
     };
 }

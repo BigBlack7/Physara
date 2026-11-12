@@ -1,54 +1,69 @@
 #pragma once
 
 /// @file
-/// @brief 管理主窗口固定面板及布局动作. 面板从会话借用只读的选择身份.
-/// 工作区保存面板显隐, 停靠和组合状态由该会话的 ImGui context 管理.
+/// @brief 提交固定面板和停靠布局, 由只读快照构建字段编辑及窗口意图.
+/// Workspace 持有面板展示状态和标题草稿, 会话在 UI 封存后消费编辑意图.
 
 #include <array>
-#include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
-#include <Core/Identity.hpp>
-#include <Input.hpp>
+#include <DeviceHost.hpp>
 
+#include "Commands/EditHistory.hpp"
 #include "Viewport/Viewport.hpp"
 
 namespace Physara::Editor::Detail
 {
     struct InputClaims;
     struct SelectionIdentityTag;
-    /// @brief 按 Tag 隔离的选择身份, 外层 optional 表示当前是否有选择.
     using SelectionId = Core::Identity<SelectionIdentityTag>;
 
-    /// @brief 已注册的布局动作. 编号对应一个显隐槽位, Count 表示槽位数.
+    /// @brief 固定面板的显隐动作. 前两项的序号同时索引本地展示状态.
     enum class ActionId : std::uint8_t
     {
-        ToggleViewport,
         ToggleHierarchy,
         ToggleInspector,
-        Count
+        ToggleViewport
     };
 
-    /// @brief 会话内的工作区显隐状态, 菜单与快捷键共用布局修改入口.
+    /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
+    /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
+    struct WorkspaceFrame
+    {
+        ViewportLayout viewport;
+        ScaleGesture scale;
+        std::vector<EditAction> edits;
+        std::optional<Platform::SetWindowTitle> title;
+        std::optional<Platform::SetWindowVSync> vsync;
+    };
+
+    /// @brief 管理主窗口停靠和展示状态. 主视口显隐及比例由领域快照提供.
     class Workspace final
     {
     public:
-        /// @brief 提交布局菜单, 停靠区和可见面板. 选择身份仅在调用期间借用.
-        /// @pre 当前会话的 ImGui 帧已开始.
-        /// @return 当前视口的逻辑命中及可选的离屏像素请求. 未绘制视口时返回空布局.
-        [[nodiscard]] ViewportLayout Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
-                                           const Platform::WindowState &window);
-        /// @brief 依到达顺序只从工作区拥有的 Press 产生一次性布局动作.
-        /// @pre events 来自本次有效发布, claims 由该轮布局提交后取得.
-        /// @note 本次 Draw 之后触发的显隐变更由下一次 Draw 消费.
-        void ApplyShortcuts(std::span<const Platform::InputEvent> events, const InputClaims &claims) noexcept;
+        /// @brief 在当前 ImGui 帧构建菜单, 控件及可见面板.
+        /// @param window 当前宿主设置的短期借用. 空值时省略窗口设置菜单.
+        /// @param allowActions 输入可用时才收集动作. 输入失效轮次仍可构建布局.
+        [[nodiscard]] WorkspaceFrame Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
+                                            EditState edits, const Renderer::ViewSettings &view,
+                                            const Platform::WindowSettings *window,
+                                            const std::optional<Core::BoundedText> &editError, bool allowActions);
+
+        /// @brief 依到达顺序从当轮有资格的 Press 生成历史或布局动作.
+        /// @note 每条历史动作在会话重放时按届时的游标判断可用性.
+        void ApplyShortcuts(std::span<const Platform::InputEvent> events, const InputClaims &claims,
+                            WorkspaceFrame &frame);
 
     private:
-        /// @brief 切换一个已注册面板的显隐槽位, 供菜单和快捷键调用.
-        void Toggle(ActionId action) noexcept;
+        [[nodiscard]] bool Visible(ActionId action, EditState edits) const noexcept;
+        void SetVisible(ActionId action, bool visible, WorkspaceFrame &frame);
+        void DrawWindowMenu(const Platform::WindowSettings *window, WorkspaceFrame &frame, bool allowActions);
 
-        std::array<bool, static_cast<std::size_t>(ActionId::Count)> m_Visible{true, true, true};
+        std::array<bool, 2> m_Visible{true, true}; ///< Hierarchy 与 Inspector 的展示状态.
+        /// @brief 控件激活期间保留 UTF-8 草稿. 退出编辑后重新从宿主快照取值.
+        std::array<char, Platform::MaxWindowTitleBytes + 1> m_TitleDraft{};
+        bool m_TitleEditing = false;
     };
 }

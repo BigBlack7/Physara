@@ -1,6 +1,7 @@
 /// @file
 /// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主和 Editor.
-/// 输入与布局在帧边界封存. 通过有界帧槽组织诊断 View 输出与 UI 合成, 由宿主提交并呈现窗口颜色.
+/// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
+/// 有界帧槽组织诊断 View 输出和 UI 合成, 由宿主提交并呈现窗口颜色.
 
 #include <array>
 #include <cassert>
@@ -166,7 +167,8 @@ namespace Physara::Runtime
         UploadPending
     };
 
-    // 准备及准入完成后才打开列表. 录制失败保留原始原因, 已发前缀交同槽提交或退出收拢.
+    // 先按封存请求准备颜色或占位, UI 核定本轮采样和共享上传准入后再开放列表.
+    // 录制失败时保留原始原因, 已发前缀交同槽提交或退出收拢.
     static std::variant<FrameStatus, Core::BoundedText> RenderFrame(
         Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
@@ -196,6 +198,10 @@ namespace Physara::Runtime
         }
         if (std::holds_alternative<Editor::UiPrepareStatus>(ui))
         {
+            if (outputs.Diagnostic() || outputs.UploadPending())
+            {
+                view.Defer(Renderer::ViewSettingReason::UploadPending);
+            }
             // 当前取得尚无新命令. 归还后继续处理输入和退休, 后续轮次再按当时请求准备.
             if (const auto error = host.CancelPresentation(presentation.token))
             {
@@ -206,6 +212,10 @@ namespace Physara::Runtime
 
         auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
         const bool useDiagnostic = prepared && prepared->UsesDiagnosticOutput();
+        if (prepared && prepared->DiagnosticUploadPending())
+        {
+            view.Defer(Renderer::ViewSettingReason::UploadPending);
+        }
         // 仅生成本次实际采样的诊断像素. UI 已将其写入计入准入及 arena 预留.
         if (useDiagnostic && !outputs.PrepareUpload(slot.arena))
         {
@@ -260,6 +270,7 @@ namespace Physara::Runtime
         }
         if (receipt.colorValid && useDiagnostic)
         {
+            // 有效比例随本轮采样到的颜色一起确认. 同尺寸复用也经过这次提交.
             view.Publish(std::move(outputs));
         }
         // Present 消费本次取得. 后续窗口变化或交换失败仍保留此前接受的工作及其退休责任.
@@ -281,6 +292,30 @@ namespace Physara::Runtime
             ReportTicket(diagnostics, "Editor window presented", result.ticket);
         }
         return FrameStatus::Rendered;
+    }
+
+    // 标题与 VSync 在同一 CPU 边界各自应用. 字段拒绝保留原因并继续尝试另一字段.
+    // 宿主生命周期错误结束运行, 由调用者归还尚未录制的窗口取得.
+    static std::optional<Platform::HostError> ApplyWindowSettings(Platform::DeviceHost &host,
+                                                                  const Editor::EditorFrame &frame) noexcept
+    {
+        if (frame.titleRequest)
+        {
+            if (auto error = host.ApplyWindowTitle(*frame.titleRequest);
+                error && error->reason != Platform::HostErrorReason::RequestRejected)
+            {
+                return error;
+            }
+        }
+        if (frame.vsyncRequest)
+        {
+            if (auto error = host.ApplyWindowVSync(*frame.vsyncRequest);
+                error && error->reason != Platform::HostErrorReason::RequestRejected)
+            {
+                return error;
+            }
+        }
+        return std::nullopt;
     }
 
     // 终止轮次只消费发布事实. 继续的轮次推进 Editor 和呈现, 暂停及槽忙仍有限等待事件.
@@ -331,8 +366,8 @@ namespace Physara::Runtime
             wasSlotBusy = slotBusy;
             const auto *presentation = std::get_if<Platform::PresentationFrame>(&acquired);
 
-            // 无可用槽时仍消费本批输入, 暂停轮次仍可归还光标. 宿主在下次 poll 前应用请求.
-            const auto frame = editor.Advance(input);
+            // CPU 仍在槽忙时推进. Advance 封存 UI 并应用领域编辑, 窗口请求随后在录制前处理.
+            const auto frame = editor.Advance(input, &view, host.GetWindowSettings());
             if (frame.hostRequest)
             {
                 const std::span requests(&*frame.hostRequest, 1);
@@ -347,6 +382,15 @@ namespace Physara::Runtime
                 }
                 // 请求成功后通知会话. 若本轮已恢复交互, 指针基线先于 Wait 分发的新回调入队.
                 editor.CompleteCursorRelease();
+            }
+            if (auto error = ApplyWindowSettings(host, frame))
+            {
+                if (presentation)
+                {
+                    static_cast<void>(host.CancelPresentation(presentation->token));
+                }
+                PrintError(Platform::DescribeHostError(*error));
+                return 1;
             }
             // 只记录 CPU 帧就绪状态的变化. 日志写入结果独立于本轮窗口推进结果.
             if (!previousFrame || *previousFrame != frame.hasDrawData)
@@ -388,6 +432,11 @@ namespace Physara::Runtime
                                                         "Graphics upload backpressure: waiting for retired storage"));
                 }
                 wasUploadPending = uploadPending;
+            }
+            else
+            {
+                view.Defer(slotBusy && frame.viewport ? Renderer::ViewSettingReason::SlotPending :
+                                                         Renderer::ViewSettingReason::LayoutPending);
             }
             // 帧快照持有的 framebuffer 在原生回收前释放, 以便及时排空被替换目标的删除记录.
             acquired = Platform::PresentationStatus::Suspended;
@@ -454,7 +503,7 @@ int main(int argc, char **argv)
         {
             const auto &package = std::get<std::filesystem::path>(located);
             auto &device = *host->GetDevice();
-            auto view = Renderer::View::Create(device);
+            auto view = Renderer::View::Create(device, host->GetInfo().maxTextureSizePixels);
             if (!view)
             {
                 Runtime::PrintError(Core::BoundedText("Cannot allocate the main view identity"));

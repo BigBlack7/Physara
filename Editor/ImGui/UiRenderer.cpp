@@ -23,8 +23,8 @@
 
 /// @file
 /// @brief 准备 UI 几何与绑定, 向开放列表发出上传和绘制, 消费同一次提交的回执.
-/// 在列表开放前完成容量预检, 将几何和像素复制到帧槽.
-/// 批次持有 RHI 句柄, 纹理请求借用到确认或取消.
+/// 在列表开放前解析当轮的诊断颜色或占位, 并按实际录制顺序预检上传容量.
+/// 批次持有 RHI 句柄, 借用帧槽几何与像素, 纹理请求借用到确认或取消.
 
 namespace Physara::Editor::Detail
 {
@@ -71,6 +71,7 @@ namespace Physara::Editor::Detail
         std::size_t uploadChunkSize = 0;
         bool hasDraws = false;
         bool usesDiagnosticOutput = false;
+        bool diagnosticUploadPending = false;
     };
 
     /// @brief 准备值的控制对象. owner 与 batch 一起解除后, 外部句柄可以安全地过期.
@@ -384,6 +385,7 @@ namespace Physara::Editor::Detail
         platform.DrawCallback_ResetRenderState = ResetRenderState;
         platform.Renderer_TextureMaxWidth = platform.Renderer_TextureMaxHeight = UiTextures::MaxTextureSize;
         renderer->m_Attached = true;
+        // 当前字体来自 ImGui 内置默认字体, 动态 atlas 只装入该字体可提供的字形.
         if (io.Fonts->AddFontDefault() == nullptr || io.Fonts->TexData == nullptr || io.Fonts->TexData->Pixels == nullptr)
         {
             return Core::BoundedText("Editor base font initialization failed to create the default atlas");
@@ -493,7 +495,23 @@ namespace Physara::Editor::Detail
         return detail;
     }
 
-    // 先测量并预检共享上传容量. 准入后预留字节, 建立临时身份并封存依赖.
+    // 将 View 的无颜色结果转换为本轮占位及状态标签的原因.
+    static UiFallback MissingViewportOutput(const Renderer::NoSceneOutputs &outputs) noexcept
+    {
+        if (outputs.UploadPending())
+        {
+            return UiFallback::UploadPending;
+        }
+        switch (outputs.Rejection())
+        {
+        case Renderer::ViewSettingReason::InvalidExtent: return UiFallback::InvalidExtent;
+        case Renderer::ViewSettingReason::TextureSizeLimit: return UiFallback::TextureSizeLimit;
+        case Renderer::ViewSettingReason::DiagnosticBudget: return UiFallback::DiagnosticBudget;
+        default: return UiFallback::MissingOutput;
+        }
+    }
+
+    // 先解析视口与容量需求, 再统一预留 arena 并复制数据, 最后封存供 Record 使用的 RHI 依赖.
     PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData, RHI::Framebuffer *target,
                                         Platform::WindowExtent extent, Core::FrameArena &arena,
                                         const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
@@ -545,8 +563,7 @@ namespace Physara::Editor::Detail
                 }
                 else if (!bindings.output)
                 {
-                    bindings.viewportFallback = bindings.uploadPending ? UiFallback::UploadPending :
-                                                                        UiFallback::MissingOutput;
+                    bindings.viewportFallback = MissingViewportOutput(outputs);
                 }
             }
             else
@@ -644,8 +661,10 @@ namespace Physara::Editor::Detail
             {
                 return *error;
             }
-            // 临时身份安装后, 可见命令应使用预检时计划的同一组写入.
+            // 实际为普通 draw 建立诊断绑定时, Runtime 才为本轮生成并录制诊断像素.
+            // 此时使用的写入集合须与容量预检一致.
             batch.usesDiagnosticOutput = bindings.viewBinding.Get() != nullptr;
+            batch.diagnosticUploadPending = bindings.viewportFallback == UiFallback::UploadPending;
             assert(batch.hasDraws == drawUploads.geometry && batch.uploads.usesPlaceholder == drawUploads.placeholder &&
                    batch.usesDiagnosticOutput == drawUploads.diagnostic);
             if (batch.draws.empty() && !m_Textures.HasUploads(batch.uploads))
@@ -789,6 +808,11 @@ namespace Physara::Editor
     bool PreparedUiFrame::UsesDiagnosticOutput() const noexcept
     {
         return m_Data && m_Data->batch && m_Data->batch->usesDiagnosticOutput;
+    }
+
+    bool PreparedUiFrame::DiagnosticUploadPending() const noexcept
+    {
+        return m_Data && m_Data->batch && m_Data->batch->diagnosticUploadPending;
     }
 
     // 外部准备值可比会话存活更久. 先核对控制对象的 owner 再访问帧槽借用.

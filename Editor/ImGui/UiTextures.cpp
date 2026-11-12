@@ -12,7 +12,7 @@
 
 /// @file
 /// @brief 将固定 ImGui 的纹理请求转换为有界 RHI 驻留与本槽持有的像素数据.
-/// 创建和更新由录制回执确认. 逻辑注销立即生效, 已发资源由命令列表和提交包保活.
+/// 逻辑 View token 在准备期解析到本轮颜色或占位, 纹理协议的创建和更新由提交回执确认.
 
 namespace Physara::Editor::Detail
 {
@@ -411,7 +411,7 @@ namespace Physara::Editor::Detail
         {
             return sample.entry->binding;
         }
-        // 本帧只有一个候选 View 输出. 重复采样可共享这次准备创建的绑定.
+        // 只在可见命令采样本轮 View 颜色时创建绑定. 同一帧的重复采样共用该绑定.
         if (!bindings.viewBinding)
         {
             bindings.viewBinding = Bind(bindings.output->texture.Get());
@@ -432,7 +432,7 @@ namespace Physara::Editor::Detail
                 {
                     message = "Editor UI viewport is waiting for diagnostic upload capacity";
                 }
-                else if (reason == UiFallback::MissingOutput)
+                else if (reason != UiFallback::InvalidIdentity)
                 {
                     message = "Editor UI viewport output is unavailable for this frame";
                 }

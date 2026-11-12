@@ -13,12 +13,12 @@
 #include "Panels/Workspace.hpp"
 
 /// @file
-/// @brief 将宿主发布推进为一次 Editor 轮次. 先识别输入失效边界, 再按窗口状态构建布局.
-/// 可渲染轮次封存 CPU 绘制数据及同批像素范围, 供可选的离屏 renderer 消费.
+/// @brief 将宿主发布推进为一次 Editor 轮次. 先处理输入失效边沿, 再封存布局和 DrawData.
+/// 编辑历史在封存后应用字段意图, 视口像素请求采用同批度量与此时的 View 请求.
 
 namespace Physara::Editor
 {
-    /// @brief 会话内的 context 依赖, 输入恢复状态和本轮 DrawData 借用.
+    /// @brief 聚合本会话的布局, 编辑与纹理身份, 以及一轮内有效的 UI 借用.
     struct EditorSession::State
     {
         // 平台适配最后析构, renderer 先结束借用并解除纹理关联, 再销毁 UI context.
@@ -26,8 +26,12 @@ namespace Physara::Editor
         std::unique_ptr<Detail::UiRenderer> renderer;
         Detail::Workspace workspace;
         Detail::Viewport viewport;
-        // 与 drawData 同轮封存. PrepareUiFrame 用它识别迟到的身份或尺寸.
+        // 编辑状态在平台适配接入成功后建立, 结束会话时释放事务与历史.
+        std::optional<Detail::EditHistory> edits;
+        std::optional<Core::BoundedText> editError;
+        // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
+        std::optional<Renderer::ViewportRequest> viewportRequest;
         std::optional<Detail::SelectionId> selection;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
         Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
@@ -67,6 +71,11 @@ namespace Physara::Editor
         {
             return *error;
         }
+        state.edits.emplace();
+        if (!state.edits->Id().IsValid())
+        {
+            return Core::BoundedText("Editor edit session identity exhausted");
+        }
         // RHI 路径由 ImGui 动态生成 atlas. CPU 路径在首帧前预建 atlas 以满足固定版本的合同.
         if (renderer != nullptr)
         {
@@ -84,8 +93,7 @@ namespace Physara::Editor
                 {
                     return *error;
                 }
-                state.viewport = Detail::Viewport(renderer->mainView, std::get<UiTextureId>(token),
-                                                  host.GetInfo().maxTextureSizePixels);
+                state.viewport = Detail::Viewport(renderer->mainView, std::get<UiTextureId>(token));
             }
         }
         else if (!ImGui::GetIO().Fonts->Build())
@@ -95,7 +103,9 @@ namespace Physara::Editor
         return session;
     }
 
-    EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input)
+    // 结束前一轮 UI 借用, 在当前窗口输入边界生成布局, 编辑和宿主值请求.
+    EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input, Renderer::View *view,
+                                        const Platform::WindowSettings *window)
     {
         auto &state = *m_State;
         if (state.renderer)
@@ -105,13 +115,24 @@ namespace Physara::Editor
         }
         state.drawData = nullptr;
         state.viewportLayout = {};
+        state.viewportRequest.reset();
+        auto &history = *state.edits;
+        const auto edits = history.Snapshot();
+        if (view && view->Id() != state.viewport.Id())
+        {
+            state.editError.emplace("Editor frame received a View outside its session");
+            view = nullptr;
+        }
         const bool renderable = input.window.Renderable();
         const bool inputAvailable = renderable && input.window.focused;
+        // 使用宿主发布的窗口末值. 业务按键和失效边沿均从本会话接入后的事件中解释.
+        const auto events = state.platform.EventsSinceAttach(input);
         // 即使发布末值已恢复, 批次中的失焦, 最小化或零像素边沿仍会使本批失效.
         // 前一批已停用时, 恢复批次仍先清理队列, 后续批次才重新派发动作.
         const bool discard = !inputAvailable || !state.inputAvailable ||
-                             std::ranges::any_of(input.events, Detail::InterruptsInput);
+                             std::ranges::any_of(events, Detail::InterruptsInput);
         EditorFrame frame;
+        Detail::WorkspaceFrame workspace;
         if (discard)
         {
             state.platform.DiscardInput(input.window.focused);
@@ -127,7 +148,9 @@ namespace Physara::Editor
             state.platform.BeginFrame(input.window, state.suspended);
             constexpr auto allPopups = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
             const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
-            const auto layout = state.workspace.Draw(state.selection, state.viewport, input.window);
+            const auto settings = view ? view->Settings() : Renderer::ViewSettings{};
+            workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, window, state.editError,
+                                             !discard);
             if (!discard)
             {
                 // 布局可释放弹出层或活动项. 已被占用的本批键盘输入不能随后触发工作区动作.
@@ -135,19 +158,35 @@ namespace Physara::Editor
                 const Detail::InputClaims claims{
                     .blockingPopup = ImGui::IsPopupOpen(nullptr, allPopups),
                     .uiKeyboard = keyboardOwnedBeforeLayout || activeItem,
-                    .uiPointer = activeItem || (!layout.hit && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
+                    .uiPointer = activeItem ||
+                                 (!workspace.viewport.hit && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
                     .cursorMode = input.state.cursorMode,
-                    .viewportHit = layout.hit};
-                state.workspace.ApplyShortcuts(input.events, claims);
+                    .viewportHit = workspace.viewport.hit};
+                state.workspace.ApplyShortcuts(events, claims, workspace);
             }
-            // 封存同批窗口像素范围与离屏请求. 后续准备分别用它们校验窗口目标和候选 View 输出.
+            // 先封存逻辑布局, 再应用事务. 准备期只消费应用后的比例及同批窗口度量.
             ImGui::Render();
             state.drawData = ImGui::GetDrawData();
             state.extentPixels = input.window.framebufferSizePixels;
-            state.viewportLayout = layout;
+            state.viewportLayout = workspace.viewport;
             frame.hasDrawData = state.drawData != nullptr;
-            frame.viewport = layout.request;
         }
+        // 暂停时也消费事务取消, 由活动 View 尝试还原拖拽起点.
+        workspace.scale.cancelled |= discard;
+        auto editError = history.Apply(history.Id(), view, workspace.scale, workspace.edits);
+        if (editError || workspace.scale.preview || !workspace.edits.empty())
+        {
+            state.editError = std::move(editError);
+        }
+        // 用匹配 View 的最新比例和请求代配合封存布局生成像素范围.
+        // 隐藏在封存后已生效, 重开要等下一份可见布局才有新的图像矩形.
+        if (view && history.Snapshot().viewportVisible)
+        {
+            state.viewportRequest = state.viewport.Request(state.viewportLayout, input.window, view->Settings());
+            frame.viewport = state.viewportRequest;
+        }
+        frame.titleRequest = std::move(workspace.title);
+        frame.vsyncRequest = workspace.vsync;
         // 普通模式的恢复批次可在本轮结束时建立基线. 相对模式保持门控, 等宿主确认归还.
         if (discard && inputAvailable && !frame.hostRequest)
         {
@@ -174,8 +213,9 @@ namespace Physara::Editor
         }
         const auto *diagnostic = outputs.Diagnostic();
         const auto &layout = state.viewportLayout;
-        if (diagnostic && (!layout.request || diagnostic->view != layout.request->view ||
-                           diagnostic->extent != layout.request->extent))
+        if (diagnostic && (!state.viewportRequest || diagnostic->view != state.viewportRequest->view ||
+                           diagnostic->extent != state.viewportRequest->extent ||
+                           outputs.RequestRevision() != state.viewportRequest->requestRevision))
         {
             // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
             return state.renderer->Prepare(*state.drawData, target, extentPixels, arena, {}, layout.image, commands);

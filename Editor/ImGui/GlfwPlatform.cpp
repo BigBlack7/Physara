@@ -34,8 +34,8 @@ namespace Physara::Editor::Detail
 
     std::optional<Core::BoundedText> GlfwPlatform::Attach(Platform::DeviceHost &host)
     {
-        // 先核对窗口借用和单 context 前提, 再取得 UI 资源或安装回调.
-        auto *window = Platform::Detail::GlfwAccess::Borrow(host);
+        // 借用时记录宿主发布边界, 之后才创建 context 并将新回调接入本会话.
+        auto *window = Platform::Detail::GlfwAccess::Borrow(host, &m_InputBoundary);
         if (window == nullptr)
         {
             return Core::BoundedText("Editor initialization requires a ready host on its owner thread");
@@ -62,6 +62,22 @@ namespace Physara::Editor::Detail
         }
         m_Window = window;
         return std::nullopt;
+    }
+
+    std::span<const Platform::InputEvent>
+    GlfwPlatform::EventsSinceAttach(const Platform::HostFrameInput &input) const noexcept
+    {
+        // 已在接入前发布的批次可能仍被调用者借用, 其中没有本会话的动作输入.
+        if (input.sequence <= m_InputBoundary.publishedSequence)
+        {
+            return {};
+        }
+        if (input.sequence - m_InputBoundary.publishedSequence == 1)
+        {
+            // 首次发布可能同时含旧会话在 Wait 中积累的事件和新回调. 仅略过接入前的前缀.
+            return input.events.subspan(std::min(m_InputBoundary.pendingCount, input.events.size()));
+        }
+        return input.events;
     }
 
     void GlfwPlatform::DiscardInput(bool focused)

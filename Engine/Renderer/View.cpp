@@ -8,7 +8,8 @@
 #include <Core/FrameArena.hpp>
 
 /// @file
-/// @brief 生成用于验证视口尺寸, 颜色和方向的静态诊断纹理. 接受后复用同尺寸输出.
+/// @brief 生成用于验证视口尺寸, 颜色和方向的静态诊断纹理.
+/// 将范围校验, 候选准备和提交确认分开, 便于等待期间保留最后接受的颜色与比例.
 
 namespace Physara::Renderer
 {
@@ -27,40 +28,99 @@ namespace Physara::Renderer
         return static_cast<std::size_t>(extent.width) * extent.height * PixelBytes;
     }
 
-    std::optional<View> View::Create(RHI::Device &device) noexcept
+    std::optional<View> View::Create(RHI::Device &device, std::uint32_t maxTextureSize) noexcept
     {
         if (!Core::AdvanceGeneration(LastViewIdentity))
         {
             return std::nullopt;
         }
-        return View(device, {0, LastViewIdentity});
+        return View(device, {0, LastViewIdentity}, maxTextureSize);
+    }
+
+    ViewSettings View::Settings() const noexcept
+    {
+        ViewSettings snapshot{.view = m_Id, .requestedScale = m_RequestedScale, .reason = m_Reason,
+                              .requestRevision = m_RequestRevision};
+        if (m_Diagnostic)
+        {
+            snapshot.effective = EffectiveViewport{m_EffectiveScale, m_Diagnostic->extent};
+        }
+        return snapshot;
+    }
+
+    std::optional<Core::BoundedText> View::RequestRenderScale(ViewId view, float scale) noexcept
+    {
+        if (view != m_Id || !(scale >= MinRenderScale && scale <= MaxRenderScale))
+        {
+            return Core::BoundedText("Render scale requires the active View and a finite value in [0.5, 1.0]");
+        }
+        if (scale != m_RequestedScale)
+        {
+            // 每次实际变化分配请求代, 使回到同一比例也无法接受早先准备的候选.
+            if (!Core::AdvanceGeneration(m_RequestRevision))
+            {
+                return Core::BoundedText("View request revision exhausted");
+            }
+            m_RequestedScale = scale;
+            m_Reason = ViewSettingReason::LayoutPending;
+        }
+        return std::nullopt;
+    }
+
+    // 只更新待确认状态的原因, 已接受的请求继续报告有效.
+    void View::Defer(ViewSettingReason reason) noexcept
+    {
+        if (m_Reason != ViewSettingReason::None)
+        {
+            m_Reason = reason;
+        }
     }
 
     std::variant<NoSceneOutputs, Core::BoundedText> View::Prepare(const std::optional<ViewportRequest> &request,
                                                                 std::size_t remainingUploadBytes)
     {
         NoSceneOutputs outputs;
-        if (!request)
+        // 先确认尺寸请求对应当前比例. 过期请求保持最后有效输出, 后续布局可重新准备.
+        if (!request || request->view != m_Id || request->requestRevision != m_RequestRevision)
         {
+            Defer(ViewSettingReason::LayoutPending);
             return outputs;
         }
-        assert(request->view == m_Id);
+        // 区分换算失败, 设备边长上限及单图像预算. 这些拒绝都可在后续布局中恢复.
         const auto extent = request->extent;
+        if (extent.width == 0 || extent.height == 0)
+        {
+            outputs.m_Rejection = m_Reason = ViewSettingReason::InvalidExtent;
+            return outputs;
+        }
+        if (extent.width > m_MaxTextureSize || extent.height > m_MaxTextureSize)
+        {
+            outputs.m_Rejection = m_Reason = ViewSettingReason::TextureSizeLimit;
+            return outputs;
+        }
         const auto bytes = DiagnosticPixelBytes(extent);
         if (bytes == 0)
         {
+            outputs.m_Rejection = m_Reason = ViewSettingReason::DiagnosticBudget;
             return outputs;
         }
+        outputs.m_RequestRevision = request->requestRevision;
+        outputs.m_Scale = m_RequestedScale;
         // 静态诊断图由实际采样尺寸确定. 相同尺寸可沿 Graphics 队列顺序直接读取已接受代.
         if (m_Diagnostic && m_Diagnostic->extent == extent)
         {
             outputs.m_Output = m_Diagnostic;
+            if (m_Reason != ViewSettingReason::None || m_RequestedScale != m_EffectiveScale)
+            {
+                m_Reason = ViewSettingReason::SubmissionPending;
+            }
             return outputs;
         }
         // 保留无颜色结果供 Editor 解析占位. 未创建新纹理, 下次按届时布局重新判断额度.
         if (bytes > remainingUploadBytes)
         {
             outputs.m_UploadPending = true;
+            m_Reason = ViewSettingReason::UploadPending;
             return outputs;
         }
 
@@ -75,6 +135,7 @@ namespace Physara::Renderer
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DiagnosticColor, m_LastGeneration, extent,
                                       std::move(texture)};
         outputs.m_UploadBytes = bytes;
+        m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
 
@@ -120,10 +181,18 @@ namespace Physara::Renderer
     // 换入已接受的新代并释放旧代的 View 引用. 原有 UI 绑定由已提交的 RHI 包继续持有.
     void View::Publish(NoSceneOutputs &&outputs) noexcept
     {
+        // 拒绝已被后继编辑取代的候选, 即使比例随后回到了相同值.
+        if (!outputs.m_Output || outputs.m_Output->view != m_Id || outputs.m_RequestRevision != m_RequestRevision)
+        {
+            return;
+        }
         if (outputs.m_UploadBytes != 0)
         {
             assert(outputs.m_Output->view == m_Id && !outputs.m_Pixels.empty());
             m_Diagnostic = std::move(outputs.m_Output);
         }
+        // 复用颜色时也使用本轮候选所记录的比例, 尺寸仍来自已接受的颜色代.
+        m_EffectiveScale = outputs.m_Scale;
+        m_Reason = ViewSettingReason::None;
     }
 }

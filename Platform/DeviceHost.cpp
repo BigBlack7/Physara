@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief 装配宿主并统一处理线程, 重入与失败收拢.
-/// 输入发布和索引呈现的原生步骤由内部阶段入口执行, 此文件维持操作边界.
+/// 输入发布, 实时设置与索引呈现的原生步骤由内部阶段入口执行.
 
 #include <algorithm>
 #include <array>
@@ -90,6 +90,11 @@ namespace Physara::Platform
         if (!error)
         {
             error = Detail::InitializeWindowInput(state);
+        }
+        if (!error)
+        {
+            // 以现有窗口和已激活的 context 读回启动值, 字段确认结果留在实时快照.
+            Detail::InspectWindowSettings(state, desc);
         }
         return error;
     }
@@ -359,12 +364,17 @@ namespace Physara::Platform::Detail
         }
     }
 
-    GLFWwindow *GlfwAccess::Borrow(DeviceHost &host) noexcept
+    GLFWwindow *GlfwAccess::Borrow(DeviceHost &host, InputBoundary *inputBoundary) noexcept
     {
         const auto &state = *host.m_State;
         if (state.ownerThread != std::this_thread::get_id() || !state.ready)
         {
             return nullptr;
+        }
+        if (inputBoundary)
+        {
+            // owner 线程在同一借用点读取两个 bank 边界, 宿主发布和累积状态保持原样.
+            *inputBoundary = {state.input.PublishedSequence(), state.input.PendingEventCount()};
         }
         return state.window;
     }
@@ -469,6 +479,12 @@ namespace Physara::Platform
     HostInfo DeviceHost::GetInfo() const noexcept
     {
         return m_State->info;
+    }
+
+    const WindowSettings *DeviceHost::GetWindowSettings() const noexcept
+    {
+        return m_State->ownerThread == std::this_thread::get_id() && m_State->ready ?
+                   &m_State->windowSettings : nullptr;
     }
 
     RHI::Device *DeviceHost::GetDevice() const noexcept
@@ -595,5 +611,32 @@ namespace Physara::Platform
         return RunHostOperation(*m_State, HostStage::RequestApplication,
                                  [&]
                                  { return Detail::ApplyNativeRequests(*m_State, requests); });
+    }
+
+    // 两项设置共用宿主操作检查. 只有命中当前窗口代的意图才进入原生字段入口.
+    std::optional<HostError> DeviceHost::ApplyWindowTitle(const SetWindowTitle &request) noexcept
+    {
+        return RunHostOperation(*m_State, HostStage::RequestApplication, [&]() -> std::optional<HostError>
+        {
+            if (request.window != m_State->info.identity)
+            {
+                return Detail::MakeError(m_State.get(), HostErrorReason::RequestRejected, HostStage::RequestApplication,
+                                         "Title request belongs to an expired window");
+            }
+            return Detail::ApplyWindowTitle(*m_State, request.title);
+        });
+    }
+
+    std::optional<HostError> DeviceHost::ApplyWindowVSync(SetWindowVSync request) noexcept
+    {
+        return RunHostOperation(*m_State, HostStage::RequestApplication, [&]() -> std::optional<HostError>
+        {
+            if (request.window != m_State->info.identity)
+            {
+                return Detail::MakeError(m_State.get(), HostErrorReason::RequestRejected, HostStage::RequestApplication,
+                                         "VSync request belongs to an expired window");
+            }
+            return Detail::ApplyWindowVSync(*m_State, request.enabled);
+        });
     }
 }

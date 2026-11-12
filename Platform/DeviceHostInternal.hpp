@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 宿主实现之间共享的状态与阶段入口, 原生窗口, 输入和 RHI 根引用归同一 State.
+/// @brief 宿主私有的共享状态及阶段入口. 原生窗口, 设置, 输入和 RHI 根引用归同一 State.
 
 #include "DeviceHost.hpp"
 #include "InputState.hpp"
@@ -109,6 +109,8 @@ namespace Physara::Platform::Detail
         const std::thread::id ownerThread = std::this_thread::get_id();
         std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
         HostInfo info;
+        /// @brief 启动读回建立首份设置快照, 此后由 owner 的窗口请求入口按字段更新.
+        WindowSettings windowSettings;
         HostStage stage = HostStage::Reservation;
         GLFWwindow *window = nullptr;
         GLFWerrorfun previousCallback = nullptr;
@@ -162,6 +164,12 @@ namespace Physara::Platform::Detail
     [[nodiscard]] std::optional<HostError> InspectEnvironment(DeviceHostState &state);
     /// @brief 请求交换间隔并记录请求值, 不测量或保证驱动实际等待行为.
     [[nodiscard]] std::optional<HostError> RequestSwapInterval(DeviceHostState &state, bool vsync);
+    /// @brief 在原生窗口和 context 就绪后读取首份实时设置. 某字段无法确认时记入该字段原因.
+    void InspectWindowSettings(DeviceHostState &state, const HostDesc &desc);
+    /// @brief 校验 UTF-8 并应用 caption, 读回与请求一致后确认. 调用者已检查线程与窗口身份.
+    [[nodiscard]] std::optional<HostError> ApplyWindowTitle(DeviceHostState &state, std::string_view title);
+    /// @brief 在确认 context 和 drawable 归属后应用交换区间, 以原生查询确认实际值.
+    [[nodiscard]] std::optional<HostError> ApplyWindowVSync(DeviceHostState &state, bool enabled);
     /// @brief 在原生 context 上建立 raw Device, 再建立持有它的 Validation 包装.
     [[nodiscard]] std::optional<HostError> InitializeResourceDevice(DeviceHostState &state);
     /// @brief 预检已知根引用之外的 owner, 调用前使用者须已停止, 不承担并发停止协议.

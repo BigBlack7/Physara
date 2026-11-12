@@ -71,6 +71,10 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 
 槽全忙时继续处理输入和有限事件等待. 最小化或 framebuffer 为零时清理交互并暂停新帧. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出, 最后一次 GPU 使用按设备的完成与关闭协议收拢. [阶段计划](Developments/D03-D05-FramePipeline.md#d04-t04)
 
+- 在 `Inspector` 的 `Main View` 中拖动 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 若 `Viewport` 在同一停靠组的后台标签中, 切回该标签后可准备新的诊断图. 需要同时看比例和图像时可将两个面板停靠在不同区域. `Pending` 和失败状态会显示原因.
+- 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
+- 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
+
 ## 接口与开发资料
 
 宿主、输入值和 CPU 编辑器会话的合同见公开头. [DeviceHost.hpp](../Platform/DeviceHost.hpp) · [Input.hpp](../Platform/Input.hpp) · [EditorSession.hpp](../Editor/Session/EditorSession.hpp)

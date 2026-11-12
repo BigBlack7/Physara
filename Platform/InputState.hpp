@@ -45,6 +45,10 @@ namespace Physara::Platform::Detail
         /// @brief 发布值快照并切换 bank, 清区间边沿和增量, 保留 held.
         /// @return 已锁存故障或无法继续分配序号时为空, 不交付成功的部分批次.
         [[nodiscard]] std::optional<HostFrameInput> Publish() noexcept;
+        /// @brief 最后一次成功发布的序号, 首次发布前为零.
+        [[nodiscard]] std::uint64_t PublishedSequence() const noexcept { return m_Sequence; }
+        /// @brief 当前待发布 bank 中已累积的事件数. 在下一次成功发布中占据前缀.
+        [[nodiscard]] std::size_t PendingEventCount() const noexcept { return m_PendingCount; }
         [[nodiscard]] const WindowState &Window() const noexcept;
         [[nodiscard]] const InputSnapshot &Snapshot() const noexcept;
         [[nodiscard]] const std::optional<InputFault> &Fault() const noexcept;

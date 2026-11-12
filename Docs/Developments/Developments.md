@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 D04 · 建立带编辑器的可呈现程序。D04-T01 的 EditorSession、面板和输入路由，D04-T02 的 ImGui 公共 RHI 绘制与纹理协议，D04-T03 的 PresentColor 和窗口提交，以及 D04-T04 的有界 FrameSlot 与最小视口资源身份均已验收归档。下一工作包为 D04-T05 · 建立领域编辑命令与渲染配置请求边界，待立项。D03 的五个工作包及阶段出口均已完成。 [D04 阶段](D03-D05-FramePipeline.md#dev-d04) · [D04-T05](D03-D05-FramePipeline.md#d04-t05) · [D04-T04 验收](../../openspec/changes/archive/2026-11-11-establish-frame-slots-and-viewport-output/tasks.md#final-verification) · [D04-T03 验收](../../openspec/changes/archive/2026-11-11-establish-opengl-window-presentation/tasks.md#final-verification) · [D04-T02 验收](../../openspec/changes/archive/2026-11-10-establish-imgui-rhi-renderer/tasks.md#final-verification) · [D04-T01 验收](../../openspec/changes/archive/2026-11-10-establish-editor-session-input/tasks.md#final-verification) · [D03 阶段](D03-D05-FramePipeline.md#dev-d03)
+当前阶段为 D05 · 让整帧经 RenderGraph 执行。D04 的五个工作包均已验收归档，阶段出口通过。下一工作包为 D05-T01 · 实现图资源、版本与 Pass 权限，待建立 OpenSpec change。 [D05 阶段](D03-D05-FramePipeline.md#dev-d05) · [D05-T01](D03-D05-FramePipeline.md#d05-t01) · [D04 阶段出口](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#d04-阶段出口) · [D04-T05 验收](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#final-verification)
 
 ## 阅读与使用
 

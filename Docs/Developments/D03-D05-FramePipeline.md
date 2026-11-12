@@ -148,15 +148,17 @@
 
 **职责位置：** Editor/Commands、Session、Viewport。**前置：** [D04-T01](#d04-t01)、[D04-T04](#d04-t04)。**架构依据：** [2.3](../Architecture.md#edits)、[2.4](../Architecture.md#viewport-input)、[5.7](../Architecture.md#plan-readiness)。
 
-- [ ] 建立命令/事务、拖拽合并和 undo/redo 的窄协议，先覆盖真实存在的 View/编辑器配置；后续 Scene 命令扩充同一入口。
-- [ ] 分离 View 设置、编辑器布局和平台 VSync/标题请求，保留 requested/effective、Pending/失败原因。
-- [ ] 测试事务边界、合并、撤销重做及 Session 销毁；面板不保存另一份可分叉的权威渲染设置。
+- [x] 建立命令/事务、拖拽合并和 undo/redo 的窄协议，先覆盖真实存在的 View/编辑器配置；后续 Scene 命令扩充同一入口。
+- [x] 分离 View 设置、编辑器布局和平台 VSync/标题请求，保留 requested/effective、Pending/失败原因。
+- [x] 测试事务边界、合并、撤销重做及 Session 销毁；面板不保存另一份可分叉的权威渲染设置。
 
 **完成条件：** 当前 View/编辑器设置的编辑可应用及撤销，后续领域操作沿同一窄入口加入；不提前建立通用命令框架。
 
-**当前状态** 待立项。
+**当前状态** 已完成验收并归档。 [establish-editor-commands-and-render-requests](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#final-verification)
 
 **D04 阶段出口：** 真实窗口稳定显示 Docking 编辑器及测试视口；字体更新、resize/DPI、颜色、提交前末端复制、在途关闭均可验证。
+
+**出口状态** 已通过。 [D04 阶段出口证据](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#d04-阶段出口)
 
 <a id="dev-d05"></a>
 ## D05 · 让整帧经 RenderGraph 执行

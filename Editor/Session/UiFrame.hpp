@@ -3,6 +3,7 @@
 /// @file
 /// @brief 编辑器离屏 UI 的公开准备值和提交回执.
 /// 会话借用宿主 Device. 准备值持有录制依赖并借用帧槽字节, 调用者负责初始化底色和提交.
+/// 提交回执用于确认本轮纹理协议, 诊断颜色的有效设置由调用者交给 View 发布.
 
 #include <cstdint>
 #include <filesystem>
@@ -61,10 +62,12 @@ namespace Physara::Editor
         PreparedUiFrame(const PreparedUiFrame &) = delete;
         PreparedUiFrame &operator=(const PreparedUiFrame &) = delete;
 
-        /// @brief 活动批次解析到了本帧诊断输出时为 true.
-        /// @note 如候选代需要上传, 调用者在同一列表调用 Record 前写入, 与准入顺序一致.
-        /// @note 已取消或确认的批次返回 false. 已接受的同尺寸诊断代可直接采样.
+        /// @brief 活动批次有普通 draw 解析到本帧诊断颜色时为 true, 供调用者安排本轮写入.
+        /// @note 如候选代需要上传, 在同一列表调用 Record 前写入, 与准入顺序一致.
+        /// 已接受的同尺寸诊断代可直接采样. 是否发布本次有效设置由完整提交回执决定.
         [[nodiscard]] bool UsesDiagnosticOutput() const noexcept;
+        /// @brief 本轮以占位替代因上传容量暂缓的诊断输出, 调用者据此报告等待原因.
+        [[nodiscard]] bool DiagnosticUploadPending() const noexcept;
 
         /// @brief 在调用者已开放的 Graphics 列表中调用上传和绘制命令.
         /// @pre 列表使用 Automatic 资源状态跟踪, 且由会话的 Device 创建.

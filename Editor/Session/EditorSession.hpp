@@ -2,21 +2,17 @@
 
 /// @file
 /// @brief Editor 在宿主线程上的会话入口. 从窗口输入发布生成 CPU UI 帧.
-/// Runtime 取得帧状态和宿主请求. 接入 renderer 的会话还可准备离屏 RHI 绘制.
+/// 会话应用领域意图后向 Runtime 交付视口像素请求及独立的宿主请求.
+/// 接入 renderer 时, 同一份封存 UI 还用于准备离屏 RHI 绘制.
 
 #include <memory>
 #include <optional>
 #include <variant>
 
 #include <Core/Error.hpp>
-#include <Input.hpp>
+#include <DeviceHost.hpp>
 
 #include "UiFrame.hpp"
-
-namespace Physara::Platform
-{
-    class DeviceHost;
-}
 
 namespace Physara::Editor
 {
@@ -26,10 +22,13 @@ namespace Physara::Editor
         bool hasDrawData = false; ///< 本轮是否封存了新帧, 暂停期间为 false.
         /// @brief 失效轮次仍观测到相对模式时请求归还. 成功后在等待或轮询前通知会话.
         std::optional<Platform::HostRequest> hostRequest;
-        std::optional<Renderer::ViewportRequest> viewport; ///< 本轮可见且可用时发布, 单位为离屏像素.
+        std::optional<Platform::SetWindowTitle> titleRequest; ///< 本轮确认的标题, 消费前保有正文.
+        std::optional<Platform::SetWindowVSync> vsyncRequest;
+        /// @brief 无可测量布局时为空. 有布局但像素换算失败时, 零范围供 View 报告拒绝.
+        std::optional<Renderer::ViewportRequest> viewport; ///< 本轮主 View 与可见布局匹配时发布, 单位为离屏像素.
     };
 
-    /// @brief 拥有单窗口 UI context, 工作区, 输入适配及可选的 RHI renderer, 借用已就绪的宿主.
+    /// @brief 拥有单窗口 UI context, 工作区, 编辑历史, 输入适配和可选的 RHI renderer.
     /// @note 在宿主 owner 线程创建, 推进和销毁. 会话必须在宿主关闭前析构以恢复原回调.
     class EditorSession final
     {
@@ -50,17 +49,23 @@ namespace Physara::Editor
         EditorSession(const EditorSession &) = delete;
         EditorSession &operator=(const EditorSession &) = delete;
 
-        /// @brief 消费一次继续运行的输入发布, 先处理失效边界再按窗口状态生成 UI.
-        /// @pre 调用方已经处理终止条件, 每批按发布顺序最多调用一次, events 在调用期间有效.
-        /// @return 当前 CPU 帧状态, 本轮离屏请求和可选宿主请求. 暂停时 hasDrawData 为 false.
+        /// @brief 消费继续运行的输入, 封存 UI 后应用本会话的字段编辑.
+        /// @pre 调用方已处理终止条件. input 由本会话借用的宿主发布, 每批按发布顺序最多调用一次.
+        /// events 在调用期间有效. 会话只将接入后到达的事件用于交互路由.
+        /// @param view 可借用本会话登记的主 View. 面板取快照, 会话应用比例后生成本轮像素请求.
+        /// 缺省或身份失配时仍可封存 UI, 可见视口由合成器显示占位.
+        /// @param window 可借用活动宿主的窗口设置, 供本轮菜单生成请求和显示回执.
+        /// @return 当前 CPU 帧状态, 本轮离屏及独立宿主请求. 暂停时 hasDrawData 为 false.
         /// @note 进入下一次 Advance 即结束前一轮封存数据的借用, 并取消未确认的离屏准备值.
-        [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input);
+        [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
+                                           const Platform::WindowSettings *window = nullptr);
 
         /// @brief 为本轮封存帧准备离屏绘制, 将几何与上传字节复制到调用方的帧槽存储.
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸时不使用 target.
         /// @pre 在打开列表前调用. 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer.
         /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
-        /// outputs 来自本轮视口请求, 仅在准备调用期间借用. 解析前核对身份和像素范围.
+        /// outputs 来自本轮视口请求, 仅在准备调用期间借用.
+        /// 颜色的 View 身份, 像素范围或比例请求代与封存请求失配时使用占位.
         /// @param commands 拟录制列表的参数. 上传预检采用它的最小 chunk 大小.
         /// @see PreparedUiFrame::Record
         /// @return 无工作, 可录制的准备值, 等待上传容量或有界原因. 同时只允许一份活动准备值.

@@ -1,4 +1,5 @@
 # Platform 拥有 GLFW 窗口, context, RHI 装配和窗口呈现的寿命.
+# WindowSettings 在此实现 Win32 标题和 WGL 交换区间的原生确认.
 add_library(PhysaraPlatform STATIC
     DeviceHost.hpp
     DeviceHost.cpp
@@ -6,6 +7,7 @@ add_library(PhysaraPlatform STATIC
     GlfwAccess.hpp
     GlfwWindow.cpp
     OpenGLDeviceHost.cpp
+    WindowSettings.cpp
     Presentation.hpp
     Presentation.cpp
     RhiDeviceHost.cpp
