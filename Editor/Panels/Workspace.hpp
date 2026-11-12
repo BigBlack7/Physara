@@ -13,6 +13,8 @@
 #include <Core/Identity.hpp>
 #include <Input.hpp>
 
+#include "Viewport/Viewport.hpp"
+
 namespace Physara::Editor::Detail
 {
     struct InputClaims;
@@ -35,8 +37,9 @@ namespace Physara::Editor::Detail
     public:
         /// @brief 提交布局菜单, 停靠区和可见面板. 选择身份仅在调用期间借用.
         /// @pre 当前会话的 ImGui 帧已开始.
-        /// @return 鼠标是否命中当前视口可交互的逻辑内容区.
-        [[nodiscard]] bool Draw(const std::optional<SelectionId> &selection);
+        /// @return 当前视口的逻辑命中及可选的离屏像素请求. 未绘制视口时返回空布局.
+        [[nodiscard]] ViewportLayout Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
+                                           const Platform::WindowState &window);
         /// @brief 依到达顺序只从工作区拥有的 Press 产生一次性布局动作.
         /// @pre events 来自本次有效发布, claims 由该轮布局提交后取得.
         /// @note 本次 Draw 之后触发的显隐变更由下一次 Draw 消费.

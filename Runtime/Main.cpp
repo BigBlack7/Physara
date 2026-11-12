@@ -1,8 +1,9 @@
 /// @file
 /// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主和 Editor.
-/// 每次成功 poll 发布一个输入批次. 继续的轮次经 Editor 和公共 RHI 合成, 由宿主提交并呈现窗口颜色.
+/// 输入与布局在帧边界封存. 通过有界帧槽组织诊断 View 输出与 UI 合成, 由宿主提交并呈现窗口颜色.
 
 #include <array>
+#include <cassert>
 #include <charconv>
 #include <cstdio>
 #include <cstdint>
@@ -16,13 +17,18 @@
 
 #include <Core/Diagnostics.hpp>
 #include <Core/Error.hpp>
+#include <Core/FrameArena.hpp>
 #include <DeviceHost.hpp>
+#include <Renderer/View.hpp>
 #include <Session/EditorSession.hpp>
 
 #include "Resources.hpp"
 
 namespace Physara::Runtime
 {
+    // 装配时将同一容量传给宿主, 让 CPU arena 与窗口目标使用相同槽索引.
+    static constexpr std::size_t FrameSlotCount = Platform::MaxPresentationSlots;
+
     static constexpr std::string_view Usage =
         "Physara - native window and RHI editor runtime\n"
         "Usage: Physara [--help] [--hidden] [--width=N] [--height=N] [--poll-limit=N]\n"
@@ -33,7 +39,7 @@ namespace Physara::Runtime
     /// @brief 通过命令行语法验证的自持启动配置. 原生尺寸约束由宿主检查.
     struct StartupOptions
     {
-        Platform::HostDesc host;
+        Platform::HostDesc host{.presentationSlotCount = FrameSlotCount};
         // 按成功发布的批次数计数, 空值表示由窗口关闭请求决定退出时机.
         std::optional<std::uint64_t> pollLimit;
         bool help = false;
@@ -123,40 +129,105 @@ namespace Physara::Runtime
         static_cast<void>(diagnostics.Write(Core::Severity::Info, message.View()));
     }
 
-    // 取得窗口目标, 在一份即时列表上初始化底色并录制封存的 UI, 再按该次录制确认上传和交换.
-    // 失败时保留原始原因, 已发前缀交宿主提交或在退出时收拢.
-    static std::optional<Core::BoundedText> RenderFrame(Platform::DeviceHost &host, Editor::EditorSession &editor,
-                                                        RHI::CommandList &commands, Core::Diagnostics &diagnostics)
+    /// @brief Runtime 的帧内存储和接受回执. lastSubmission 用于关联诊断, 复用以同槽 Ready 为准.
+    struct FrameSlot
     {
-        auto acquired = host.BeginPresentation();
-        if (const auto *error = std::get_if<Platform::HostError>(&acquired))
+        Core::FrameArena arena;
+        std::uint64_t lastSubmission = 0;
+        std::size_t diagnosticUploadBytes = 0; ///< 只为在途诊断上传记账, Ready 后归还额度.
+    };
+
+    // 轮询有界的一圈. 仅 Retry 允许检查其它索引, 失败不能误作槽忙或尝试绕过.
+    static Platform::DeviceHost::PresentationAcquire AcquireFrame(Platform::DeviceHost &host, std::size_t &next)
+    {
+        for (std::size_t offset = 0; offset < FrameSlotCount; ++offset)
         {
-            return Platform::DescribeHostError(*error);
+            const auto index = (next + offset) % FrameSlotCount;
+            auto acquired = host.BeginPresentation(index);
+            if (std::holds_alternative<Platform::PresentationFrame>(acquired))
+            {
+                next = (index + 1) % FrameSlotCount;
+                return acquired;
+            }
+            const auto *status = std::get_if<Platform::PresentationStatus>(&acquired);
+            if (!status || *status != Platform::PresentationStatus::Retry)
+            {
+                return acquired;
+            }
         }
-        auto *presentation = std::get_if<Platform::PresentationFrame>(&acquired);
-        if (!presentation)
+        return Platform::PresentationStatus::Retry;
+    }
+
+    /// @brief 本轮帧推进结果. Rendered 包括已提交但因窗口变化跳过交换的帧.
+    /// UploadPending 表示开放列表前已归还取得, 后续轮次可重新准备.
+    enum class FrameStatus
+    {
+        Rendered,
+        UploadPending
+    };
+
+    // 准备及准入完成后才打开列表. 录制失败保留原始原因, 已发前缀交同槽提交或退出收拢.
+    static std::variant<FrameStatus, Core::BoundedText> RenderFrame(
+        Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
+        const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
+        std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics)
+    {
+        const auto cancel = [&host, &presentation](Core::BoundedText failure)
         {
-            // 暂停和槽忙均由下一轮事件推进. 本轮没有可供录制或提交的目标.
-            return std::nullopt;
+            static_cast<void>(host.CancelPresentation(presentation.token));
+            return failure;
+        };
+        const auto errors = host.CaptureRhiErrors();
+        auto preparedOutputs = view.Prepare(editorFrame.viewport, remainingDiagnosticBytes);
+        if (const auto *error = std::get_if<Core::BoundedText>(&preparedOutputs))
+        {
+            return cancel(*error);
         }
-        // 先准备拥有型 UI 批. 此阶段失败可在打开列表和发出首个写入前退还取得.
-        auto ui = editor.PrepareUiFrame(presentation->target.framebuffer, presentation->target.extentPixels);
+        auto &outputs = std::get<Renderer::NoSceneOutputs>(preparedOutputs);
+        auto ui = editor.PrepareUiFrame(presentation.target.framebuffer, presentation.target.extentPixels,
+                                        slot.arena, outputs, commands.GetDesc());
         if (const auto *error = std::get_if<Core::BoundedText>(&ui))
         {
-            static_cast<void>(host.CancelPresentation(presentation->token));
-            return *error;
+            return cancel(*error);
         }
+        if (!errors.IsClear())
+        {
+            return cancel(Core::BoundedText("Window Graphics frame preparation failed"));
+        }
+        if (std::holds_alternative<Editor::UiPrepareStatus>(ui))
+        {
+            // 当前取得尚无新命令. 归还后继续处理输入和退休, 后续轮次再按当时请求准备.
+            if (const auto error = host.CancelPresentation(presentation.token))
+            {
+                return Platform::DescribeHostError(*error);
+            }
+            return FrameStatus::UploadPending;
+        }
+
         auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
-        const auto errors = host.CaptureRhiErrors();
+        const bool useDiagnostic = prepared && prepared->UsesDiagnosticOutput();
+        // 仅生成本次实际采样的诊断像素. UI 已将其写入计入准入及 arena 预留.
+        if (useDiagnostic && !outputs.PrepareUpload(slot.arena))
+        {
+            return cancel(Core::BoundedText("Window Graphics frame preparation failed"));
+        }
         std::optional<Core::BoundedText> failure;
         commands.Open();
         if (!errors.IsClear())
         {
             return Core::BoundedText("Cannot open the window Graphics list");
         }
-        // 每个有效窗口帧都完整清除目标. 底色按线性值传入, 由 sRGB 附件编码, 空 UI 批也可清屏呈现.
-        commands.ClearTextureFloat(presentation->target.texture, RHI::AllSubresources,
-                                   RHI::Color(0.018f, 0.024f, 0.035f, 1.f));
+        // 先写入本帧采样的诊断候选. 窗口底色独立初始化, 在 sRGB 附件上存储编码.
+        if (useDiagnostic)
+        {
+            outputs.RecordUpload(commands);
+            slot.diagnosticUploadBytes = outputs.UploadBytes();
+        }
+        if (errors.IsClear())
+        {
+            commands.ClearTextureFloat(presentation.target.texture, RHI::AllSubresources,
+                                       RHI::Color(0.018f, 0.024f, 0.035f, 1.f));
+        }
         if (errors.IsClear() && prepared)
         {
             failure = prepared->Record(commands);
@@ -164,25 +235,35 @@ namespace Physara::Runtime
         // Close 恢复导出状态并纳入本次错误区间. 仅完整录制才允许末端源访问.
         commands.Close();
         const bool recorded = errors.IsClear() && !failure;
-        if (auto error = host.PrepareSubmission(presentation->token, commands, recorded))
+        if (auto error = host.PrepareSubmission(presentation.token, commands, recorded))
         {
             return failure ? *failure : Platform::DescribeHostError(*error);
         }
-        auto submitted = host.SubmitPresentation(presentation->token);
-        if (const auto *error = std::get_if<Platform::HostError>(&submitted))
+        std::optional<Platform::HostError> error;
+        const auto receipt = host.SubmitPresentation(presentation.token, error);
+        // Event 设置或交换稍后失败也不改变设备已接受的事实.
+        slot.lastSubmission = receipt.ticket;
+        if (slot.lastSubmission != 0)
+        {
+            ReportTicket(diagnostics, "Window Graphics submission accepted", slot.lastSubmission);
+        }
+        if (error)
         {
             return failure ? *failure : Platform::DescribeHostError(*error);
         }
-        // 非零前缀票据也可能没有有效颜色. 先记录接受, UI 确认仍取决于完整录制和复制.
-        const auto receipt = std::get<Platform::PresentationSubmission>(submitted);
-        ReportTicket(diagnostics, "Window Graphics submission accepted", receipt.ticket);
+        // 前缀也可获非零票据. 仅通过颜色资格的完整录制确认纹理请求和候选 View 颜色.
         if (prepared)
         {
-            static_cast<void>(prepared->Finish({commands, receipt.ticket, recorded && receipt.colorValid}));
+            const bool confirmed = prepared->Finish({commands, receipt.ticket, recorded && receipt.colorValid});
+            assert(confirmed == receipt.colorValid);
+            static_cast<void>(confirmed);
+        }
+        if (receipt.colorValid && useDiagnostic)
+        {
+            view.Publish(std::move(outputs));
         }
         // Present 消费本次取得. 后续窗口变化或交换失败仍保留此前接受的工作及其退休责任.
-        std::optional<Platform::HostError> error;
-        const auto result = host.Present(presentation->token, error);
+        const auto result = host.Present(presentation.token, error);
         if (failure)
         {
             return *failure;
@@ -199,14 +280,18 @@ namespace Physara::Runtime
         {
             ReportTicket(diagnostics, "Editor window presented", result.ticket);
         }
-        return std::nullopt;
+        return FrameStatus::Rendered;
     }
 
     // 终止轮次只消费发布事实. 继续的轮次推进 Editor 和呈现, 暂停及槽忙仍有限等待事件.
-    static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor,
+    static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
                          Core::Diagnostics &diagnostics, std::optional<std::uint64_t> pollLimit)
     {
         std::optional<bool> previousFrame;
+        std::array<FrameSlot, FrameSlotCount> slots;
+        std::size_t nextSlot = 0;
+        bool wasSlotBusy = false;
+        bool wasUploadPending = false;
         // 跨帧重用逻辑列表. 每次 Open 分配本轮物理包, 由已接受的提交接管在途引用.
         auto &device = *host.GetDevice();
         auto commands = device.CreateCommandList();
@@ -230,13 +315,33 @@ namespace Physara::Runtime
                 return 0;
             }
 
-            // 暂停轮次也可能需要释放光标捕获. 自持请求在下一次 poll 前交给宿主执行.
+            auto acquired = input.window.Renderable() ? AcquireFrame(host, nextSlot) :
+                            Platform::DeviceHost::PresentationAcquire{Platform::PresentationStatus::Suspended};
+            if (const auto *error = std::get_if<Platform::HostError>(&acquired))
+            {
+                PrintError(Platform::DescribeHostError(*error));
+                return 1;
+            }
+            const auto *status = std::get_if<Platform::PresentationStatus>(&acquired);
+            const bool slotBusy = status && *status == Platform::PresentationStatus::Retry;
+            if (slotBusy && !wasSlotBusy)
+            {
+                static_cast<void>(diagnostics.Write(Core::Severity::Info, "FrameSlot backpressure: all 3 slots pending"));
+            }
+            wasSlotBusy = slotBusy;
+            const auto *presentation = std::get_if<Platform::PresentationFrame>(&acquired);
+
+            // 无可用槽时仍消费本批输入, 暂停轮次仍可归还光标. 宿主在下次 poll 前应用请求.
             const auto frame = editor.Advance(input);
             if (frame.hostRequest)
             {
                 const std::span requests(&*frame.hostRequest, 1);
                 if (auto error = host.ApplyDeferredRequests(requests))
                 {
+                    if (presentation)
+                    {
+                        static_cast<void>(host.CancelPresentation(presentation->token));
+                    }
                     PrintError(Platform::DescribeHostError(*error));
                     return 1;
                 }
@@ -250,16 +355,44 @@ namespace Physara::Runtime
                                                     frame.hasDrawData ? "Editor CPU frame ready" : "Window suspended"));
                 previousFrame = frame.hasDrawData;
             }
-            if (frame.hasDrawData)
+            if (presentation)
             {
-                if (auto error = RenderFrame(host, editor, *commands, diagnostics))
+                if (!frame.hasDrawData)
+                {
+                    static_cast<void>(host.CancelPresentation(presentation->token));
+                    PrintError(Core::BoundedText("Editor did not seal a CPU frame for the acquired window target"));
+                    return 1;
+                }
+                // Ready 已证明这一个槽可以覆写. Pending 或失败从未取得以下存储的使用权.
+                auto &slot = slots[presentation->token.slotIndex];
+                slot.arena.Reset();
+                slot.lastSubmission = 0;
+                slot.diagnosticUploadBytes = 0;
+                // 这里只应用诊断图的独立预算. 实际共享上传区段由准备阶段向设备预检.
+                auto remaining = Renderer::DiagnosticUploadBudget;
+                for (const auto &pending : slots)
+                {
+                    remaining -= pending.diagnosticUploadBytes;
+                }
+                const auto rendered =
+                    RenderFrame(host, editor, view, frame, *presentation, slot, remaining, *commands, diagnostics);
+                if (const auto *error = std::get_if<Core::BoundedText>(&rendered))
                 {
                     PrintError(*error);
                     return 1;
                 }
+                const bool uploadPending = std::get<FrameStatus>(rendered) == FrameStatus::UploadPending;
+                if (uploadPending && !wasUploadPending)
+                {
+                    static_cast<void>(diagnostics.Write(Core::Severity::Info,
+                                                        "Graphics upload backpressure: waiting for retired storage"));
+                }
+                wasUploadPending = uploadPending;
             }
+            // 帧快照持有的 framebuffer 在原生回收前释放, 以便及时排空被替换目标的删除记录.
+            acquired = Platform::PresentationStatus::Suspended;
             // Event 证明槽可复用. 帧临时引用释放后, 在 owner context 零超时收集并排空原生删除队列.
-            // 暂停和槽忙也推进回收; 原生完成或删除失败后停止新帧, 交显式关闭收拢.
+            // 窗口暂停, 槽忙和上传背压都推进回收. 完成观察或删除失败后交显式关闭收拢.
             const auto errors = host.CaptureRhiErrors();
             device.RunGarbageCollection();
             if (!errors.IsClear())
@@ -267,7 +400,7 @@ namespace Physara::Runtime
                 PrintError(Core::BoundedText("Window Graphics retirement failed"));
                 return 1;
             }
-            // Editor 在暂停时清理输入, 两种状态都沿宿主有限等待继续接收回调.
+            // 有限等待把收到的回调留给下一次 poll. 正常, 槽忙及暂停轮次共用这条入口.
             if (auto error = host.WaitForEvents(0.05))
             {
                 PrintError(Platform::DescribeHostError(*error));
@@ -307,7 +440,7 @@ int main(int argc, char **argv)
         return 1;
     }
     auto host = std::move(std::get<std::unique_ptr<Platform::DeviceHost>>(creation));
-    // Editor 与 RunEditor 的逻辑列表在宿主关闭前释放. 已发 GPU 工作沿设备物理包收拢.
+    // Editor, View 和逻辑列表在宿主关闭前释放. 已发 GPU 工作由原物理包保留到设备收拢.
     int exitCode = 0;
     try
     {
@@ -320,16 +453,26 @@ int main(int argc, char **argv)
         else
         {
             const auto &package = std::get<std::filesystem::path>(located);
-            auto editor = Editor::EditorSession::Create(*host, {*host->GetDevice(), package});
-            if (const auto *editorError = std::get_if<Core::BoundedText>(&editor))
+            auto &device = *host->GetDevice();
+            auto view = Renderer::View::Create(device);
+            if (!view)
             {
-                Runtime::PrintError(*editorError);
+                Runtime::PrintError(Core::BoundedText("Cannot allocate the main view identity"));
                 exitCode = 1;
             }
             else
             {
-                auto &session = std::get<std::unique_ptr<Editor::EditorSession>>(editor);
-                exitCode = Runtime::RunEditor(*host, *session, *diagnostics, options.pollLimit);
+                auto editor = Editor::EditorSession::Create(*host, {device, package, view->Id()});
+                if (const auto *editorError = std::get_if<Core::BoundedText>(&editor))
+                {
+                    Runtime::PrintError(*editorError);
+                    exitCode = 1;
+                }
+                else
+                {
+                    auto &session = std::get<std::unique_ptr<Editor::EditorSession>>(editor);
+                    exitCode = Runtime::RunEditor(*host, *session, *view, *diagnostics, options.pollLimit);
+                }
             }
         }
     }

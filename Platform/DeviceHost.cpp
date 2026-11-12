@@ -1,7 +1,8 @@
 #include "DeviceHost.hpp"
 
 /// @file
-/// @brief 装配宿主阶段, 统一处理线程/重入前提, 主错和回滚, 原生细节交给各阶段入口.
+/// @brief 装配宿主并统一处理线程, 重入与失败收拢.
+/// 输入发布和索引呈现的原生步骤由内部阶段入口执行, 此文件维持操作边界.
 
 #include <algorithm>
 #include <array>
@@ -38,7 +39,7 @@ namespace Physara::Platform
         text.Append({number.data(), static_cast<std::size_t>(result.ptr - number.data())});
     }
 
-    // 在分配宿主和触碰 GLFW 之前拒绝原生 int 无法表示的尺寸及嵌入 NUL 的标题.
+    // 在分配宿主和触碰 GLFW 之前校验逻辑尺寸, 标题和呈现槽容量.
     static std::optional<HostError> ValidateDescription(const HostDesc &desc) noexcept
     {
         constexpr auto MaxDimension = static_cast<std::uint32_t>(std::numeric_limits<int>::max());
@@ -47,6 +48,11 @@ namespace Physara::Platform
         {
             return Detail::MakeError(nullptr, HostErrorReason::InvalidConfiguration, HostStage::Validation,
                                      "Initial logical size must be positive and fit int; title must not contain NUL");
+        }
+        if (desc.presentationSlotCount == 0 || desc.presentationSlotCount > MaxPresentationSlots)
+        {
+            return Detail::MakeError(nullptr, HostErrorReason::InvalidConfiguration, HostStage::Validation,
+                                     "Presentation slot count exceeds the supported range");
         }
         return std::nullopt;
     }
@@ -318,6 +324,7 @@ namespace Physara::Platform::Detail
             }
             auto state = std::make_unique<DeviceHostState>(diagnostics);
             state->started = started;
+            state->presentation.slotCount = desc.presentationSlotCount;
             host = std::unique_ptr<DeviceHost>(new DeviceHost(std::move(state)));
             if (auto error = ReserveProcess(*host->m_State))
             {
@@ -492,12 +499,12 @@ namespace Physara::Platform
     }
 
     // 呈现包装层统一执行宿主操作检查. Suspended 和 Retry 沿值结果返回, 域错误走宿主诊断.
-    DeviceHost::PresentationAcquire DeviceHost::BeginPresentation() noexcept
+    DeviceHost::PresentationAcquire DeviceHost::BeginPresentation(std::size_t slotIndex) noexcept
     {
         PresentationAcquire result = PresentationStatus::Retry;
         auto error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
         {
-            result = Detail::BeginPresentation(*m_State);
+            result = Detail::BeginPresentation(*m_State, slotIndex);
             if (const auto *failure = std::get_if<HostError>(&result))
             {
                 return *failure;
@@ -514,19 +521,18 @@ namespace Physara::Platform
                                 [&] { return Detail::PrepareSubmission(*m_State, token, commands, frameSucceeded); });
     }
 
-    std::variant<PresentationSubmission, HostError> DeviceHost::SubmitPresentation(PresentationToken token) noexcept
+    // 错误经统一操作边界报告. 返回值独立保存 Execute 已接受的票据, 包括观察绑定失败时.
+    PresentationSubmission DeviceHost::SubmitPresentation(PresentationToken token,
+                                                          std::optional<HostError> &error) noexcept
     {
-        std::variant<PresentationSubmission, HostError> result;
-        auto error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
+        PresentationSubmission result;
+        error = RunHostOperation(*m_State, HostStage::Presentation, [&]() -> std::optional<HostError>
         {
-            result = Detail::SubmitPresentation(*m_State, token);
-            if (const auto *failure = std::get_if<HostError>(&result))
-            {
-                return *failure;
-            }
-            return std::nullopt;
+            std::optional<HostError> failure;
+            result = Detail::SubmitPresentation(*m_State, token, failure);
+            return failure;
         });
-        return error ? std::variant<PresentationSubmission, HostError>{*error} : std::move(result);
+        return result;
     }
 
     PresentationResult DeviceHost::Present(PresentationToken token, std::optional<HostError> &error) noexcept

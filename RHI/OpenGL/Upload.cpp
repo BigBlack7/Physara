@@ -1,9 +1,11 @@
 #include "Upload.hpp"
 
 /// @file
-/// @brief 维护包资源 lease/复合引用账目, 检查源布局并取得有界 coherent 区段, 不跨未完成包复用.
+/// @brief 维护包的资源保活和上传源布局, 为即时写入取得有界 coherent 区段.
+/// 准入与实际分配使用同一最小 chunk 和对齐规则, 已分配容量沿物理包退休.
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <limits>
 #include <memory>
@@ -136,6 +138,112 @@ namespace Physara::RHI::OpenGL
         Report(operation, reason);
     }
 
+    // 新 chunk 同时满足本次写入, 列表最小容量和设备映射对齐.
+    static bool GetChunkCapacity(std::size_t size, std::size_t minimumChunk, std::size_t alignment,
+                                 std::size_t &capacity) noexcept
+    {
+        return CheckedAlign(std::max(size, minimumChunk), alignment, capacity);
+    }
+
+    // 预检和实际分配共用尾部的对齐及范围判断.
+    static bool FitChunkTail(std::size_t used, std::size_t capacity, std::size_t size,
+                             std::size_t alignment, std::size_t &offset) noexcept
+    {
+        return CheckedAlign(used, alignment, offset) && offset <= capacity && size <= capacity - offset;
+    }
+
+    UploadAdmission OpenGLDevice::CheckUploadCapacity(std::size_t chunkSize,
+                                                       std::span<const std::size_t> textureWrites,
+                                                       std::span<const std::size_t> bufferWrites) const noexcept
+    {
+        if (!RequireContext("CheckUploadCapacity") || m_ActiveRecording.load(std::memory_order_relaxed) != 0)
+        {
+            return UploadAdmission::InvalidState;
+        }
+        const auto alignment = std::size_t(m_Caps.minMapAlignment);
+        std::size_t alignedChunk = 0;
+        if (chunkSize == 0 || !GetChunkCapacity(0, chunkSize, alignment, alignedChunk) ||
+            alignedChunk > UploadCapacityLimit)
+        {
+            return UploadAdmission::InvalidState;
+        }
+
+        // 按录制顺序模拟本包的首个可用尾部. 这里只记 CPU 范围, 实际 chunk 仍由录制取得.
+        // 每笔非空写入最多增加一个 chunk. 写入次数的上限同时限制模拟区段数.
+        struct ChunkRange
+        {
+            std::size_t used;
+            std::size_t capacity;
+        };
+        std::array<ChunkRange, UploadItemLimit> chunks;
+        std::size_t chunkCount = 0;
+        std::size_t mappedCapacity = 0;
+        std::size_t logicalBytes = 0;
+        std::size_t writes = 0;
+        const auto account = [&](std::size_t size, bool mapped)
+        {
+            if (size == 0)
+            {
+                return true;
+            }
+            if (writes == UploadItemLimit || size > UploadCapacityLimit - logicalBytes)
+            {
+                return false;
+            }
+            ++writes;
+            logicalBytes += size;
+            if (!mapped)
+            {
+                return true;
+            }
+            for (auto &chunk : std::span(chunks).first(chunkCount))
+            {
+                std::size_t offset = 0;
+                if (FitChunkTail(chunk.used, chunk.capacity, size, alignment, offset))
+                {
+                    chunk.used = offset + size;
+                    return true;
+                }
+            }
+
+            std::size_t capacity = 0;
+            if (!GetChunkCapacity(size, chunkSize, alignment, capacity) ||
+                capacity > UploadCapacityLimit - mappedCapacity)
+            {
+                return false;
+            }
+            chunks[chunkCount++] = {size, capacity};
+            mappedCapacity += capacity;
+            return true;
+        };
+        // 小缓冲只占逻辑载荷和次数. 先核对空闲设备能否录制, 再扣除实际未退休容量.
+        for (const auto size : textureWrites)
+        {
+            if (!account(size, true))
+            {
+                return UploadAdmission::ExceedsLimit;
+            }
+        }
+        for (const auto size : bufferWrites)
+        {
+            if (!account(size, size > SmallBufferLimit))
+            {
+                return UploadAdmission::ExceedsLimit;
+            }
+        }
+        return mappedCapacity <= UploadCapacityLimit - m_UploadCapacity ? UploadAdmission::Ready :
+                                                                         UploadAdmission::Pending;
+    }
+
+    UploadAdmission CheckUploadCapacity(Device *device, std::size_t chunkSize,
+                                         std::span<const std::size_t> textureWrites,
+                                         std::span<const std::size_t> bufferWrites) noexcept
+    {
+        const auto *native = dynamic_cast<OpenGLDevice *>(device);
+        return native != nullptr ? native->CheckUploadCapacity(chunkSize, textureWrites, bufferWrites) :
+                                   UploadAdmission::InvalidState;
+    }
+
     bool OpenGLDevice::AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice)
     {
         // 只从当前包已有 chunk 的未使用尾部取空间. 新 chunk 同时受对齐/设备总预算限制, 不等待 GPU 腾空间.
@@ -143,8 +251,7 @@ namespace Physara::RHI::OpenGL
         for (auto &chunk : packet.chunks)
         {
             std::size_t offset = 0;
-            if (CheckedAlign(chunk->used, alignment, offset) && offset <= chunk->capacity &&
-                size <= chunk->capacity - offset && chunk->mapping != nullptr)
+            if (chunk->mapping != nullptr && FitChunkTail(chunk->used, chunk->capacity, size, alignment, offset))
             {
                 slice = {chunk->name, offset, chunk->mapping + offset};
                 chunk->used = offset + size;
@@ -152,7 +259,7 @@ namespace Physara::RHI::OpenGL
             }
         }
         std::size_t capacity = 0;
-        if (!CheckedAlign(std::max(size, packet.minimumChunk), alignment, capacity) ||
+        if (!GetChunkCapacity(size, packet.minimumChunk, alignment, capacity) ||
             capacity > UploadCapacityLimit - m_UploadCapacity)
         {
             ReportBudget("AllocateUpload", capacity != 0 ? capacity : size, m_UploadCapacity, UploadCapacityLimit);

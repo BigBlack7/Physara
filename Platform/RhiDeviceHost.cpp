@@ -1,12 +1,35 @@
 #include "DeviceHostInternal.hpp"
 
 /// @file
-/// @brief 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根, 捕获领域诊断并收拢上传与删除.
+/// @brief 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根, 捕获诊断并收拢工作.
+/// 上传准入直接读取 raw Device 的保留容量, 在宿主侧返回供帧调度使用的结果.
 
 #include <limits>
 
 #include <OpenGL.hpp>
 #include <Validation.hpp>
+
+namespace Physara::Platform
+{
+    // 就绪宿主才可借用设备. 原生入口随后核对 current context 与录制状态.
+    UploadAdmission DeviceHost::CheckUploadCapacity(std::size_t chunkSize,
+                                                     std::span<const std::size_t> textureWrites,
+                                                     std::span<const std::size_t> bufferWrites) const noexcept
+    {
+        if (GetDevice() == nullptr)
+        {
+            return UploadAdmission::InvalidState;
+        }
+        switch (RHI::OpenGL::CheckUploadCapacity(m_State->rawDevice.Get(), chunkSize, textureWrites, bufferWrites))
+        {
+        case RHI::OpenGL::UploadAdmission::Ready: return UploadAdmission::Ready;
+        case RHI::OpenGL::UploadAdmission::Pending: return UploadAdmission::Pending;
+        case RHI::OpenGL::UploadAdmission::ExceedsLimit: return UploadAdmission::ExceedsLimit;
+        case RHI::OpenGL::UploadAdmission::InvalidState: return UploadAdmission::InvalidState;
+        }
+        return UploadAdmission::InvalidState;
+    }
+}
 
 namespace Physara::Platform::Detail
 {

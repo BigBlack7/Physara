@@ -137,6 +137,10 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] DrainResult DrainWork(ShutdownMode mode, std::uint32_t *nativeError);
         /// @brief 核对 owner, 阶段, 确切 current context 和原生可用性, 拒绝不改变 context.
         [[nodiscard]] bool RequireContext(const char *operation, bool allowFaulted = false) const noexcept;
+        /// @brief 结合实际设备账目, 按本包录制顺序复用对齐后的 chunk 尾部进行预检.
+        [[nodiscard]] UploadAdmission CheckUploadCapacity(std::size_t chunkSize,
+                                                           std::span<const std::size_t> textureWrites,
+                                                           std::span<const std::size_t> bufferWrites) const noexcept;
         /// @brief 发出新操作前检查调用合同和已有 GL 错误, 防止把前序故障归因到新操作.
         [[nodiscard]] bool BeginNative(const char *operation, const char *label = nullptr,
                                        std::source_location location = std::source_location::current()) noexcept;
@@ -326,6 +330,7 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_LastRecordingId = 0;
         std::uint64_t m_LastSubmissionId = 0;
         std::uint64_t m_CompletedSubmissionId = 0;
+        // 由 owner 计入已分配 chunk 的实际容量, 在物理包退休时归还.
         std::size_t m_UploadCapacity = 0;
         std::size_t m_TimerNames = 0; ///< 实际存活/待删除名字, 只有原生删除或最终失效退出归还.
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.

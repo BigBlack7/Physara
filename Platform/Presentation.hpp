@@ -3,6 +3,7 @@
 /// @file
 /// @brief 窗口目标和单次取得值. Runtime 持有 token, 绘制只消费公共 RHI 目标.
 
+#include <cstddef>
 #include <cstdint>
 
 #include "Input.hpp"
@@ -14,12 +15,14 @@ namespace Physara::Platform
 {
     struct WindowIdentityTag;
     using WindowId = Core::Identity<WindowIdentityTag>;
+    inline constexpr std::size_t MaxPresentationSlots = 3;
 
-    /// @brief 单次窗口取得身份, 由宿主代, 目标代和递增的取得号共同确定.
+    /// @brief 单次窗口取得身份, 由宿主, 槽索引, 目标代和递增的取得号共同确定.
     /// @note 同尺寸复用沿用目标代, 但每次 BeginPresentation 都分配新的取得号.
     struct PresentationToken
     {
         WindowId window;
+        std::size_t slotIndex = 0;
         std::uint64_t targetGeneration = 0;
         std::uint64_t acquisition = 0;
         bool operator==(const PresentationToken &) const = default;
@@ -49,8 +52,8 @@ namespace Physara::Platform
         Retry
     };
 
-    /// @brief 本次闭合录制的接受票据及颜色资格.
-    /// @note colorValid 为 true 时可确认本次 UI 上传. 为 false 时票据只用于已发前缀退休.
+    /// @brief 本次闭合录制的接受票据及颜色资格, 供调用者确认完整录制的结果.
+    /// @note 非零票据也可仅保活已发前缀. colorValid 为 true 时可确认上传并尝试窗口交换.
     struct PresentationSubmission
     {
         std::uint64_t ticket = 0;
@@ -59,7 +62,7 @@ namespace Physara::Platform
 
     /// @brief 消费取得后的交换结果. ticket 记录设备接受, swapped 记录交换成功.
     /// @note attempted 为 true 时, presentWaitSeconds 记录实际交换调用所在的单调 CPU 秒区间.
-    /// GPU 完成由设备对票据的观察确定.
+    /// 尺寸过期或颜色无效时保留接受票据, attempted 保持 false. GPU 完成由设备观察.
     struct PresentationResult
     {
         std::uint64_t ticket = 0;

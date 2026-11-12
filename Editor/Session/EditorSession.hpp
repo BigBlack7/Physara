@@ -26,6 +26,7 @@ namespace Physara::Editor
         bool hasDrawData = false; ///< 本轮是否封存了新帧, 暂停期间为 false.
         /// @brief 失效轮次仍观测到相对模式时请求归还. 成功后在等待或轮询前通知会话.
         std::optional<Platform::HostRequest> hostRequest;
+        std::optional<Renderer::ViewportRequest> viewport; ///< 本轮可见且可用时发布, 单位为离屏像素.
     };
 
     /// @brief 拥有单窗口 UI context, 工作区, 输入适配及可选的 RHI renderer, 借用已就绪的宿主.
@@ -51,16 +52,23 @@ namespace Physara::Editor
 
         /// @brief 消费一次继续运行的输入发布, 先处理失效边界再按窗口状态生成 UI.
         /// @pre 调用方已经处理终止条件, 每批按发布顺序最多调用一次, events 在调用期间有效.
-        /// @return 当前 CPU 帧状态及可选的宿主请求. 暂停时 hasDrawData 为 false.
+        /// @return 当前 CPU 帧状态, 本轮离屏请求和可选宿主请求. 暂停时 hasDrawData 为 false.
         /// @note 进入下一次 Advance 即结束前一轮封存数据的借用, 并取消未确认的离屏准备值.
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input);
 
-        /// @brief 为本轮封存帧准备离屏绘制, 持有目标及本轮几何和上传数据.
+        /// @brief 为本轮封存帧准备离屏绘制, 将几何与上传字节复制到调用方的帧槽存储.
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸时不使用 target.
-        /// @pre 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer.
+        /// @pre 在打开列表前调用. 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer.
+        /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
+        /// outputs 来自本轮视口请求, 仅在准备调用期间借用. 解析前核对身份和像素范围.
+        /// @param commands 拟录制列表的参数. 上传预检采用它的最小 chunk 大小.
         /// @see PreparedUiFrame::Record
-        /// @return 无工作, 可录制的准备值或有界原因. 同时只允许一份活动准备值.
-        [[nodiscard]] PrepareUiResult PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels);
+        /// @return 无工作, 可录制的准备值, 等待上传容量或有界原因. 同时只允许一份活动准备值.
+        /// 等待时本次准备已结束, 之后可按届时的封存帧和可用容量重试.
+        [[nodiscard]] PrepareUiResult PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels,
+                                                     Core::FrameArena &arena,
+                                                     const Renderer::NoSceneOutputs &outputs = {},
+                                                     const RHI::CommandListParameters &commands = {});
 
         /// @brief 注册已初始化的单样本 RGBA8/SRGBA8 二维 SRV, 以实际格式解释采样域.
         /// @pre 资源来自会话的 Device, 采样内容和可跟踪前态由调用者准备.

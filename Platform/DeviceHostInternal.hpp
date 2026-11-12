@@ -6,6 +6,7 @@
 #include "DeviceHost.hpp"
 #include "InputState.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <source_location>
@@ -71,19 +72,27 @@ namespace Physara::Platform::Detail
         Submitted
     };
 
-    /// @brief owner 线程维护的单槽目标, 取得状态和完成观察.
-    /// @note Prepared 阶段强持验证列表, 成功设置 Event 后释放该持有. 在途引用归原生包.
-    /// lastSubmission 保留至 Event 确认完成. 发生故障时, 交设备关闭路径收拢.
-    struct PresentationState
+    /// @brief 固定索引的窗口目标和完成观察. lastSubmission 非零时保留最近一次接受的设备票据.
+    /// @note 同槽再取得时用 Event 确认上次完成, 之后才复用或替换目标.
+    struct PresentationSlot
     {
         PresentTarget target;
         RHI::EventQueryHandle event;
+        std::uint64_t targetGeneration = 0;
+        std::uint64_t lastSubmission = 0;
+    };
+
+    /// @brief 同一窗口可有多个在途槽, owner 线程一次只推进一个 CPU 取得.
+    /// @note Prepared 阶段强持验证列表. 成功设置 Event 后释放, 失败时由关闭路径解除.
+    /// 各槽的 GPU 依赖仍由已发的物理包持有.
+    struct PresentationState
+    {
+        std::array<PresentationSlot, MaxPresentationSlots> slots;
+        std::size_t slotCount = 1;
         RHI::CommandListHandle commands;
         PresentationToken token;
         PresentationPhase phase = PresentationPhase::Idle;
-        std::uint64_t targetGeneration = 0;
         std::uint64_t acquisition = 0;
-        std::uint64_t lastSubmission = 0;
         bool colorValid = false;
         bool stopped = false;
     };
@@ -162,11 +171,11 @@ namespace Physara::Platform::Detail
     /// @brief 执行分阶段幂等退出, 外部 owner 拒绝或 drain Pending 时不销毁原生环境.
     [[nodiscard]] std::optional<HostError> ReleaseNativeState(DeviceHostState &state);
     // 呈现阶段入口由 DeviceHost 的线程, 重入和就绪检查统一包围.
-    [[nodiscard]] DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state);
+    [[nodiscard]] DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state, std::size_t slotIndex);
     [[nodiscard]] std::optional<HostError> PrepareSubmission(DeviceHostState &state, PresentationToken token,
                                                             RHI::CommandList &commands, bool frameSucceeded);
-    [[nodiscard]] std::variant<PresentationSubmission, HostError> SubmitPresentation(DeviceHostState &state,
-                                                                                   PresentationToken token);
+    [[nodiscard]] PresentationSubmission SubmitPresentation(DeviceHostState &state, PresentationToken token,
+                                                            std::optional<HostError> &error);
     [[nodiscard]] PresentationResult Present(DeviceHostState &state, PresentationToken token,
                                               std::optional<HostError> &error);
     [[nodiscard]] std::optional<HostError> CancelPresentation(DeviceHostState &state, PresentationToken token);

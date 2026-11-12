@@ -4,6 +4,7 @@
 /// @brief 不暴露 GL/GLFW 类型的后端互操作合同, 外部 owner 管理 context, Device 管理资源与工作退休.
 
 #include <cstdint>
+#include <span>
 
 #include "RHI.hpp"
 
@@ -62,6 +63,26 @@ namespace Physara::RHI::OpenGL
     /// @param nativeError 可空输出, 先置零, GL 失败记录首个实际错误.
     /// @return 成功 owning handle, 参数/环境不支持或 bad_alloc 时为空.
     [[nodiscard]] DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError = nullptr);
+
+    /// @brief 新包上传的容量预检结果. Pending 表示当前持有的区段退休后可重试.
+    enum class UploadAdmission : std::uint8_t
+    {
+        Ready,
+        Pending,
+        ExceedsLimit,
+        InvalidState
+    };
+
+    /// @brief 按录制顺序推算新包占用的对齐 chunk 容量, 与 Device 实际持有的容量一同检查.
+    /// @pre device 为原生 Device, owning context current, 无开放录制. chunkSize 来自拟录制的列表.
+    /// @param textureWrites 按录制顺序提供的紧密字节数, 0 表示该项无写入.
+    /// @param bufferWrites 纹理写入后按录制顺序提供的缓冲写入字节数, 0 表示该项无写入.
+    /// @return ExceedsLimit 表示该录制计划在空闲设备上也超限. Pending 表示现有区段退休后可重试.
+    /// InvalidState 表示设备状态或列表参数不满足前提.
+    /// @note 只读取容量. Ready 后在同一 owner 上先录制该包.
+    [[nodiscard]] UploadAdmission CheckUploadCapacity(Device *device, std::size_t chunkSize,
+                                                       std::span<const std::size_t> textureWrites,
+                                                       std::span<const std::size_t> bufferWrites) noexcept;
 
     /// @brief 复制当前帧的 SDR 颜色到默认后缓冲. 源 FBO 及附件依赖归入同一闭合物理包.
     /// @pre owner 线程上 owning context current, 无开放录制. source 属于同一设备, 已由该帧初始化,

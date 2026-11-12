@@ -135,13 +135,13 @@
 
 **职责位置：** Runtime、Engine/Renderer 帧状态、Editor/Viewport。**前置：** [D04-T03](#d04-t03)。**架构依据：** [5.1](../Architecture.md#frame-state)、[10.1](../Architecture.md#editor-output)、[11.2](../Architecture.md#history-commit)。
 
-- [ ] 随真实帧数据引入 FrameArena，检查容量、对齐、算术溢出与失效借用；建立有界 FrameSlot、提交引用和票据回收，复用依据完成值，等待/查询失败不能 reset 该槽。
-- [ ] 建立稳定 ViewId 与 UI 纹理注册；基础 UI 程序/字体失败明确终止启动，无 Scene 或场景准备中仍可清屏呈现 UI 和可诊断占位，NoSceneOutputs 不推进 View 历史。
-- [ ] 覆盖窗口/视口连续 resize、最小化恢复、最后一帧在途退出和字体/目标重建；请求不在 GPU execute 中修改。
+- [x] 随真实帧数据引入 FrameArena，检查容量、对齐、算术溢出与失效借用；建立有界 FrameSlot、提交引用和票据回收，复用依据完成值，等待/查询失败不能 reset 该槽。
+- [x] 建立稳定 ViewId 与 UI 纹理注册；基础 UI 程序/字体失败明确终止启动，无 Scene 或场景准备中仍可清屏呈现 UI 和可诊断占位，NoSceneOutputs 不推进 View 历史。
+- [x] 覆盖窗口/视口连续 resize、最小化恢复、最后一帧在途退出和字体/目标重建；请求不在 GPU execute 中修改。
 
 **完成条件：** 入口始终为带编辑器的程序，测试图与真实场景能力状态可区分，帧槽不会凭 CPU 帧号复用。
 
-**当前状态** 前置已满足，待立项。
+**当前状态** 已完成验收并归档。 [establish-frame-slots-and-viewport-output](../../openspec/changes/archive/2026-11-11-establish-frame-slots-and-viewport-output/tasks.md#final-verification)
 
 <a id="d04-t05"></a>
 ### D04-T05 · 建立领域编辑命令与渲染配置请求边界
@@ -153,6 +153,8 @@
 - [ ] 测试事务边界、合并、撤销重做及 Session 销毁；面板不保存另一份可分叉的权威渲染设置。
 
 **完成条件：** 当前 View/编辑器设置的编辑可应用及撤销，后续领域操作沿同一窄入口加入；不提前建立通用命令框架。
+
+**当前状态** 待立项。
 
 **D04 阶段出口：** 真实窗口稳定显示 Docking 编辑器及测试视口；字体更新、resize/DPI、颜色、提交前末端复制、在途关闭均可验证。
 

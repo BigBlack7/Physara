@@ -14,7 +14,7 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 直接链接实际使用的 Core、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [RHI 来源说明](../RHI/README.md)
+当前第一方目标是 PhysaraCore、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [RHI 来源说明](../RHI/README.md)
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休. Platform 用闭合包的末端复制入口消费窗口颜色, 在同一包 Execute 后检查 Win32 交换结果, 源资源沿真实完成保活. [RHI 支持范围](../RHI/README.md#opengl-原生消费边界)
 
@@ -67,7 +67,9 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 | 1 | Diagnostics、宿主或 Editor 创建失败, 或运行及关闭失败, 通过有界 stderr 文本报告 |
 | 2 | 参数语法错误, 在原生初始化前退出 |
 
-当前程序在继续运行的可渲染轮次生成主窗口停靠区和面板, 在单个 PresentColor 槽中通过公共 RHI 初始化底色并合成 UI. 列表关闭后由宿主复制有效颜色, 接受提交后交换窗口缓冲. 槽按 Event 观察到的真实完成复用, 记录的 PresentWait 秒值来自实际交换调用. 最小化或 framebuffer 为零时清理交互, 继续接收事件并使用有限等待. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出. [阶段计划](Developments/D03-D05-FramePipeline.md#dev-d04)
+可渲染轮次生成主窗口停靠区和面板. Runtime 按索引取得三个帧槽之一, 由同槽的 Event 完成观察决定 CPU 存储和 PresentColor 的复用. 视口有可采样的离屏测试图时显示其颜色, 场景状态和诊断占位在面板中可辨认. 基础 UI 程序或首个字体 atlas 初始化失败返回 1. 列表关闭后由宿主复制有效颜色, 接受提交后交换窗口缓冲. PresentWait 来自实际交换调用.
+
+槽全忙时继续处理输入和有限事件等待. 最小化或 framebuffer 为零时清理交互并暂停新帧. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出, 最后一次 GPU 使用按设备的完成与关闭协议收拢. [阶段计划](Developments/D03-D05-FramePipeline.md#d04-t04)
 
 ## 接口与开发资料
 

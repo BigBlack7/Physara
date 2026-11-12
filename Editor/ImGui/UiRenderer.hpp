@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 会话内的公共 RHI UI renderer. 从封存 DrawData 准备自持批次, 由调用者录制并提交.
+/// @brief 会话内的公共 RHI UI renderer. 从封存 DrawData 生成持有依赖并借用帧槽的批次.
 /// renderer 管理批次的有效期, 纹理请求借用在本轮内结束.
 
 #include <filesystem>
@@ -22,6 +22,7 @@ namespace Physara::Platform
 namespace Physara::Editor::Detail
 {
     struct UiBatch;
+    struct ViewportImage;
 
     /// @brief 持有固定 UI Pipeline, 可复用几何缓冲和本会话的纹理资源.
     /// @note 调用限宿主 owner 线程, 资源释放和回执处理早于 ImGui context 销毁.
@@ -36,10 +37,13 @@ namespace Physara::Editor::Detail
         [[nodiscard]] static CreateResult Create(Platform::DeviceHost &host, const UiRendererDesc &desc);
         ~UiRenderer();
 
-        /// @brief 先复制纹理请求, 再解析 draw 的采样依赖并整理几何.
-        /// @note 上一准备值尚有效时拒绝新准备. 构建中的批次退出时取消临时纹理身份.
+        /// @brief 测量本轮字节后统一预留帧槽. 复制像素和几何, 并封存本轮 draw 的采样依赖.
+        /// @pre drawData 及纹理请求来自当前封存帧. arena 及其区段存活到确认或取消.
+        /// @note 上一准备值尚有效时拒绝新准备. 构建失败时撤回临时纹理身份和本次分配的尾部范围.
         [[nodiscard]] PrepareUiResult Prepare(const ImDrawData &drawData, RHI::Framebuffer *target,
-                                             Platform::WindowExtent extent);
+                                              Platform::WindowExtent extent, Core::FrameArena &arena,
+                                              const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
+                                              const RHI::CommandListParameters &commands);
 
         /// @brief 在推进或销毁 context 前结束纹理请求的借用, 并使外部准备值失效.
         void CancelPending() noexcept;
@@ -47,6 +51,8 @@ namespace Physara::Editor::Detail
         /// @brief 驻留注册与注销沿用纹理表的会话身份, 已准备的绑定继续由批次持有.
         [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture);
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
+        /// @brief 为主视口注册稳定的逻辑身份, 具体颜色只在每次准备时解析.
+        [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view);
 
     private:
         friend class Physara::Editor::PreparedUiFrame;
@@ -66,5 +72,6 @@ namespace Physara::Editor::Detail
         RHI::BufferHandle m_IndexBuffer;
         UiFrameData *m_Pending = nullptr; ///< 借用当前准备值, 完成或取消会同时解除双方引用.
         bool m_Attached = false;
+        bool m_BaseFontReady = false; ///< 首个基础 atlas 上传获得有效回执后置位.
     };
 }

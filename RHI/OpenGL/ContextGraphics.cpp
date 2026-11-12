@@ -1,7 +1,8 @@
 #include "ContextState.hpp"
 
 /// @file
-/// @brief 将已验证的普通固定/动态状态映射为 GL, 保持 clip, 线性颜色和目标空间绕序合同.
+/// @brief 将已验证的固定和动态状态映射为 GL, 保持 clip, 颜色域和绕序合同.
+/// 绘制, 清屏和窗口复制共用 ContextState 的绑定与状态事实.
 
 #include <algorithm>
 #include <tuple>
@@ -212,6 +213,7 @@ namespace Physara::RHI::OpenGL
         m_Srgb = srgb;
     }
 
+    // 该 profile 只使用 viewport 0. 深度范围与像素范围一起更新.
     void ContextState::ApplyViewport(const Viewport &viewport) noexcept
     {
         if (!m_ViewportKnown || m_Viewport != viewport)
@@ -223,6 +225,7 @@ namespace Physara::RHI::OpenGL
         m_ViewportKnown = true;
     }
 
+    // RHI 的半开裁剪矩形已处于当前目标的像素坐标, 缓存记录位置和边界.
     void ContextState::ApplyScissor(const Rect &rect) noexcept
     {
         if (!m_ScissorKnown || m_Scissor != rect)
@@ -251,7 +254,10 @@ namespace Physara::RHI::OpenGL
     }
     void ContextState::ApplyWindowPresentation(bool srgb) noexcept
     {
-        // DSA 只修改默认 FBO 的写附件选择. 当前读写 FBO 的绑定事实仍有效.
+        // 从离屏绘制切回默认 FBO, 让已观察到的 WGL 驱动在窗口 resize 后更新 drawable 尺寸.
+        // 绑定也进入同一缓存, 后续 Draw 可以据此切换到自己的离屏目标.
+        ApplyFramebuffer(0);
+        // DSA 设置默认后缓冲的写附件, 沿用上面建立的绑定事实.
         glNamedFramebufferDrawBuffer(0, GL_BACK_LEFT);
         // 复制使用 viewport 0 的裁剪开关, 保留其 box. 固定光栅设置在下次 Draw 重新应用.
         glDisablei(GL_SCISSOR_TEST, 0);

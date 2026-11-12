@@ -12,6 +12,8 @@ add_library(PhysaraEditor STATIC
     Session/ActionRouter.cpp
     Panels/Workspace.hpp
     Panels/Workspace.cpp
+    Viewport/Viewport.hpp
+    Viewport/Viewport.cpp
     ImGui/GlfwPlatform.hpp
     ImGui/GlfwPlatform.cpp
     ImGui/UiRenderer.hpp
@@ -26,9 +28,9 @@ set_property(TARGET PhysaraEditor PROPERTY PHYSARA_UI_PACKAGE "${EditorUiPackage
 set_property(TARGET PhysaraEditor PROPERTY PHYSARA_UI_PACKAGE_TARGET "${EditorUiPackageTarget}")
 target_include_directories(PhysaraEditor PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
-# Session 公开 Platform 输入和 RHI 绘制值. Shader 加载及 ImGui/GLFW 留在私有实现.
+# Session 公开 Platform 输入, RHI 绘制值和 Renderer 的 View 请求. Shader 加载及 ImGui/GLFW 留在私有实现.
 # 适配直接读取归还后的指针位置, 因此私有链接 glfw.
-target_link_libraries(PhysaraEditor PUBLIC PhysaraPlatform PhysaraRHI PRIVATE PhysaraShader imgui glfw)
+target_link_libraries(PhysaraEditor PUBLIC PhysaraPlatform PhysaraRHI PhysaraRenderer PRIVATE PhysaraShader imgui glfw)
 target_compile_definitions(PhysaraEditor PRIVATE GLFW_INCLUDE_NONE)
 target_compile_features(PhysaraEditor PUBLIC cxx_std_20)
 set_target_properties(PhysaraEditor PROPERTIES CXX_EXTENSIONS OFF)

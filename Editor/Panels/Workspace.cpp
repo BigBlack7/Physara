@@ -21,22 +21,11 @@ namespace Physara::Editor::Detail
         const char *shortcut;
     };
 
-    // ### 后的稳定 ID 供 ImGui 关联显隐前后的同一窗口与停靠设置.
+    // ### 后的稳定 ID 供 ImGui 关联停靠设置. 首次停靠组选择最后加入的 Viewport 页.
     static constexpr std::array Panels{
-        Panel{ActionId::ToggleViewport, "Viewport", "Viewport###Physara.Viewport", nullptr},
         Panel{ActionId::ToggleHierarchy, "Hierarchy", "Hierarchy###Physara.Hierarchy", nullptr},
-        Panel{ActionId::ToggleInspector, "Inspector", "Inspector###Physara.Inspector", "Ctrl+Shift+I"}};
-
-    // 命中只覆盖内容, 排除窗口标题, 其他面板及阻挡当前窗口的 UI.
-    static bool DrawViewport()
-    {
-        const auto min = ImGui::GetCursorScreenPos();
-        const auto size = ImGui::GetContentRegionAvail();
-        const ImVec2 max{min.x + size.x, min.y + size.y};
-        ImGui::TextUnformatted("Viewport output pending.");
-        return size.x > 0.0f && size.y > 0.0f && ImGui::IsWindowHovered() &&
-               ImGui::IsMouseHoveringRect(min, max);
-    }
+        Panel{ActionId::ToggleInspector, "Inspector", "Inspector###Physara.Inspector", "Ctrl+Shift+I"},
+        Panel{ActionId::ToggleViewport, "Viewport", "Viewport###Physara.Viewport", nullptr}};
 
     // 空场景下展示面板入口, 创建行为由后续领域消费者提供.
     static void DrawHierarchy()
@@ -56,7 +45,8 @@ namespace Physara::Editor::Detail
         ImGui::EndDisabled();
     }
 
-    bool Workspace::Draw(const std::optional<SelectionId> &selection)
+    ViewportLayout Workspace::Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
+                                    const Platform::WindowState &window)
     {
         // 先提交主窗口菜单. 菜单动作当场更新显隐, 随后的面板构建使用更新后的状态.
         if (ImGui::BeginMainMenuBar())
@@ -76,7 +66,8 @@ namespace Physara::Editor::Detail
         }
 
         const auto dock = ImGui::DockSpaceOverViewport();
-        bool viewportHit = false;
+        // 本轮布局从空值开始. 隐藏或被停靠页遮住的视口不会沿用前一轮请求.
+        ViewportLayout layout;
         for (const auto &panel : Panels)
         {
             auto &visible = m_Visible[static_cast<std::size_t>(panel.action)];
@@ -91,7 +82,7 @@ namespace Physara::Editor::Detail
                 switch (panel.action)
                 {
                 case ActionId::ToggleViewport:
-                    viewportHit = DrawViewport();
+                    layout = viewport.Draw(window);
                     break;
                 case ActionId::ToggleHierarchy:
                     DrawHierarchy();
@@ -105,7 +96,7 @@ namespace Physara::Editor::Detail
             }
             ImGui::End();
         }
-        return viewportHit;
+        return layout;
     }
 
     void Workspace::ApplyShortcuts(std::span<const Platform::InputEvent> events, const InputClaims &claims) noexcept

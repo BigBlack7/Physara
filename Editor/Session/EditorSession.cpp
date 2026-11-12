@@ -25,6 +25,9 @@ namespace Physara::Editor
         Detail::GlfwPlatform platform;
         std::unique_ptr<Detail::UiRenderer> renderer;
         Detail::Workspace workspace;
+        Detail::Viewport viewport;
+        // 与 drawData 同轮封存. PrepareUiFrame 用它识别迟到的身份或尺寸.
+        Detail::ViewportLayout viewportLayout;
         std::optional<Detail::SelectionId> selection;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
         Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
@@ -73,6 +76,17 @@ namespace Physara::Editor
                 return *error;
             }
             state.renderer = std::get<std::unique_ptr<Detail::UiRenderer>>(std::move(created));
+            // 每个会话只为主 View 注册一次逻辑 token. 随后的布局和换代沿用该身份.
+            if (renderer->mainView.IsValid())
+            {
+                auto token = state.renderer->RegisterView(renderer->mainView);
+                if (const auto *error = std::get_if<Core::BoundedText>(&token))
+                {
+                    return *error;
+                }
+                state.viewport = Detail::Viewport(renderer->mainView, std::get<UiTextureId>(token),
+                                                  host.GetInfo().maxTextureSizePixels);
+            }
         }
         else if (!ImGui::GetIO().Fonts->Build())
         {
@@ -90,6 +104,7 @@ namespace Physara::Editor
             state.renderer->CancelPending();
         }
         state.drawData = nullptr;
+        state.viewportLayout = {};
         const bool renderable = input.window.Renderable();
         const bool inputAvailable = renderable && input.window.focused;
         // 即使发布末值已恢复, 批次中的失焦, 最小化或零像素边沿仍会使本批失效.
@@ -112,7 +127,7 @@ namespace Physara::Editor
             state.platform.BeginFrame(input.window, state.suspended);
             constexpr auto allPopups = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
             const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
-            const bool viewportHit = state.workspace.Draw(state.selection);
+            const auto layout = state.workspace.Draw(state.selection, state.viewport, input.window);
             if (!discard)
             {
                 // 布局可释放弹出层或活动项. 已被占用的本批键盘输入不能随后触发工作区动作.
@@ -120,16 +135,18 @@ namespace Physara::Editor
                 const Detail::InputClaims claims{
                     .blockingPopup = ImGui::IsPopupOpen(nullptr, allPopups),
                     .uiKeyboard = keyboardOwnedBeforeLayout || activeItem,
-                    .uiPointer = activeItem || (!viewportHit && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
+                    .uiPointer = activeItem || (!layout.hit && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
                     .cursorMode = input.state.cursorMode,
-                    .viewportHit = viewportHit};
+                    .viewportHit = layout.hit};
                 state.workspace.ApplyShortcuts(input.events, claims);
             }
-            // 封存时一并记住同次宿主发布的像素范围, 后续准备以它校验调用者目标.
+            // 封存同批窗口像素范围与离屏请求. 后续准备分别用它们校验窗口目标和候选 View 输出.
             ImGui::Render();
             state.drawData = ImGui::GetDrawData();
             state.extentPixels = input.window.framebufferSizePixels;
+            state.viewportLayout = layout;
             frame.hasDrawData = state.drawData != nullptr;
+            frame.viewport = layout.request;
         }
         // 普通模式的恢复批次可在本轮结束时建立基线. 相对模式保持门控, 等宿主确认归还.
         if (discard && inputAvailable && !frame.hostRequest)
@@ -141,7 +158,9 @@ namespace Physara::Editor
         return frame;
     }
 
-    PrepareUiResult EditorSession::PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels)
+    PrepareUiResult EditorSession::PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels,
+                                                   Core::FrameArena &arena, const Renderer::NoSceneOutputs &outputs,
+                                                   const RHI::CommandListParameters &commands)
     {
         auto &state = *m_State;
         // 暂停或零像素范围直接返回, 待处理纹理请求留给下一次有效准备.
@@ -153,7 +172,15 @@ namespace Physara::Editor
         {
             return Core::BoundedText("Editor UI prepare requires a renderer and the sealed frame's pixel extent");
         }
-        return state.renderer->Prepare(*state.drawData, target, extentPixels);
+        const auto *diagnostic = outputs.Diagnostic();
+        const auto &layout = state.viewportLayout;
+        if (diagnostic && (!layout.request || diagnostic->view != layout.request->view ||
+                           diagnostic->extent != layout.request->extent))
+        {
+            // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
+            return state.renderer->Prepare(*state.drawData, target, extentPixels, arena, {}, layout.image, commands);
+        }
+        return state.renderer->Prepare(*state.drawData, target, extentPixels, arena, outputs, layout.image, commands);
     }
 
     UiTextureResult EditorSession::RegisterUiTexture(RHI::Texture &texture)

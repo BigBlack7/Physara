@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief Platform 的宿主边界: 发布窗口与输入事实, 借出 RHI Device, 在 owner 线程推进生命周期.
+/// @brief 发布窗口和输入事实, 借出 RHI Device, 并在 owner 线程推进索引呈现与关闭.
 
 #include <atomic>
 #include <cstddef>
@@ -30,6 +30,15 @@ namespace Physara::RHI
 
 namespace Physara::Platform
 {
+    /// @brief 一个拟录制包的上传准入结果. Pending 可随已有包退休恢复.
+    enum class UploadAdmission : std::uint8_t
+    {
+        Ready,
+        Pending,
+        ExceedsLimit,
+        InvalidState
+    };
+
     namespace Detail
     {
         struct DeviceHostState;
@@ -47,6 +56,7 @@ namespace Physara::Platform
         bool visible = true;
         bool vsync = true;
         bool debugContext = false;
+        std::size_t presentationSlotCount = 1; ///< Runtime 传入其固定帧槽数, 须位于 [1, MaxPresentationSlots].
     };
 
     enum class HostPlatform : std::uint8_t
@@ -182,6 +192,7 @@ namespace Physara::Platform
     };
 
     /// @brief 独占进程 GLFW 生命周期, 拥有窗口, context, 输入与 raw/Validation Device.
+    /// 按应用提供的索引保有窗口目标和完成观察, 每次只推进一个活动取得.
     /// @par 线程与寿命
     /// 首次 Create 从进程 main 线程调用; 活跃操作限创建线程且不可重入.
     /// diagnostics 必须活到本 owner 完成关闭, 原生借用不得跨成功关闭保留.
@@ -217,11 +228,21 @@ namespace Physara::Platform
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;
 
+        /// @brief 预检新 Graphics 包的纹理和缓冲写入. 尺寸为单次写入的紧密字节数, 0 表示省略.
+        /// @pre 宿主就绪且 owner 持有 current context. 无开放录制, chunkSize 取自拟使用的列表.
+        /// 提供的序列与实际录制一致, 纹理写入后录制缓冲写入.
+        /// @return Ready 表示当前余量容得下该包, Pending 随设备退休可重试.
+        /// @note 只读取容量. 准入后须在同一 owner 上先录制该包.
+        [[nodiscard]] UploadAdmission CheckUploadCapacity(std::size_t chunkSize,
+                                                           std::span<const std::size_t> textureWrites,
+                                                           std::span<const std::size_t> bufferWrites) const noexcept;
+
         /// @brief 一次取得返回拥有型帧, 正常暂不可用状态或宿主错误.
         using PresentationAcquire = std::variant<PresentationFrame, PresentationStatus, HostError>;
-        /// @brief 按宿主当前窗口像素取得单槽目标. 上一提交 Pending 时返回 Retry.
-        /// @pre 宿主就绪, 由 owner 线程调用. 可用的取得须经 Present 或 CancelPresentation 结束.
-        [[nodiscard]] PresentationAcquire BeginPresentation() noexcept;
+        /// @brief 按索引取得最近发布的窗口像素目标, 返回帧时可复用该槽的帧内存储.
+        /// @pre 宿主就绪, 由 owner 线程调用. 可用的取得经 Present 或 CancelPresentation 结束.
+        /// @return 槽未完成时为 Retry, 窗口暂停时为 Suspended. 返回错误时无新取得.
+        [[nodiscard]] PresentationAcquire BeginPresentation(std::size_t slotIndex) noexcept;
         /// @brief 关联本次取得和闭合 Graphics 列表. 颜色有效且尺寸仍匹配时发出末端复制.
         /// @param frameSucceeded 表示本次录制已完整初始化颜色, 并且录制与 Close 区间均成功.
         /// @pre commands 来自此宿主的验证设备. 准备成功后由 SubmitPresentation 消费同一次录制.
@@ -230,8 +251,10 @@ namespace Physara::Platform
         [[nodiscard]] std::optional<HostError> PrepareSubmission(PresentationToken token, RHI::CommandList &commands,
                                                                 bool frameSucceeded) noexcept;
         /// @brief 委托验证设备提交已关联的列表, 将接受票据绑定到槽的 Event 观察.
-        /// @return 接受结果可供 Present 消费. 提交或 Event 设置失败时停止新帧并保留已发工作供关闭.
-        [[nodiscard]] std::variant<PresentationSubmission, HostError> SubmitPresentation(PresentationToken token) noexcept;
+        /// @return 设备接受的票据与颜色资格. 即使后续 Event 设置失败, 非零票据仍会返回.
+        /// @param error 写入本次操作错误. 为空时继续调用 Present 消费取得.
+        [[nodiscard]] PresentationSubmission SubmitPresentation(PresentationToken token,
+                                                                std::optional<HostError> &error) noexcept;
         /// @brief 结束本次已提交取得, 颜色和窗口仍有效时尝试一次交换.
         /// @return 已接受票据始终关联该次提交. error 报告交换故障时仍可读实际尝试及等待区间.
         [[nodiscard]] PresentationResult Present(PresentationToken token, std::optional<HostError> &error) noexcept;

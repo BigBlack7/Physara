@@ -1,8 +1,8 @@
 #include "DeviceHostInternal.hpp"
 
 /// @file
-/// @brief 推进单槽目标的取得, 末端复制, 接受提交和交换.
-/// 宿主保存颜色资格和 Event 快照. 源依赖及已发前缀随设备的物理包退休.
+/// @brief 在宿主线程推进一次索引取得, 末端复制, 提交和交换.
+/// 活动取得保存颜色资格. 各槽的目标与 Event 独立保留, 已发访问沿设备的物理包退休.
 
 #include <limits>
 #include <array>
@@ -63,10 +63,15 @@ namespace Physara::Platform::Detail
     }
 
     // 先按窗口事实决定是否取得, 再确认上一笔完成. 只在槽空闲且尺寸变化时替换整组目标.
-    DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state)
+    DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state, std::size_t slotIndex)
     {
-        auto &slot = state.presentation;
-        if (slot.stopped || slot.phase != PresentationPhase::Idle)
+        auto &presentation = state.presentation;
+        if (slotIndex >= presentation.slotCount)
+        {
+            return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
+                             "Presentation slot index is out of range");
+        }
+        if (presentation.stopped || presentation.phase != PresentationPhase::Idle)
         {
             return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
                              "Presentation is stopped or already acquired");
@@ -79,12 +84,13 @@ namespace Physara::Platform::Detail
         // Event 轮询的 false 可能是正常 Pending, 也可能伴随诊断. 先判诊断再决定能否重试.
         const auto before = state.rhiMessages.ErrorCount().load(std::memory_order_relaxed);
         auto &device = *state.validatedDevice;
+        auto &slot = presentation.slots[slotIndex];
         if (slot.lastSubmission != 0)
         {
             const bool complete = device.PollEventQuery(slot.event);
             if (!RhiSucceeded(state, before))
             {
-                slot.stopped = true;
+                presentation.stopped = true;
                 return PresentationError(state, "Presentation completion observation failed");
             }
             if (!complete)
@@ -93,7 +99,7 @@ namespace Physara::Platform::Detail
             }
             slot.lastSubmission = 0;
         }
-        if (slot.acquisition == std::numeric_limits<std::uint64_t>::max())
+        if (presentation.acquisition == std::numeric_limits<std::uint64_t>::max())
         {
             return PresentationError(state, "Presentation acquisition identity exhausted");
         }
@@ -111,7 +117,7 @@ namespace Physara::Platform::Detail
             desc.initialState = RHI::ResourceStates::ShaderResource;
             desc.keepInitialState = true;
             desc.debugName = "PresentColor";
-            // 局部句柄收拢部分创建. 纹理, FBO 和观察者全部就绪后才发布新目标代.
+            // 局部句柄收拢部分创建. 槽已有 Event 时复用, 纹理和 FBO 随目标代成组发布.
             PresentTarget candidate;
             candidate.texture = device.CreateTexture(desc);
             if (candidate.texture)
@@ -129,10 +135,10 @@ namespace Physara::Platform::Detail
             slot.event = std::move(event);
             ++slot.targetGeneration;
         }
-        slot.token = {state.info.identity, slot.targetGeneration, ++slot.acquisition};
-        slot.phase = PresentationPhase::Acquired;
-        slot.colorValid = false;
-        return PresentationFrame{slot.target, slot.token};
+        presentation.token = {state.info.identity, slotIndex, slot.targetGeneration, ++presentation.acquisition};
+        presentation.phase = PresentationPhase::Acquired;
+        presentation.colorValid = false;
+        return PresentationFrame{slot.target, presentation.token};
     }
 
     // 验证取得和包装列表后锁定提交对象. 失败帧与过期窗口仍可提交合法前缀.
@@ -149,10 +155,11 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
                              "Presentation requires the same device's closed validated Graphics list");
         }
-        auto &slot = state.presentation;
-        slot.commands = &commands;
-        slot.phase = PresentationPhase::Prepared;
-        // 从这里起, 关联列表随槽持有. 只有通过窗口复查和原生复制才发布有效颜色.
+        auto &presentation = state.presentation;
+        const auto &target = presentation.slots[token.slotIndex].target;
+        presentation.commands = &commands;
+        presentation.phase = PresentationPhase::Prepared;
+        // 活动取得先强持列表. 窗口变更时保留列表供提交已发前缀, 有效颜色还需末端复制成功.
         if (!frameSucceeded)
         {
             return std::nullopt;
@@ -162,51 +169,61 @@ namespace Physara::Platform::Detail
         {
             return *error;
         }
-        if (std::get<WindowExtent>(current) != slot.target.extentPixels)
+        if (std::get<WindowExtent>(current) != target.extentPixels)
         {
             return std::nullopt;
         }
-        slot.colorValid = RHI::OpenGL::PrepareWindowPresentation(
-            state.rawDevice, native, slot.target.framebuffer,
+        presentation.colorValid = RHI::OpenGL::PrepareWindowPresentation(
+            state.rawDevice, native, target.framebuffer,
             state.info.defaultFramebufferEncoding == FramebufferEncoding::SRGB);
-        if (!slot.colorValid)
+        if (!presentation.colorValid)
         {
             // 可能已有前缀和末端访问. 保留关联列表, 交宿主关闭路径收拢原生包.
-            slot.stopped = true;
+            presentation.stopped = true;
             return PresentationError(state, "Native terminal window copy failed");
         }
         return std::nullopt;
     }
 
     // 验证层 Execute 接受闭合列表后, 立即将该 Graphics 前缀绑定到槽的完成观察.
-    std::variant<PresentationSubmission, HostError> SubmitPresentation(DeviceHostState &state, PresentationToken token)
+    PresentationSubmission SubmitPresentation(DeviceHostState &state, PresentationToken token,
+                                              std::optional<HostError> &error)
     {
-        if (auto error = RequirePresentation(state, token, PresentationPhase::Prepared))
+        error = RequirePresentation(state, token, PresentationPhase::Prepared);
+        if (error)
         {
-            return *error;
+            return {};
         }
-        auto &slot = state.presentation;
+        auto &presentation = state.presentation;
+        auto &slot = presentation.slots[token.slotIndex];
         const auto before = state.rhiMessages.ErrorCount().load(std::memory_order_relaxed);
-        const auto ticket = state.validatedDevice->ExecuteCommandList(slot.commands);
+        const auto ticket = state.validatedDevice->ExecuteCommandList(presentation.commands);
         // 已接受的票据先入槽. 随后的同步诊断和 Event 设置仍可能使本帧退出.
         slot.lastSubmission = ticket;
         if (!ticket || !RhiSucceeded(state, before))
         {
-            slot.stopped = true;
-            slot.colorValid = false;
-            return PresentationError(state, "Presentation submission was not accepted cleanly");
+            presentation.stopped = true;
+            presentation.colorValid = false;
+            error = PresentationError(state, "Presentation submission was not accepted cleanly");
+            return {ticket, false};
         }
-        // 快照在任何后续提交之前绑定刚接受的票据. 失败时仍保留真实提交, 只停止复用.
+        // Reset 只清旧观察身份. 同一 owner 紧接 Execute 捕获队列尾, 该快照覆盖刚接受的票据.
+        // 绑定失败仍返回票据, 同时停止复用并撤销颜色资格.
         state.validatedDevice->ResetEventQuery(slot.event);
-        state.validatedDevice->SetEventQuery(slot.event, RHI::CommandQueue::Graphics);
+        if (RhiSucceeded(state, before))
+        {
+            state.validatedDevice->SetEventQuery(slot.event, RHI::CommandQueue::Graphics);
+        }
         if (!RhiSucceeded(state, before))
         {
-            slot.stopped = true;
-            return PresentationError(state, "Accepted presentation has no reliable completion observer");
+            presentation.stopped = true;
+            presentation.colorValid = false;
+            error = PresentationError(state, "Accepted presentation has no reliable completion observer");
+            return {ticket, false};
         }
-        slot.commands.Reset();
-        slot.phase = PresentationPhase::Submitted;
-        return PresentationSubmission{ticket, slot.colorValid};
+        presentation.commands.Reset();
+        presentation.phase = PresentationPhase::Submitted;
+        return {ticket, presentation.colorValid};
     }
 
     // 结束已提交的取得, 在最后一次窗口事实和 context 校验后交换, 同时返回原接受票据.
@@ -218,12 +235,13 @@ namespace Physara::Platform::Detail
         {
             return result;
         }
-        auto &slot = state.presentation;
+        auto &presentation = state.presentation;
+        const auto &slot = presentation.slots[token.slotIndex];
         result.ticket = slot.lastSubmission;
-        const bool validColor = slot.colorValid;
-        // 一旦匹配取得即消费交换资格. 是否实际尝试交换独立于槽内提交的完成观察.
-        slot.phase = PresentationPhase::Idle;
-        slot.colorValid = false;
+        const bool validColor = presentation.colorValid;
+        // 一旦匹配取得即消费交换资格. 槽的 Event 与票据继续留到后续取得, 交换只观测窗口结果.
+        presentation.phase = PresentationPhase::Idle;
+        presentation.colorValid = false;
         if (!validColor)
         {
             return result;
@@ -282,11 +300,14 @@ namespace Physara::Platform::Detail
     // 释放宿主强持有, 使关闭预检只看到外部 owner 和设备内部 lease.
     void ReleasePresentation(DeviceHostState &state) noexcept
     {
-        auto &slot = state.presentation;
-        slot.commands.Reset();
-        slot.target = {};
-        slot.event.Reset();
-        slot.phase = PresentationPhase::Idle;
-        slot.stopped = true;
+        auto &presentation = state.presentation;
+        presentation.commands.Reset();
+        for (auto &slot : presentation.slots)
+        {
+            slot.target = {};
+            slot.event.Reset();
+        }
+        presentation.phase = PresentationPhase::Idle;
+        presentation.stopped = true;
     }
 }
