@@ -172,11 +172,13 @@
 
 **职责位置：** Engine/Renderer/RenderGraph。**前置：** 本阶段入口满足。**架构依据：** [6.2](../Architecture.md#graph)。
 
-- [ ] 实现 typed GraphId、代校验、纹理/Buffer 描述、subresource/range、import/export 与读写版本。
-- [ ] 实现 setup 即时声明及 execute 的拥有型 PassData/arena 捕获；执行期只能访问 Pass 已声明资源。
-- [ ] 覆盖同一外部资源重复导入、失效 ID、越界访问、Load/Store 内容有效性与资源写版本用例。
+- [x] 实现 typed GraphId、代校验、纹理/Buffer 描述、subresource/range、import/export 与读写版本。
+- [x] 实现 setup 即时声明及 execute 的拥有型 PassData/arena 捕获；执行期只能访问 Pass 已声明资源。
+- [x] 覆盖同一外部资源重复导入、失效 ID、越界访问、Load/Store 内容有效性与资源写版本用例。
 
 **完成条件：** 图合同足以表示真实 UI/上传/输出，不依赖跨帧保存 GraphId 或回调借用栈变量。
+
+**当前状态** B 复核与最终验证通过，主规范已同步，change 已归档。后续工作包为 [D05-T02](#d05-t02)。 [D05-T01 归档](../../openspec/changes/archive/2026-11-13-establish-render-graph-contract/tasks.md#final-verification)
 
 <a id="d05-t02"></a>
 ### D05-T02 · 实现依赖编译、活性裁剪与确定顺序
