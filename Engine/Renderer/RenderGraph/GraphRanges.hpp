@@ -1,8 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 声明和查询共用的逻辑范围规则. 从 RHI 描述建立范围, 用包含关系校验显式请求.
-/// 交集供内容版本回溯使用, 输入为图中已校验的范围.
+/// @brief 从 RHI 描述建立逻辑范围, 供声明与查询核对显式请求.
+/// 交集以已校验范围为输入, 供内容回溯和编译的存储冲突检查共用.
 
 #include "GraphResources.hpp"
 
@@ -27,6 +27,7 @@ namespace Physara::Renderer::Detail
                ContainsInterval(outer.firstLayer, outer.layerCount, inner.firstLayer, inner.layerCount);
     }
 
+    // 缓冲范围按字节解释为半开区间, 内层必须有正长度.
     inline bool Contains(const RHI::BufferRange &outer, const RHI::BufferRange &inner) noexcept
     {
         return ContainsInterval(outer.byteOffset, outer.byteSize, inner.byteOffset, inner.byteSize);
@@ -54,6 +55,7 @@ namespace Physara::Renderer::Detail
         return TextureRange{mip, mips, layer, layers, static_cast<TextureAspect>(aspects)};
     }
 
+    // 相邻区间交集为空, 只有共同覆盖的字节需要参与内容和顺序判断.
     inline std::optional<RHI::BufferRange> Intersect(const RHI::BufferRange &a, const RHI::BufferRange &b) noexcept
     {
         const auto [offset, bytes] = IntersectInterval(a.byteOffset, a.byteSize, b.byteOffset, b.byteSize);

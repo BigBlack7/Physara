@@ -6,16 +6,16 @@
 #include <optional>
 #include <vector>
 
+#include "GraphContent.hpp"
 #include "GraphRanges.hpp"
 
 /// @file
-/// @brief 实现 setup 的用途校验和写版本记录, 以及 execute 的资源查询权限.
-/// 声明阶段用规范范围和版本链判定内容. 回调阶段先匹配用途表, 再调用物理解析入口.
+/// @brief 实现 setup 中暂存用途, 写版本, 读回根和导出的入口, 并限制 execute 可查询的资源.
+/// 声明阶段用逻辑范围和版本链判断内容. 消费阶段凭当前 Pass 的精确权限访问物理解析器.
 
 namespace Physara::Renderer
 {
     using Detail::Contains;
-    using Detail::Intersect;
 
     // 过滤不可能的用途组合. 格式与原生视图的支持仍由编译和 RHI 判定.
     static bool AllowsRead(const RHI::TextureDesc &desc, TextureAspect aspect, GraphUsage usage) noexcept
@@ -107,7 +107,7 @@ namespace Physara::Renderer
     {
         if (!m_Failure)
         {
-            m_Failure = RenderGraph::MakeError(code, m_Id.IsValid() ? "AddPass" : "Export",
+            m_Failure = Detail::MakeGraphError(code, m_Id.IsValid() ? "AddPass" : "Export",
                                               m_Name, name, reason, version);
         }
         return false;
@@ -156,109 +156,8 @@ namespace Physara::Renderer
         return requested.value_or(resource.range);
     }
 
-    // cut 已包含在区间内. 依次提交其前后留下的正长度区间.
-    template <typename T, typename Append>
-    static void AppendIntervalRemainder(T first, T count, T cutFirst, T cutCount, Append append)
-    {
-        const T end = first + count;
-        const T cutEnd = cutFirst + cutCount;
-        if (first < cutFirst)
-        {
-            append(first, cutFirst - first);
-        }
-        if (cutEnd < end)
-        {
-            append(cutEnd, end - cutEnd);
-        }
-    }
-
-    // 先留下未覆盖的 aspect, 再分割相交 aspect 的 mip 和 layer. 输出互不重叠.
-    static void AppendRemainder(const TextureRange &range, const TextureRange &cut, std::vector<TextureRange> &out)
-    {
-        const auto otherAspects = static_cast<unsigned>(range.aspect) & ~static_cast<unsigned>(cut.aspect);
-        if (otherAspects != 0)
-        {
-            out.push_back({range.firstMip, range.mipCount, range.firstLayer, range.layerCount,
-                           static_cast<TextureAspect>(otherAspects)});
-        }
-        AppendIntervalRemainder(range.firstMip, range.mipCount, cut.firstMip, cut.mipCount,
-                                [&](std::uint32_t mip, std::uint32_t mips)
-        {
-            out.push_back({mip, mips, range.firstLayer, range.layerCount, cut.aspect});
-        });
-        AppendIntervalRemainder(range.firstLayer, range.layerCount, cut.firstLayer, cut.layerCount,
-                                [&](std::uint32_t layer, std::uint32_t layers)
-        {
-            out.push_back({cut.firstMip, cut.mipCount, layer, layers, cut.aspect});
-        });
-    }
-
-    // 缓冲只留下本次写入之前和之后的字节区间.
-    static void AppendRemainder(const RHI::BufferRange &range, const RHI::BufferRange &cut,
-                                std::vector<RHI::BufferRange> &out)
-    {
-        AppendIntervalRemainder(range.byteOffset, range.byteSize, cut.byteOffset, cut.byteSize,
-                                [&](std::uint64_t offset, std::uint64_t bytes)
-        {
-            out.emplace_back(offset, bytes);
-        });
-    }
-
-    enum class ContentStatus
-    {
-        Pending,
-        Defined,
-        Undefined
-    };
-
-    // 首次局部覆盖前直接检查 requested. 此后 remaining 保存互不重叠的未决范围.
-    // 无效写入只有与未决范围相交时才使查询失败.
-    template <typename Range>
-    static ContentStatus ApplyWriteToQuery(const Range &requested, const Range &written, bool defined,
-                                           std::optional<std::vector<Range>> &remaining)
-    {
-        if (!remaining)
-        {
-            const auto cut = Intersect(requested, written);
-            if (!cut)
-            {
-                return ContentStatus::Pending;
-            }
-            if (!defined)
-            {
-                return ContentStatus::Undefined;
-            }
-            if (*cut == requested)
-            {
-                return ContentStatus::Defined;
-            }
-            AppendRemainder(requested, *cut, remaining.emplace(0));
-            return ContentStatus::Pending;
-        }
-
-        auto &ranges = *remaining;
-        for (std::size_t i = ranges.size(); i != 0;)
-        {
-            const Range range = ranges[--i];
-            const auto cut = Intersect(range, written);
-            if (!cut)
-            {
-                continue;
-            }
-            if (!defined)
-            {
-                return ContentStatus::Undefined;
-            }
-            // 倒序扫描允许移入已检查的尾部区间. 新分片也已排除本次写入, 可留给更早的版本.
-            ranges[i] = ranges.back();
-            ranges.pop_back();
-            AppendRemainder(range, *cut, ranges);
-        }
-        return ranges.empty() ? ContentStatus::Defined : ContentStatus::Pending;
-    }
-
-    // 从请求版本向初始内容回溯, 先取本次 setup 的候选写, 再用已发布的生产者索引.
-    // Read, Load 和 Export 共用这一检查. 每次写只解释当前查询中尚未覆盖的部分.
+    // Read, Load 和 Export 共用版本回溯. 本次 setup 可读到先前候选写, 再沿已发布生产者追溯.
+    // 两段都使用相同的扣除规则, 每次写只解释仍未确定来源的部分. 编译阶段据此另外建立 Pass 依赖.
     template <typename Use, typename Id, typename Range, typename Declaration>
     bool PassBuilder::RequireContent(Id id, const Range &range, const Declaration &resource)
     {
@@ -287,19 +186,13 @@ namespace Physara::Renderer
                 use = &std::get<Use>(m_Graph.m_Passes[producer.pass.index].uses[producer.useIndex]);
             }
 
-            bool defined = true;
-            if constexpr (std::is_same_v<Use, TextureUse>)
+            bool contributed = false;
+            switch (Detail::ApplyWriteToQuery(range, use->access.range, Detail::DefinesContent(*use->write),
+                                              remaining, contributed))
             {
-                // Load 在声明该写入时已验证输入. Discard 后只有完整覆盖才能定义内容.
-                const auto &ops = use->write->ops;
-                defined = ops.store == StoreOp::Store &&
-                          (ops.load != LoadOp::Discard || ops.coverage == WriteCoverage::Full);
-            }
-            switch (ApplyWriteToQuery(range, use->access.range, defined, remaining))
-            {
-            case ContentStatus::Pending: break;
-            case ContentStatus::Defined: return true;
-            case ContentStatus::Undefined:
+            case Detail::ContentStatus::Pending: break;
+            case Detail::ContentStatus::Defined: return true;
+            case Detail::ContentStatus::Undefined:
                 return Fail(GraphErrorCode::UndefinedContent, resource.desc.debugName, readVersion,
                             "Requested content intersects a discarded or incompletely written range");
             }
@@ -357,6 +250,44 @@ namespace Physara::Renderer
         }
         m_Uses.emplace_back(BufferUse{{id, *range, usage}, std::nullopt});
         return true;
+    }
+
+    // 读回标记复用本 Pass 的精确 CopySource 声明. 重复标记复用同一索引.
+    // 没有匹配用途时保存候选失败, 由 AddPass 一并撤回候选内容.
+    template <typename Use, typename Id, typename Range, typename Declaration>
+    bool PassBuilder::MarkReadbackUse(Id id, const std::optional<Range> &requested,
+                                      const std::deque<Declaration> &resources)
+    {
+        const auto range = Validate<Id, Range, Declaration, Use>(id, requested, resources);
+        if (!range)
+        {
+            return false;
+        }
+        for (std::size_t i = 0; i < m_Uses.size(); ++i)
+        {
+            const auto *use = std::get_if<Use>(&m_Uses[i]);
+            if (use && !use->write && use->access.usage == GraphUsage::CopySource &&
+                use->access.resource == id && use->access.range == *range)
+            {
+                if (std::ranges::find(m_ReadbackUses, i) == m_ReadbackUses.end())
+                {
+                    m_ReadbackUses.push_back(i);
+                }
+                return true;
+            }
+        }
+        return Fail(GraphErrorCode::InvalidUsage, resources[id.identity.index].desc.debugName, id.version,
+                    "Readback requires a matching CopySource read in this Pass");
+    }
+
+    bool PassBuilder::MarkReadback(TextureId id, std::optional<TextureRange> range)
+    {
+        return MarkReadbackUse<TextureUse>(id, range, m_Graph.m_Textures);
+    }
+
+    bool PassBuilder::MarkReadback(BufferId id, std::optional<RHI::BufferRange> range)
+    {
+        return MarkReadbackUse<BufferUse>(id, range, m_Graph.m_Buffers);
     }
 
     // 纹理写先校验前一版本和操作合同, Load 通过后才生成候选新版本.
@@ -485,7 +416,7 @@ namespace Physara::Renderer
         }
         const auto fail = [&](GraphErrorCode code, std::string_view name, std::string_view reason) -> Pointer
         {
-            m_Failure = RenderGraph::MakeError(code, "PassResources", m_Pass.name, name, reason, id.version);
+            m_Failure = Detail::MakeGraphError(code, "PassResources", m_Pass.name, name, reason, id.version);
             return nullptr;
         };
         if (!id.IsValid() || id.identity.generation != m_Graph.m_Generation || id.identity.index >= resources.size())

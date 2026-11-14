@@ -47,9 +47,9 @@ namespace Physara::Renderer
     }
 
     // 先写原因, 即使 Pass 或资源名称过长也保留失败类别.
-    GraphError RenderGraph::MakeError(GraphErrorCode code, std::string_view stage, std::string_view pass,
-                                      std::string_view resource, std::string_view reason,
-                                      std::optional<std::uint32_t> version) noexcept
+    GraphError Detail::MakeGraphError(GraphErrorCode code, std::string_view stage, std::string_view pass,
+                                     std::string_view resource, std::string_view reason,
+                                     std::optional<std::uint32_t> version) noexcept
     {
         Core::BoundedText message(stage);
         message.Append(": ");
@@ -79,25 +79,25 @@ namespace Physara::Renderer
     {
         if (m_Generation == 0)
         {
-            return MakeError(GraphErrorCode::OutOfStorage, stage, pass, {}, "Graph generation space exhausted");
+            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, pass, {},
+                                          "Graph generation space exhausted");
         }
         if (m_Active || m_Sealed || m_Poisoned)
         {
-            return MakeError(GraphErrorCode::InvalidPhase, stage, pass, {}, "Graph is not open for declarations");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidPhase, stage, pass, {},
+                                          "Graph is not open for declarations");
         }
         return std::nullopt;
     }
 
-    // 公共 ResourceStates 的有效位从 Common 连续到 ConvertCoopVecMatrixOutput.
     // 进出状态必须能提交给通用 tracker, 具体后端的用途限制由编译和执行检查.
     static bool IsExplicitImportState(RHI::ResourceStates state) noexcept
     {
-        constexpr auto lastBit = static_cast<std::uint32_t>(RHI::ResourceStates::ConvertCoopVecMatrixOutput);
-        constexpr auto validBits = (lastBit << 1u) - 1u;
-        return state != RHI::ResourceStates::Unknown && (static_cast<std::uint32_t>(state) & ~validBits) == 0;
+        return state != RHI::ResourceStates::Unknown && Detail::HasKnownResourceStateBits(state);
     }
 
     // 先确定完整范围和导入合同, 再查同一公共 RHI 对象是否已有身份.
+    // 成功时复制描述, 导入还取得强引用. 所有校验通过后才追加新的资源记录.
     template <typename Id, typename Declaration>
     GraphResult<Id> RenderGraph::DeclareResource(std::string_view stage, std::deque<Declaration> &resources,
                                                 const typename Declaration::Description &desc,
@@ -108,12 +108,13 @@ namespace Physara::Renderer
         const auto full = Detail::FullRange(desc);
         if (!full)
         {
-            return MakeError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
-                             "Resource description has no valid range");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
+                                          "Resource description has no valid range");
         }
         if (requested && !Detail::Contains(*full, *requested))
         {
-            return MakeError(GraphErrorCode::InvalidRange, stage, {}, desc.debugName, "Import range exceeds the resource");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidRange, stage, {}, desc.debugName,
+                                          "Import range exceeds the resource");
         }
         const auto range = requested.value_or(*full);
 
@@ -121,13 +122,13 @@ namespace Physara::Renderer
         {
             if (!IsExplicitImportState(state->entry))
             {
-                return MakeError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
-                                 "Import entry state is unknown or contains undefined RHI bits");
+                return Detail::MakeGraphError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
+                                              "Import entry state is unknown or contains undefined RHI bits");
             }
             if (!IsExplicitImportState(state->final))
             {
-                return MakeError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
-                                 "Import final state is unknown or contains undefined RHI bits");
+                return Detail::MakeGraphError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
+                                              "Import final state is unknown or contains undefined RHI bits");
             }
 
             // 公共 RHI 对象是导入键. 返回版本 0, 后续写入不改变外部输入身份.
@@ -140,8 +141,8 @@ namespace Physara::Renderer
                 }
                 if (resource.range != range || resource.importState != state)
                 {
-                    return MakeError(GraphErrorCode::ConflictingImport, stage, {}, desc.debugName,
-                                     "External resource already has a different import declaration");
+                    return Detail::MakeGraphError(GraphErrorCode::ConflictingImport, stage, {}, desc.debugName,
+                                                  "External resource already has a different import declaration");
                 }
                 return Id{{static_cast<std::uint32_t>(i), m_Generation}, 0};
             }
@@ -149,7 +150,8 @@ namespace Physara::Renderer
 
         if (resources.size() == MaxIndex)
         {
-            return MakeError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName, "Resource index space exhausted");
+            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
+                                          "Resource index space exhausted");
         }
         const Id id{{static_cast<std::uint32_t>(resources.size()), m_Generation}, 0};
         try
@@ -158,7 +160,8 @@ namespace Physara::Renderer
         }
         catch (const std::bad_alloc &)
         {
-            return MakeError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName, "Could not store resource");
+            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
+                                          "Could not store resource");
         }
         return id;
     }
@@ -190,7 +193,8 @@ namespace Physara::Renderer
         }
         if (!texture)
         {
-            return MakeError(GraphErrorCode::InvalidResource, "ImportTexture", {}, {}, "Missing external texture");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidResource, "ImportTexture", {}, {},
+                                          "Missing external texture");
         }
         return DeclareResource<TextureId>("ImportTexture", m_Textures, texture->GetDesc(), range, texture, states);
     }
@@ -204,7 +208,8 @@ namespace Physara::Renderer
         }
         if (!buffer)
         {
-            return MakeError(GraphErrorCode::InvalidResource, "ImportBuffer", {}, {}, "Missing external buffer");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidResource, "ImportBuffer", {}, {},
+                                          "Missing external buffer");
         }
         return DeclareResource<BufferId>("ImportBuffer", m_Buffers, buffer->GetDesc(), range, buffer, states);
     }
@@ -229,11 +234,13 @@ namespace Physara::Renderer
         }
         catch (const std::bad_alloc &)
         {
-            return MakeError(GraphErrorCode::OutOfStorage, "Export", {}, {}, "Could not store output", id.version);
+            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, "Export", {}, {},
+                                          "Could not store output", id.version);
         }
         catch (const std::length_error &)
         {
-            return MakeError(GraphErrorCode::OutOfStorage, "Export", {}, {}, "Output table is full", id.version);
+            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, "Export", {}, {},
+                                          "Output table is full", id.version);
         }
     }
 
@@ -247,7 +254,8 @@ namespace Physara::Renderer
         return ExportResource(id, usage, range);
     }
 
-    // 在一处提交生产者, 导出与回调. 表项扩容失败时撤回本次已经写入的尾部, 其余 Pass 保持原样.
+    // 在一处提交生产者, 导出与回调. 表项扩容失败时撤回本次已经写入的尾部.
+    // 只有所有可失败的追加完成后, Pass 才接收完整用途与读回索引.
     void RenderGraph::PublishPass(PassBuilder &builder, PassCallback callback)
     {
         const auto writesFor = [this](const PassUse &use) -> std::vector<VersionProducer> *
@@ -292,8 +300,9 @@ namespace Physara::Renderer
             }
             throw;
         }
-        // Pass 声明就位后交换用途表, 保持生产者索引与 setup 的用途顺序一致.
+        // 同时交付用途与读回索引, 保持它们与 setup 的声明顺序一致.
         m_Passes.back().uses.swap(builder.m_Uses);
+        m_Passes.back().readbackUses.swap(builder.m_ReadbackUses);
     }
 
     GraphFailure RenderGraph::Seal() noexcept
@@ -310,11 +319,13 @@ namespace Physara::Renderer
     {
         if (!m_Sealed || m_Active)
         {
-            return MakeError(GraphErrorCode::InvalidPhase, "InvokePass", {}, {}, "A sealed idle graph is required");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidPhase, "InvokePass", {}, {},
+                                          "A sealed idle graph is required");
         }
         if (id.generation != m_Generation || id.index >= m_Passes.size())
         {
-            return MakeError(GraphErrorCode::InvalidPass, "InvokePass", {}, {}, "Pass identity is not part of this graph");
+            return Detail::MakeGraphError(GraphErrorCode::InvalidPass, "InvokePass", {}, {},
+                                          "Pass identity is not part of this graph");
         }
         // 每次调用新建一份只关联该 Pass 的查询上下文, 查询错误优先报告.
         Activity activity(m_Active);

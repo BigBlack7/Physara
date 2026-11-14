@@ -1,8 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 提供帧内图的声明入口, 持有延迟 Pass 数据, 并为执行期的单个 Pass 约束资源查询.
-/// 声明与回调消费由 Seal 分隔, Pass 的执行次序和物理资源由调用方提供.
+/// @brief 提供帧内图的声明入口, 持有导入和延迟 Pass 数据, 并限制执行期的资源查询权限.
+/// Seal 固定编译所需的记录. 回调由执行方按编译顺序调用, 物理资源由执行方解析.
 
 #include "GraphResources.hpp"
 
@@ -22,14 +22,18 @@
 namespace Physara::Renderer
 {
     class RenderGraph;
+    namespace Detail
+    {
+        class GraphCompiler;
+    }
 
     /// @brief 执行方提供的物理资源查询, 输入为当前 Pass 已授权的版本, 用途和规范范围.
-    /// @return 返回由解析方保活的资源, 资源尚不可用时返回空指针.
-    /// @note access 仅在 Resolve 调用期间有效. 解析方提供与声明匹配的物理对象并保活至 execute 返回.
     class PassResourceResolver
     {
     public:
         virtual ~PassResourceResolver() = default;
+        /// @return 返回与声明匹配的物理对象, 尚不可用时返回空指针.
+        /// @note access 只在本次调用期间有效, 解析方保活对象至 execute 返回.
         [[nodiscard]] virtual RHI::Texture *Resolve(const TextureAccess &access) noexcept = 0;
         [[nodiscard]] virtual RHI::Buffer *Resolve(const BufferAccess &access) noexcept = 0;
     };
@@ -77,8 +81,15 @@ namespace Physara::Renderer
         PassBuilder &operator=(const PassBuilder &) = delete;
 
         /// @brief 核对用途与内容后登记指定版本的读取.
+        /// @note 纹理复制及普通阶段的联合用途由编译器核对, 包括 packed depth/stencil 的传输范围.
         [[nodiscard]] bool Read(TextureId id, GraphUsage usage, std::optional<TextureRange> range = std::nullopt);
         [[nodiscard]] bool Read(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range = std::nullopt);
+
+        /// @brief 将本 Pass 已声明的同版本, 同范围 CopySource 读取标记为图内读回.
+        /// @note 省略范围时选择整个允许范围. 重复标记共用索引, 无匹配读取时拒绝候选 Pass.
+        /// 标记随 Pass 发布, 由编译器作为活性根消费. 请求与结果的寿命由读回消费方管理.
+        [[nodiscard]] bool MarkReadback(TextureId id, std::optional<TextureRange> range = std::nullopt);
+        [[nodiscard]] bool MarkReadback(BufferId id, std::optional<RHI::BufferRange> range = std::nullopt);
 
         /// @brief 从当前版本写入, 返回本次 setup 内可引用的新版本. 纹理写的内容由 ops 说明.
         /// @note 候选版本随 Pass 一起发布, AddPass 失败后不得使用候选身份.
@@ -104,6 +115,9 @@ namespace Physara::Renderer
         [[nodiscard]] std::size_t LatestVersion(Id id, const Declaration &resource) const noexcept;
         template <typename Use, typename Id, typename Range, typename Declaration>
         [[nodiscard]] bool RequireContent(Id id, const Range &range, const Declaration &resource);
+        template <typename Use, typename Id, typename Range, typename Declaration>
+        [[nodiscard]] bool MarkReadbackUse(Id id, const std::optional<Range> &requested,
+                                           const std::deque<Declaration> &resources);
         bool Fail(GraphErrorCode code, std::string_view name, std::uint32_t version, std::string_view reason) noexcept;
 
         const RenderGraph &m_Graph;
@@ -111,6 +125,7 @@ namespace Physara::Renderer
         std::string_view m_Name;
         std::vector<PassUse> m_Uses = std::vector<PassUse>(0);
         std::vector<GraphExport> m_Exports = std::vector<GraphExport>(0);
+        std::vector<std::size_t> m_ReadbackUses = std::vector<std::size_t>(0);
         GraphFailure m_Failure;
     };
 
@@ -168,8 +183,9 @@ namespace Physara::Renderer
             if (m_Passes.size() == MaxIndex || !execute)
             {
                 m_Poisoned = true;
-                return MakeError(execute ? GraphErrorCode::OutOfStorage : GraphErrorCode::InvalidUsage,
-                                 stage, name, {}, execute ? "Pass index space exhausted" : "Missing execute callback");
+                const auto code = execute ? GraphErrorCode::OutOfStorage : GraphErrorCode::InvalidUsage;
+                const auto reason = execute ? "Pass index space exhausted" : "Missing execute callback";
+                return Detail::MakeGraphError(code, stage, name, {}, reason);
             }
 
             // 失败时先析构候选, 再撤回它占用的 arena 尾部. 已发布 Pass 的地址保持稳定.
@@ -178,7 +194,7 @@ namespace Physara::Renderer
             if (memory.empty())
             {
                 m_Poisoned = true;
-                return MakeError(GraphErrorCode::OutOfStorage, stage, name, {}, "Pass arena exhausted");
+                return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, name, {}, "Pass arena exhausted");
             }
 
             Activity activity(m_Active);
@@ -214,7 +230,8 @@ namespace Physara::Renderer
                 if (!accepted)
                 {
                     m_Poisoned = true;
-                    return MakeError(GraphErrorCode::SetupFailed, stage, name, {}, "Setup rejected this Pass");
+                    return Detail::MakeGraphError(GraphErrorCode::SetupFailed, stage, name, {},
+                                                  "Setup rejected this Pass");
                 }
 
                 // 发布声明成功后, 对象的析构责任随回调表转给图.
@@ -226,25 +243,30 @@ namespace Physara::Renderer
             catch (const std::bad_alloc &)
             {
                 m_Poisoned = true;
-                return MakeError(GraphErrorCode::OutOfStorage, stage, name, {}, "Could not store Pass declarations");
+                return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, name, {},
+                                              "Could not store Pass declarations");
             }
             catch (const std::length_error &)
             {
                 m_Poisoned = true;
-                return MakeError(GraphErrorCode::OutOfStorage, stage, name, {}, "Pass declaration table is full");
+                return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, name, {},
+                                              "Pass declaration table is full");
             }
             catch (...)
             {
                 m_Poisoned = true;
-                return MakeError(GraphErrorCode::SetupFailed, stage, name, {}, "Setup or Pass data construction threw");
+                return Detail::MakeGraphError(GraphErrorCode::SetupFailed, stage, name, {},
+                                              "Setup or Pass data construction threw");
             }
         }
 
         /// @brief 结束声明, 固定供编译和回调消费的记录.
         /// @return 封存成功时为空. 已拒绝候选 Pass 的图无法封存, 原记录仍可读取.
+        /// @note 封存只切换阶段. 用途组合, 依赖和存储预算由 CompileRenderGraph 检查.
         [[nodiscard]] GraphFailure Seal() noexcept;
 
-        /// @brief 在已封存且空闲的图上同步调用指定 Pass. 调用方负责顺序和物理资源准备.
+        /// @brief 在已封存且空闲的图上同步调用指定 Pass.
+        /// @note 执行方负责按计划选择 Pass 并准备物理资源. 此入口检查图代与阶段, 并限制本次查询权限.
         /// @return 返回首个查询错误或 execute 自身的结果. 失败后调用方负责停止后续消费.
         [[nodiscard]] GraphFailure InvokePass(PassId id, PassResourceResolver &resolver) const noexcept;
 
@@ -257,6 +279,7 @@ namespace Physara::Renderer
     private:
         friend class PassBuilder;
         friend class PassResources;
+        friend class Detail::GraphCompiler;
 
         /// @brief 在 setup 和 execute 期间阻止重入, 返回时恢复调用边界.
         struct Activity
@@ -295,9 +318,6 @@ namespace Physara::Renderer
             return stored.execute(resources, stored.data);
         }
 
-        [[nodiscard]] static GraphError MakeError(GraphErrorCode code, std::string_view stage, std::string_view pass,
-                                                  std::string_view resource, std::string_view reason,
-                                                  std::optional<std::uint32_t> version = std::nullopt) noexcept;
         [[nodiscard]] GraphFailure CheckBuilding(std::string_view stage, std::string_view name) const noexcept;
         void PublishPass(PassBuilder &builder, PassCallback callback);
 

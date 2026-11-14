@@ -14,7 +14,7 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraRenderGraph 提供 CPU 图声明和 Pass 访问, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [RHI 来源说明](../RHI/README.md)
+当前第一方目标是 PhysaraCore、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraRenderGraph 提供 CPU 图声明、封存图编译和 Pass 访问, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、六个公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [图编译入口](../Engine/Renderer/RenderGraph/GraphCompiler.hpp) · [RHI 来源说明](../RHI/README.md)
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休. Platform 用闭合包的末端复制入口消费窗口颜色, 在同一包 Execute 后检查 Win32 交换结果, 源资源沿真实完成保活. [RHI 支持范围](../RHI/README.md#opengl-原生消费边界)
 

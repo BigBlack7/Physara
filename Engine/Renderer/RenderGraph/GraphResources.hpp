@@ -65,6 +65,8 @@ namespace Physara::Renderer
 
     /// @brief Graph 的访问用途, 同时作为 Pass 查询的匹配键.
     /// 写版本和内容读写由对应的 Use 记录表达.
+    /// @note 首发的普通纹理复制对 packed depth/stencil 使用两个 aspect.
+    /// typed clear 可按 aspect 选择, 由编译计划单独调度.
     enum class GraphUsage : std::uint8_t
     {
         Sampled,
@@ -120,9 +122,10 @@ namespace Physara::Renderer
         std::variant<std::monostate, RHI::Color, std::uint32_t, DepthStencilClear> clearValue;
     };
 
-    /// @brief 外部 owner 提供允许范围的进出用途状态与初始内容事实.
+    /// @brief 外部 owner 提供允许范围的进出状态与初始内容事实.
     /// @note 导入方须填写 entry 和 final. 两者都须为公共 RHI 定义的非零状态位组合.
-    /// contentDefined 单独声明整个导入范围的初始内容有效性.
+    /// entry 用于接管外部对象时的状态跟踪, final 用于将其交还给外部 owner.
+    /// 整个导入范围的初始内容有效性由 contentDefined 单独声明.
     struct ImportState
     {
         RHI::ResourceStates entry = RHI::ResourceStates::Unknown;
@@ -132,7 +135,9 @@ namespace Physara::Renderer
         bool operator==(const ImportState &) const = default;
     };
 
-    /// @brief 图外消费者的用途. Presentation 用于导入的颜色目标.
+    /// @brief 最后一个 Pass 之后的外部消费用途.
+    /// @note 纹理 ShaderRead 需要所选范围的同格式采样视图, packed depth/stencil 的 Readback 使用两个 aspect.
+    /// Presentation 使用导入的颜色目标, 其 final 须符合宿主交接要求.
     enum class ExportUsage : std::uint8_t
     {
         ShaderRead,
@@ -140,7 +145,8 @@ namespace Physara::Renderer
         Presentation
     };
 
-    /// @brief 一次访问的精确版本, 已校验范围与用途. 查询解析器也接收同一结构.
+    /// @brief 一次访问的精确版本, 已校验范围与用途.
+    /// 同一组值用于追溯内容, 验证查询权限, 并交给执行期解析器定位实际对象.
     template <typename Id, typename Range>
     struct ResourceAccess
     {
@@ -180,7 +186,8 @@ namespace Physara::Renderer
     using BufferUse = ResourceUse<BufferAccess, BufferWrite>;
     using PassUse = std::variant<TextureUse, BufferUse>;
 
-    /// @brief 明确外部消费的版本和范围, 供编译器确定输出根.
+    /// @brief 最后一个 Pass 之后的外部消费, 保留所需的逻辑版本和精确范围.
+    /// 编译器据此追溯活性并延长物理存储的使用区间.
     template <typename Id, typename Range>
     struct ResourceExport
     {
@@ -225,8 +232,8 @@ namespace Physara::Renderer
     using TextureDeclaration = ResourceDeclaration<RHI::TextureDesc, TextureRange, RHI::TextureHandle>;
     using BufferDeclaration = ResourceDeclaration<RHI::BufferDesc, RHI::BufferRange, RHI::BufferHandle>;
 
-    /// @brief 供后续编译读取的已发布 Pass. 名称仅用于诊断, uses 按 setup 的声明顺序保存.
-    /// 图另行保存延迟回调与拥有型数据, 使用者通过 PassId 进入回调.
+    /// @brief 供编译读取的已发布 Pass. 名称仅用于诊断, uses 按 setup 的声明顺序保存.
+    /// @invariant 生产者和读回记录的用途索引均指向同一份 uses. 图通过 PassId 关联拥有型回调.
     struct PassDeclaration
     {
         PassDeclaration(PassId pass, std::string_view label) : id(pass), name(label)
@@ -236,9 +243,10 @@ namespace Physara::Renderer
         PassId id;
         std::string name;
         std::vector<PassUse> uses = std::vector<PassUse>(0);
+        std::vector<std::size_t> readbackUses = std::vector<std::size_t>(0); ///< 图内读回对应的 CopySource 用途索引.
     };
 
-    /// @brief 区分声明阶段的合同拒绝, 存储失败和回调中的权限或解析失败.
+    /// @brief 区分声明, 编译及回调消费阶段的失败.
     enum class GraphErrorCode : std::uint8_t
     {
         InvalidPhase,
@@ -253,7 +261,13 @@ namespace Physara::Renderer
         SetupFailed,
         InvalidPass,
         AccessDenied,
-        UnresolvedResource
+        UnresolvedResource,
+        UnsupportedCapability,
+        IncompatibleAttachments,
+        InvalidFeedback,
+        CyclicDependency,
+        OverwrittenExport,
+        TransientBudgetExceeded
     };
 
     /// @brief 错误正文独立持有阶段及已知对象信息, 可在图销毁后报告.
@@ -263,10 +277,27 @@ namespace Physara::Renderer
         Core::BoundedText description;
     };
 
-    /// @brief 成功时返回声明身份等值, 失败时返回诊断.
+    /// @brief 成功时返回阶段结果, 失败时返回诊断.
     template <typename T>
     using GraphResult = std::variant<T, GraphError>;
 
     /// @brief 无业务值的操作结果. 空值表示成功.
     using GraphFailure = std::optional<GraphError>;
+
+    namespace Detail
+    {
+        /// @brief 验证公共 RHI 位域, 状态位从 Common 连续到 ConvertCoopVecMatrixOutput.
+        /// @note 调用方解释零值, 并按相应阶段检查状态组合和设备能力.
+        [[nodiscard]] inline bool HasKnownResourceStateBits(RHI::ResourceStates state) noexcept
+        {
+            constexpr auto last = static_cast<std::uint32_t>(RHI::ResourceStates::ConvertCoopVecMatrixOutput);
+            constexpr auto known = (last << 1u) - 1u;
+            return (static_cast<std::uint32_t>(state) & ~known) == 0;
+        }
+
+        /// @brief 生成独立的有界诊断, 调试名称仅在调用期间借用.
+        [[nodiscard]] GraphError MakeGraphError(GraphErrorCode code, std::string_view stage, std::string_view pass,
+                                                std::string_view resource, std::string_view reason,
+                                                std::optional<std::uint32_t> version = std::nullopt) noexcept;
+    }
 }

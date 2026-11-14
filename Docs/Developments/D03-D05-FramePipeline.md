@@ -185,11 +185,13 @@
 
 **职责位置：** RenderGraph Compiler。**前置：** [D05-T01](#d05-t01)。**架构依据：** [6.3](../Architecture.md#graph-compile)。
 
-- [ ] 由资源访问建立 RAW/WAR/WAW、版本和 range 依赖，检查未初始化读、非法 feedback、覆盖和环。
-- [ ] 从外部输出/side effects 建立活性，稳定拓扑排序并形成首末使用和物理分配计划。
-- [ ] 用跨分支、同资源不同 range、被裁剪上传和读回副作用验证编译；非法图不给按声明顺序执行的兜底。
+- [x] 由资源访问建立 RAW/WAR/WAW、版本和 range 依赖，检查未初始化读、非法 feedback、覆盖和环。
+- [x] 从外部输出/side effects 建立活性，稳定拓扑排序并形成首末使用和物理分配计划。
+- [x] 用跨分支、同资源不同 range、被裁剪上传和读回副作用验证编译；非法图不给按声明顺序执行的兜底。
 
 **完成条件：** 纯 CPU 测试能验证正确依赖和失败诊断，compile 不调用原生创建或发出 Draw。
+
+**当前状态** B 复核与最终验证通过，主规范已同步，change 已归档。后续工作包为 [D05-T03](#d05-t03)。 [D05-T02 归档](../../openspec/changes/archive/2026-11-14-compile-render-graph-plan/tasks.md#final-verification)
 
 <a id="d05-t03"></a>
 ### D05-T03 · 实现图执行、首次使用分配与单一同步
@@ -201,6 +203,8 @@
 - [ ] 验证 clear 所需状态先于 Draw、depth 只读附件并采样的联合用途，以及上传→采样、附件→UI 和 Shader 读→后续写的原生结果；RAW/WAR/WAW 都遵守唯一同步发射合同。
 
 **完成条件：** 一个依赖只有一个同步发射权威；图编译与 GL 原生执行边界清楚。
+
+**当前状态** 前置工作包已验收归档，待建立 OpenSpec change。
 
 <a id="d05-t04"></a>
 ### D05-T04 · 将 UI、窗口和本帧纹理绑定接入图
