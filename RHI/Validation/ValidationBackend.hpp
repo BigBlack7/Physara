@@ -34,6 +34,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "ImmediateGraphics.hpp"
 #include "Validation.hpp"
 
 namespace Physara::RHI::Validation
@@ -244,7 +245,7 @@ namespace Physara::RHI::Validation
     /// @brief 单写者公共调用协议与输入验证, 强持有父设备及底层列表.
     /// @note Open/Closed 表示通过的调用顺序, 不证明 void 原生调用成功; 即时 claim 只限制录制重叠.
     /// GL 的图形生效状态与 IB 范围由底层 owning recording 统一维护, 包装仍负责公共输入和录制协议.
-    class CommandListWrapper : public RefCounter<CommandList>
+    class CommandListWrapper : public RefCounter<CommandList>, public ImmediateGraphicsRecording
     {
         // 状态描述已通过的公共调用顺序; 底层 void 方法的原生失败仍由底层诊断/停止协议处理.
       public:
@@ -255,6 +256,21 @@ namespace Physara::RHI::Validation
         CommandListWrapper(DeviceWrapper *device, CommandList *commandList, bool isImmediate, CommandQueue queueType);
         ~CommandListWrapper() override;
 
+      private:
+        /// @brief 在同一包装设备的 Open 即时 Graphics 列表上接管底层录制. 命令消费仍经原包装验证.
+        [[nodiscard]] std::uint64_t BeginGraphManaged(Device &device) override;
+        /// @brief 只归还本包装曾接管的物理包, 清除包装的绘制和常量前提, 再由底层收拢录制.
+        [[nodiscard]] bool EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept override;
+        /// @brief 只在接管有效期间使用底层图入口, 各项命令继续通过原包装消费.
+        void TrackGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state) override;
+        void TrackGraphBuffer(Buffer &buffer, ResourceStates state) override;
+        void RequestGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state) override;
+        void RequestGraphBuffer(Buffer &buffer, ResourceStates state) override;
+        void CommitGraphUses(std::span<const GraphTextureUse> textures, std::span<const GraphBufferUse> buffers) override;
+        void RevokeGraphUses() noexcept override;
+
+        ImmediateGraphicsRecording *m_GraphRecorder = nullptr; ///< 指向 m_CommandList 内的接口, 接管有效期间借用.
+
       protected:
         CommandListHandle m_CommandList;
         RefCountPtr<DeviceWrapper> m_Device;
@@ -262,6 +278,7 @@ namespace Physara::RHI::Validation
         bool m_IsImmediate;
         bool m_HasImmediateClaim = false;
         CommandQueue m_QueueType;
+        std::uint64_t m_GraphRecording = 0; ///< 包装层借用的底层身份, 防止图回调推进列表生命周期.
 
         CommandListState m_State = CommandListState::Initial;
         // 图形标记/快照仅供非 GL 的上游验证路径; GL 由实际 recording 检查已接受状态和索引.
@@ -276,6 +293,9 @@ namespace Physara::RHI::Validation
 
         size_t m_PipelinePushConstantSize = 0;
         bool m_PushConstantsSet = false;
+
+        /// @brief 清除包装层的 Pipeline 和 push constants 就绪条件, 保留原 Open/Closed 阶段.
+        void ResetCommandState() noexcept;
 
         void Error(const std::string &messageText,
                    std::source_location location = std::source_location::current()) const;

@@ -53,6 +53,7 @@ namespace Physara::RHI::OpenGL
             Report("CreateFramebuffer", "Unsupported: empty or shading-rate framebuffer");
             return nullptr;
         }
+        // 整组预检的短期记录. 选中的分量决定实际挂载点, 与共享的底层 storage 格式分开保存.
         struct AttachmentPlan
         {
             OpenGLTexture *texture = nullptr;
@@ -62,6 +63,7 @@ namespace Physara::RHI::OpenGL
             Format format = Format::UNKNOWN;
             GLint level = 0;
             GLint layer = 0;
+            TextureAspect aspects = TextureAspect::All;
             bool layeredStorage = false;
             bool reinterpret = false;
         };
@@ -111,6 +113,15 @@ namespace Physara::RHI::OpenGL
                        textureDesc.debugName.c_str());
                 return false;
             }
+            // 旧调用以 All 选择视图的完整分量. 图执行传入确切的分量集合.
+            const auto available = FormatAspects(formatInfo);
+            const auto aspects = attachment.aspects == TextureAspect::All ? available : attachment.aspects;
+            if ((aspects & available) != aspects)
+            {
+                Report("CreateFramebuffer", "InvalidArgument: attachment aspects exceed the view format",
+                       textureDesc.debugName.c_str());
+                return false;
+            }
             if (reinterpret &&
                 (!textureDesc.isTypeless || storageCaps.viewClass == 0 || storageCaps.viewClass != viewCaps.viewClass))
             {
@@ -131,7 +142,10 @@ namespace Physara::RHI::OpenGL
             samples = textureDesc.sampleCount;
             auto &plan = plans[planCount++];
             plan.texture = texture;
-            plan.attachment = depth && formatInfo.hasStencil ? GL_DEPTH_STENCIL_ATTACHMENT : point;
+            // Packed 图像可挂一个分量或两个分量. 按实际选中的逻辑附件设置 GL attachment point.
+            plan.attachment = aspects == TextureAspect::DepthStencil ? GL_DEPTH_STENCIL_ATTACHMENT
+                            : aspects == TextureAspect::Stencil ? GL_STENCIL_ATTACHMENT : point;
+            plan.aspects = aspects;
             plan.format = format;
             plan.internalFormat = viewCaps.internalFormat;
             plan.level = GLint(range.baseMipLevel);
@@ -163,7 +177,9 @@ namespace Physara::RHI::OpenGL
             auto framebuffer = std::make_unique<OpenGLFramebuffer>(this, desc);
             if (desc.depthAttachment.texture)
             {
+                // 消费者使用实际挂载分量预检 Pipeline 与清除, 同格式的两个 FBO 仍可有不同分量.
                 framebuffer->m_Info.depthFormat = plans[planCount - 1].format;
+                framebuffer->m_Desc.depthAttachment.aspects = plans[planCount - 1].aspects;
             }
             if (!BeginNative("CreateFramebuffer"))
             {

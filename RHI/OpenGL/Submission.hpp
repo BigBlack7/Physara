@@ -10,7 +10,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
+
+#include "../ImmediateGraphics.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -20,6 +23,29 @@ namespace Physara::RHI::OpenGL
         Recording,
         Closed,
         Submitted
+    };
+
+    /// @brief 区分自动推导, 调用方显式请求和图执行接管. GraphManaged 按物理包身份配对进出.
+    enum class UseMode : std::uint8_t
+    {
+        Automatic,
+        Explicit,
+        GraphManaged
+    };
+
+    /// @brief 当前 GraphManaged 消费阶段的精确物理访问权限, 与包内 tracker 的状态请求独立.
+    /// @note 每次提交复制声明, 回调或 clear 结束后清空. 权限表只借用资源, 包内 lease 负责延长对象寿命.
+    struct GraphUseBatch
+    {
+        std::vector<GraphTextureUse> textures = std::vector<GraphTextureUse>(0);
+        std::vector<GraphBufferUse> buffers = std::vector<GraphBufferUse>(0);
+
+        /// @brief 丢弃阶段登记, tracker 状态和包内对象引用继续保留.
+        void Reset() noexcept
+        {
+            textures.clear();
+            buffers.clear();
+        }
     };
 
     /// @brief 持有 tracker, 资源 lease 和映射 chunk 的稳定物理包, 寿命跨逻辑列表与 GPU 完成.
@@ -37,7 +63,8 @@ namespace Physara::RHI::OpenGL
         std::atomic<bool> orphaned{false};
         bool issuedWork = false;
         bool invalid = false;
-        bool automaticBarriers = true;
+        UseMode useMode = UseMode::Automatic;
+        GraphUseBatch graphUses;
         // 图形快照中的指针只借用, 默认由 resources 保活; trackLiveness=false 的集合归调用方保活.
         // 区域标记只记录本 recording 的显式输入, 不从跨 recording 的 native 缓存推定已设置.
         GraphicsState graphics;

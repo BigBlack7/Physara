@@ -182,8 +182,7 @@ namespace Physara::Renderer::Detail
         switch (usage)
         {
         case GraphUsage::Sampled:
-            return {"Sampled", aspect == TextureAspect::Color ? ResourceStates::ShaderResource :
-                                                               ResourceStates::ShaderResource | ResourceStates::DepthRead};
+            return {"Sampled", SampledState(aspect)};
         case GraphUsage::ShaderRead: return {"ShaderRead", ResourceStates::ShaderResource};
         case GraphUsage::VertexBuffer: return {"VertexBuffer", ResourceStates::VertexBuffer};
         case GraphUsage::IndexBuffer: return {"IndexBuffer", ResourceStates::IndexBuffer};
@@ -257,10 +256,10 @@ namespace Physara::Renderer::Detail
         return std::nullopt;
     }
 
-    // 采样和着色器导出交付同格式视图, 都需要实际的视图能力和范围.
+    // 采样和着色器导出检查同一能力行和分量规则. Packed 深度只允许选择 Depth, 实际 SRV 由 RHI 创建.
     static bool SupportsSampledView(const TextureRange &range, const GraphTextureSupport &support) noexcept
     {
-        return (support.formatSupport & FormatSupport::ShaderSample) != 0 &&
+        return HasSameFormatSampledAspect(range.aspect) && (support.formatSupport & FormatSupport::ShaderSample) != 0 &&
                range.layerCount <= support.maxSampledLayers;
     }
 
@@ -289,22 +288,6 @@ namespace Physara::Renderer::Detail
         case GraphUsage::DepthStencilAttachment: return bool(support.formatSupport & FormatSupport::DepthStencil);
         default: return false;
         }
-    }
-
-    // 普通阶段一次准备全部状态. 首发 RHI 支持图形只读位的组合及 CopySource|CopyDest.
-    static bool SupportsCombinedState(ResourceStates state) noexcept
-    {
-        const auto reads = ResourceStates::ConstantBuffer | ResourceStates::VertexBuffer | ResourceStates::IndexBuffer |
-                           ResourceStates::ShaderResource | ResourceStates::DepthRead;
-        return (state & ~reads) == ResourceStates::Unknown ||
-               state == (ResourceStates::CopySource | ResourceStates::CopyDest);
-    }
-
-    // Texture 状态共享 mip/layer, Buffer 状态共享整个对象. 内容依赖仍使用 aspect 和字节区间.
-    static bool SharesTrackedSubresource(const TextureRange &a, const TextureRange &b) noexcept
-    {
-        return IntersectInterval(a.firstMip, a.mipCount, b.firstMip, b.mipCount).second != 0 &&
-               IntersectInterval(a.firstLayer, a.layerCount, b.firstLayer, b.layerCount).second != 0;
     }
 
     // 逐项核对本用途与已登记的同一状态单元. 首发允许任意图形只读位组合, 或复制源和目标状态组合.
@@ -413,6 +396,7 @@ namespace Physara::Renderer::Detail
                 }
                 if (state)
                 {
+                    // 先排除同一物理状态单元中无法同时满足的普通请求. 清除前的 CopyDest 属于独立阶段.
                     if (auto error = CheckOrdinaryUse(*texture, *state, plan, support.readOnlyDepthSampling,
                                                       location, pass))
                     {

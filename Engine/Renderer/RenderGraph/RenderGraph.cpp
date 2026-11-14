@@ -327,11 +327,32 @@ namespace Physara::Renderer
             return Detail::MakeGraphError(GraphErrorCode::InvalidPass, "InvokePass", {}, {},
                                           "Pass identity is not part of this graph");
         }
-        // 每次调用新建一份只关联该 Pass 的查询上下文, 查询错误优先报告.
+        // 独立入口只准备声明授权. 需要录制的回调由执行器在物化及用途提交后调用.
         Activity activity(m_Active);
         PassResources resources(*this, m_Passes[id.index], resolver);
-        const auto &callback = m_Callbacks[id.index];
-        auto failure = callback.invoke(callback.data, resources);
-        return resources.m_Failure ? resources.m_Failure : failure;
+        return InvokePreparedPass(resources, nullptr);
+    }
+
+    GraphFailure RenderGraph::InvokePreparedPass(PassResources &resources, RHI::CommandList *commands) const noexcept
+    {
+        const auto &pass = resources.m_Pass;
+        const auto &callback = m_Callbacks[pass.id.index];
+        if (!commands && callback.requiresCommands)
+        {
+            return Detail::MakeGraphError(GraphErrorCode::InvalidRecording, "InvokePass", pass.name, {},
+                                          "This Pass requires an immediate Graphics recording");
+        }
+        const auto failure = callback.invoke(callback.data, resources, commands);
+        // 查询上下文可在记录本地错误时发现更早的 RHI 诊断. 回调返回后补查最后一段命令的结果.
+        if (resources.m_Failure)
+        {
+            return resources.m_Failure;
+        }
+        if (!resources.m_Diagnostics.IsClear())
+        {
+            return Detail::MakeGraphError(GraphErrorCode::ExecutionFailed, resources.m_RhiStage, pass.name, {},
+                                          "RHI reported Error/Fatal; see the device diagnostic");
+        }
+        return failure;
     }
 }

@@ -105,7 +105,8 @@ namespace Physara::RHI::OpenGL
             return;
         }
         if (!Retain(native, native->m_InternalOwners) ||
-            !UseTexture(*native, range, ResourceStates::CopyDest, operation) || !m_Device->BeginNative(operation))
+            !UseTexture(*native, range, TextureAspect::Color, ResourceStates::CopyDest, operation) ||
+            !m_Device->BeginNative(operation))
         {
             return;
         }
@@ -168,8 +169,11 @@ namespace Physara::RHI::OpenGL
             m_Device->Report(Operation, "InvalidArgument: depth/stencil format, aspect or clear value");
             return;
         }
+        const auto aspects = clearDepth && clearStencil ? TextureAspect::DepthStencil
+                           : clearDepth ? TextureAspect::Depth : TextureAspect::Stencil;
         if (!Retain(native, native->m_InternalOwners) ||
-            !UseTexture(*native, range, ResourceStates::CopyDest, Operation) || !m_Device->BeginNative(Operation))
+            !UseTexture(*native, range, aspects, ResourceStates::CopyDest, Operation) ||
+            !m_Device->BeginNative(Operation))
         {
             return;
         }
@@ -202,6 +206,12 @@ namespace Physara::RHI::OpenGL
         {
             m_Packet->invalid = true;
             context.Invalidate();
+            return;
+        }
+        if (clearDepth)
+        {
+            // 用实际 clear 范围推进深度写入历史. 仅清 stencil 时保留深度采样依赖的进度.
+            RecordDepthWrite(*native, range);
         }
     }
 
@@ -239,9 +249,11 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
+        // 两端的精确区间各自核对角色和授权. 同一对象的 tracker 可以同时持有两个复制状态位.
         if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
-            !UseBuffer(*src, ResourceStates::CopySource, Operation) ||
-            !UseBuffer(*dest, ResourceStates::CopyDest, Operation) || !m_Device->BeginNative(Operation))
+            !UseBuffer(*src, ResourceStates::CopySource, Operation, BufferRange{sourceOffset, size}) ||
+            !UseBuffer(*dest, ResourceStates::CopyDest, Operation, BufferRange{destinationOffset, size}) ||
+            !m_Device->BeginNative(Operation))
         {
             return;
         }
@@ -291,9 +303,11 @@ namespace Physara::RHI::OpenGL
             m_Device->Report(Operation, "Unsupported or InvalidArgument: texture copy profile, region or overlap");
             return;
         }
+        // 同格式复制消费实际存储的全部分量, packed 复制需要两端同时提供深度和模板权限.
+        const auto aspects = FormatAspects(GetFormatInfo(sd.format));
         if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
-            !UseTexture(*src, {s.mipLevel, 1, s.arraySlice, 1}, ResourceStates::CopySource, Operation) ||
-            !UseTexture(*dest, {d.mipLevel, 1, d.arraySlice, 1}, ResourceStates::CopyDest, Operation) ||
+            !UseTexture(*src, {s.mipLevel, 1, s.arraySlice, 1}, aspects, ResourceStates::CopySource, Operation) ||
+            !UseTexture(*dest, {d.mipLevel, 1, d.arraySlice, 1}, aspects, ResourceStates::CopyDest, Operation) ||
             !m_Device->BeginNative(Operation))
         {
             return;

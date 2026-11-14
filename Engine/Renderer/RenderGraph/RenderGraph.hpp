@@ -13,6 +13,7 @@
 #include <new>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -22,10 +23,22 @@
 namespace Physara::Renderer
 {
     class RenderGraph;
+    class PassPreparation;
     namespace Detail
     {
         class GraphCompiler;
+        class GraphExecutor;
     }
+
+    /// @brief 从执行入口观察该设备 callback 的同步 Error/Fatal, 借用调用方当次诊断区间.
+    /// @note IsClear 返回自取样起是否仍无 Error/Fatal. 观察函数保持非抛出, 只读, 并可在各阶段反复调用.
+    struct GraphExecutionDiagnostics
+    {
+        const void *scope = nullptr;
+        bool (*isClear)(const void *) noexcept = nullptr;
+
+        [[nodiscard]] bool IsClear() const noexcept { return !isClear || isClear(scope); }
+    };
 
     /// @brief 执行方提供的物理资源查询, 输入为当前 Pass 已授权的版本, 用途和规范范围.
     class PassResourceResolver
@@ -38,8 +51,8 @@ namespace Physara::Renderer
         [[nodiscard]] virtual RHI::Buffer *Resolve(const BufferAccess &access) noexcept = 0;
     };
 
-    /// @brief 当前 execute 的查询入口. 一条同版本且同用途的声明必须覆盖所请求的完整范围.
-    /// @note 查询只在回调内有效. 首次失败后本回调的查询都返回空, InvokePass 返回首次查询错误.
+    /// @brief 当前 Pass 的查询入口. 一条同版本且同用途的声明必须覆盖所请求的完整范围.
+    /// @note 查询结果借用至回调返回. 首次查询失败后, Resolve 和 BindingSet 返回空, 错误由调用入口报告.
     class PassResources final
     {
     public:
@@ -54,8 +67,15 @@ namespace Physara::Renderer
         [[nodiscard]] RHI::Buffer *Resolve(BufferId id, GraphUsage usage,
                                            std::optional<RHI::BufferRange> range = std::nullopt) noexcept;
 
+        /// @brief 借用为本 Pass 准备的附件对象. 没有附件的 Pass 或独立 InvokePass 返回空.
+        [[nodiscard]] RHI::Framebuffer *Framebuffer() const noexcept { return m_Framebuffer; }
+        /// @brief 按本 Pass prepare 的创建次序借用 BindingSet. 未准备的索引使本 Pass 失败.
+        [[nodiscard]] RHI::BindingSet *BindingSet(std::size_t index) noexcept;
+
     private:
         friend class RenderGraph;
+        friend class PassPreparation;
+        friend class Detail::GraphExecutor;
         PassResources(const RenderGraph &graph, const PassDeclaration &pass, PassResourceResolver &resolver) noexcept
             : m_Graph(graph), m_Pass(pass), m_Resolver(resolver)
         {
@@ -63,11 +83,23 @@ namespace Physara::Renderer
 
         template <typename Id, typename Range, typename Declaration, typename Use, typename ResolveFn>
         auto ResolveDeclared(Id id, GraphUsage usage, const std::optional<Range> &range,
-                             const std::deque<Declaration> &resources, ResolveFn resolve) noexcept;
+                             const std::deque<Declaration> &resources, ResolveFn resolve, Range *resolvedRange) noexcept;
+        [[nodiscard]] RHI::Texture *ResolveTexture(TextureId id, GraphUsage usage,
+                                                   const std::optional<TextureRange> &range,
+                                                   TextureRange *resolvedRange) noexcept;
+        [[nodiscard]] RHI::Buffer *ResolveBuffer(BufferId id, GraphUsage usage,
+                                               const std::optional<RHI::BufferRange> &range,
+                                               RHI::BufferRange *resolvedRange) noexcept;
+        void Fail(GraphErrorCode code, std::string_view stage, std::string_view resource, std::string_view reason,
+                  std::optional<std::uint32_t> version = std::nullopt) noexcept;
 
         const RenderGraph &m_Graph;
         const PassDeclaration &m_Pass;
         PassResourceResolver &m_Resolver;
+        RHI::Framebuffer *m_Framebuffer = nullptr;
+        std::span<const RHI::BindingSetHandle> m_BindingSets;
+        GraphExecutionDiagnostics m_Diagnostics;
+        std::string_view m_RhiStage;
         GraphFailure m_Failure;
     };
 
@@ -172,8 +204,94 @@ namespace Physara::Renderer
         [[nodiscard]] GraphResult<PassId> AddPass(std::string_view name, Setup &&setup,
                                                  GraphFailure (*execute)(PassResources &, const Data &) noexcept)
         {
+            return AddStoredPass<Data>(name, std::forward<Setup>(setup), execute, nullptr);
+        }
+
+        /// @brief 保留无回调声明的拒绝路径, nullptr 无需指定回调签名.
+        template <typename Data, typename Setup>
+        [[nodiscard]] GraphResult<PassId> AddPass(std::string_view name, Setup &&setup, std::nullptr_t)
+        {
+            using Execute = GraphFailure (*)(PassResources &, const Data &) noexcept;
+            return AddStoredPass<Data>(name, std::forward<Setup>(setup), Execute{}, nullptr);
+        }
+
+        /// @brief 声明借用即时命令列表的 Pass. prepare 可选, 在清除前建立本 Pass 的绑定集合.
+        /// @note 执行器管理本次接管和状态请求. 调用方持有列表的打开, 关闭和提交职责.
+        /// execute 同步借用列表及已准备对象, 按声明的版本和范围发出命令. 录制用途由执行器提交和撤销.
+        /// Indexed Draw 的逐顶点索引值由数据提供方保证对应的读取落在声明范围内.
+        template <typename Data, typename Setup>
+        [[nodiscard]] GraphResult<PassId> AddPass(
+            std::string_view name, Setup &&setup,
+            GraphFailure (*execute)(PassResources &, const Data &, RHI::CommandList &) noexcept,
+            GraphFailure (*prepare)(PassPreparation &, const Data &) = nullptr)
+        {
+            return AddStoredPass<Data>(name, std::forward<Setup>(setup), execute, prepare);
+        }
+
+        /// @brief 结束声明, 固定供编译和回调消费的记录.
+        /// @return 封存成功时为空. 已拒绝候选 Pass 的图无法封存, 原记录仍可读取.
+        /// @note 封存只切换阶段. 用途组合, 依赖和存储预算由 CompileRenderGraph 检查.
+        [[nodiscard]] GraphFailure Seal() noexcept;
+
+        /// @brief 独立调用已封存且空闲的图中无需命令列表的 Pass.
+        /// @note 执行方负责按计划选择 Pass 并准备物理资源. 此入口检查图代与阶段, 并限制本次查询权限.
+        /// @return 返回首个查询错误或 execute 自身的结果. 失败后调用方负责停止后续消费.
+        [[nodiscard]] GraphFailure InvokePass(PassId id, PassResourceResolver &resolver) const noexcept;
+
+        /// @brief 借用图内记录. 用途, 版本索引和导出在构建期间可能失效, Seal 后稳定至图销毁.
+        [[nodiscard]] const std::deque<TextureDeclaration> &Textures() const noexcept { return m_Textures; }
+        [[nodiscard]] const std::deque<BufferDeclaration> &Buffers() const noexcept { return m_Buffers; }
+        [[nodiscard]] std::span<const GraphExport> Exports() const noexcept { return m_Exports; }
+        [[nodiscard]] const std::deque<PassDeclaration> &Passes() const noexcept { return m_Passes; }
+
+    private:
+        friend class PassBuilder;
+        friend class PassResources;
+        friend class Detail::GraphCompiler;
+        friend class Detail::GraphExecutor;
+
+        /// @brief 阻止 setup 或消费期间重入图操作, 作用域结束时恢复调用边界.
+        struct Activity
+        {
+            explicit Activity(bool &active) noexcept : flag(active) { flag = true; }
+            ~Activity() { flag = false; }
+            bool &flag;
+        };
+
+        using Invoke = GraphFailure (*)(void *, PassResources &, RHI::CommandList *) noexcept;
+        using Prepare = GraphFailure (*)(void *, PassPreparation &);
+
+        /// @brief 将 arena 中的具体 Pass 类型与图的统一回调表连接. 每项随同索引的 Pass 发布.
+        struct PassCallback
+        {
+            void *data;
+            void (*destroy)(void *) noexcept;
+            Invoke invoke;
+            Prepare prepare;
+            bool requiresCommands;
+        };
+
+        /// @brief 以稳定地址存放拥有型数据和类型化执行入口.
+        template <typename Data, typename Execute>
+        struct StoredPass
+        {
+            using PrepareData = GraphFailure (*)(PassPreparation &, const Data &);
+            Data data{};
+            Execute execute;
+            PrepareData prepare;
+        };
+
+        /// @brief 共用 Pass 构造与发布事务. 回调签名决定消费时是否必须提供列表.
+        template <typename Data, typename Setup, typename Execute>
+        [[nodiscard]] GraphResult<PassId> AddStoredPass(
+            std::string_view name, Setup &&setup, Execute execute,
+            typename StoredPass<Data, Execute>::PrepareData prepare)
+        {
+            using Stored = StoredPass<Data, Execute>;
+            constexpr bool RequiresCommands =
+                std::is_invocable_v<Execute, PassResources &, const Data &, RHI::CommandList &>;
             static_assert(std::is_nothrow_destructible_v<Data>);
-            static_assert(alignof(StoredPass<Data>) <= Core::FrameArena::MaxAlignment);
+            static_assert(alignof(Stored) <= Core::FrameArena::MaxAlignment);
 
             const auto stage = std::string_view("AddPass");
             if (auto failure = CheckBuilding(stage, name))
@@ -190,7 +308,7 @@ namespace Physara::Renderer
 
             // 失败时先析构候选, 再撤回它占用的 arena 尾部. 已发布 Pass 的地址保持稳定.
             const std::size_t start = m_Arena.Used();
-            const auto memory = m_Arena.Allocate(1, sizeof(StoredPass<Data>), alignof(StoredPass<Data>));
+            const auto memory = m_Arena.Allocate(1, sizeof(Stored), alignof(Stored));
             if (memory.empty())
             {
                 m_Poisoned = true;
@@ -216,9 +334,9 @@ namespace Physara::Renderer
             try
             {
                 // 临时 owner 管理已构造的对象, 先于存储回退析构. setup 只积累候选声明.
-                std::unique_ptr<StoredPass<Data>, decltype(&DestroyPass<Data>)> value(
-                    ::new (static_cast<void *>(memory.data())) StoredPass<Data>{.execute = execute},
-                    &DestroyPass<Data>);
+                std::unique_ptr<Stored, decltype(&DestroyPass<Stored>)> value(
+                    ::new (static_cast<void *>(memory.data())) Stored{.execute = execute, .prepare = prepare},
+                    &DestroyPass<Stored>);
                 const PassId id{static_cast<std::uint32_t>(m_Passes.size()), m_Generation};
                 PassBuilder builder(*this, id, name);
                 const bool accepted = std::invoke(std::forward<Setup>(setup), builder, value->data);
@@ -235,7 +353,8 @@ namespace Physara::Renderer
                 }
 
                 // 发布声明成功后, 对象的析构责任随回调表转给图.
-                PublishPass(builder, {value.get(), &DestroyPass<Data>, &InvokeStoredPass<Data>});
+                PublishPass(builder, {value.get(), &DestroyPass<Stored>, &InvokeStoredPass<Data, Execute>,
+                                      prepare ? &PrepareStoredPass<Stored> : nullptr, RequiresCommands});
                 storage.published = true;
                 static_cast<void>(value.release());
                 return id;
@@ -260,63 +379,39 @@ namespace Physara::Renderer
             }
         }
 
-        /// @brief 结束声明, 固定供编译和回调消费的记录.
-        /// @return 封存成功时为空. 已拒绝候选 Pass 的图无法封存, 原记录仍可读取.
-        /// @note 封存只切换阶段. 用途组合, 依赖和存储预算由 CompileRenderGraph 检查.
-        [[nodiscard]] GraphFailure Seal() noexcept;
-
-        /// @brief 在已封存且空闲的图上同步调用指定 Pass.
-        /// @note 执行方负责按计划选择 Pass 并准备物理资源. 此入口检查图代与阶段, 并限制本次查询权限.
-        /// @return 返回首个查询错误或 execute 自身的结果. 失败后调用方负责停止后续消费.
-        [[nodiscard]] GraphFailure InvokePass(PassId id, PassResourceResolver &resolver) const noexcept;
-
-        /// @brief 借用图内记录. 用途, 版本索引和导出在构建期间可能失效, Seal 后稳定至图销毁.
-        [[nodiscard]] const std::deque<TextureDeclaration> &Textures() const noexcept { return m_Textures; }
-        [[nodiscard]] const std::deque<BufferDeclaration> &Buffers() const noexcept { return m_Buffers; }
-        [[nodiscard]] const std::deque<PassDeclaration> &Passes() const noexcept { return m_Passes; }
-        [[nodiscard]] std::span<const GraphExport> Exports() const noexcept { return m_Exports; }
-
-    private:
-        friend class PassBuilder;
-        friend class PassResources;
-        friend class Detail::GraphCompiler;
-
-        /// @brief 在 setup 和 execute 期间阻止重入, 返回时恢复调用边界.
-        struct Activity
-        {
-            explicit Activity(bool &active) noexcept : flag(active) { flag = true; }
-            ~Activity() { flag = false; }
-            bool &flag;
-        };
-
-        /// @brief 将 arena 中的具体 Pass 类型与图的统一回调表连接. 每项随同索引的 Pass 发布.
-        struct PassCallback
-        {
-            void *data;
-            void (*destroy)(void *) noexcept;
-            GraphFailure (*invoke)(void *, PassResources &) noexcept;
-        };
-
-        /// @brief 以稳定地址存放拥有型数据和类型化执行入口.
-        template <typename Data>
-        struct StoredPass
-        {
-            Data data{};
-            GraphFailure (*execute)(PassResources &, const Data &) noexcept;
-        };
-
-        template <typename Data>
+        template <typename Stored>
         static void DestroyPass(void *value) noexcept
         {
-            std::destroy_at(static_cast<StoredPass<Data> *>(value));
+            std::destroy_at(static_cast<Stored *>(value));
         }
 
-        template <typename Data>
-        [[nodiscard]] static GraphFailure InvokeStoredPass(void *value, PassResources &resources) noexcept
+        /// @brief 从统一回调表取回具体 Data. 需要命令列表时已由调用入口验证.
+        template <typename Data, typename Execute>
+        [[nodiscard]] static GraphFailure InvokeStoredPass(void *value, PassResources &resources,
+                                                          RHI::CommandList *commands) noexcept
         {
-            const auto &stored = *static_cast<const StoredPass<Data> *>(value);
-            return stored.execute(resources, stored.data);
+            const auto &stored = *static_cast<const StoredPass<Data, Execute> *>(value);
+            if constexpr (std::is_invocable_v<Execute, PassResources &, const Data &, RHI::CommandList &>)
+            {
+                return stored.execute(resources, stored.data, *commands);
+            }
+            else
+            {
+                return stored.execute(resources, stored.data);
+            }
         }
+
+        /// @brief 将同一个拥有型 Data 借给可选的准备阶段.
+        template <typename Stored>
+        [[nodiscard]] static GraphFailure PrepareStoredPass(void *value, PassPreparation &preparation)
+        {
+            const auto &stored = *static_cast<const Stored *>(value);
+            return stored.prepare(preparation, stored.data);
+        }
+
+        /// @brief 使用已建立的 Pass 查询上下文分派回调, 并汇合查询和录制诊断.
+        [[nodiscard]] GraphFailure InvokePreparedPass(PassResources &resources, RHI::CommandList *commands)
+            const noexcept;
 
         [[nodiscard]] GraphFailure CheckBuilding(std::string_view stage, std::string_view name) const noexcept;
         void PublishPass(PassBuilder &builder, PassCallback callback);

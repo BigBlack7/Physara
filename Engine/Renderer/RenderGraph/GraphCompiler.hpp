@@ -17,11 +17,15 @@
 namespace Physara::Renderer
 {
     class RenderGraph;
+    namespace Detail
+    {
+        class GraphCompiler;
+    }
 
     /// @brief 以格式, 存储维度和样本数为键的能力记录. 缺少组合表示不支持.
     /// @pre 调用方为每个组合提供唯一记录. maxDepth 是体深, maxLayers 是数组层或面数.
     /// formatSupport 描述此组合的存储和同格式视图能力, 传输和只读深度联合采样有各自的标记.
-    /// maxSampledLayers 限定一次采样视图的层数, 0 表示不支持采样. 纹理 ShaderRead 导出也遵守此限制.
+    /// maxSampledLayers 限定一次采样视图的层数, 0 表示不支持采样. 普通采样和 ShaderRead 导出均核对视图分量.
     /// readOnlyDepthSampling 用于同一 mip/layer 上的采样和只读深度/模板附件.
     /// presentation 标记可交给窗口 owner 的组合, 编译另行核对形状和宿主结束状态.
     struct GraphTextureSupport
@@ -97,8 +101,9 @@ namespace Physara::Renderer
         bool readOnly;
     };
 
-    /// @brief 执行序列中的一个 Pass. 先处理 clears, 再准备普通用途与视图, 最后按 id 调用原图回调.
-    /// @note uses 保留声明索引, readbackUses 引用其中的 CopySource. 颜色附件按声明顺序编号.
+    /// @brief 执行序列中的一个 Pass. 先物化资源并准备附件和绑定, 再处理 clears 与普通用途,
+    /// 最后按 id 调用原图回调. uses 保留声明索引, readbackUses 引用其中的 CopySource.
+    /// @note 颜色附件按声明顺序编号. 计划持有 recipe 输入, 实际 RHI 对象由执行器在使用时取得.
     struct PlannedGraphPass
     {
         PassId id;
@@ -136,9 +141,12 @@ namespace Physara::Renderer
 
     /// @brief 已验证的纯 CPU 执行计划. passes 按执行顺序保存, 资源映射按各类型的声明索引排列.
     /// @note exports 在全部 Pass 后消费, transientBytes 汇总不同瞬态槽.
-    /// 计划持有自身数据, 导入强引用和回调由同图代原图保活.
+    /// 编译器独占构造并只读发布计划. 执行器持有物化的槽, 同图代原图保活导入引用和回调.
     struct CompiledGraphPlan
     {
+        CompiledGraphPlan(const CompiledGraphPlan &) = delete;
+        CompiledGraphPlan &operator=(const CompiledGraphPlan &) = delete;
+
         std::uint64_t graphGeneration = 0;
         std::vector<PlannedGraphPass> passes = std::vector<PlannedGraphPass>(0);
         std::vector<PlannedGraphTexture> textures = std::vector<PlannedGraphTexture>(0);
@@ -146,6 +154,10 @@ namespace Physara::Renderer
         std::vector<PlannedGraphSlot> transientSlots = std::vector<PlannedGraphSlot>(0);
         std::vector<GraphExport> exports = std::vector<GraphExport>(0);
         std::uint64_t transientBytes = 0;
+
+    private:
+        friend class Detail::GraphCompiler;
+        CompiledGraphPlan() = default;
     };
 
     /// @brief 从封存图生成完整计划, 全部校验通过后才发布.

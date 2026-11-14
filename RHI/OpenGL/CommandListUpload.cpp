@@ -8,7 +8,7 @@
 
 namespace Physara::RHI::OpenGL
 {
-    // 校验区间与预算后建立 lease/CopyDest, 小写用 subdata, 大写先拷贝至包独有映射区再 GPU copy.
+    // 确认容量, 预算和 CopyDest, 图内另核对本次确切字节权限. 小写直接上传, 大写经过包独有的映射区.
     void OpenGLCommandList::WriteBuffer(Buffer *buffer, const void *data, size_t size, uint64_t offset)
     {
         auto *packet = Recording("WriteBuffer");
@@ -43,7 +43,8 @@ namespace Physara::RHI::OpenGL
             m_Device->ReportBudget("WriteBuffer", size, packet->logicalBytes, UploadCapacityLimit);
             return;
         }
-        if (!Retain(native, native->m_InternalOwners) || !TransferState(*native))
+        if (!Retain(native, native->m_InternalOwners) ||
+            !UseBuffer(*native, ResourceStates::CopyDest, "WriteBuffer", BufferRange{offset, size}))
         {
             return;
         }
@@ -127,7 +128,8 @@ namespace Physara::RHI::OpenGL
         subresources.numMipLevels = 1;
         subresources.baseArraySlice = arraySlice;
         subresources.numArraySlices = 1;
-        if (!Retain(native, native->m_InternalOwners) || !TransferState(*native, subresources))
+        if (!Retain(native, native->m_InternalOwners) ||
+            !UseTexture(*native, subresources, TextureAspect::Color, ResourceStates::CopyDest, "WriteTexture"))
         {
             return;
         }

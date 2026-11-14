@@ -15,6 +15,13 @@ namespace Physara::RHI::OpenGL
     OpenGLTexture::OpenGLTexture(OpenGLDevice *device, const TextureDesc &desc)
         : m_Device(device), m_Desc(desc), m_Deletion(std::make_unique<NativeDeletion>(NativeKind::Texture))
     {
+        // 联合采样需同时具备两种实际用途. 逐 mip 历史随底层存储保留, 新建对象的各 mip 初始无写入记录.
+        if (desc.isRenderTarget && desc.isShaderResource &&
+            (device->GetFormatCaps(desc.format, desc.dimension).support & FormatSupport::ReadOnlyDepthSampling) !=
+                FormatSupport::None)
+        {
+            m_DepthWrites = std::make_unique<std::uint64_t[]>(desc.mipLevels);
+        }
     }
 
     OpenGLTexture::~OpenGLTexture()

@@ -23,7 +23,8 @@
 #include "Utils.hpp"
 
 /// @file
-/// @brief 固定来源的描述构造, 字符串诊断和固定容量索引分配, 不拥有 Device/context 或原生缓存.
+/// @brief 固定来源的描述构造, 字符串诊断和固定容量索引分配.
+/// 附件清除辅助函数借用 Framebuffer 描述并把实际命令交给调用方的列表.
 
 #include <algorithm>
 #include <cassert>
@@ -136,14 +137,16 @@ namespace Physara::RHI::Utils
         }
     }
 
+    // 使用附件选定的分量调用 typed clear. 仍使用 All 的描述沿用按纹理格式选择分量的旧入口.
     void ClearDepthStencilAttachment(CommandList *commandList, Framebuffer *framebuffer, float depth, uint32_t stencil)
     {
         const FramebufferAttachment &att = framebuffer->GetDesc().depthAttachment;
         if (att.texture)
         {
-            const FormatInfo &formatInfo = GetFormatInfo(att.texture->GetDesc().format);
-            commandList->ClearDepthStencilTexture(att.texture, att.subresources, formatInfo.hasDepth, depth,
-                                                  formatInfo.hasStencil, uint8_t(stencil));
+            const auto aspects = att.aspects == TextureAspect::All
+                ? FormatAspects(GetFormatInfo(att.texture->GetDesc().format)) : att.aspects;
+            commandList->ClearDepthStencilTexture(att.texture, att.subresources, (aspects & TextureAspect::Depth) != 0,
+                                                  depth, (aspects & TextureAspect::Stencil) != 0, uint8_t(stencil));
         }
     }
 

@@ -1,5 +1,5 @@
-# 本目录的静态库负责 CPU 构图, 编译及按 Pass 解析资源的入口.
-# 编译器确定存活顺序, 用途与存储规划分别生成后续执行所需的值.
+# 本目录的静态库负责 CPU 构图, 编译及即时录制执行.
+# 编译器输出有序用途和物理槽映射. 执行器沿公共 RHI 首用物化, 准备附件和绑定, 再执行计划.
 # 公开声明使用 Core 的身份和帧内存, 以及通用 RHI 的描述和句柄, 因此传播这两个目标.
 add_library(PhysaraRenderGraph STATIC
     GraphResources.hpp
@@ -13,6 +13,11 @@ add_library(PhysaraRenderGraph STATIC
     RenderGraph.hpp
     RenderGraph.cpp
     PassResources.cpp
+    GraphExecutor.hpp
+    GraphExecutor.cpp
+    GraphExecutionStates.hpp
+    GraphExecutionStates.cpp
+    PassPreparation.cpp
 )
 target_link_libraries(PhysaraRenderGraph PUBLIC PhysaraCore PhysaraRHI)
 target_compile_features(PhysaraRenderGraph PUBLIC cxx_std_20)

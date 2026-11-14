@@ -407,7 +407,8 @@ namespace Physara::Renderer
     // 解析只在授权后发生. 首个失败留在当前查询上下文, 由 InvokePass 返回给执行方.
     template <typename Id, typename Range, typename Declaration, typename Use, typename ResolveFn>
     auto PassResources::ResolveDeclared(Id id, GraphUsage usage, const std::optional<Range> &requested,
-                                        const std::deque<Declaration> &resources, ResolveFn resolve) noexcept
+                                        const std::deque<Declaration> &resources, ResolveFn resolve,
+                                        Range *resolvedRange) noexcept
     {
         using Pointer = decltype(resolve(typename Use::AccessType{}));
         if (m_Failure)
@@ -416,7 +417,7 @@ namespace Physara::Renderer
         }
         const auto fail = [&](GraphErrorCode code, std::string_view name, std::string_view reason) -> Pointer
         {
-            m_Failure = Detail::MakeGraphError(code, "PassResources", m_Pass.name, name, reason, id.version);
+            Fail(code, "PassResources", name, reason, id.version);
             return nullptr;
         };
         if (!id.IsValid() || id.identity.generation != m_Graph.m_Generation || id.identity.index >= resources.size())
@@ -447,6 +448,10 @@ namespace Physara::Renderer
 
         if (auto *resolved = resolve({id, range, usage}))
         {
+            if (resolvedRange)
+            {
+                *resolvedRange = range;
+            }
             return resolved;
         }
         return fail(GraphErrorCode::UnresolvedResource, resource.desc.debugName, "Declared resource could not be resolved");
@@ -454,15 +459,57 @@ namespace Physara::Renderer
 
     RHI::Texture *PassResources::Resolve(TextureId id, GraphUsage usage, std::optional<TextureRange> range) noexcept
     {
+        return ResolveTexture(id, usage, range, nullptr);
+    }
+
+    RHI::Texture *PassResources::ResolveTexture(TextureId id, GraphUsage usage,
+                                               const std::optional<TextureRange> &range,
+                                               TextureRange *resolvedRange) noexcept
+    {
+        // 查询和绑定准备共用权限判断. 绑定准备另取已规范化范围, 以该范围构造实际视图.
         return ResolveDeclared<TextureId, TextureRange, TextureDeclaration, TextureUse>(
             id, usage, range, m_Graph.m_Textures,
-            [this](const TextureAccess &access) noexcept { return m_Resolver.Resolve(access); });
+            [this](const TextureAccess &access) noexcept { return m_Resolver.Resolve(access); }, resolvedRange);
     }
 
     RHI::Buffer *PassResources::Resolve(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range) noexcept
     {
+        return ResolveBuffer(id, usage, range, nullptr);
+    }
+
+    RHI::Buffer *PassResources::ResolveBuffer(BufferId id, GraphUsage usage,
+                                             const std::optional<RHI::BufferRange> &range,
+                                             RHI::BufferRange *resolvedRange) noexcept
+    {
         return ResolveDeclared<BufferId, RHI::BufferRange, BufferDeclaration, BufferUse>(
             id, usage, range, m_Graph.m_Buffers,
-            [this](const BufferAccess &access) noexcept { return m_Resolver.Resolve(access); });
+            [this](const BufferAccess &access) noexcept { return m_Resolver.Resolve(access); }, resolvedRange);
+    }
+
+    RHI::BindingSet *PassResources::BindingSet(std::size_t index) noexcept
+    {
+        if (m_Failure)
+        {
+            return nullptr;
+        }
+        if (index >= m_BindingSets.size())
+        {
+            Fail(GraphErrorCode::AccessDenied, "PassResources", {}, "BindingSet index was not prepared");
+            return nullptr;
+        }
+        return m_BindingSets[index].Get();
+    }
+
+    void PassResources::Fail(GraphErrorCode code, std::string_view stage, std::string_view resource,
+                             std::string_view reason, std::optional<std::uint32_t> version) noexcept
+    {
+        if (!m_Failure)
+        {
+            // 同一回调中较早的 RHI 诊断优先于迟到的资源查询错误.
+            m_Failure = m_Diagnostics.IsClear() || code == GraphErrorCode::ExecutionFailed
+                ? Detail::MakeGraphError(code, stage, m_Pass.name, resource, reason, version)
+                : Detail::MakeGraphError(GraphErrorCode::ExecutionFailed, m_RhiStage, m_Pass.name, {},
+                                         "RHI reported Error/Fatal; see the device diagnostic");
+        }
     }
 }

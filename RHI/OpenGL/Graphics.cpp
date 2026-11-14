@@ -26,9 +26,16 @@ namespace Physara::RHI::OpenGL
         return state;
     }
 
+    // 同格式深度采样同时带上 DepthRead, 供普通采样和只读附件联合采样共用.
+    static ResourceStates TextureReads(const OpenGLTexture &texture, ResourceStates shaderReads) noexcept
+    {
+        return GetFormatInfo(texture.GetDesc().format).hasDepth ? shaderReads | ResourceStates::DepthRead : shaderReads;
+    }
+
     bool OpenGLCommandList::GraphicsUses(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
                                          const char *operation)
     {
+        const auto &depth = state.framebuffer->GetDesc().depthAttachment;
         // Shader 读取按活动计划请求, 然后处理顶点/索引与附件, 不从 native 缓存命中推断用途.
         for (const auto &entry : pipeline.Plan().resources)
         {
@@ -37,16 +44,22 @@ namespace Physara::RHI::OpenGL
             {
                 const auto use = binding.type == ResourceType::ConstantBuffer ? ResourceStates::ConstantBuffer
                                                                               : ShaderReads(entry.stages);
-                if (!UseBuffer(*static_cast<OpenGLBuffer *>(binding.resource), use, operation))
+                if (!UseBuffer(*static_cast<OpenGLBuffer *>(binding.resource), use, operation, binding.range))
                 {
                     return false;
                 }
             }
-            else if (binding.type == ResourceType::Texture_SRV &&
-                     !UseTexture(*static_cast<OpenGLTexture *>(binding.resource), binding.subresources,
-                                 ShaderReads(entry.stages), operation))
+            else if (binding.type == ResourceType::Texture_SRV)
             {
-                return false;
+                auto &texture = *static_cast<OpenGLTexture *>(binding.resource);
+                const auto shaderReads = ShaderReads(entry.stages);
+                const auto usesDepth = GetFormatInfo(texture.GetDesc().format).hasDepth;
+                const auto aspect = usesDepth ? TextureAspect::Depth : TextureAspect::Color;
+                if (!UseTexture(texture, binding.subresources, aspect, TextureReads(texture, shaderReads),
+                                operation, shaderReads))
+                {
+                    return false;
+                }
             }
         }
         if (const auto *input = static_cast<OpenGLInputLayout *>(pipeline.GetDesc().inputLayout.Get()))
@@ -61,6 +74,7 @@ namespace Physara::RHI::OpenGL
                 used[attribute.bufferIndex] = true;
                 const auto found =
                     std::ranges::find(state.vertexBuffers, attribute.bufferIndex, &VertexBufferBinding::slot);
+                // 绑定时先确认 VB 角色. 实际元素区间由 Draw 在取得命令参数之后检查.
                 if (!UseBuffer(*static_cast<OpenGLBuffer *>(found->buffer), ResourceStates::VertexBuffer, operation))
                 {
                     return false;
@@ -75,15 +89,29 @@ namespace Physara::RHI::OpenGL
         for (const auto &attachment : state.framebuffer->GetDesc().colorAttachments)
         {
             if (!UseTexture(*static_cast<OpenGLTexture *>(attachment.texture), attachment.subresources,
-                            ResourceStates::RenderTarget, operation))
+                            TextureAspect::Color, ResourceStates::RenderTarget, operation))
             {
                 return false;
             }
         }
-        const auto &depth = state.framebuffer->GetDesc().depthAttachment;
+        if (depth.texture && depth.isReadOnly)
+        {
+            // 合并与深度附件相交的活动采样阶段. Automatic 沿该组合更新 tracker, GraphManaged 核对已提交的值.
+            auto use = ResourceStates::DepthRead;
+            for (const auto &entry : pipeline.Plan().resources)
+            {
+                const auto &binding = BindingFor(state, entry);
+                if (SamplesAttachment(binding, depth))
+                {
+                    use = use | ShaderReads(entry.stages);
+                }
+            }
+            return UseTexture(*static_cast<OpenGLTexture *>(depth.texture), depth.subresources, depth.aspects,
+                              use, operation, ResourceStates::DepthRead);
+        }
         return !depth.texture ||
-               UseTexture(*static_cast<OpenGLTexture *>(depth.texture), depth.subresources,
-                          depth.isReadOnly ? ResourceStates::DepthRead : ResourceStates::DepthWrite, operation);
+               UseTexture(*static_cast<OpenGLTexture *>(depth.texture), depth.subresources, depth.aspects,
+                          ResourceStates::DepthWrite, operation);
     }
 
     void OpenGLCommandList::ApplyGraphics(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline)
@@ -151,7 +179,7 @@ namespace Physara::RHI::OpenGL
     void OpenGLCommandList::SetResourceStatesForBindingSet(BindingSet *bindingSet)
     {
         // 此入口只形成待提交的用途请求; 单独保活实际资源以保护 tracker 对 extension 的借用.
-        if (!Recording("SetResourceStatesForBindingSet"))
+        if (!StateRecording("SetResourceStatesForBindingSet"))
         {
             return;
         }
@@ -175,7 +203,8 @@ namespace Physara::RHI::OpenGL
             if (binding.type == ResourceType::Texture_SRV)
             {
                 auto *texture = static_cast<OpenGLTexture *>(binding.resource);
-                m_Packet->tracker.RequireTextureState(&texture->m_State, binding.subresources, shaderState);
+                m_Packet->tracker.RequireTextureState(&texture->m_State, binding.subresources,
+                                                      TextureReads(*texture, shaderState));
             }
             else
             {

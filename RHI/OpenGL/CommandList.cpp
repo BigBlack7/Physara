@@ -153,13 +153,65 @@ namespace Physara::RHI::OpenGL
         {
             return nullptr;
         }
-        if (m_Packet == nullptr || m_Packet->phase != PacketPhase::Recording || m_Packet->invalid ||
-            m_Packet->tracker.HasErrors() || m_Device->m_ActiveRecording.load() != m_Packet->recordingId)
+        auto *packet = OwningRecording();
+        if (!packet || packet->invalid || packet->tracker.HasErrors())
         {
             m_Device->Report(operation, "InvalidState: no valid owning recording");
             return nullptr;
         }
+        return packet;
+    }
+
+    UploadWorkPacket *OpenGLCommandList::OwningRecording() const noexcept
+    {
+        if (!m_Packet || m_Packet->phase != PacketPhase::Recording ||
+            m_Device->m_ActiveRecording.load() != m_Packet->recordingId)
+        {
+            return nullptr;
+        }
         return m_Packet;
+    }
+
+    std::uint64_t OpenGLCommandList::BeginGraphManaged(Device &device) noexcept
+    {
+        // 错误线程在读取包状态前拒绝. 只有确认为当前 owner 的有效 Automatic 包才清空图形状态.
+        if (&device != m_Device.Get() || std::this_thread::get_id() != m_Device->m_OwnerThread ||
+            !m_Device->RequireContext("BeginGraphManaged"))
+        {
+            return 0;
+        }
+        auto *packet = OwningRecording();
+        if (!packet || packet->invalid || packet->tracker.HasErrors() || packet->useMode != UseMode::Automatic ||
+            !packet->tracker.GetBufferBarriers().empty() || !packet->tracker.GetTextureBarriers().empty())
+        {
+            return 0;
+        }
+        ResetGraphicsState();
+        packet->useMode = UseMode::GraphManaged;
+        return packet->recordingId;
+    }
+
+    bool OpenGLCommandList::EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept
+    {
+        if (std::this_thread::get_id() != m_Device->m_OwnerThread)
+        {
+            return false;
+        }
+        auto *packet = OwningRecording();
+        if (!packet || packet->recordingId != recordingId || packet->useMode != UseMode::GraphManaged)
+        {
+            return false;
+        }
+        // 仅匹配身份的包可归还接管. 模式, 批次和缓存都是 CPU 状态, 仍保留 claim, tracker 和 lease.
+        ResetGraphicsState();
+        packet->graphUses.Reset();
+        packet->useMode = UseMode::Automatic;
+        if (!executionSucceeded)
+        {
+            // 有序图形和传输由 GL 命令顺序保证. 丢弃未提交的依赖条目, 保留包内状态和已发前缀.
+            packet->tracker.ClearBarriers();
+        }
+        return m_Device->RequireContext("EndGraphManaged") && !packet->invalid && !packet->tracker.HasErrors();
     }
 
     void OpenGLCommandList::Close()
@@ -173,6 +225,11 @@ namespace Physara::RHI::OpenGL
         if (m_Packet == nullptr || m_Packet->phase != PacketPhase::Recording)
         {
             m_Device->Report("Close", "InvalidState: no owning recording");
+            return;
+        }
+        if (m_Packet->useMode == UseMode::GraphManaged)
+        {
+            m_Device->Report("Close", "InvalidState: graph execution owns the recording scope");
             return;
         }
         if (!m_Packet->invalid && !m_Packet->tracker.HasErrors())
@@ -205,11 +262,16 @@ namespace Physara::RHI::OpenGL
         // 取消逻辑可绘制条件并使 native 事实未知, 资源用途和已发前缀的 lease 继续属于同一包.
         if (Recording("ClearState") != nullptr)
         {
-            m_Packet->graphics = {};
-            m_Packet->graphicsSet = false;
-            m_Packet->viewportSet = false;
-            m_Packet->scissorSet = false;
-            m_Device->m_ContextState.Invalidate();
+            ResetGraphicsState();
         }
+    }
+
+    void OpenGLCommandList::ResetGraphicsState() noexcept
+    {
+        m_Packet->graphics = {};
+        m_Packet->graphicsSet = false;
+        m_Packet->viewportSet = false;
+        m_Packet->scissorSet = false;
+        m_Device->m_ContextState.Invalidate();
     }
 }

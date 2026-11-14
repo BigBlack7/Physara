@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 D05 · 让整帧经 RenderGraph 执行。D04 的五个工作包均已验收归档，阶段出口通过。D05-T01 和 D05-T02 已验收归档。下一工作包为 D05-T03 · 实现图执行、首次使用分配与单一同步，待建立 OpenSpec change。 [D05 阶段](D03-D05-FramePipeline.md#dev-d05) · [D05-T01 归档](../../openspec/changes/archive/2026-11-13-establish-render-graph-contract/tasks.md#final-verification) · [D05-T02 归档](../../openspec/changes/archive/2026-11-14-compile-render-graph-plan/tasks.md#final-verification) · [D05-T03](D03-D05-FramePipeline.md#d05-t03) · [D04 阶段出口](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#d04-阶段出口) · [D04-T05 验收](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#final-verification)
+当前阶段为 D05 · 让整帧经 RenderGraph 执行。D04 的五个工作包均已验收归档，阶段出口通过。D05-T01 至 D05-T03 已验收归档。下一工作包为 D05-T04 · 将 UI、窗口和本帧纹理绑定接入图，待立项。 [D05 阶段](D03-D05-FramePipeline.md#dev-d05) · [D05-T01 归档](../../openspec/changes/archive/2026-11-13-establish-render-graph-contract/tasks.md#final-verification) · [D05-T02 归档](../../openspec/changes/archive/2026-11-14-compile-render-graph-plan/tasks.md#final-verification) · [D05-T03 归档](../../openspec/changes/archive/2026-11-15-execute-render-graph-plan/tasks.md#final-verification) · [D05-T04](D03-D05-FramePipeline.md#d05-t04) · [D04 阶段出口](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#d04-阶段出口) · [D04-T05 验收](../../openspec/changes/archive/2026-11-12-establish-editor-commands-and-render-requests/tasks.md#final-verification)
 
 ## 阅读与使用
 

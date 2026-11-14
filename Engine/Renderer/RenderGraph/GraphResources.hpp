@@ -41,14 +41,8 @@ namespace Physara::Renderer
     /// @brief 由图代和 Pass 声明索引组成, 供生产者记录和回调入口使用.
     using PassId = Core::Identity<GraphPassTag>;
 
-    /// @brief 纹理范围的 aspect 位集. 深度和模板可单独选取, 颜色只用于颜色格式.
-    enum class TextureAspect : std::uint8_t
-    {
-        Color = 1,
-        Depth = 2,
-        Stencil = 4,
-        DepthStencil = 6
-    };
+    /// @brief 图声明沿用 RHI 的分量位集. 范围必须选定明确分量, 省略范围才表示整个允许范围.
+    using TextureAspect = RHI::TextureAspect;
 
     /// @brief mip 和 layer 使用起点与正计数, aspect 必须来自实际格式.
     /// @note 整个允许范围以省略参数表达. 显式范围不裁剪, 3D 纹理的深度不作为数组层.
@@ -246,7 +240,7 @@ namespace Physara::Renderer
         std::vector<std::size_t> readbackUses = std::vector<std::size_t>(0); ///< 图内读回对应的 CopySource 用途索引.
     };
 
-    /// @brief 区分声明, 编译及回调消费阶段的失败.
+    /// @brief 区分声明, 编译, 录制执行及状态交接的失败.
     enum class GraphErrorCode : std::uint8_t
     {
         InvalidPhase,
@@ -267,7 +261,11 @@ namespace Physara::Renderer
         InvalidFeedback,
         CyclicDependency,
         OverwrittenExport,
-        TransientBudgetExceeded
+        TransientBudgetExceeded,
+        InvalidRecording, ///< 调用阶段或录制接管前提不满足.
+        StateMismatch, ///< 已知物理状态与导入声明的 entry 不符.
+        ConflictingExport, ///< 一个瞬态追踪单元的图尾用途无法合并.
+        ExecutionFailed ///< 执行阶段的 RHI 诊断或操作失败.
     };
 
     /// @brief 错误正文独立持有阶段及已知对象信息, 可在图销毁后报告.

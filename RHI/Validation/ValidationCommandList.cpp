@@ -35,6 +35,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace Physara::RHI::Validation
 {
@@ -57,6 +58,71 @@ namespace Physara::RHI::Validation
         : m_CommandList(commandList), m_Device(device), m_MessageCallback(device->GetMessageCallback()),
           m_IsImmediate(isImmediate), m_QueueType(queueType)
     {
+    }
+
+    std::uint64_t CommandListWrapper::BeginGraphManaged(Device &device)
+    {
+        // 先确认公共列表协议, 再让实际后端核对 owner/context 和物理包. 回调继续走本包装.
+        if (&device != m_Device.Get() || !m_IsImmediate || m_QueueType != CommandQueue::Graphics ||
+            m_State != CommandListState::Open || !m_HasImmediateClaim || m_GraphRecording != 0)
+        {
+            return 0;
+        }
+        if (auto *recording = dynamic_cast<ImmediateGraphicsRecording *>(m_CommandList.Get()))
+        {
+            m_GraphRecording = recording->BeginGraphManaged(*m_CommandList->GetDevice());
+            if (m_GraphRecording != 0)
+            {
+                m_GraphRecorder = recording;
+                ResetCommandState();
+            }
+            return m_GraphRecording;
+        }
+        return 0;
+    }
+
+    bool CommandListWrapper::EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept
+    {
+        if (recordingId == 0 || m_GraphRecording != recordingId)
+        {
+            return false;
+        }
+        // 成功接管时已有底层互操作. 即使包失效, 包装也要清掉图形就绪条件, 将关闭交还给原调用方.
+        auto *recording = std::exchange(m_GraphRecorder, nullptr);
+        m_GraphRecording = 0;
+        ResetCommandState();
+        return recording->EndGraphManaged(recordingId, executionSucceeded);
+    }
+
+    void CommandListWrapper::TrackGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state)
+    {
+        m_GraphRecorder->TrackGraphTexture(texture, range, state);
+    }
+
+    void CommandListWrapper::TrackGraphBuffer(Buffer &buffer, ResourceStates state)
+    {
+        m_GraphRecorder->TrackGraphBuffer(buffer, state);
+    }
+
+    void CommandListWrapper::RequestGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state)
+    {
+        m_GraphRecorder->RequestGraphTexture(texture, range, state);
+    }
+
+    void CommandListWrapper::RequestGraphBuffer(Buffer &buffer, ResourceStates state)
+    {
+        m_GraphRecorder->RequestGraphBuffer(buffer, state);
+    }
+
+    void CommandListWrapper::CommitGraphUses(std::span<const GraphTextureUse> textures,
+                                             std::span<const GraphBufferUse> buffers)
+    {
+        m_GraphRecorder->CommitGraphUses(textures, buffers);
+    }
+
+    void CommandListWrapper::RevokeGraphUses() noexcept
+    {
+        m_GraphRecorder->RevokeGraphUses();
     }
 
     CommandListWrapper::~CommandListWrapper()
@@ -210,6 +276,11 @@ namespace Physara::RHI::Validation
     {
         // 这里只推进包装层调用协议并释放 immediate claim. 下层 void Close 的诊断仍由实际 backend 报告,
         // Closed 不证明原生录制成功, 更不表示已经提交; Execute 还须通过下层整批预检并取得真实票据.
+        if (m_GraphRecording != 0)
+        {
+            Error("InvalidState: graph execution owns the recording scope");
+            return;
+        }
         switch (m_State)
         {
         case CommandListState::Initial:
@@ -1966,13 +2037,19 @@ namespace Physara::RHI::Validation
             return;
         }
 
+        ResetCommandState();
+        m_CommandList->ClearState();
+    }
+
+    void CommandListWrapper::ResetCommandState() noexcept
+    {
+        // 各状态快照只在对应标记有效时可消费. 后端继续持有保活引用, 包装仍保留原录制阶段.
         m_GraphicsStateSet = false;
         m_ComputeStateSet = false;
         m_MeshletStateSet = false;
         m_RayTracingStateSet = false;
         m_PushConstantsSet = false;
-
-        m_CommandList->ClearState();
+        m_PipelinePushConstantSize = 0;
     }
 
     Device *CommandListWrapper::GetDevice()

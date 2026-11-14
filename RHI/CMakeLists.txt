@@ -13,8 +13,10 @@ add_library(PhysaraRHI STATIC
     Validation/ValidationCommandList.cpp
 )
 
+# 即时录制互操作随公共头提供. 具体接管检查由 Validation 和原生后端实现.
 target_sources(PhysaraRHI PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/RHI.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ImmediateGraphics.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Resource.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Containers.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ShaderTypes.hpp"

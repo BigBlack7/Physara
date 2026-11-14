@@ -346,6 +346,7 @@ namespace Physara::RHI
         ShaderUavLoad = 0x00000200,
         ShaderUavStore = 0x00000400,
         ShaderAtomic = 0x00000800,
+        ReadOnlyDepthSampling = 0x00001000, ///< 单样本 2D 格式可联合采样和只读深度/模板测试, Draw 须禁用相应写入.
     };
 
     PHYSARA_RHI_ENUM_CLASS_FLAG_OPERATORS(FormatSupport)
@@ -2106,12 +2107,36 @@ namespace Physara::RHI
     // Framebuffer
     //////////////////////////////////////////////////////////////////////////
 
+    /// @brief 纹理的颜色, 深度或模板分量位集. 仅在 FramebufferAttachment 描述中用 All 选择视图的完整分量.
+    enum class TextureAspect : uint8_t
+    {
+        All = 0,
+        Color = 1,
+        Depth = 2,
+        Stencil = 4,
+        DepthStencil = 6
+    };
+
+    PHYSARA_RHI_ENUM_CLASS_FLAG_OPERATORS(TextureAspect)
+
+    /// @brief 由已验证的视图格式取得完整分量.
+    [[nodiscard]] inline TextureAspect FormatAspects(const FormatInfo &info) noexcept
+    {
+        if (info.hasDepth)
+        {
+            return info.hasStencil ? TextureAspect::DepthStencil : TextureAspect::Depth;
+        }
+        return info.hasStencil ? TextureAspect::Stencil : TextureAspect::Color;
+    }
+
+    /// @brief 借用纹理并指定附件视图. 工厂校验分量及范围, 成功的 Framebuffer 持有附件对象.
     struct FramebufferAttachment
     {
         Texture *texture = nullptr;
         TextureSubresourceSet subresources = TextureSubresourceSet(0, 1, 0, 1);
         Format format = Format::UNKNOWN;
         bool isReadOnly = false;
+        TextureAspect aspects = TextureAspect::All; ///< 附件的实际分量, All 由后端按视图格式解析.
 
         constexpr FramebufferAttachment &SetTexture(Texture *t)
         {

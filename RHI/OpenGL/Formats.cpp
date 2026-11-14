@@ -81,9 +81,9 @@ namespace Physara::RHI::OpenGL
     static bool ReadFormat(OpenGLDevice &device, const DeviceCaps &caps, const FormatMapping &mapping,
                            TextureDimension dimension, FormatCaps &result)
     {
-        // 对实际 target 求支持交集; MS 使用枚举出的样本集合, 不由最大样本数推导中间值可用.
+        const auto &format = GetFormatInfo(mapping.format);
         // GL 4.6 8.5 排除 3D 深度/模板存储; 不能由驱动的乐观 query 放行非法 target.
-        if (dimension == TextureDimension::Texture3D && GetFormatInfo(mapping.format).hasDepth)
+        if (dimension == TextureDimension::Texture3D && format.hasDepth)
         {
             return true;
         }
@@ -124,7 +124,7 @@ namespace Physara::RHI::OpenGL
                     result.support = result.support | FormatSupport::Blendable;
                 }
             }
-            if (depth == GL_TRUE && (!GetFormatInfo(mapping.format).hasStencil || stencil == GL_TRUE))
+            if (depth == GL_TRUE && (!format.hasStencil || stencil == GL_TRUE))
             {
                 result.support = result.support | FormatSupport::DepthStencil;
             }
@@ -133,8 +133,10 @@ namespace Physara::RHI::OpenGL
             dimension == TextureDimension::Texture2DMS || dimension == TextureDimension::Texture2DMSArray;
         if (vertex == GL_FULL_SUPPORT && fragment == GL_FULL_SUPPORT)
         {
+            // ShaderLoad 保留驱动读取能力, 供纹理存储校验使用.
+            // ShaderSample 额外要求格式可用于首发浮点采样视图, 供图编译和绑定工厂共用.
             result.support = result.support | FormatSupport::ShaderLoad;
-            if (!multisample)
+            if (!multisample && format.kind != FormatKind::Integer)
             {
                 result.support = result.support | FormatSupport::ShaderSample;
             }
@@ -142,6 +144,23 @@ namespace Physara::RHI::OpenGL
         if (!multisample)
         {
             result.sampleMask = 1u << 1;
+            const auto required = FormatSupport::DepthStencil | FormatSupport::ShaderSample;
+            if (dimension == TextureDimension::Texture2D && (result.support & required) == required &&
+                glTextureBarrier != nullptr)
+            {
+                // GL 4.6 22.3.1 为采样和测试的组合提供独立查询. Packed 格式还要求同时进行模板测试的能力.
+                const bool depthTest = query(GL_SIMULTANEOUS_TEXTURE_AND_DEPTH_TEST) == GL_FULL_SUPPORT;
+                const bool stencilTest = !format.hasStencil ||
+                                         query(GL_SIMULTANEOUS_TEXTURE_AND_STENCIL_TEST) == GL_FULL_SUPPORT;
+                if (!device.CheckNative("CreateDevice.ReadOnlyDepthSampling"))
+                {
+                    return false;
+                }
+                if (depthTest && stencilTest)
+                {
+                    result.support = result.support | FormatSupport::ReadOnlyDepthSampling;
+                }
+            }
             return true;
         }
         const GLint count = query(GL_NUM_SAMPLE_COUNTS);

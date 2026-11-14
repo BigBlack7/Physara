@@ -63,6 +63,11 @@ namespace Physara::RHI::OpenGL
                 m_Device->Report(operation, "InvalidArgument: index byte interval exceeds buffer");
                 return;
             }
+            if (!CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(state.indexBuffer.buffer),
+                                     ResourceStates::IndexBuffer, operation, BufferRange{indexOffset, size}))
+            {
+                return;
+            }
         }
         if (const auto *input = static_cast<OpenGLInputLayout *>(pipeline->GetDesc().inputLayout.Get()))
         {
@@ -70,22 +75,36 @@ namespace Physara::RHI::OpenGL
             {
                 const auto found =
                     std::ranges::find(state.vertexBuffers, attribute.bufferIndex, &VertexBufferBinding::slot);
-                // indexed 内容由调用方/资产边界保证; 不为求最大索引增加 GPU 同步读回.
-                // 已检查的 count/stride 上限保证下面的宽算术可表示, 实例属性 divisor 固定为 1.
-                const auto last = attribute.instanced
-                                      ? std::uint64_t(args.startInstanceLocation) + args.instanceCount - 1
-                                      : std::uint64_t(args.startVertexLocation) + (indexed ? 0 : args.vertexCount - 1);
-                const auto begin = std::uint64_t(found->offset) + attribute.offset + last * attribute.stride;
+                // 非索引顶点和实例从命令参数得到首末元素, 实例 divisor 固定为 1.
+                // 已校验的 count 和 stride 上限使乘加在宽字节类型内可表示.
+                // Indexed 的逐顶点取值由索引数据决定, 这里只核对 baseVertex 的容量, 具体索引值由数据提供方保证.
+                const auto first = attribute.instanced ? args.startInstanceLocation : args.startVertexLocation;
+                const bool knownRange = attribute.instanced || !indexed;
+                const auto count = !knownRange ? 1u : (attribute.instanced ? args.instanceCount : args.vertexCount);
+                const auto firstByte = attribute.offset + std::uint64_t(first) * attribute.stride;
+                const auto lastByte = firstByte + std::uint64_t(count - 1) * attribute.stride;
                 const auto capacity = found->buffer->GetDesc().byteSize;
-                if (begin > capacity || attribute.byteSize > capacity - begin)
+                const auto available = capacity - found->offset;
+                if (lastByte > available || attribute.byteSize > available - lastByte)
                 {
                     m_Device->Report(operation, "InvalidArgument: vertex/instance byte interval exceeds buffer");
+                    return;
+                }
+                const BufferRange covered{found->offset + firstByte, lastByte - firstByte + attribute.byteSize};
+                if (knownRange && !CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(found->buffer),
+                                                      ResourceStates::VertexBuffer, operation, covered))
+                {
                     return;
                 }
             }
         }
         // 上传/clear/copy 可能改变用途或 native 状态, 即使没有再次 SetGraphicsState 也要重新满足它们.
         if (!GraphicsUses(state, *pipeline, operation) || !m_Device->BeginNative(operation))
+        {
+            return;
+        }
+        // 状态就绪后才为实际 Draw 检查附件写入历史. SetGraphicsState 或绑定缓存命中不会推进该进度.
+        if (!PrepareDepthSampling(state, *pipeline))
         {
             return;
         }
@@ -113,6 +132,14 @@ namespace Physara::RHI::OpenGL
         {
             packet->invalid = true;
             m_Device->m_ContextState.Invalidate();
+            return;
+        }
+        const auto &attachment = state.framebuffer->GetDesc().depthAttachment;
+        const auto &depth = pipeline->GetDesc().renderState.depthStencilState;
+        // Draw 成功且允许深度写时, 按底层 mip 标记可能修改的深度内容. 同格式采样读取深度分量.
+        if (attachment.texture && depth.depthTestEnable && depth.depthWriteEnable)
+        {
+            RecordDepthWrite(*static_cast<OpenGLTexture *>(attachment.texture), attachment.subresources);
         }
     }
 } // namespace Physara::RHI::OpenGL

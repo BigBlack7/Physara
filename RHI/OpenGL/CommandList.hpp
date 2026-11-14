@@ -25,7 +25,10 @@
 /// @file
 /// @brief 基线图形/传输的逻辑即时列表, 借用 Device 稳定物理包, 不保存调用方 CPU 源或命令重放记录.
 
+#include <optional>
+
 #include "Backend.hpp"
+#include "ImmediateGraphics.hpp"
 #include "Submission.hpp"
 
 namespace Physara::RHI::OpenGL
@@ -36,7 +39,7 @@ namespace Physara::RHI::OpenGL
     /// @brief 单写者即时列表, GL 在 recording 调用时发出, Execute 只接受提交而不重放.
     /// @note 物理包归 Device, 未提交列表的 worker 最终析构只交接 orphan, 不执行 GL.
     /// 逻辑状态只借用对象, 默认由物理包 lease 保活; trackLiveness=false 的集合由调用方保活到完成.
-    class OpenGLCommandList final : public RefCounter<RHI::CommandList>
+    class OpenGLCommandList final : public RefCounter<RHI::CommandList>, public ImmediateGraphicsRecording
     {
     public:
         OpenGLCommandList(OpenGLDevice *device, const CommandListParameters &params) noexcept;
@@ -79,10 +82,11 @@ namespace Physara::RHI::OpenGL
                                           Physara::RHI::Format format) override;
         void SetSamplerFeedbackTextureState(SamplerFeedbackTexture *texture, ResourceStates stateBits) override;
         void SetPushConstants(const void *data, size_t byteSize) override;
-        /// @brief 预检同设备的完整候选, 先保活再应用; 对象/参数预检失败不替换已有逻辑状态.
-        /// @note tracker 或原生错误会使 recording 失效, 已发前缀仍按原包退休, 不能据此继续绘制.
+        /// @brief 预检同设备的完整候选, 先保活再应用. 图内候选预检失败时撤销旧候选的绘制资格.
+        /// @note 资源保活失败发生在候选发布前. 跟踪或原生错误使录制失效, 已发前缀仍按原包退休.
         void SetGraphicsState(const GraphicsState &state) override;
         /// @brief 即时消费当前用途和状态, indexed 的 startVertexLocation 只作为一次 baseVertex.
+        /// @note 图内按声明检查已知顶点, 索引和实例区间. 索引内容对应的顶点范围由数据提供方保证.
         void Draw(const DrawArguments &args) override;
         void DrawIndexed(const DrawArguments &args) override;
         void DrawIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
@@ -143,8 +147,29 @@ namespace Physara::RHI::OpenGL
         const CommandListParameters &GetDesc() override;
 
     private:
+        /// @brief 接管同设备且无待决依赖的 Automatic 录制. 归还后原 owner 继续持有包.
+        [[nodiscard]] std::uint64_t BeginGraphManaged(Device &device) noexcept override;
+        /// @brief 按匹配的身份归还接管并清除本地渲染状态和阶段授权, 包内 tracker 与引用继续存活.
+        [[nodiscard]] bool EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept override;
+        /// @brief 由接管者登记前态, 请求已合并状态, 并提交或清除独立的消费授权.
+        void TrackGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state) override;
+        void TrackGraphBuffer(Buffer &buffer, ResourceStates state) override;
+        void RequestGraphTexture(Texture &texture, TextureSubresourceSet range, ResourceStates state) override;
+        void RequestGraphBuffer(Buffer &buffer, ResourceStates state) override;
+        void CommitGraphUses(std::span<const GraphTextureUse> textures, std::span<const GraphBufferUse> buffers) override;
+        void RevokeGraphUses() noexcept override;
         /// @brief 只借出本列表拥有的有效 recording, 同时检查 context, claim 和 sticky tracker 错误.
         [[nodiscard]] UploadWorkPacket *Recording(const char *operation);
+        /// @brief 在用途来源匹配时准许修改 tracker. 普通列表在 GraphManaged 只消费授权.
+        [[nodiscard]] UploadWorkPacket *StateRecording(const char *operation, bool graphRequest = false);
+        /// @brief 公共和图入口共用实际初态登记与状态请求, 修改前确认用途来源.
+        void SetTrackedBufferState(Buffer *buffer, ResourceStates state, bool initial, bool graphRequest);
+        void SetTrackedTextureState(Texture *texture, TextureSubresourceSet range, ResourceStates state,
+                                    bool initial, bool graphRequest);
+        /// @brief 串行 owner 上借用本列表当前持有的物理录制, 含已失效但仍须收拢的包.
+        [[nodiscard]] UploadWorkPacket *OwningRecording() const noexcept;
+        /// @brief 只清理逻辑图形状态和缓存. 保留状态跟踪和已发命令.
+        void ResetGraphicsState() noexcept;
         /// @brief 核对实际实现和 Device 归属, 不以接口类型相同推定原生对象可用.
         [[nodiscard]] OpenGLBuffer *BufferFor(Buffer *buffer, const char *operation);
         /// @brief 取得属于同一 Device 的 Texture wrapper, 失败先报告并返回空.
@@ -153,16 +178,27 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] bool Retain(Resource *resource, InternalOwnership &owners);
         /// @brief 已验证的原生复合对象按实际依赖展开一次, 返回稳定账目; nullptr 表示准备失败.
         [[nodiscard]] InternalOwnership *RetainResource(Resource *resource);
-        /// @brief 自动模式要求 CopyDest 并消费依赖; 显式模式核对调用方已完成的同一前提.
-        [[nodiscard]] bool TransferState(OpenGLBuffer &buffer);
-        // 对选定纹理子资源应用同一 CopyDest 合同, 不把原生缓存命中当成同步完成.
-        [[nodiscard]] bool TransferState(OpenGLTexture &texture, TextureSubresourceSet subresources);
-        /// @brief 在自动模式请求用途, 显式模式核对已提交用途; 两者消费同一份 Common 依赖.
-        [[nodiscard]] bool UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation);
-        [[nodiscard]] bool UseTexture(OpenGLTexture &texture, TextureSubresourceSet range, ResourceStates state,
-                                      const char *operation);
+        /// @brief 自动模式请求状态. 图模式核对已提交范围, 无 range 时只检查该 Buffer 能否绑定到指定角色.
+        [[nodiscard]] bool UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation,
+                                     std::optional<BufferRange> range = std::nullopt);
+        /// @brief 纹理消费按已解析的底层 mip/layer 与实际分量核对授权, 与跟踪粒度独立.
+        [[nodiscard]] bool UseTexture(OpenGLTexture &texture, TextureSubresourceSet range, TextureAspect aspects,
+                                      ResourceStates state, const char *operation,
+                                      ResourceStates access = ResourceStates::Unknown);
+        /// @brief Draw 计算出的精确区间沿用传输和绑定的 GraphManaged 授权规则.
+        [[nodiscard]] bool CheckGraphBufferUse(const OpenGLBuffer &buffer, ResourceStates state,
+                                               const char *operation, std::optional<BufferRange> range);
         /// @brief 本 profile 没有 Shader 写生产者, 有序访问满足的依赖在此唯一消费.
         [[nodiscard]] bool ConsumeBarriers();
+        /// @brief 在实际联合采样的 Draw 前, 由同一发射路径满足重叠的先前附件写.
+        [[nodiscard]] bool PrepareDepthSampling(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
+        /// @brief 判断启用的测试与写掩码是否允许修改深度或模板, 供只读附件预检使用.
+        [[nodiscard]] static bool WritesDepthStencil(const DepthStencilState &state) noexcept;
+        /// @brief 以原存储和已解析的 mip/layer 判断采样与附件是否相交.
+        [[nodiscard]] static bool SamplesAttachment(const NativeBinding &binding,
+                                                    const FramebufferAttachment &attachment) noexcept;
+        /// @brief 发出实际修改深度分量的 Draw 或 clear 后登记写. 范围引用底层物理 mip.
+        void RecordDepthWrite(OpenGLTexture &texture, TextureSubresourceSet subresources) noexcept;
         /// @brief 全量解析本次二维传输范围, 先拒绝显式越界, 不把无效请求裁成合法范围.
         [[nodiscard]] bool TransferRange(OpenGLTexture &texture, TextureSubresourceSet requested,
                                          TextureSubresourceSet &resolved, const char *operation);

@@ -1,4 +1,4 @@
-# Engine 在此装配 Core, 独立图声明, View 和 Shader 目标.
+# Engine 在此装配 Core, 独立 RenderGraph, View 和 Shader 目标.
 # Core 提供 CPU 基础机制. FrameArena 的复用时机由 Runtime 决定, 日志后端 spdlog 私有链接.
 add_library(PhysaraCore STATIC
     Core/Identity.hpp
@@ -15,7 +15,7 @@ target_compile_features(PhysaraCore PUBLIC cxx_std_20)
 set_target_properties(PhysaraCore PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraCore PRIVATE /W4 /WX /utf-8 /permissive-)
 
-# 图声明先作为独立目标交付, 供 CPU 消费者验证资源版本和 Pass 权限.
+# 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
 # Renderer 管理诊断 View 的颜色代. 公开头使用 Core 身份与通用 RHI 句柄, 因此传播两个目标.

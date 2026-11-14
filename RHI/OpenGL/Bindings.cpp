@@ -1,7 +1,8 @@
 #include "Bindings.hpp"
 
 /// @file
-/// @brief 先核对整组逻辑输入, 再物化独立 texture view; 创建不改变 context 的活动绑定.
+/// @brief 核对逻辑布局和整组绑定输入, 再建立独立的采样视图与资源引用.
+/// 创建过程保留 context 的活动绑定. Pipeline 另外解释 slot 到原生单元的映射.
 
 #include <algorithm>
 #include <limits>
@@ -164,8 +165,10 @@ namespace Physara::RHI::OpenGL
         const auto &info = GetFormatInfo(format);
         const auto &storage = device.GetFormatCaps(desc.format, desc.dimension);
         const auto &view = device.GetFormatCaps(format, TextureDimension::Texture2D);
-        RequirePreparation(info.kind != FormatKind::Integer && info.kind != FormatKind::DepthStencil &&
-                               (view.support & FormatSupport::ShaderSample) != 0 && view.internalFormat != 0 &&
+        // 使用设备公开的二维 ShaderSample 能力. 对应 internal format 已由能力表建立.
+        // 深度视图使用同格式, packed 视图沿用 GL 默认的深度分量. 其余格式的 typeless 重解释须同 view class.
+        RequirePreparation((view.support & FormatSupport::ShaderSample) != 0 &&
+                               (info.kind != FormatKind::DepthStencil || format == desc.format) &&
                                (format == desc.format ||
                                 (desc.isTypeless && storage.viewClass != 0 && storage.viewClass == view.viewClass)),
                            "Unsupported: sampling view interpretation or format capability");

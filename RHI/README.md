@@ -1,6 +1,6 @@
 # RHI 公共合同与来源
 
-本模块按 [Architecture 7.1](../Docs/Architecture.md#rhi) 移植固定 NVRHI 的公共合同. PhysaraRHI 是无 native 依赖的 STATIC 消费入口, 提供六个自包含公共头及 Common/Validation 定义. 原生组件通过独立 PhysaraRHIOpenGL 消费, 支持范围见下方; API 或枚举存在不代表对应设备操作已经实现.
+本模块按 [Architecture 7.1](../Docs/Architecture.md#rhi) 移植固定 NVRHI 的公共合同. PhysaraRHI 是无 native 依赖的 STATIC 消费入口, 提供公共头及 Common/Validation 定义. 原生组件通过独立 PhysaraRHIOpenGL 消费, 设备按实际后端公布支持范围.
 
 ## OpenGL 原生消费边界
 
@@ -12,13 +12,15 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 |---|---|
 | Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 有限离屏直接绘制不代表稳定图像/呈现阶段出口 |
 | Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入和普通 byte copy, 公共 Map/readback 与 UInt clear 仍拒绝 |
-| Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建; 3D 深度/模板存储拒绝. 公共格式 flags 表示 2D 基线. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
+| Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建. 公共格式 flags 表示 2D 基线, 包括按驱动实际查询公布的 ReadOnlyDepthSampling. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
-| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图与独立 Sampler, 不绑定全局单元. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
+| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图及同格式深度采样视图, Draw 消费独立 Sampler. 采样格式沿用设备的 ShaderSample 能力, 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
+| 即时录制互操作 | ImmediateGraphics.hpp 的 GraphRecording 借用经 Validation 和后端确认的当前录制, 负责状态准备和提交. GraphManaged 的普通列表核对已授权的用途、字节区间和纹理分量; Automatic 由 RHI 入口推导. 两种模式共用 tracker 与后端发射 |
+| 附件分量 | RHI.hpp 的 FramebufferAttachment 增加可选 aspects, 默认使用视图格式的全部分量. OpenGL 按选中分量挂载 packed depth/stencil, 预检 FBO 完整性及 Pipeline 需要的分量 |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy、Draw 或时间戳. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
 | Event/Timer | Event 捕获最后已接受的 Graphics ID, Poll 不阻塞, Wait 只等待该前缀, 单次 5 秒期限. Timer 使用可重叠的 timestamp 对, available 后读取完整 GPU 数值并转换为秒; 显式 Get 可冷路径有界等待, Ready 不退休整个提交包 |
 | 窗口末端复制 | OpenGL.hpp 的 PrepareWindowPresentation 消费同设备闭合 Graphics 包及单层单 mip 单样本 SRGBA8 FBO, 核对 ShaderResource 出口. 源 FBO/附件先登记到原包, 同尺寸复制至默认后缓冲, 按实测编码控制 sRGB 并在此处适配行序. 后续 Execute 才插 fence/flush, 窗口交换由 Platform 拥有 |

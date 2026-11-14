@@ -486,7 +486,8 @@ namespace Physara::Renderer::Detail
             return *error;
         }
 
-        auto plan = std::make_unique<CompiledGraphPlan>();
+        // 构造只开放给编译器. 本地 owner 完成全部表项后才以只读计划移交给调用方.
+        auto plan = std::unique_ptr<CompiledGraphPlan>(new CompiledGraphPlan);
         plan->graphGeneration = graph.m_Generation;
         if (!graph.Exports().empty())
         {

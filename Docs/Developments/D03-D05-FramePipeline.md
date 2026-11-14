@@ -198,13 +198,13 @@
 
 **职责位置：** RenderGraph Executor、RHI Common/OpenGL。**前置：** [D05-T02](#d05-t02)。**架构依据：** [6.4](../Architecture.md#graph-resources)、[7.5](../Architecture.md#barriers)、[7.4](../Architecture.md#uploads)。
 
-- [ ] 在 execute 的首次实际使用建立兼容物理资源及 PassResources，接通上传、clear、采样、attachment 等实际用途；创建/recipe 失败明确停止并报告，不能向 Pass 交付空资源。
-- [ ] GraphManaged 模式关闭 RHI 自动推断，由图提交用途给同一 tracker/emitter；正常与失败退出均恢复模式，失效设备不再发原生命令；独立 RHI 调用仍用其自动入口。
-- [ ] 验证 clear 所需状态先于 Draw、depth 只读附件并采样的联合用途，以及上传→采样、附件→UI 和 Shader 读→后续写的原生结果；RAW/WAR/WAW 都遵守唯一同步发射合同。
+- [x] 在 execute 的首次实际使用建立兼容物理资源及 PassResources，接通上传、clear、采样、attachment 等实际用途；创建/recipe 失败明确停止并报告，不能向 Pass 交付空资源。
+- [x] GraphManaged 模式关闭 RHI 自动推断，由图提交用途给同一 tracker/emitter；正常与失败退出均恢复模式，失效设备不再发原生命令；独立 RHI 调用仍用其自动入口。
+- [x] 验证 clear 所需状态先于 Draw、depth 只读附件并采样的联合用途，以及上传→采样、附件→UI 和 Shader 读→后续写的原生结果；RAW/WAR/WAW 都遵守唯一同步发射合同。
 
 **完成条件：** 一个依赖只有一个同步发射权威；图编译与 GL 原生执行边界清楚。
 
-**当前状态** 前置工作包已验收归档，待建立 OpenSpec change。
+**当前状态** B 复核与最终验证通过，主规范已同步，change 已归档。后续工作包为 [D05-T04](#d05-t04)。 [D05-T03 归档](../../openspec/changes/archive/2026-11-15-execute-render-graph-plan/tasks.md#final-verification)
 
 <a id="d05-t04"></a>
 ### D05-T04 · 将 UI、窗口和本帧纹理绑定接入图
@@ -216,6 +216,8 @@
 - [ ] 验证隐藏面板/多次 Image 引用、图资源裁剪、目标换代与绑定在途保活；图 ID 不进入 Session 长期状态。
 
 **完成条件：** 同一帧图可解释 UI 读了哪个视口版本和最终窗口目标，构图过程中不绘制。
+
+**当前状态** D05-T03 前置已验收归档，D05-T04 待立项。 [图执行主规范](../../openspec/specs/render-graph-execution/spec.md)
 
 <a id="d05-t05"></a>
 ### D05-T05 · 实现图失败、UI fallback 与帧取消

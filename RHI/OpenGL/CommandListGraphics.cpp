@@ -34,11 +34,29 @@ namespace Physara::RHI::OpenGL
     }
 
     /// @brief 两个已解析范围只按底层 storage 的 mip/layer 相交判断, 不能比较 GLuint view 名称.
-    static bool Overlap(TextureSubresourceSet a, TextureSubresourceSet b) noexcept
+    bool OpenGLCommandList::SamplesAttachment(const NativeBinding &binding,
+                                               const FramebufferAttachment &attachment) noexcept
     {
+        if (binding.type != ResourceType::Texture_SRV || binding.resource != attachment.texture)
+        {
+            return false;
+        }
+        const auto &a = binding.subresources;
+        const auto &b = attachment.subresources;
         return a.baseMipLevel < b.baseMipLevel + b.numMipLevels && b.baseMipLevel < a.baseMipLevel + a.numMipLevels &&
                a.baseArraySlice < b.baseArraySlice + b.numArraySlices &&
                b.baseArraySlice < a.baseArraySlice + a.numArraySlices;
+    }
+
+    bool OpenGLCommandList::WritesDepthStencil(const DepthStencilState &depth) noexcept
+    {
+        // 深度测试关闭也旁路深度写入; 模板有独立的启用位, 写 mask 和双面操作条件.
+        return (depth.depthTestEnable && depth.depthWriteEnable) ||
+               (depth.stencilEnable && depth.stencilWriteMask != 0 &&
+                (depth.frontFaceStencil.failOp != StencilOp::Keep ||
+                 depth.frontFaceStencil.depthFailOp != StencilOp::Keep ||
+                 depth.frontFaceStencil.passOp != StencilOp::Keep || depth.backFaceStencil.failOp != StencilOp::Keep ||
+                 depth.backFaceStencil.depthFailOp != StencilOp::Keep || depth.backFaceStencil.passOp != StencilOp::Keep));
     }
 
     const NativeBinding &OpenGLCommandList::BindingFor(const GraphicsState &state, const PlannedResource &entry) const
@@ -138,15 +156,15 @@ namespace Physara::RHI::OpenGL
             }
         }
         const auto &depth = desc.renderState.depthStencilState;
-        // 深度测试关闭也旁路深度写入; 模板仍有独立的启用位, 写 mask 和双面操作条件.
-        if (framebuffer->GetDesc().depthAttachment.isReadOnly &&
-            ((depth.depthTestEnable && depth.depthWriteEnable) ||
-             (depth.stencilEnable && depth.stencilWriteMask != 0 &&
-              (depth.frontFaceStencil.failOp != StencilOp::Keep ||
-               depth.frontFaceStencil.depthFailOp != StencilOp::Keep ||
-               depth.frontFaceStencil.passOp != StencilOp::Keep || depth.backFaceStencil.failOp != StencilOp::Keep ||
-               depth.backFaceStencil.depthFailOp != StencilOp::Keep ||
-               depth.backFaceStencil.passOp != StencilOp::Keep))))
+        const auto &depthAttachment = framebuffer->GetDesc().depthAttachment;
+        if (depthAttachment.texture &&
+            ((depth.depthTestEnable && !(depthAttachment.aspects & TextureAspect::Depth)) ||
+             (depth.stencilEnable && !(depthAttachment.aspects & TextureAspect::Stencil))))
+        {
+            // 本次组合没有可供已启用深度/模板测试消费的分量.
+            return fail("InvalidArgument: pipeline requires a depth/stencil aspect absent from the framebuffer");
+        }
+        if (depthAttachment.isReadOnly && WritesDepthStencil(depth))
         {
             return fail("InvalidArgument: writing pipeline with read-only depth/stencil attachment");
         }
@@ -168,9 +186,7 @@ namespace Physara::RHI::OpenGL
             {
                 const auto conflicts = [&](const FramebufferAttachment &attachment)
                 {
-                    return attachment.texture == binding.resource && !attachment.isReadOnly &&
-                           Overlap(binding.subresources,
-                                   attachment.subresources.Resolve(attachment.texture->GetDesc(), true));
+                    return !attachment.isReadOnly && SamplesAttachment(binding, attachment);
                 };
                 for (const auto &attachment : framebuffer->GetDesc().colorAttachments)
                 {
@@ -184,6 +200,42 @@ namespace Physara::RHI::OpenGL
                 {
                     return fail("InvalidState: sampling/writable-depth feedback");
                 }
+                if (attachment.isReadOnly && SamplesAttachment(binding, attachment) &&
+                    !static_cast<OpenGLTexture *>(attachment.texture)->m_DepthWrites)
+                {
+                    return fail("Unsupported: simultaneous texture sampling and read-only depth attachment");
+                }
+            }
+        }
+        return true;
+    }
+
+    bool OpenGLCommandList::PrepareDepthSampling(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline)
+    {
+        const auto &depth = state.framebuffer->GetDesc().depthAttachment;
+        if (!depth.texture || !depth.isReadOnly)
+        {
+            return true;
+        }
+        const auto *texture = static_cast<const OpenGLTexture *>(depth.texture);
+        for (const auto &entry : pipeline.Plan().resources)
+        {
+            const auto &binding = BindingFor(state, entry);
+            if (SamplesAttachment(binding, depth))
+            {
+                // 同一物理 mip 可能在更早的列表写过. 状态请求和新 view 沿用实际深度写入进度.
+                if (texture->m_DepthWrites[depth.subresources.baseMipLevel] > m_Device->m_TextureBarrierEpoch)
+                {
+                    glTextureBarrier();
+                    if (!m_Device->CheckNative("TextureBarrier", texture->Name()))
+                    {
+                        m_Packet->invalid = true;
+                        return false;
+                    }
+                    // GL 屏障覆盖此前设备已发出的附件写, 因此一个成功屏障可以推进设备级进度.
+                    m_Device->m_TextureBarrierEpoch = m_Device->m_DepthWriteEpoch;
+                }
+                break;
             }
         }
         return true;
@@ -200,6 +252,11 @@ namespace Physara::RHI::OpenGL
         OpenGLFramebuffer *framebuffer = nullptr;
         if (!ValidateGraphicsState(state, pipeline, framebuffer))
         {
+            // 图内拒绝的候选不能让随后的 Draw 沿用同 Pass 中的旧图形状态.
+            if (m_Packet->useMode == UseMode::GraphManaged)
+            {
+                m_Packet->graphicsSet = false;
+            }
             return;
         }
         if (!RetainResource(pipeline) || !RetainResource(framebuffer))

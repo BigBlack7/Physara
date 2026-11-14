@@ -332,6 +332,8 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_CompletedSubmissionId = 0;
         // 由 owner 计入已分配 chunk 的实际容量, 在物理包退休时归还.
         std::size_t m_UploadCapacity = 0;
+        std::uint64_t m_DepthWriteEpoch = 0;     ///< owner 已发出的深度附件写入序号, 独立于包和状态缓存.
+        std::uint64_t m_TextureBarrierEpoch = 0; ///< 最近一次 GL TextureBarrier 覆盖的设备级写入进度.
         std::size_t m_TimerNames = 0; ///< 实际存活/待删除名字, 只有原生删除或最终失效退出归还.
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
@@ -425,6 +427,7 @@ namespace Physara::RHI::OpenGL
         InternalOwnership m_InternalOwners;
         TextureDesc m_Desc;
         TextureStateExtension m_State{m_Desc};
+        std::unique_ptr<std::uint64_t[]> m_DepthWrites; ///< 可联合采样的 2D 存储才按 mip 分配深度写入历史.
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;
         friend class OpenGLDevice;
