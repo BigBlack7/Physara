@@ -1,7 +1,8 @@
 /// @file
-/// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主和 Editor.
+/// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主, Editor 和 CPU 资产服务.
 /// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
 /// 有界帧槽持有载荷和图绑定, 同一张图组织上传与 UI 合成, 由宿主提交并呈现窗口颜色.
+/// 继续的输入轮次在取得帧槽前发布 CPU 资产, 退出先收拢资产作业再释放其余 owner.
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@
 #include <utility>
 #include <variant>
 
+#include <Asset/AssetManager.hpp>
 #include <Core/Diagnostics.hpp>
 #include <Core/Error.hpp>
 #include <Core/FrameArena.hpp>
@@ -40,7 +42,7 @@ namespace Physara::Runtime
     struct StartupOptions
     {
         Platform::HostDesc host{.presentationSlotCount = FrameSlotCount};
-        // 按成功发布的批次数计数, 空值表示由窗口关闭请求决定退出时机.
+        // 按宿主成功发布的输入批次数计数, 与资产发布数量无关; 空值表示由窗口关闭请求决定退出时机.
         std::optional<std::uint64_t> pollLimit;
         bool help = false;
     };
@@ -142,9 +144,11 @@ namespace Physara::Runtime
         return std::nullopt;
     }
 
-    // 终止轮次只消费发布事实. 继续的轮次推进 Editor 和呈现, 暂停及槽忙仍有限等待事件.
+    // 先判定宿主输入是否终止, 继续的轮次才发布 CPU 资产并推进 Editor/呈现.
+    // 暂停与槽忙共享发布入口和有限等待; 本函数不等待资产 worker, 退出收拢由外层 owner 负责.
     static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
-                         Core::Diagnostics &diagnostics, std::optional<std::uint64_t> pollLimit)
+                         Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
+                         std::optional<std::uint64_t> pollLimit)
     {
         std::optional<bool> previousFrame;
         std::array<FrameSlot, FrameSlotCount> slots;
@@ -179,6 +183,8 @@ namespace Physara::Runtime
                 return 0;
             }
 
+            // CPU 发布独立于 GPU 槽. 终止轮次在上面直接退出, 不再接受新版本.
+            assets.PublishCompleted();
             auto acquired = input.window.Renderable() ? AcquireFrame(host, nextSlot) :
                             Platform::DeviceHost::PresentationAcquire{Platform::PresentationStatus::Suspended};
             if (const auto *error = std::get_if<Platform::HostError>(&acquired))
@@ -328,7 +334,7 @@ int main(int argc, char **argv)
     int exitCode = 0;
     try
     {
-        auto located = Runtime::LocateEditorUiPackage();
+        auto located = Runtime::LocateResources();
         if (const auto *error = std::get_if<Core::BoundedText>(&located))
         {
             Runtime::PrintError(*error);
@@ -336,7 +342,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            const auto &package = std::get<std::filesystem::path>(located);
+            const auto &resources = std::get<Runtime::ResourceLocations>(located);
             auto &device = *host->GetDevice();
             auto view = Renderer::View::Create(host->GetInfo().maxTextureSizePixels);
             if (!view)
@@ -346,7 +352,7 @@ int main(int argc, char **argv)
             }
             else
             {
-                auto editor = Editor::EditorSession::Create(*host, {device, package, view->Id()});
+                auto editor = Editor::EditorSession::Create(*host, {device, resources.editorUiPackage, view->Id()});
                 if (const auto *editorError = std::get_if<Core::BoundedText>(&editor))
                 {
                     Runtime::PrintError(*editorError);
@@ -355,7 +361,19 @@ int main(int argc, char **argv)
                 else
                 {
                     auto &session = std::get<std::unique_ptr<Editor::EditorSession>>(editor);
-                    exitCode = Runtime::RunEditor(*host, *session, *view, *diagnostics, options.pollLimit);
+                    // 资产 owner 在 session 之前停止并 join, 正常退出和异常沿同一析构顺序.
+                    auto assets = Asset::AssetManager::Create(resources.projectRoot);
+                    if (const auto *assetError = std::get_if<Asset::AssetFailure>(&assets))
+                    {
+                        Runtime::PrintError(assetError->description);
+                        exitCode = 1;
+                    }
+                    else
+                    {
+                        auto &manager = std::get<std::unique_ptr<Asset::AssetManager>>(assets);
+                        exitCode = Runtime::RunEditor(*host, *session, *view, *manager, *diagnostics,
+                                                      options.pollLimit);
+                    }
                 }
             }
         }

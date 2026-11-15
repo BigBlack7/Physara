@@ -14,12 +14,14 @@
 
 **职责位置：** Engine/Asset、Core Jobs/IO、Assets。**前置：** 本阶段入口满足。**架构依据：** [1.2](../Architecture.md#core)、[3.1](../Architecture.md#asset-types)、[3.3](../Architecture.md#asset-images)。
 
-- [ ] 实现 AssetId/ContentRevision、Unloaded/Loading/CpuReady/Failed/Cancelled、源身份和不可变 CPU 资产记录。
-- [ ] 随异步资产导入引入有界 Core 作业队列、独立拥有结果、取消和帧边界完成队列；实现所需受控路径、文件读取与内容 hash，验证请求/源/目标版本后发布，CPU Ready 与 GPU Ready 分离。
-- [ ] 检查重复请求、迟到结果、停止接单、取消和 join；worker 不访问 UI、Scene 可变状态或原生设备。
-- [ ] 建立图片、HDR/EXR 和 Editor 图像的 color/data/alpha 元数据，按语义区分同像素的不同解释。
+- [x] 实现 AssetId/ContentRevision、Unloaded/Loading/CpuReady/Failed/Cancelled、源身份和不可变 CPU 资产记录。
+- [x] 随异步资产导入引入有界 Core 作业队列、独立拥有结果、取消和帧边界完成队列；实现所需受控路径、文件读取与内容 hash，验证请求/源/目标版本后发布，CPU Ready 与 GPU Ready 分离。
+- [x] 检查重复请求、迟到结果、停止接单、取消和 join；worker 不访问 UI、Scene 可变状态或原生设备。
+- [x] 建立图片、HDR/EXR 和 Editor 图像的 color/data/alpha 元数据，按语义区分同像素的不同解释。
 
 **完成条件：** 迟到/取消结果安全丢弃，CPU 记录只含标准数据和引用，不带 RHI/UI 对象。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-15-publish-versioned-cpu-assets/tasks.md#final-verification)
 
 <a id="d06-t02"></a>
 ### D06-T02 · 实现标准 glTF 模型解码与校验

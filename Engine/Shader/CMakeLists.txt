@@ -9,10 +9,10 @@ add_library(PhysaraShader STATIC
     RhiProgram.hpp RhiProgram.cpp
 )
 target_include_directories(PhysaraShader PUBLIC "${PROJECT_SOURCE_DIR}/Engine")
-# 公开结果包含 Core 错误值和 RHI handles, 因而传递两者; 编译库/JSON/CNG 均封闭在实现中.
+# 公开结果包含 Core 错误值和 RHI handles, 因而传递两者. 编译库和 JSON 封闭在实现中.
 target_link_libraries(PhysaraShader PUBLIC PhysaraCore PhysaraRHI PRIVATE
     nlohmann_json glslang glslang-default-resource-limits
-    SPIRV-Tools-static spirv-cross-core bcrypt
+    SPIRV-Tools-static spirv-cross-core
 )
 target_compile_features(PhysaraShader PUBLIC cxx_std_20)
 set_target_properties(PhysaraShader PROPERTIES CXX_EXTENSIONS OFF)
@@ -28,9 +28,11 @@ foreach(directory IN ITEMS glslang spirv-tools spirv-headers spirv-cross ShaderT
     list(APPEND shaderFingerprintInputs ${dependencyInputs})
 endforeach()
 file(GLOB moduleInputs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+# 共用摘要实现也影响包构建身份. 内容变化须触发重新配置及后续包生成, 不能只重链接工具.
 list(APPEND shaderFingerprintInputs ${moduleInputs}
     "${PROJECT_SOURCE_DIR}/ThirdParty/json/single_include/nlohmann/json.hpp"
     "${PROJECT_SOURCE_DIR}/ThirdParty/json/single_include/nlohmann/json_fwd.hpp"
+    "${PROJECT_SOURCE_DIR}/Engine/Core/ContentHash.hpp" "${PROJECT_SOURCE_DIR}/Engine/Core/ContentHash.cpp"
     "${CMAKE_CURRENT_LIST_FILE}" "${PROJECT_SOURCE_DIR}/RHI/RHI.hpp"
     "${PROJECT_SOURCE_DIR}/CMakeLists.txt" "${PROJECT_SOURCE_DIR}/Engine/CMakeLists.txt"
     "${PROJECT_SOURCE_DIR}/ThirdParty/CMakeLists.txt")

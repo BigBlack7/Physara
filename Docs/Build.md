@@ -14,13 +14,21 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraRenderGraph 提供 CPU 图声明、封存图编译与即时录制执行, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [图编译入口](../Engine/Renderer/RenderGraph/GraphCompiler.hpp) · [图执行入口](../Engine/Renderer/RenderGraph/GraphExecutor.hpp) · [RHI 来源说明](../RHI/README.md)
+当前第一方目标是 PhysaraCore、PhysaraAsset、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraRenderGraph 提供 CPU 图声明、封存图编译与即时录制执行, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Asset、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [图编译入口](../Engine/Renderer/RenderGraph/GraphCompiler.hpp) · [图执行入口](../Engine/Renderer/RenderGraph/GraphExecutor.hpp) · [RHI 来源说明](../RHI/README.md)
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休. Platform 用闭合包的末端复制入口消费窗口颜色, 在同一包 Execute 后检查 Win32 交换结果, 源资源沿真实完成保活. [RHI 支持范围](../RHI/README.md#opengl-原生消费边界)
 
+## CPU 资产导入
+
+PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有的固定 stb 解码图片. 直接消费者使用 AssetManager::Create 提供绝对的本地项目资源目录, 然后在 owner 线程通过 RequestImage 请求 Assets/Textures 或 Assets/Editor 下的相对路径. CPU 输入轮次调用 PublishCompleted, 用 Status 取得请求状态、失败原因及最后有效版本. 显式刷新先使源失效再重新请求, 也可取消当前请求. 关闭时停止接单和发布并收拢作业. [资产入口](../Engine/Asset/AssetManager.hpp)
+
+首版接受每样本至多 8 位的标准 PNG 和 8 位 JPEG, 解码为顶部起行的 RGBA8. CgBI PNG 返回 UnsupportedEncoding. 用途描述区分 sRGB 颜色、线性数据与 alpha 语义. HDR/EXR 提供源类别与线性辐亮度标定描述, 环境像素导入归 D07. CpuReady 是可固定版本的 CPU 记录, GPU 驻留由后续 Renderer 消费. [图像语义](Architecture.md#asset-images)
+
+产品从实际 exe 目录解析 Assets, 作业线程在首次有效请求时启动. 当前编辑器的模型和场景入口随后续 D06 工作包接入. 从任意工作目录启动时, 资产根和 UI Shader 包位置均以 exe 为基准.
+
 ## Shader 构建
 
-PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库/JSON/CNG 为私有实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认构建为 PhysaraEditor 生成 EditorUi 接口及 `Shaders/<Debug|Release>/EditorUi.pshader`. Runtime 共享该包的唯一生成目标, CMake 按配置生成从产品目录到包的相对路径, 运行时从实际 exe 位置解析. 从其他工作目录启动也使用同一配置的包. 缺失或不匹配的包使启动返回 1. [声明说明](../Engine/Shader/Interface/README.md)
+PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认构建为 PhysaraEditor 生成 EditorUi 接口及 `Shaders/<Debug|Release>/EditorUi.pshader`. Runtime 共享该包的唯一生成目标, CMake 按配置生成从产品目录到包的相对路径, 运行时从实际 exe 位置解析. 从其他工作目录启动也使用同一配置的包. 缺失或不匹配的包使启动返回 1. [声明说明](../Engine/Shader/Interface/README.md)
 
 运行期消费使用 [RhiProgram.hpp](../Engine/Shader/RhiProgram.hpp) 的 `LoadRhiProgram(device, packagePath, expectedAbiHash)`, 通常从生成 Data.hpp 的 `AbiHash` 传入期望值. 成功结果拥有 VS/PS RHI 句柄和包身份, 包原始 CPU 存储可释放; 返回前任一阶段失败不交付部分集合. 此入口只链接通用 RHI, 不反向依赖 native backend; 所用 Device 的 owner/context 前提由实际消费者满足. 原生 GL 的绑定展平、GLSL 460 编译/link 在 `CreateGraphicsPipeline` 中发生, 随后通过公共集合/Framebuffer、SetGraphicsState 和直接 Draw/DrawIndexed 消费. 当前普通单样本执行范围见 [RHI](../RHI/README.md#opengl-原生消费边界), Dispatch、间接命令仍待后续工作包.
 

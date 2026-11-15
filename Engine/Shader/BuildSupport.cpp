@@ -1,17 +1,16 @@
 #include "BuildSupport.hpp"
 
 /// @file
-/// @brief 实现受预算约束的文件/JSON 边界, 使用 CNG 摘要和同目录原子发布保护旧产物.
+/// @brief 实现受预算约束的文件/JSON 边界, 将 Core 字节摘要转为包身份并原子发布文件.
 
 #include <algorithm>
-#include <array>
 #include <fstream>
-#include <limits>
 #include <set>
 
 #include <glslang/Public/ShaderLang.h>
 #include <Windows.h>
-#include <bcrypt.h>
+
+#include <Core/ContentHash.hpp>
 
 namespace Physara::Shader
 {
@@ -180,57 +179,23 @@ namespace Physara::Shader
         return name;
     }
 
-    // CNG 句柄的作用域与本次摘要计算一致, 任何失败/分配异常均先关闭句柄再向公共边界传播.
-    struct HashHandles final
-    {
-        BCRYPT_ALG_HANDLE algorithm = nullptr;
-        BCRYPT_HASH_HANDLE hash = nullptr;
-        // 显式 count 构造可抛出 MSVC Debug proxy 分配失败, 避免默认构造的 noexcept.
-        std::vector<unsigned char> storage = std::vector<unsigned char>(0);
-        HashHandles() = default;
-        HashHandles(const HashHandles &) = delete;
-        HashHandles &operator=(const HashHandles &) = delete;
-        HashHandles(HashHandles &&) = delete;
-        HashHandles &operator=(HashHandles &&) = delete;
-        ~HashHandles()
-        {
-            if (hash)
-            {
-                BCryptDestroyHash(hash);
-            }
-            if (algorithm)
-            {
-                BCryptCloseAlgorithmProvider(algorithm, 0);
-            }
-        }
-    };
-
     std::string Sha256(std::span<const std::byte> bytes)
     {
-        if (bytes.size() > std::numeric_limits<ULONG>::max())
+        // Core 计算字节摘要. Shader wrapper 保留包所用的十六进制布局和原错误分类.
+        const auto hash = Core::ComputeSha256(bytes);
+        if (const auto *error = std::get_if<Core::Sha256Error>(&hash))
         {
-            throw BuildError(ErrorCode::InvalidInput, "SHA-256 input exceeds CNG length range.");
+            switch (*error)
+            {
+            case Core::Sha256Error::InputTooLarge:
+                throw BuildError(ErrorCode::InvalidInput, "SHA-256 input exceeds CNG length range.");
+            case Core::Sha256Error::InitializationFailed:
+                throw BuildError(ErrorCode::SystemFailure, "Cannot initialize CNG SHA-256.");
+            case Core::Sha256Error::ComputationFailed:
+                throw BuildError(ErrorCode::SystemFailure, "CNG SHA-256 operation failed.");
+            }
         }
-        HashHandles handles;
-        ULONG objectBytes = 0;
-        ULONG written = 0;
-        if (BCryptOpenAlgorithmProvider(&handles.algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0 ||
-            BCryptGetProperty(handles.algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
-                              sizeof(objectBytes), &written, 0) < 0)
-        {
-            throw BuildError(ErrorCode::SystemFailure, "Cannot initialize CNG SHA-256.");
-        }
-        handles.storage.resize(objectBytes);
-        std::array<unsigned char, 32> digest{};
-        if (BCryptCreateHash(handles.algorithm, &handles.hash, handles.storage.data(), objectBytes, nullptr, 0, 0) <
-                0 ||
-            BCryptHashData(handles.hash, reinterpret_cast<PUCHAR>(const_cast<std::byte *>(bytes.data())),
-                           static_cast<ULONG>(bytes.size()), 0) < 0 ||
-            BCryptFinishHash(handles.hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0)
-        {
-            throw BuildError(ErrorCode::SystemFailure, "CNG SHA-256 operation failed.");
-        }
-        // HashHandles 的析构体先销毁 hash, 再由成员析构释放其外部 storage.
+        const auto &digest = std::get<Core::Sha256Digest>(hash);
         static constexpr char Hex[] = "0123456789abcdef";
         std::string result(64, '0');
         for (std::size_t index = 0; index < digest.size(); ++index)

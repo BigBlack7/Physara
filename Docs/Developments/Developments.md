@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 D06 · 接入标准资产、场景与首个真实视口。D05 的五个工作包均已验收归档，阶段出口及 M0 正式帧骨架通过。当前工作包为 D06-T01 · 建立不可变资产、请求与版本发布，前置已齐备，待建立下一 change。 [D06 阶段](D06-D07-SceneAndForward.md#dev-d06) · [D06-T01](D06-D07-SceneAndForward.md#d06-t01) · [D05 阶段](D03-D05-FramePipeline.md#dev-d05) · [D05-T05 与阶段出口验收](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)
+当前阶段为 D06 · 接入标准资产、场景与首个真实视口。D06-T01 已验收归档。当前工作包为 D06-T02 · 实现标准 glTF 模型解码与校验，前置已齐备，待建立下一 change。 [D06 阶段](D06-D07-SceneAndForward.md#dev-d06) · [D06-T02](D06-D07-SceneAndForward.md#d06-t02) · [D06-T01 验收与证据](../../openspec/changes/archive/2026-11-15-publish-versioned-cpu-assets/tasks.md#final-verification) · [D05 阶段出口验收](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)
 
 ## 阅读与使用
 
