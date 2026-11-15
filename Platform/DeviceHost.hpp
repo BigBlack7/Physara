@@ -274,10 +274,12 @@ namespace Physara::Platform
         using PresentationAcquire = std::variant<PresentationFrame, PresentationStatus, HostError>;
         /// @brief 按索引取得最近发布的窗口像素目标, 返回帧时可复用该槽的帧内存储.
         /// @pre 宿主就绪, 由 owner 线程调用. 可用的取得经 Present 或 CancelPresentation 结束.
+        /// @note 返回的 entryState 属于本目标代; 取得次数, CPU 帧号及交换结果都不代替该状态事实.
         /// @return 槽未完成时为 Retry, 窗口暂停时为 Suspended. 返回错误时无新取得.
         [[nodiscard]] PresentationAcquire BeginPresentation(std::size_t slotIndex) noexcept;
         /// @brief 关联本次取得和闭合 Graphics 列表. 颜色有效且尺寸仍匹配时发出末端复制.
         /// @param frameSucceeded 表示本次录制已完整初始化颜色, 并且录制与 Close 区间均成功.
+        /// 目标已按取得值的 finalState 交回. 接受失败前缀后停止新取得, 由调用者进入关闭收拢.
         /// @pre commands 来自此宿主的验证设备. 准备成功后由 SubmitPresentation 消费同一次录制.
         /// @return 空值表示可进入提交, 失败帧或尺寸过期时提交仅保护已发前缀.
         /// RequestRejected 保留当前取得. 末端原生失败进入宿主关闭收拢.

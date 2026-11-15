@@ -13,6 +13,7 @@
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
 #include <RHI.hpp>
+#include "FrameGraph.hpp"
 
 namespace Physara::Core
 {
@@ -80,13 +81,14 @@ namespace Physara::Renderer
     /// @brief Runtime 对诊断纹理像素记账的总字节上限, 同时约束单张诊断图的尺寸.
     inline constexpr std::size_t DiagnosticUploadBudget = 32 * 1024 * 1024;
 
+    /// @brief 当前仅提供静态诊断颜色, 不表示真实场景输出或可推进的时域历史.
     enum class ViewOutputRole : std::uint8_t
     {
         DiagnosticColor
     };
 
-    /// @brief 本帧可绑定的颜色句柄及其身份. generation 随尺寸换代, ViewId 保持稳定.
-    /// @note 候选代须先在同一 Graphics 列表写入像素, 后续 UI 命令才能采样.
+    /// @brief 诊断颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
+    /// @note 候选代的 texture 为空. 图执行并获得有效提交后才交付持久句柄.
     struct ViewOutput
     {
         ViewId view;
@@ -97,7 +99,7 @@ namespace Physara::Renderer
     };
 
     /// @brief 本轮的诊断颜色或缺失原因, 同时保存准备时的比例及请求代.
-    /// @note 拥有颜色句柄, 候选像素借用本槽的 arena, 在同一槽使用期内录制.
+    /// @note 复用时拥有已接受的颜色句柄, 新候选像素借用本槽 arena. 不含跨帧 GraphId.
     class NoSceneOutputs final
     {
     public:
@@ -115,9 +117,10 @@ namespace Physara::Renderer
         /// @brief 在已预留的本槽空间中生成新代像素. 复用已有代时直接成功.
         /// @return 可供本轮录制时为 true. 空间不足时返回 false, 由调用方结束本次准备.
         [[nodiscard]] bool PrepareUpload(Core::FrameArena &arena) noexcept;
-        /// @brief 在同一列表的首个采样前写入候选代. 上游负责检查 RHI 执行区间.
-        /// @pre PrepareUpload 已成功, 帧槽字节仍有效, 列表来自同一 Device.
-        void RecordUpload(RHI::CommandList &commands) const;
+        /// @brief 将候选上传或已接受颜色的导入加入当前图, 不创建原生纹理.
+        /// @pre Diagnostic 非空, PrepareUpload 已成功, 像素区段借用至图执行结束.
+        /// @note 返回本图版本, 由实际消费者决定活性与持久导出. 声明本身不发布有效设置.
+        [[nodiscard]] GraphResult<TextureId> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const;
 
     private:
         friend class View;
@@ -138,9 +141,9 @@ namespace Physara::Renderer
     class View final
     {
     public:
-        /// @brief 为当前宿主创建带新逻辑身份的 View, 设备由宿主持有.
+        /// @brief 按宿主能力建立逻辑 View, 纹理创建由本轮图执行负责.
         /// @return 身份代耗尽时返回空. 视图输出随首次有效请求准备.
-        [[nodiscard]] static std::optional<View> Create(RHI::Device &device, std::uint32_t maxTextureSize) noexcept;
+        [[nodiscard]] static std::optional<View> Create(std::uint32_t maxTextureSize) noexcept;
         View(const View &) = delete;
         View &operator=(const View &) = delete;
         View(View &&) noexcept = default;
@@ -160,19 +163,19 @@ namespace Physara::Renderer
         /// @brief 复用已接受的同尺寸颜色, 或为本次有效布局建立新代候选.
         /// @note 请求缺失或 View 与比例请求代失配时, 返回无颜色并等待当前布局.
         /// @param remainingUploadBytes 本轮可用的诊断像素额度, 由 Runtime 按槽记账.
-        /// @return 无有效范围或上传额度不足时返回无颜色的结果. 纹理或身份创建失败时返回原因.
+        /// @return 无有效范围或上传额度不足时返回无颜色的结果. 身份代耗尽时返回原因.
         [[nodiscard]] std::variant<NoSceneOutputs, Core::BoundedText>
             Prepare(const std::optional<ViewportRequest> &request, std::size_t remainingUploadBytes);
         /// @brief 接受本轮匹配的颜色, 发布对应比例和像素尺寸. 复用的同尺寸颜色也可确认新比例.
         /// @pre outputs 属于本轮准备, 且被已接受的完整合成实际采样.
+        /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
         /// @note 已过期的 View 或请求代保持原状态. 旧代的 GPU 访问由原 RHI 包持有.
-        void Publish(NoSceneOutputs &&outputs) noexcept;
+        void Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
 
     private:
-        View(RHI::Device &device, ViewId id, std::uint32_t maxTextureSize) noexcept
-            : m_Device(device), m_Id(id), m_MaxTextureSize(maxTextureSize) {}
+        View(ViewId id, std::uint32_t maxTextureSize) noexcept
+            : m_Id(id), m_MaxTextureSize(maxTextureSize) {}
 
-        RHI::Device &m_Device;
         ViewId m_Id;
         std::uint32_t m_MaxTextureSize;
         std::uint64_t m_LastGeneration = 0;

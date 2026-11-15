@@ -1,8 +1,9 @@
 /// @file
 /// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主和 Editor.
 /// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
-/// 有界帧槽组织诊断 View 输出和 UI 合成, 由宿主提交并呈现窗口颜色.
+/// 有界帧槽持有载荷和图绑定, 同一张图组织上传与 UI 合成, 由宿主提交并呈现窗口颜色.
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <charconv>
@@ -133,7 +134,9 @@ namespace Physara::Runtime
     /// @brief Runtime 的帧内存储和接受回执. lastSubmission 用于关联诊断, 复用以同槽 Ready 为准.
     struct FrameSlot
     {
-        Core::FrameArena arena;
+        Core::FrameArena arena; ///< 本轮几何和像素的稳定区段, 原生 Write 在调用期间复制.
+        Core::FrameArena graphArena; ///< 图独占的回调对象区段, 析构回退不影响载荷 arena.
+        Editor::FrameSlotUiFrameBindings bindings; ///< 只存本图身份, 安全重用槽时结束旧图代.
         std::uint64_t lastSubmission = 0;
         std::size_t diagnosticUploadBytes = 0; ///< 只为在途诊断上传记账, Ready 后归还额度.
     };
@@ -167,131 +170,253 @@ namespace Physara::Runtime
         UploadPending
     };
 
-    // 先按封存请求准备颜色或占位, UI 核定本轮采样和共享上传准入后再开放列表.
-    // 录制失败时保留原始原因, 已发前缀交同槽提交或退出收拢.
+    /// @brief 首发 UI 所用的保守能力表, 从当前设备格式支持和宿主尺寸限制形成 CPU 编译输入.
+    struct EditorGraphProfile
+    {
+        std::array<Renderer::GraphTextureSupport, 2> textures;
+        std::array<RHI::ResourceStates, 2> states{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
+        Renderer::GraphCompileOptions options;
+
+        // 能力表由本值持有, options 中的 span 借用至本轮编译结束, 不跨本对象移动或销毁.
+        explicit EditorGraphProfile(Platform::DeviceHost &host)
+        {
+            const auto info = host.GetInfo();
+            const auto extent = std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels);
+            constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM};
+            for (std::size_t index = 0; index < formats.size(); ++index)
+            {
+                textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
+                    .sampleCount = 1, .maxWidth = extent, .maxHeight = extent, .maxDepth = 1, .maxLayers = 1,
+                    .formatSupport = host.GetDevice()->QueryFormatSupport(formats[index]),
+                    .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
+                    .presentation = formats[index] == RHI::Format::SRGBA8_UNORM};
+            }
+            // UI 程序已验证投影块, 常量能力取 256 字节保守上界, 实际读取遵守 ABI. 几何沿用 8 MiB 上限.
+            options = {.textures = textures,
+                .buffers = {.maxBytes = 8 * 1024 * 1024, .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
+                            .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes},
+                .textureBoundaryStates = states, .bufferBoundaryStates = states, .maxColorAttachments = 1,
+                .transientByteBudget = Renderer::DiagnosticUploadBudget + 32 * 1024 * 1024 + 4};
+        }
+    };
+
+    // 先准备自持 UI 和逻辑 View, 再构图, 编译并核算存活上传; Open 之后仅消费该计划.
+    // 诊断压力可重建一次正常占位候选, 基础 UI Pending 在任何命令发出前归还取得.
+    // 执行失败不拼接其它图: 关闭并提交前缀, 或由调用者结束主循环并让宿主受控收拢.
     static std::variant<FrameStatus, Core::BoundedText> RenderFrame(
         Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics)
     {
+        using namespace Renderer;
+        // 仅用于尚未 Open 的分支. 已发原生命令的失败不能靠退还 token 完成退休.
         const auto cancel = [&host, &presentation](Core::BoundedText failure)
         {
             static_cast<void>(host.CancelPresentation(presentation.token));
             return failure;
         };
         const auto errors = host.CaptureRhiErrors();
-        auto preparedOutputs = view.Prepare(editorFrame.viewport, remainingDiagnosticBytes);
-        if (const auto *error = std::get_if<Core::BoundedText>(&preparedOutputs))
+        const GraphExecutionDiagnostics graphErrors{&errors, +[](const void *scope) noexcept
+        {
+            return static_cast<const Platform::RhiErrorScope *>(scope)->IsClear();
+        }};
+        auto candidate = view.Prepare(editorFrame.viewport, remainingDiagnosticBytes);
+        if (const auto *error = std::get_if<Core::BoundedText>(&candidate))
         {
             return cancel(*error);
         }
-        auto &outputs = std::get<Renderer::NoSceneOutputs>(preparedOutputs);
-        auto ui = editor.PrepareUiFrame(presentation.target.framebuffer, presentation.target.extentPixels,
-                                        slot.arena, outputs, commands.GetDesc());
-        if (const auto *error = std::get_if<Core::BoundedText>(&ui))
+        auto &outputs = std::get<NoSceneOutputs>(candidate);
+        EditorGraphProfile profile(host);
+        for (bool deferred = false;; deferred = true)
         {
-            return cancel(*error);
-        }
-        if (!errors.IsClear())
-        {
-            return cancel(Core::BoundedText("Window Graphics frame preparation failed"));
-        }
-        if (std::holds_alternative<Editor::UiPrepareStatus>(ui))
-        {
-            if (outputs.Diagnostic() || outputs.UploadPending())
+            // 只有槽 Ready 或本轮无命令候选结束后到达这里. 图专用 arena 与载荷存储独立回退.
+            slot.arena.Reset();
+            slot.bindings.Reset();
+            auto ui = editor.PrepareUiFrame(presentation.target.extentPixels, slot.arena, outputs, deferred);
+            if (const auto *error = std::get_if<Core::BoundedText>(&ui))
             {
-                view.Defer(Renderer::ViewSettingReason::UploadPending);
+                return cancel(*error);
             }
-            // 当前取得尚无新命令. 归还后继续处理输入和退休, 后续轮次再按当时请求准备.
-            if (const auto error = host.CancelPresentation(presentation.token))
+            auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
+            if (prepared && prepared->DiagnosticUploadPending())
+            {
+                view.Defer(ViewSettingReason::UploadPending);
+            }
+            if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024))
+            {
+                return cancel(Core::BoundedText("Cannot reserve product graph storage"));
+            }
+            RenderGraph graph(slot.graphArena);
+            std::vector<GraphUpload> uploads(0);
+            auto imported = graph.ImportTexture(presentation.target.texture,
+                {presentation.target.entryState, presentation.target.finalState, false});
+            if (const auto *error = std::get_if<GraphError>(&imported))
+            {
+                return cancel(error->description);
+            }
+            TextureId color;
+            // 目标状态与内容有效性分开. 每帧从显式 clear 建立内容, 空 UI 也有合法呈现版本.
+            auto cleared = graph.AddPass<TextureId>("Window clear", [&](PassBuilder &builder, auto &data)
+            {
+                color = data = builder.Write(std::get<TextureId>(imported), GraphUsage::ColorAttachment,
+                    {.load = LoadOp::Clear, .clearValue = RHI::Color(0.018f, 0.024f, 0.035f, 1.f)});
+                return color.IsValid();
+            }, +[](PassResources &, const TextureId &, RHI::CommandList &) noexcept -> GraphFailure
+            {
+                return std::nullopt;
+            });
+            if (const auto *error = std::get_if<GraphError>(&cleared))
+            {
+                return cancel(error->description);
+            }
+            TextureId diagnostic;
+            PassId diagnosticUpload;
+            if (outputs.Diagnostic() && !deferred && prepared)
+            {
+                if (!outputs.PrepareUpload(slot.arena))
+                {
+                    return cancel(Core::BoundedText("Cannot prepare diagnostic pixels in the current frame slot"));
+                }
+                auto declared = outputs.Declare(graph, uploads);
+                if (const auto *error = std::get_if<GraphError>(&declared))
+                {
+                    return cancel(error->description);
+                }
+                diagnostic = std::get<TextureId>(declared);
+                if (outputs.UploadBytes() != 0)
+                {
+                    diagnosticUpload = uploads.back().pass;
+                }
+            }
+            if (prepared)
+            {
+                auto composed = prepared->BuildGraph(graph, color, diagnostic, slot.bindings, uploads, graphErrors);
+                if (const auto *error = std::get_if<GraphError>(&composed))
+                {
+                    return cancel(error->description);
+                }
+                color = std::get<TextureId>(composed);
+            }
+            if (auto error = graph.Export(color, ExportUsage::Presentation))
+            {
+                return cancel(error->description);
+            }
+            if (auto error = graph.Seal())
+            {
+                return cancel(error->description);
+            }
+            auto compiled = CompileRenderGraph(graph, profile.options);
+            if (const auto *error = std::get_if<GraphError>(&compiled))
+            {
+                return cancel(error->description);
+            }
+            const auto &plan = *std::get<std::unique_ptr<const CompiledGraphPlan>>(compiled);
+            // 声明过的上传未必存活. 只按拓扑计划核算 PBO/Buffer 写入, 区域复制不重复收费.
+            auto measured = CollectGraphUploads(plan, uploads);
+            if (const auto *error = std::get_if<GraphError>(&measured))
+            {
+                return cancel(error->description);
+            }
+            const auto &budget = std::get<GraphUploadBudget>(measured);
+            const auto admission = host.CheckUploadCapacity(commands.GetDesc().uploadChunkSize,
+                                                             budget.textures, budget.buffers);
+            const bool liveDiagnosticUpload = IsLivePass(plan, diagnosticUpload);
+            if ((admission == Platform::UploadAdmission::Pending ||
+                 admission == Platform::UploadAdmission::ExceedsLimit) &&
+                liveDiagnosticUpload && !deferred)
+            {
+                // 先析构当前图及准备值, 撤销临时 token. 新候选重新包含占位标签和字体需求.
+                view.Defer(ViewSettingReason::UploadPending);
+                continue;
+            }
+            if (admission == Platform::UploadAdmission::Pending)
+            {
+                if (auto error = host.CancelPresentation(presentation.token))
+                {
+                    return Platform::DescribeHostError(*error);
+                }
+                return FrameStatus::UploadPending;
+            }
+            if (admission != Platform::UploadAdmission::Ready || !errors.IsClear())
+            {
+                return cancel(Core::BoundedText("Product graph preparation or upload admission failed"));
+            }
+
+            std::optional<Core::BoundedText> failure;
+            // 准备诊断贯穿本次执行, 不重新取样以掩盖先前错误. GraphManaged 接管前提交已有状态请求.
+            commands.Open();
+            if (!errors.IsClear())
+            {
+                return Core::BoundedText("Cannot open the product Graphics list");
+            }
+            commands.CommitBarriers();
+            auto executed = ExecuteRenderGraph(graph, plan, *host.GetDevice(), commands, graphErrors);
+            const GraphExecutionOutputList *executionOutputs = nullptr;
+            if (const auto *error = std::get_if<GraphError>(&executed))
+            {
+                failure = error->description;
+            }
+            else
+            {
+                executionOutputs = std::get<GraphExecutionOutputs>(executed).get();
+                if (FindTextureOutput(*executionOutputs, color) != presentation.target.texture.Get())
+                {
+                    failure = Core::BoundedText("Product graph did not return the original window color");
+                }
+            }
+            // 即使失败也按存活上传上界保守记账, ticket 和 Event 决定槽的真实退休.
+            slot.diagnosticUploadBytes = liveDiagnosticUpload ? outputs.UploadBytes() : 0;
+            // Close 也属于颜色有效性的判断区间, 只有完整图及关闭成功才授权宿主读取窗口颜色.
+            commands.Close();
+            const bool recorded = errors.IsClear() && !failure;
+            if (auto error = host.PrepareSubmission(presentation.token, commands, recorded))
+            {
+                return failure ? *failure : Platform::DescribeHostError(*error);
+            }
+            std::optional<Platform::HostError> error;
+            const auto receipt = host.SubmitPresentation(presentation.token, error);
+            slot.lastSubmission = receipt.ticket;
+            if (receipt.ticket != 0)
+            {
+                ReportTicket(diagnostics, "Window Graphics submission accepted", receipt.ticket);
+            }
+            if (error)
+            {
+                return failure ? *failure : Platform::DescribeHostError(*error);
+            }
+            const bool accepted = recorded && receipt.colorValid && errors.IsClear();
+            // Finish 会消费批次, 先取其诊断采样事实. UI 请求和 View 仅在同次完整颜色回执下发布.
+            const bool useDiagnostic = prepared && prepared->UsesDiagnosticOutput();
+            if (prepared)
+            {
+                const bool confirmed = prepared->Finish({commands, plan, executionOutputs, receipt.ticket, accepted});
+                assert(confirmed == accepted);
+                static_cast<void>(confirmed);
+            }
+            if (accepted && useDiagnostic)
+            {
+                view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*executionOutputs, diagnostic)));
+            }
+            // 交换独立于已接受的上传和输出, 后续窗口变化不能撤回已提交工作或其退休责任.
+            const auto result = host.Present(presentation.token, error);
+            if (failure)
+            {
+                return *failure;
+            }
+            if (!recorded)
+            {
+                return Core::BoundedText("Product graph recording failed");
+            }
+            if (error)
             {
                 return Platform::DescribeHostError(*error);
             }
-            return FrameStatus::UploadPending;
+            if (result.swapped)
+            {
+                ReportTicket(diagnostics, "Editor window presented", result.ticket);
+            }
+            return FrameStatus::Rendered;
         }
-
-        auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
-        const bool useDiagnostic = prepared && prepared->UsesDiagnosticOutput();
-        if (prepared && prepared->DiagnosticUploadPending())
-        {
-            view.Defer(Renderer::ViewSettingReason::UploadPending);
-        }
-        // 仅生成本次实际采样的诊断像素. UI 已将其写入计入准入及 arena 预留.
-        if (useDiagnostic && !outputs.PrepareUpload(slot.arena))
-        {
-            return cancel(Core::BoundedText("Window Graphics frame preparation failed"));
-        }
-        std::optional<Core::BoundedText> failure;
-        commands.Open();
-        if (!errors.IsClear())
-        {
-            return Core::BoundedText("Cannot open the window Graphics list");
-        }
-        // 先写入本帧采样的诊断候选. 窗口底色独立初始化, 在 sRGB 附件上存储编码.
-        if (useDiagnostic)
-        {
-            outputs.RecordUpload(commands);
-            slot.diagnosticUploadBytes = outputs.UploadBytes();
-        }
-        if (errors.IsClear())
-        {
-            commands.ClearTextureFloat(presentation.target.texture, RHI::AllSubresources,
-                                       RHI::Color(0.018f, 0.024f, 0.035f, 1.f));
-        }
-        if (errors.IsClear() && prepared)
-        {
-            failure = prepared->Record(commands);
-        }
-        // Close 恢复导出状态并纳入本次错误区间. 仅完整录制才允许末端源访问.
-        commands.Close();
-        const bool recorded = errors.IsClear() && !failure;
-        if (auto error = host.PrepareSubmission(presentation.token, commands, recorded))
-        {
-            return failure ? *failure : Platform::DescribeHostError(*error);
-        }
-        std::optional<Platform::HostError> error;
-        const auto receipt = host.SubmitPresentation(presentation.token, error);
-        // Event 设置或交换稍后失败也不改变设备已接受的事实.
-        slot.lastSubmission = receipt.ticket;
-        if (slot.lastSubmission != 0)
-        {
-            ReportTicket(diagnostics, "Window Graphics submission accepted", slot.lastSubmission);
-        }
-        if (error)
-        {
-            return failure ? *failure : Platform::DescribeHostError(*error);
-        }
-        // 前缀也可获非零票据. 仅通过颜色资格的完整录制确认纹理请求和候选 View 颜色.
-        if (prepared)
-        {
-            const bool confirmed = prepared->Finish({commands, receipt.ticket, recorded && receipt.colorValid});
-            assert(confirmed == receipt.colorValid);
-            static_cast<void>(confirmed);
-        }
-        if (receipt.colorValid && useDiagnostic)
-        {
-            // 有效比例随本轮采样到的颜色一起确认. 同尺寸复用也经过这次提交.
-            view.Publish(std::move(outputs));
-        }
-        // Present 消费本次取得. 后续窗口变化或交换失败仍保留此前接受的工作及其退休责任.
-        const auto result = host.Present(presentation.token, error);
-        if (failure)
-        {
-            return *failure;
-        }
-        if (!recorded)
-        {
-            return Core::BoundedText("Window Graphics recording failed");
-        }
-        if (error)
-        {
-            return Platform::DescribeHostError(*error);
-        }
-        if (result.swapped)
-        {
-            ReportTicket(diagnostics, "Editor window presented", result.ticket);
-        }
-        return FrameStatus::Rendered;
     }
 
     // 标题与 VSync 在同一 CPU 边界各自应用. 字段拒绝保留原因并继续尝试另一字段.
@@ -503,7 +628,7 @@ int main(int argc, char **argv)
         {
             const auto &package = std::get<std::filesystem::path>(located);
             auto &device = *host->GetDevice();
-            auto view = Renderer::View::Create(device, host->GetInfo().maxTextureSizePixels);
+            auto view = Renderer::View::Create(host->GetInfo().maxTextureSizePixels);
             if (!view)
             {
                 Runtime::PrintError(Core::BoundedText("Cannot allocate the main view identity"));

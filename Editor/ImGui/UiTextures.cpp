@@ -8,11 +8,11 @@
 #include <vector>
 
 #include <Core/FrameArena.hpp>
-#include <DeviceHost.hpp>
+#include <EditorUi/Data.hpp>
 
 /// @file
 /// @brief 将固定 ImGui 的纹理请求转换为有界 RHI 驻留与本槽持有的像素数据.
-/// 逻辑 View token 在准备期解析到本轮颜色或占位, 纹理协议的创建和更新由提交回执确认.
+/// 准备期核对逻辑身份并复制像素, 构图期关联当前写版本, 成功提交后才发布物理句柄和请求状态.
 
 namespace Physara::Editor::Detail
 {
@@ -25,6 +25,7 @@ namespace Physara::Editor::Detail
     // 宿主只允许一个活动会话, 在同一 owner 线程为当前及后续接入分配不同的 token 代.
     static std::uint32_t LastTextureGeneration = 0;
 
+    // 高 32 位为进程内不复用的代, 低 32 位为本会话的槽位, 与固定 ImGui 整数协议一致.
     ImTextureID EncodeUiTexture(UiTextureId id) noexcept
     {
         assert(id.generation <= std::numeric_limits<std::uint32_t>::max());
@@ -38,8 +39,7 @@ namespace Physara::Editor::Detail
     }
 
     // 管理纹理和区域暂存保持同格式, 复制保留 sRGB 编码后的 texel.
-    static RHI::TextureHandle CreateUploadTexture(RHI::Device &device, std::uint32_t width, std::uint32_t height,
-                                                  bool sampled)
+    static RHI::TextureDesc UploadDescription(std::uint32_t width, std::uint32_t height, bool sampled)
     {
         // 直接构造名称, 让 MSVC Debug 的 string 代理分配走可抛构造.
         const RHI::TextureDesc desc{
@@ -50,56 +50,27 @@ namespace Physara::Editor::Detail
             .isShaderResource = sampled,
             .initialState = RHI::ResourceStates::Common,
             .keepInitialState = true};
-        return device.CreateTexture(desc);
+        return desc;
     }
 
+    // 共享采样接口先就绪, 各纹理的 BindingSet 留给所属图 Pass 的 prepare.
     std::optional<Core::BoundedText> UiTextures::Initialize(const RHI::BindingLayoutDesc &layout)
     {
-        // 占位也用生成布局和共享 sampler. 像素等到首次需要该绑定的批次才写入.
+        // 投影采用 ABI 的完整范围, 避免把 16 字节数据绑定成未定义的 256 字节子区间.
+        // 占位纹理直到图中首次被实际采样才物化.
         m_Layout = m_Device.CreateBindingLayout(layout);
         m_Projection = m_Device.CreateBuffer(
-            RHI::BufferDesc().SetByteSize(RHI::ConstantBufferOffsetSizeAlignment)
+            RHI::BufferDesc().SetByteSize(sizeof(Shader::Generated::EditorUi::UiProjection))
                 .SetIsConstantBuffer(true).SetKeepInitialState(true).SetDebugName("Editor UI projection"));
         m_Sampler = m_Device.CreateSampler(RHI::SamplerDesc().SetMipFilter(false));
-        m_Placeholder = CreateUploadTexture(m_Device, 1, 1, true);
-        if (!m_Layout || !m_Projection || !m_Sampler || !m_Placeholder)
+        if (!m_Layout || !m_Projection || !m_Sampler)
         {
             return Core::BoundedText("Editor UI initialization failed to create binding resources");
-        }
-        m_PlaceholderBinding = Bind(m_Placeholder.Get());
-        if (!m_PlaceholderBinding)
-        {
-            return Core::BoundedText("Editor UI initialization failed to bind the placeholder texture");
         }
         return std::nullopt;
     }
 
-    // 按生成布局组装每代的采样集合, 由 Device 建立资源保活关系.
-    RHI::BindingSetHandle UiTextures::Bind(RHI::Texture *texture) const
-    {
-        // 用可抛的 count 构造. 帧准备中的 Debug 代理分配失败展开到 Prepare, 由批次析构回滚.
-        RHI::BindingSetDesc set{.bindings = std::vector<RHI::BindingSetItem>(0)};
-        for (const auto &item : m_Layout->GetDesc()->bindings)
-        {
-            switch (item.type)
-            {
-            case RHI::ResourceType::ConstantBuffer:
-                set.AddItem(RHI::BindingSetItem::ConstantBuffer(item.slot, m_Projection.Get()));
-                break;
-            case RHI::ResourceType::Texture_SRV:
-                set.AddItem(RHI::BindingSetItem::Texture_SRV(item.slot, texture));
-                break;
-            case RHI::ResourceType::Sampler:
-                set.AddItem(RHI::BindingSetItem::Sampler(item.slot, m_Sampler.Get()));
-                break;
-            default:
-                assert(false && "Unexpected generated EditorUi layout");
-                return {};
-            }
-        }
-        return m_Device.CreateBindingSet(set, m_Layout.Get());
-    }
-
+    // 先核对代再返回槽内借用, 防止旧 token 命中新近复用的条目.
     UiTextures::Entry *UiTextures::Find(UiTextureId id) noexcept
     {
         if (!id.IsValid() || id.index >= m_Entries.size() || m_Entries[id.index].id != id)
@@ -109,7 +80,7 @@ namespace Physara::Editor::Detail
         return &m_Entries[id.index];
     }
 
-    // 槽位和代有余量且绑定完整后才发布条目. 失败不消耗代或驻留字节.
+    // 槽位和代有余量后发布逻辑条目, 创建请求的物理纹理留到接受回执.
     UiTextureResult UiTextures::Register(Entry entry)
     {
         const auto slot = std::ranges::find_if(m_Entries, [](const Entry &entry) { return !entry.id.IsValid(); });
@@ -117,21 +88,14 @@ namespace Physara::Editor::Detail
         {
             return Core::BoundedText("Editor UI texture identity capacity exhausted");
         }
-        if (entry.texture)
-        {
-            entry.binding = Bind(entry.texture.Get());
-            if (!entry.binding)
-            {
-                return Core::BoundedText("Editor UI failed to bind the texture");
-            }
-        }
         entry.id = {static_cast<std::uint32_t>(slot - m_Entries.begin()), ++LastTextureGeneration};
         m_ManagedBytes += entry.managedBytes;
         *slot = std::move(entry);
         return slot->id;
     }
 
-    UiTextureResult UiTextures::RegisterResident(RHI::Texture &texture)
+    // 外部 owner 提供内容和状态事实. 此处校验采样形状, 物理绑定的设备归属由执行准备核对.
+    UiTextureResult UiTextures::RegisterResident(RHI::Texture &texture, UiTextureImport imported)
     {
         const auto &desc = texture.GetDesc();
         if (desc.dimension != RHI::TextureDimension::Texture2D || desc.sampleCount != 1 || !desc.isShaderResource ||
@@ -139,7 +103,19 @@ namespace Physara::Editor::Detail
         {
             return Core::BoundedText("Editor UI resident texture requires a single-sample RGBA8 or SRGBA8 2D SRV");
         }
-        return Register(Entry{.texture = RHI::TextureHandle(&texture)});
+        if (!imported.states.contentDefined || imported.states.entry == RHI::ResourceStates::Unknown ||
+            imported.states.final == RHI::ResourceStates::Unknown ||
+            !Renderer::Detail::HasKnownResourceStateBits(imported.states.entry) ||
+            !Renderer::Detail::HasKnownResourceStateBits(imported.states.final) ||
+            imported.range.firstMip >= desc.mipLevels || imported.range.mipCount != 1 ||
+            imported.range.firstLayer != 0 || imported.range.layerCount != 1 ||
+            imported.range.aspect != Renderer::TextureAspect::Color ||
+            (desc.keepInitialState && imported.states.final != desc.initialState))
+        {
+            return Core::BoundedText(
+                "Editor UI resident texture requires defined content and explicit valid import facts");
+        }
+        return Register(Entry{.texture = RHI::TextureHandle(&texture), .imported = imported});
     }
 
     // 登记逻辑身份. 具体 View 颜色的句柄和采样绑定留在解析它的批次中.
@@ -149,7 +125,7 @@ namespace Physara::Editor::Detail
         return Register(Entry{.view = view, .role = Renderer::ViewOutputRole::DiagnosticColor});
     }
 
-    // 解除注册表持有并归还逻辑驻留预算, 已准备的绑定及 GPU 在途引用由各自 owner 释放.
+    // 解除注册表持有并归还逻辑驻留预算, 已准备的驻留快照及 GPU 在途引用由各自 owner 释放.
     void UiTextures::Erase(Entry &entry) noexcept
     {
         m_ManagedBytes -= entry.managedBytes;
@@ -179,6 +155,7 @@ namespace Physara::Editor::Detail
         source.SetStatus(ImTextureStatus_Destroyed);
     }
 
+    // 先消费逻辑删除, 再按驻留和上传两种预算规划 create/update; 尚不分配原生纹理.
     std::optional<Core::BoundedText> UiTextures::PlanUploads(const ImDrawData &drawData, UiTextureUploads &uploads)
     {
         if (drawData.Textures == nullptr)
@@ -232,6 +209,7 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // 创建计完整图像, 更新计包围矩形. 规划只借用源元数据, 后续统一预留后才复制像素.
     std::optional<Core::BoundedText> UiTextures::PlanUpload(ImTextureData &source, UiTextureUploads &uploads,
                                                            std::size_t &remainingResident)
     {
@@ -294,7 +272,7 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
-    // 从已预留的 arena 填充像素. 更新复用原身份, 创建只在绑定完整后安装临时 token.
+    // 从已预留的 arena 填充像素. 更新复用原身份, 创建只安装当轮协议关联的临时 token.
     std::optional<Core::BoundedText> UiTextures::PrepareUploads(UiTextureUploads &uploads, Core::FrameArena &arena)
     {
         for (auto &upload : uploads.items)
@@ -313,24 +291,17 @@ namespace Physara::Editor::Detail
             CopyTexturePixels(*upload.request, region, reinterpret_cast<std::uint8_t *>(pixels.data()));
             upload.pixels = pixels;
 
-            const bool create = !upload.target;
-            auto texture = CreateUploadTexture(m_Device, region.width, region.height, create);
-            if (!texture)
+            if (upload.target)
             {
-                return Core::BoundedText("Editor UI failed to create an upload texture");
-            }
-            if (!create)
-            {
-                upload.staging = std::move(texture);
                 continue;
             }
-            auto registered = Register(Entry{.texture = texture, .managed = upload.request,
-                                              .managedBytes = pixels.size()});
+            auto registered = Register(Entry{
+                .imported = {{RHI::ResourceStates::Common, RHI::ResourceStates::Common, true}, {}},
+                .managed = upload.request, .managedBytes = pixels.size()});
             if (const auto *error = std::get_if<Core::BoundedText>(&registered))
             {
                 return *error;
             }
-            upload.target = std::move(texture);
             upload.created = std::get<UiTextureId>(registered);
             // 临时 token 只供当前准备解析. 上传获有效提交前维持 WantCreate.
             upload.request->SetTexID(EncodeUiTexture(upload.created));
@@ -349,9 +320,8 @@ namespace Physara::Editor::Detail
         return static_cast<std::size_t>(region.width) * region.height * PixelBytes;
     }
 
-    // 两个阶段共用身份与占位判定. 预检可看到计划创建的托管纹理, 绑定阶段使用已安装的关联.
-    UiTextures::Sample UiTextures::FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings,
-                                                std::span<const UiTextureUpload> planned) noexcept
+    // 解析前已安装全部临时身份. 本轮图声明沿同一逻辑 token 查找已复制载荷的生产版本.
+    UiTextures::Sample UiTextures::FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings) noexcept
     {
         // 视口图像已为同一个原因排入可见状态. 按命令身份选用对应的占位绑定.
         if (&draw == bindings.viewportDraw && bindings.viewportFallback != UiFallback::None)
@@ -375,11 +345,7 @@ namespace Physara::Editor::Detail
         {
             const auto &fontTextures = ImGui::GetIO().Fonts->TexList;
             // 本帧计划创建的身份会在解析前安装. 必需字体缺失则在解析时拒绝整批.
-            if (std::ranges::find(fontTextures, ref._TexData) != fontTextures.end() ||
-                std::ranges::any_of(planned, [&](const auto &upload)
-                {
-                    return upload.request == ref._TexData && !upload.target;
-                }))
+            if (std::ranges::find(fontTextures, ref._TexData) != fontTextures.end())
             {
                 return {};
             }
@@ -387,40 +353,34 @@ namespace Physara::Editor::Detail
         return {nullptr, UiFallback::InvalidIdentity};
     }
 
-    UiTextures::SampleUse UiTextures::MeasureSample(const ImDrawCmd &draw, const UiTextureUploads &uploads,
-                                                      const UiFrameBindings &bindings) noexcept
-    {
-        const auto sample = FindSample(draw, bindings, uploads.items);
-        if (sample.fallback != UiFallback::None)
-        {
-            return SampleUse::Placeholder;
-        }
-        return sample.entry && sample.entry->view.IsValid() ? SampleUse::Diagnostic : SampleUse::Other;
-    }
-
-    RHI::BindingSetHandle UiTextures::Resolve(const ImDrawCmd &draw, UiTextureUploads &uploads,
-                                              UiFrameBindings &bindings)
+    // 普通可见 draw 才进入这里. 无效非字体引用登记共享占位, View 引用记录本轮实际消费.
+    std::optional<UiTextureId> UiTextures::Resolve(const ImDrawCmd &draw, UiTextureUploads &uploads,
+                                                  UiFrameBindings &bindings)
     {
         const auto sample = FindSample(draw, bindings);
         if (!sample.entry)
         {
-            return sample.fallback == UiFallback::None ? RHI::BindingSetHandle{} :
-                                                         Placeholder(uploads, sample.fallback);
+            if (sample.fallback == UiFallback::None)
+            {
+                return std::nullopt;
+            }
+            Placeholder(uploads, sample.fallback);
+            return UiTextureId{};
         }
-        if (!sample.entry->view.IsValid())
+        bindings.usesDiagnostic |= sample.entry->view.IsValid();
+        // 托管和 View 条目不能由注销入口移除, 下一次 Advance 又会先取消准备值, 只需快照外部驻留项.
+        if (!sample.entry->view.IsValid() && !sample.entry->managed &&
+            std::ranges::find(bindings.residents, sample.entry->id, &UiResidentSnapshot::token) ==
+                bindings.residents.end())
         {
-            return sample.entry->binding;
+            // 准备后 registry 可被注销或复用. 原对象和导入事实属于已封存批次, 不再借用可变条目.
+            bindings.residents.push_back({sample.entry->id, sample.entry->texture, sample.entry->imported});
         }
-        // 只在可见命令采样本轮 View 颜色时创建绑定. 同一帧的重复采样共用该绑定.
-        if (!bindings.viewBinding)
-        {
-            bindings.viewBinding = Bind(bindings.output->texture.Get());
-        }
-        return bindings.viewBinding;
+        return sample.entry->id;
     }
 
-    // 所有占位共用一个已绑定的像素. 首个占位请求登记上传需求并记录本批诊断.
-    RHI::BindingSetHandle UiTextures::Placeholder(UiTextureUploads &uploads, UiFallback reason) const
+    // 所有占位共用同一像素. 首个占位请求登记图上传需求并记录本批诊断.
+    void UiTextures::Placeholder(UiTextureUploads &uploads, UiFallback reason) const
     {
         if (!uploads.usesPlaceholder)
         {
@@ -439,68 +399,168 @@ namespace Physara::Editor::Detail
                 callback->Message(RHI::MessageSeverity::Warning, message);
             }
         }
-        return m_PlaceholderBinding;
     }
 
-    std::size_t UiTextures::PlaceholderUploadBytes(bool used) const noexcept
+    // 每个区域更新分成暂存写和目标复制, 避免同 Pass 的重叠传输读写.
+    struct UiRegionCopy
     {
-        return used && !m_PlaceholderReady ? PlaceholderPixel.size() : 0;
-    }
+        Renderer::TextureId source;
+        Renderer::TextureId target;
+        RHI::TextureSlice region;
+    };
 
-    bool UiTextures::HasUploads(const UiTextureUploads &uploads) const noexcept
+    // 声明全部合法候选但不设导出根. 之后的普通 draw 决定哪些上传真正存活.
+    Renderer::GraphFailure UiTextures::DeclareUploads(Renderer::RenderGraph &graph, UiTextureUploads &uploads,
+        FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &writes)
     {
-        return !uploads.items.empty() || PlaceholderUploadBytes(uploads.usesPlaceholder) != 0;
-    }
-
-    bool UiTextures::Record(RHI::CommandList &commands, const UiTextureUploads &uploads,
-                            const Platform::RhiErrorScope &errors) const
-    {
-        if (const auto placeholderBytes = PlaceholderUploadBytes(uploads.usesPlaceholder))
+        using namespace Renderer;
+        if (uploads.usesPlaceholder)
         {
-            commands.WriteTexture(m_Placeholder.Get(), 0, 0, PlaceholderPixel.data(), placeholderBytes);
-            if (!errors.IsClear())
+            auto target = m_Placeholder ? graph.ImportTexture(m_Placeholder,
+                {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true}) :
+                graph.CreateTexture(UploadDescription(1, 1, true));
+            if (const auto *error = std::get_if<GraphError>(&target))
             {
-                return false;
+                return *error;
             }
-        }
-        for (const auto &upload : uploads.items)
-        {
-            auto *writeTarget = upload.staging ? upload.staging.Get() : upload.target.Get();
-            commands.WriteTexture(writeTarget, 0, 0, upload.pixels.data(), upload.region.width * PixelBytes);
-            if (!errors.IsClear())
+            uploads.placeholder.texture = std::get<TextureId>(target);
+            if (!m_Placeholder)
             {
-                return false;
-            }
-            if (upload.staging)
-            {
-                // 公共 WriteTexture 接收整 mip. 先写紧密的区域纹理, 再按原位置 1:1 复制.
-                const auto source = RHI::TextureSlice().SetSize(upload.region.width, upload.region.height, 1);
-                commands.CopyTexture(upload.target.Get(), upload.region, upload.staging.Get(), source);
-                if (!errors.IsClear())
+                auto written = AddTextureUpload(graph, uploads.placeholder.texture,
+                    std::as_bytes(std::span(PlaceholderPixel)), PixelBytes, writes);
+                if (const auto *error = std::get_if<GraphError>(&written))
                 {
-                    return false;
+                    return *error;
+                }
+                uploads.placeholder = std::get<GraphTextureWrite>(written);
+            }
+            bindings.tokens.push_back({{}, {uploads.placeholder.texture, {}}});
+        }
+        for (auto &upload : uploads.items)
+        {
+            const auto &region = upload.region;
+            auto source = graph.CreateTexture(UploadDescription(region.width, region.height, !upload.target));
+            if (const auto *error = std::get_if<GraphError>(&source))
+            {
+                return *error;
+            }
+            auto written = AddTextureUpload(graph, std::get<TextureId>(source), upload.pixels,
+                                             region.width * PixelBytes, writes);
+            if (const auto *error = std::get_if<GraphError>(&written))
+            {
+                return *error;
+            }
+            upload.written = std::get<GraphTextureWrite>(written);
+            if (upload.target)
+            {
+                // 托管纹理在 Close 后保持 Common. Load 保留区域外 texel, 终结 Pass 改为目标复制.
+                auto imported = graph.ImportTexture(upload.target,
+                    {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true});
+                if (const auto *error = std::get_if<GraphError>(&imported))
+                {
+                    return *error;
+                }
+                TextureId target;
+                auto copied = graph.AddPass<UiRegionCopy>("UI region copy", [&](PassBuilder &builder, auto &data)
+                {
+                    target = builder.Write(std::get<TextureId>(imported), GraphUsage::CopyDestination,
+                                           {.load = LoadOp::Load});
+                    data = {upload.written.texture, target, region};
+                    return builder.Read(data.source, GraphUsage::CopySource) && target.IsValid();
+                }, +[](PassResources &resources, const UiRegionCopy &data, RHI::CommandList &commands) noexcept
+                    -> GraphFailure
+                {
+                    auto *sourceTexture = resources.Resolve(data.source, GraphUsage::CopySource);
+                    auto *targetTexture = resources.Resolve(data.target, GraphUsage::CopyDestination);
+                    if (sourceTexture && targetTexture)
+                    {
+                        commands.CopyTexture(targetTexture, data.region, sourceTexture,
+                            RHI::TextureSlice().SetSize(data.region.width, data.region.height, 1));
+                    }
+                    return std::nullopt;
+                });
+                if (const auto *error = std::get_if<GraphError>(&copied))
+                {
+                    return *error;
+                }
+                upload.written = {target, std::get<PassId>(copied)};
+            }
+            bindings.tokens.push_back({DecodeUiTexture(upload.request->TexID), {upload.written.texture, {}}});
+        }
+        return std::nullopt;
+    }
+
+    // 先取本轮生产者版本, 再使用驻留快照. 其余托管和 View 条目的寿命由活动准备值的会话合同保证.
+    Renderer::GraphResult<UiFrameTexture> UiTextures::ResolveGraph(Renderer::RenderGraph &graph,
+        UiTextureId token, Renderer::TextureId diagnostic, FrameSlotUiFrameBindings &bindings,
+        std::span<const UiResidentSnapshot> residents)
+    {
+        using namespace Renderer;
+        const auto known = std::ranges::find(bindings.tokens, token, &FrameSlotUiFrameBindings::Token::token);
+        if (known != bindings.tokens.end())
+        {
+            return known->value;
+        }
+        // 快照按原 token 的完整代匹配. registry 即使复用同一槽位, 本批仍导入准备时的原对象.
+        const auto resident = std::ranges::find(residents, token, &UiResidentSnapshot::token);
+        const auto *entry = resident == residents.end() ? Find(token) : nullptr;
+        if (resident == residents.end() && !entry)
+        {
+            return GraphError{GraphErrorCode::InvalidResource, Core::BoundedText("Expired UI graph token")};
+        }
+        UiFrameTexture value{diagnostic, {}};
+        if (resident != residents.end() || !entry->view.IsValid())
+        {
+            const auto &texture = resident != residents.end() ? resident->texture : entry->texture;
+            const auto &facts = resident != residents.end() ? resident->imported : entry->imported;
+            auto imported = graph.ImportTexture(texture, facts.states, facts.range);
+            if (const auto *error = std::get_if<GraphError>(&imported))
+            {
+                return *error;
+            }
+            value = {std::get<TextureId>(imported), facts.range};
+            // 等价导入返回版本零, alias 必须沿当前帧的规范身份取最新写版本.
+            for (const auto &item : bindings.tokens)
+            {
+                if (item.value.texture.identity == value.texture.identity &&
+                    item.value.texture.version > value.texture.version)
+                {
+                    value.texture = item.value.texture;
                 }
             }
         }
-        return true;
+        bindings.tokens.push_back({token, value});
+        return value;
     }
 
-    void UiTextures::Finish(const UiTextureUploads &uploads, bool accepted) noexcept
+    // 非空回执已证明整图成功, 因而存活终结 Pass 等价于本请求实际执行成功.
+    // 创建还需导出句柄才能持久发布; 更新继续使用原对象. 未确认的创建撤销身份并归还预算.
+    void UiTextures::Finish(const UiTextureUploads &uploads, const UiSubmission *submission) noexcept
     {
-        // OK 会使 ImGui 在下一次 NewFrame 清除更新记录. 失败只撤回本批临时创建的身份.
         for (const auto &upload : uploads.items)
         {
-            if (accepted)
+            const bool live = submission && Renderer::IsLivePass(submission->plan, upload.written.pass);
+            auto *created = upload.created.IsValid() ? Find(upload.created) : nullptr;
+            auto *texture = live && created ?
+                Renderer::FindTextureOutput(*submission->outputs, upload.written.texture) : nullptr;
+            if (live && (!created || texture))
             {
+                if (created)
+                {
+                    created->texture = texture;
+                }
                 upload.request->SetStatus(ImTextureStatus_OK);
             }
-            else if (upload.created.IsValid())
+            else if (created)
             {
                 upload.request->SetTexID(ImTextureID_Invalid);
-                Erase(*Find(upload.created));
+                Erase(*created);
             }
         }
-        m_PlaceholderReady |= accepted && uploads.usesPlaceholder;
+        if (submission && Renderer::IsLivePass(submission->plan, uploads.placeholder.pass))
+        {
+            m_Placeholder = Renderer::FindTextureOutput(*submission->outputs, uploads.placeholder.texture);
+        }
     }
 
     // 会话销毁前结束纹理协议关联. 已发工作需要的绑定和纹理由原提交包保活.

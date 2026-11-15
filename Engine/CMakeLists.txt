@@ -18,9 +18,10 @@ target_compile_options(PhysaraCore PRIVATE /W4 /WX /utf-8 /permissive-)
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
-# Renderer 管理诊断 View 的颜色代. 公开头使用 Core 身份与通用 RHI 句柄, 因此传播两个目标.
-add_library(PhysaraRenderer STATIC Renderer/View.hpp Renderer/View.cpp)
-target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraRHI)
+# Renderer 管理诊断 View 的颜色代和产品上传声明. 公开头使用图值, 因此传播 RenderGraph 依赖.
+# Editor 与 Runtime 经此依赖消费公共图接口; Renderer 本身不反向依赖窗口或 UI.
+add_library(PhysaraRenderer STATIC Renderer/View.hpp Renderer/View.cpp Renderer/FrameGraph.hpp Renderer/FrameGraph.cpp)
+target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraRHI PhysaraRenderGraph)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)

@@ -74,6 +74,7 @@ namespace Physara::Platform::Detail
 
     /// @brief 固定索引的窗口目标和完成观察. lastSubmission 非零时保留最近一次接受的设备票据.
     /// @note 同槽再取得时用 Event 确认上次完成, 之后才复用或替换目标.
+    /// target 同时保存该代的入口状态; 换代重置为 Common, 完整交接获提交后才推进.
     struct PresentationSlot
     {
         PresentTarget target;
@@ -94,7 +95,8 @@ namespace Physara::Platform::Detail
         PresentationPhase phase = PresentationPhase::Idle;
         std::uint64_t acquisition = 0;
         bool colorValid = false;
-        bool stopped = false;
+        bool targetUsed = false; ///< 完整录制证明目标已交回 finalState, 与窗口交换资格分开.
+        bool stopped = false; ///< 无可靠完成或状态事实时停止新取得, 已发工作仍由宿主关闭路径收拢.
     };
 
     /// @brief 按取得阶段记录资源的宿主 owner, 支持初始化中途的逆序回滚.

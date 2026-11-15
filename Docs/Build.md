@@ -67,7 +67,7 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 | 1 | Diagnostics、宿主或 Editor 创建失败, 或运行及关闭失败, 通过有界 stderr 文本报告 |
 | 2 | 参数语法错误, 在原生初始化前退出 |
 
-可渲染轮次生成主窗口停靠区和面板. Runtime 按索引取得三个帧槽之一, 由同槽的 Event 完成观察决定 CPU 存储和 PresentColor 的复用. 视口有可采样的离屏测试图时显示其颜色, 场景状态和诊断占位在面板中可辨认. 基础 UI 程序或首个字体 atlas 初始化失败返回 1. 列表关闭后由宿主复制有效颜色, 接受提交后交换窗口缓冲. PresentWait 来自实际交换调用.
+可渲染轮次生成主窗口停靠区和面板. Runtime 将诊断/纹理/几何上传、窗口清屏和 UI 合成纳入同一张 RenderGraph, 编译后按存活上传准入并执行. Runtime 按索引取得三个帧槽之一, 由同槽的 Event 完成观察决定 CPU 存储和 PresentColor 的复用. 视口有可采样的离屏测试图时显示其颜色, 场景状态和诊断占位在面板中可辨认. 基础 UI 程序或首个字体 atlas 初始化失败返回 1. 列表关闭后由宿主复制有效颜色, 接受提交后交换窗口缓冲. PresentWait 来自实际交换调用.
 
 槽全忙时继续处理输入和有限事件等待. 最小化或 framebuffer 为零时清理交互并暂停新帧. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出, 最后一次 GPU 使用按设备的完成与关闭协议收拢. [阶段计划](Developments/D03-D05-FramePipeline.md#d04-t04)
 

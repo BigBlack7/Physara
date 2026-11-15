@@ -131,6 +131,7 @@ namespace Physara::Platform::Detail
                 return PresentationError(state, "Presentation target or completion observer creation failed");
             }
             candidate.extentPixels = window.framebufferSizePixels;
+            // 连同尺寸一起替换该代的状态事实. 即使旧代曾提交, 新纹理首次入口仍为 Common.
             slot.target = std::move(candidate);
             slot.event = std::move(event);
             ++slot.targetGeneration;
@@ -138,6 +139,7 @@ namespace Physara::Platform::Detail
         presentation.token = {state.info.identity, slotIndex, slot.targetGeneration, ++presentation.acquisition};
         presentation.phase = PresentationPhase::Acquired;
         presentation.colorValid = false;
+        presentation.targetUsed = false;
         return PresentationFrame{slot.target, presentation.token};
     }
 
@@ -159,6 +161,9 @@ namespace Physara::Platform::Detail
         const auto &target = presentation.slots[token.slotIndex].target;
         presentation.commands = &commands;
         presentation.phase = PresentationPhase::Prepared;
+        // 完整录制已交回 finalState, 但还要等 Execute 接受才可更新目标代的入口事实.
+        // 窗口尺寸随后失配只取消末端复制资格, 不撤销已经成立的图尾状态.
+        presentation.targetUsed = frameSucceeded;
         // 活动取得先强持列表. 窗口变更时保留列表供提交已发前缀, 有效颜色还需末端复制成功.
         if (!frameSucceeded)
         {
@@ -206,6 +211,16 @@ namespace Physara::Platform::Detail
             presentation.colorValid = false;
             error = PresentationError(state, "Presentation submission was not accepted cleanly");
             return {ticket, false};
+        }
+        if (presentation.targetUsed)
+        {
+            // 状态随被接受的录制推进, 不依赖是否交换. 槽的真实复用仍须等待下方 Event.
+            slot.target.entryState = slot.target.finalState;
+        }
+        else
+        {
+            // 失败前缀无法证明目标状态. 完成观察仍覆盖已发工作, 但禁止再次取得该代.
+            presentation.stopped = true;
         }
         // Reset 只清旧观察身份. 同一 owner 紧接 Execute 捕获队列尾, 该快照覆盖刚接受的票据.
         // 绑定失败仍返回票据, 同时停止复用并撤销颜色资格.
@@ -286,7 +301,7 @@ namespace Physara::Platform::Detail
         return result;
     }
 
-    // 准备阶段尚未关联列表时退还取得. 下次取得仍以新的单次身份发布.
+    // 准备阶段尚未关联列表时退还取得, 不改目标代的 entryState. 下次取得发布新的单次身份.
     std::optional<HostError> CancelPresentation(DeviceHostState &state, PresentationToken token)
     {
         if (auto error = RequirePresentation(state, token, PresentationPhase::Acquired))

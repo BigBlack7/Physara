@@ -197,9 +197,10 @@ namespace Physara::Editor
         return frame;
     }
 
-    PrepareUiResult EditorSession::PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels,
+    // 只接受本次封存布局匹配的 View 候选, 不在会话状态中保存图版本或取得原生目标.
+    PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                    Core::FrameArena &arena, const Renderer::NoSceneOutputs &outputs,
-                                                   const RHI::CommandListParameters &commands)
+                                                   bool deferDiagnostic)
     {
         auto &state = *m_State;
         // 暂停或零像素范围直接返回, 待处理纹理请求留给下一次有效准备.
@@ -218,19 +219,19 @@ namespace Physara::Editor
                            outputs.RequestRevision() != state.viewportRequest->requestRevision))
         {
             // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
-            return state.renderer->Prepare(*state.drawData, target, extentPixels, arena, {}, layout.image, commands);
+            return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, deferDiagnostic);
         }
-        return state.renderer->Prepare(*state.drawData, target, extentPixels, arena, outputs, layout.image, commands);
+        return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, deferDiagnostic);
     }
 
-    UiTextureResult EditorSession::RegisterUiTexture(RHI::Texture &texture)
+    UiTextureResult EditorSession::RegisterUiTexture(RHI::Texture &texture, UiTextureImport imported)
     {
         auto &renderer = m_State->renderer;
         if (!renderer)
         {
             return Core::BoundedText("Editor UI texture registration requires an attached renderer");
         }
-        return renderer->RegisterResident(texture);
+        return renderer->RegisterResident(texture, imported);
     }
 
     bool EditorSession::UnregisterUiTexture(UiTextureId id) noexcept

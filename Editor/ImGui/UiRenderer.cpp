@@ -22,9 +22,8 @@
 #include "Viewport/Viewport.hpp"
 
 /// @file
-/// @brief 准备 UI 几何与绑定, 向开放列表发出上传和绘制, 消费同一次提交的回执.
-/// 在列表开放前解析当轮的诊断颜色或占位, 并按实际录制顺序预检上传容量.
-/// 批次持有 RHI 句柄, 借用帧槽几何与像素, 纹理请求借用到确认或取消.
+/// @brief 准备封存的 UI 值, 声明上传及 Raster, 消费同一次图执行的提交回执.
+/// 普通 draw 解析成帧内版本, 执行时按精确权限建立绑定. 纹理请求借用到确认或取消.
 
 namespace Physara::Editor::Detail
 {
@@ -41,34 +40,38 @@ namespace Physara::Editor::Detail
     static_assert(sizeof(UiShader::UiProjection) <= RHI::ConstantBufferOffsetSizeAlignment);
     using ProjectionBytes = std::array<std::byte, sizeof(UiShader::UiProjection)>;
 
-    /// @brief 空绑定表示 reset-state, 普通 draw 持有本帧已解析的纹理依赖.
+    /// @brief reset 独立表示状态重建, 普通 draw 从 token 解析到帧内绑定索引.
     struct UiDraw
     {
         RHI::Rect clip;
         RHI::DrawArguments arguments;
-        RHI::BindingSetHandle binding;
+        UiTextureId token;
+        bool reset = true;
+        std::size_t binding = 0;
     };
 
     /// @brief 从封存帧提取的一次录制输入. 按 draw 顺序保存 scissor 和绑定.
-    /// 顶点和索引借用本次帧槽的已复制区段. 纯纹理上传或 reset 批次可省去几何缓冲.
+    /// 顶点和索引借用帧槽区段, 投影字节由批次拥有. 三者在图执行结束前均须保持稳定.
+    /// 驻留快照保留准备时的原纹理和导入事实, 注销 registry 不影响本批构图.
+    /// 无普通可见 draw 时不声明几何上传和 Raster, 纹理候选由图活性裁剪.
     struct UiBatch
     {
         // MSVC Debug 会为空容器分配代理. 显式 count 构造允许准备入口捕获分配失败.
-        UiBatch() : draws(0)
+        UiBatch() : draws(0), residents(0)
         {
         }
 
-        RHI::FramebufferHandle target;
         RHI::CommandListHandle recorded; ///< 完整录制使用的列表, 供 Finish 核对回执对象.
         Platform::WindowExtent extent;
         ProjectionBytes projection;
         std::span<std::byte> vertices;
         std::span<std::byte> indices;
         std::vector<UiDraw> draws;
+        std::vector<UiResidentSnapshot> residents; ///< 本批普通可见 draw 的外部驻留快照, 按 token 去重.
         UiTextureUploads uploads;
         RHI::BufferHandle vertexBuffer;
         RHI::BufferHandle indexBuffer;
-        std::size_t uploadChunkSize = 0;
+        std::uint64_t graphGeneration = 0;
         bool hasDraws = false;
         bool usesDiagnosticOutput = false;
         bool diagnosticUploadPending = false;
@@ -81,7 +84,7 @@ namespace Physara::Editor::Detail
         {
             if (owner != nullptr)
             {
-                owner->Complete(*this, false);
+                owner->Complete(*this, nullptr);
             }
         }
 
@@ -114,22 +117,6 @@ namespace Physara::Editor::Detail
     static RHI::FramebufferInfo UiFramebufferInfo()
     {
         return RHI::FramebufferInfo().AddColorFormat(TargetFormat);
-    }
-
-    /// @brief 只接受相同发布的真实像素范围和基线单色二维目标.
-    static bool IsCompatibleTarget(const RHI::Framebuffer *target, Platform::WindowExtent extent)
-    {
-        constexpr auto maxCoordinate = static_cast<std::uint32_t>(std::numeric_limits<int>::max());
-        if (target == nullptr || extent.width > maxCoordinate || extent.height > maxCoordinate)
-        {
-            return false;
-        }
-        const auto &info = target->GetFramebufferInfo();
-        const auto &desc = target->GetDesc();
-        return info.width == extent.width && info.height == extent.height && info.arraySize == 1 &&
-               info == UiFramebufferInfo() && !desc.shadingRateAttachment.Valid() &&
-               desc.colorAttachments.size() == 1 &&
-               desc.colorAttachments[0].texture->GetDesc().dimension == RHI::TextureDimension::Texture2D;
     }
 
     /// @brief 从逻辑左上坐标得到 NDC, 像素比例另用于 scissor.
@@ -174,41 +161,6 @@ namespace Physara::Editor::Detail
     static bool HasVisibleIndices(const ImDrawCmd &draw, const RHI::Rect &clip) noexcept
     {
         return draw.ElemCount != 0 && clip.Width() > 0 && clip.Height() > 0;
-    }
-
-    /// @brief 可见命令实际触发的写入. 托管纹理写入已由纹理请求单独确定.
-    struct DrawUploads
-    {
-        bool geometry = false;
-        bool diagnostic = false;
-        bool placeholder = false;
-    };
-
-    // 准入前只检查采样及裁剪需求, 此时尚未复制像素或建立临时纹理身份.
-    static DrawUploads MeasureDrawUploads(const ImDrawData &data, std::span<ImDrawList *const> lists,
-                                          UiTextures &textures, const UiBatch &batch, const UiFrameBindings &bindings)
-    {
-        DrawUploads writes;
-        for (const auto *list : lists)
-        {
-            for (const auto &draw : list->CmdBuffer)
-            {
-                if (draw.UserCallback != nullptr)
-                {
-                    continue;
-                }
-                const auto clip = ClipRect(draw.ClipRect, data, batch.extent);
-                if (!clip || !HasVisibleIndices(draw, *clip))
-                {
-                    continue;
-                }
-                writes.geometry = true;
-                const auto use = textures.MeasureSample(draw, batch.uploads, bindings);
-                writes.diagnostic |= use == UiTextures::SampleUse::Diagnostic;
-                writes.placeholder |= use == UiTextures::SampleUse::Placeholder;
-            }
-        }
-        return writes;
     }
 
     /// @brief 封存几何的元素计数, 供拥有型缓冲预留和字节预算检查.
@@ -327,7 +279,7 @@ namespace Physara::Editor::Detail
                 arguments.SetVertexCount(draw.ElemCount)
                     .SetStartIndexLocation(static_cast<std::uint32_t>(indexBase + draw.IdxOffset))
                     .SetStartVertexLocation(static_cast<std::uint32_t>(vertexBase + draw.VtxOffset));
-                batch.draws.push_back({*clip, arguments, std::move(binding)});
+                batch.draws.push_back({*clip, arguments, *binding, false, 0});
                 batch.hasDraws = true;
             }
             if (!list->VtxBuffer.empty())
@@ -348,8 +300,8 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
-    UiRenderer::UiRenderer(Platform::DeviceHost &host, RHI::Device &device) noexcept
-        : m_Host(host), m_Device(device), m_Textures(device)
+    UiRenderer::UiRenderer(RHI::Device &device) noexcept
+        : m_Device(device), m_Textures(device)
     {
     }
 
@@ -368,9 +320,14 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // 先验证宿主设备和固定 Shader 接口, 再向当前 ImGui context 发布能力及基础 atlas.
     UiRenderer::CreateResult UiRenderer::Create(Platform::DeviceHost &host, const UiRendererDesc &desc)
     {
-        auto renderer = std::unique_ptr<UiRenderer>(new UiRenderer(host, desc.device));
+        if (host.GetDevice() != &desc.device)
+        {
+            return Core::BoundedText("UI renderer requires the ready host device");
+        }
+        auto renderer = std::unique_ptr<UiRenderer>(new UiRenderer(desc.device));
         if (auto error = renderer->Initialize(desc.packagePath))
         {
             return *error;
@@ -511,17 +468,19 @@ namespace Physara::Editor::Detail
         }
     }
 
-    // 先解析视口与容量需求, 再统一预留 arena 并复制数据, 最后封存供 Record 使用的 RHI 依赖.
-    PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData, RHI::Framebuffer *target,
+    // 先解析视口及状态标签, 再统一预留 arena 并复制数据. GPU 上传准入在编译后进行.
+    PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData,
                                         Platform::WindowExtent extent, Core::FrameArena &arena,
                                         const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
-                                        const RHI::CommandListParameters &commands)
+                                        bool deferDiagnostic)
     {
         if (m_Pending != nullptr)
         {
             return Core::BoundedText("Editor UI prepare requires the previous batch to be finished or cancelled");
         }
-        if (!IsCompatibleTarget(target, extent))
+        if (extent.width == 0 || extent.height == 0 ||
+            extent.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            extent.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
         {
             return Core::BoundedText("Editor UI prepare requires a matching single-sample SRGBA8 2D target");
         }
@@ -541,16 +500,15 @@ namespace Physara::Editor::Detail
             frame->owner = this;
             m_Pending = frame.get();
             auto &batch = *frame->batch;
-            batch.target = target;
             batch.extent = extent;
             batch.projection = std::bit_cast<ProjectionBytes>(projection);
-            batch.uploadChunkSize = commands.uploadChunkSize;
             if (auto error = m_Textures.PlanUploads(drawData, batch.uploads))
             {
                 return TexturePreparationError(*error, m_BaseFontReady);
             }
 
-            UiFrameBindings bindings{.output = outputs.Diagnostic(), .uploadPending = outputs.UploadPending(),
+            UiFrameBindings bindings{.output = deferDiagnostic ? nullptr : outputs.Diagnostic(),
+                                     .uploadPending = deferDiagnostic || outputs.UploadPending(),
                                      .viewportDraw = viewport.FindDraw(drawData)};
             if (bindings.viewportDraw)
             {
@@ -559,16 +517,12 @@ namespace Physara::Editor::Detail
                 if (ref._TexData != nullptr || ref._TexID != viewport.token)
                 {
                     bindings.viewportFallback = UiFallback::InvalidIdentity;
-                    bindings.output = nullptr;
                 }
                 else if (!bindings.output)
                 {
-                    bindings.viewportFallback = MissingViewportOutput(outputs);
+                    bindings.viewportFallback = deferDiagnostic ? UiFallback::UploadPending :
+                                                                  MissingViewportOutput(outputs);
                 }
-            }
-            else
-            {
-                bindings.output = nullptr;
             }
 
             std::span<ImDrawList *const> lists(drawData.CmdLists.Data, drawData.CmdLists.Size);
@@ -603,47 +557,9 @@ namespace Physara::Editor::Detail
                 return Core::BoundedText("Editor UI geometry budget exceeded with the viewport status");
             }
 
-            // Runtime 先写诊断色, UI 再写首次占位和托管纹理, 最后写缓冲. 预检须沿用该顺序.
-            std::vector<std::size_t> textureWrites(batch.uploads.items.size() + 2);
-            std::ranges::transform(batch.uploads.items, textureWrites.begin() + 2, &UiTextureUpload::ByteCount);
-            DrawUploads drawUploads;
-            const auto checkCapacity = [&]
-            {
-                // 视口切换到占位时重新测量同一帧的可见命令, 包括新增的原因标签.
-                drawUploads = MeasureDrawUploads(drawData, lists, m_Textures, batch, bindings);
-                textureWrites[0] = drawUploads.diagnostic ? outputs.UploadBytes() : 0;
-                textureWrites[1] = m_Textures.PlaceholderUploadBytes(drawUploads.placeholder);
-                const auto bufferWrites = drawUploads.geometry ?
-                    std::array{batch.projection.size(), size->vertices * sizeof(ImDrawVert),
-                               size->indices * sizeof(ImDrawIdx)} : std::array<std::size_t, 3>{};
-                return m_Host.CheckUploadCapacity(batch.uploadChunkSize, textureWrites, bufferWrites);
-            };
-            auto admission = checkCapacity();
-            if ((admission == Platform::UploadAdmission::Pending || admission == Platform::UploadAdmission::ExceedsLimit) &&
-                textureWrites[0] != 0)
-            {
-                // 基础 UI 优先. 改用本帧可见占位后, 按实际合成几何重新核算其上传.
-                bindings.output = nullptr;
-                bindings.uploadPending = true;
-                bindings.viewportFallback = UiFallback::UploadPending;
-                if (!addStatus())
-                {
-                    return Core::BoundedText("Editor UI geometry budget exceeded with the viewport status");
-                }
-                admission = checkCapacity();
-            }
-            if (admission == Platform::UploadAdmission::Pending)
-            {
-                return UiPrepareStatus::UploadPending;
-            }
-            if (admission != Platform::UploadAdmission::Ready)
-            {
-                return Core::BoundedText("Editor UI could not admit the planned Graphics uploads");
-            }
-
             // 所有加数来自有界几何/纹理预算. 发布第一段借用前一次预留, 包含准入的诊断像素.
             constexpr auto Padding = alignof(ImDrawVert) + alignof(ImDrawIdx) - 2;
-            if (!arena.Reserve(arena.Used() + size->Bytes() + batch.uploads.bytes + textureWrites[0] + Padding))
+            if (!arena.Reserve(arena.Used() + size->Bytes() + batch.uploads.bytes + outputs.UploadBytes() + Padding))
             {
                 return Core::BoundedText("Editor UI prepare could not reserve frame storage");
             }
@@ -661,16 +577,10 @@ namespace Physara::Editor::Detail
             {
                 return *error;
             }
-            // 实际为普通 draw 建立诊断绑定时, Runtime 才为本轮生成并录制诊断像素.
-            // 此时使用的写入集合须与容量预检一致.
-            batch.usesDiagnosticOutput = bindings.viewBinding.Get() != nullptr;
-            batch.diagnosticUploadPending = bindings.viewportFallback == UiFallback::UploadPending;
-            assert(batch.hasDraws == drawUploads.geometry && batch.uploads.usesPlaceholder == drawUploads.placeholder &&
-                   batch.usesDiagnosticOutput == drawUploads.diagnostic);
-            if (batch.draws.empty() && !m_Textures.HasUploads(batch.uploads))
-            {
-                return std::monostate{};
-            }
+            // 所有 draw 校验后移交强引用. 后续缓冲准备失败仍由 frame 析构一并结束快照和 pending 关系.
+            batch.residents = std::move(bindings.residents);
+            batch.usesDiagnosticOutput = bindings.usesDiagnostic;
+            batch.diagnosticUploadPending = bindings.uploadPending;
             if (batch.hasDraws && !PrepareBuffers(batch))
             {
                 return Core::BoundedText("Editor UI prepare failed to allocate geometry buffers");
@@ -684,88 +594,244 @@ namespace Physara::Editor::Detail
         }
     }
 
-    // 以同一同步区间检查依赖命令. 失败即停止, 列表仍归调用者提交或收拢已发前缀.
-    std::optional<Core::BoundedText> UiRenderer::Record(UiBatch &batch, RHI::CommandList &commands)
+    /// @brief Raster 拥有绘制值和固定 RHI 对象, 回执地址借用活动批次, 诊断回调借用调用方作用域.
+    struct UiRasterData
     {
-        if (batch.recorded || commands.GetDevice() != &m_Device ||
-            commands.GetDesc().queueType != RHI::CommandQueue::Graphics ||
-            commands.GetDesc().uploadChunkSize != batch.uploadChunkSize)
+        std::vector<UiDraw> draws = std::vector<UiDraw>(0);
+        std::vector<UiFrameTexture> sampled = std::vector<UiFrameTexture>(0);
+        Renderer::BufferId projection;
+        Renderer::BufferId vertices;
+        Renderer::BufferId indices;
+        std::size_t vertexBytes = 0;
+        std::size_t indexBytes = 0;
+        RHI::GraphicsPipelineHandle pipeline;
+        RHI::BindingLayoutHandle layout;
+        RHI::SamplerHandle sampler;
+        RHI::CommandListHandle *recorded = nullptr;
+        Renderer::GraphExecutionDiagnostics diagnostics;
+    };
+    static_assert(sizeof(UiRasterData) + sizeof(void *) * 2 + Core::FrameArena::MaxAlignment <= 512);
+
+    // 绑定条目来自当前 Pass 的精确读取权限, 采样去重顺序就是 execute 使用的集合索引.
+    static Renderer::GraphFailure PrepareRaster(Renderer::PassPreparation &preparation, const UiRasterData &data)
+    {
+        for (const auto &sample : data.sampled)
         {
-            return Core::BoundedText("Editor UI record requires an unused batch and the prepared Graphics upload chunk size");
-        }
-        // Validation 和原生后端共用宿主回调, 在首条 UI 命令前取样.
-        const auto errors = m_Host.CaptureRhiErrors();
-        if (!errors.IsClear())
-        {
-            return Core::BoundedText("Editor UI record requires a ready RHI error scope");
-        }
-        // 上传先于本批采样. 几何和像素由 RHI 即时复制, 已发访问随后沿物理包退休.
-        if (!m_Textures.Record(commands, batch.uploads, errors))
-        {
-            return TexturePreparationError(Core::BoundedText("Editor UI record stopped during texture upload"),
-                                           m_BaseFontReady);
-        }
-        RHI::GraphicsState state;
-        if (batch.hasDraws)
-        {
-            commands.WriteBuffer(m_Textures.GetProjectionBuffer(), batch.projection.data(), batch.projection.size());
-            if (!errors.IsClear())
+            std::vector<RHI::BindingSetItem> items(0);
+            for (const auto &item : data.layout->GetDesc()->bindings)
             {
-                return Core::BoundedText("Editor UI record stopped during projection upload");
-            }
-            commands.WriteBuffer(batch.vertexBuffer.Get(), batch.vertices.data(), batch.vertices.size());
-            if (!errors.IsClear())
-            {
-                return Core::BoundedText("Editor UI record stopped during vertex upload");
-            }
-            commands.WriteBuffer(batch.indexBuffer.Get(), batch.indices.data(), batch.indices.size());
-            if (!errors.IsClear())
-            {
-                return Core::BoundedText("Editor UI record stopped during index upload");
-            }
-            state.SetPipeline(m_Pipeline.Get()).SetFramebuffer(batch.target.Get())
-                .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(batch.vertexBuffer.Get()))
-                .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(batch.indexBuffer.Get()).SetFormat(IndexFormat));
-            state.viewport.AddViewport(batch.target->GetFramebufferInfo().GetViewport());
-            state.viewport.scissorRects.resize(1);
-            state.bindings.resize(1);
-        }
-        for (const auto &draw : batch.draws)
-        {
-            // reset 只清除图形状态. 下一条普通命令重新提供完整状态及自己的绑定和 scissor.
-            if (!draw.binding)
-            {
-                commands.ClearState();
-                if (!errors.IsClear())
+                std::optional<RHI::BindingSetItem> resource;
+                switch (item.type)
                 {
-                    return Core::BoundedText("Editor UI record stopped during render-state reset");
+                case RHI::ResourceType::ConstantBuffer:
+                    resource = preparation.ReadBuffer(item.slot, data.projection, Renderer::GraphUsage::ConstantBuffer,
+                                                       RHI::BufferRange(0, sizeof(UiShader::UiProjection)));
+                    break;
+                case RHI::ResourceType::Texture_SRV:
+                    resource = preparation.SampledTexture(item.slot, sample.texture, sample.range);
+                    break;
+                case RHI::ResourceType::Sampler:
+                    resource = RHI::BindingSetItem::Sampler(item.slot, data.sampler.Get());
+                    break;
+                default:
+                    assert(false && "Unexpected generated UI layout");
+                    break;
                 }
-                continue;
+                if (!resource)
+                {
+                    return Renderer::GraphError{Renderer::GraphErrorCode::AccessDenied,
+                        Core::BoundedText("UI graph binding preparation failed")};
+                }
+                items.push_back(*resource);
             }
-            state.bindings[0] = draw.binding.Get();
-            state.viewport.scissorRects[0] = draw.clip;
-            commands.SetGraphicsState(state);
-            // 候选被拒绝时 RHI 可能保留旧状态. 通过检查后才消费本条索引.
-            if (!errors.IsClear())
+            if (!preparation.CreateBindingSet(*data.layout, items))
             {
-                return Core::BoundedText("Editor UI record stopped during graphics-state setup");
-            }
-            commands.DrawIndexed(draw.arguments);
-            if (!errors.IsClear())
-            {
-                return Core::BoundedText("Editor UI record stopped during indexed draw");
+                return Renderer::GraphError{Renderer::GraphErrorCode::ExecutionFailed,
+                    Core::BoundedText("UI graph binding creation failed")};
             }
         }
-        batch.recorded = &commands;
         return std::nullopt;
     }
 
+    // 每条状态/绘制后观察同一错误区间. 状态拒绝不能继续沿用前一 draw 的候选.
+    static Renderer::GraphFailure ExecuteRaster(Renderer::PassResources &resources, const UiRasterData &data,
+                                                 RHI::CommandList &commands) noexcept
+    {
+        using namespace Renderer;
+        auto *vertices = resources.Resolve(data.vertices, GraphUsage::VertexBuffer,
+                                           RHI::BufferRange(0, data.vertexBytes));
+        auto *indices = resources.Resolve(data.indices, GraphUsage::IndexBuffer, RHI::BufferRange(0, data.indexBytes));
+        if (!vertices || !indices)
+        {
+            return std::nullopt;
+        }
+        RHI::GraphicsState state;
+        state.SetPipeline(data.pipeline.Get()).SetFramebuffer(resources.Framebuffer())
+            .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices))
+            .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(IndexFormat));
+        state.viewport.AddViewport(resources.Framebuffer()->GetFramebufferInfo().GetViewport());
+        state.viewport.scissorRects.resize(1);
+        state.bindings.resize(1);
+        for (const auto &draw : data.draws)
+        {
+            if (draw.reset)
+            {
+                commands.ClearState();
+            }
+            else
+            {
+                auto *binding = resources.BindingSet(draw.binding);
+                if (!binding)
+                {
+                    return std::nullopt;
+                }
+                state.bindings[0] = binding;
+                state.viewport.scissorRects[0] = draw.clip;
+                commands.SetGraphicsState(state);
+                if (data.diagnostics.IsClear())
+                {
+                    commands.DrawIndexed(draw.arguments);
+                }
+            }
+            if (!data.diagnostics.IsClear())
+            {
+                return GraphError{GraphErrorCode::ExecutionFailed,
+                    Core::BoundedText("UI graph Raster stopped on RHI error")};
+            }
+        }
+        *data.recorded = &commands;
+        return std::nullopt;
+    }
+
+    // 按目标校验, 上传声明, 采样去重, 持久导出和 Raster 的顺序构图; 不取得瞬态物理纹理.
+    Renderer::GraphResult<Renderer::TextureId> UiRenderer::BuildGraph(UiBatch &batch,
+        Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
+        FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
+        Renderer::GraphExecutionDiagnostics diagnostics)
+    {
+        using namespace Renderer;
+        if (!color.IsValid() || color.identity.index >= graph.Textures().size())
+        {
+            return GraphError{GraphErrorCode::InvalidResource, Core::BoundedText("UI graph target is invalid")};
+        }
+        const auto &target = graph.Textures()[color.identity.index];
+        if (target.desc.width != batch.extent.width || target.desc.height != batch.extent.height ||
+            target.desc.dimension != RHI::TextureDimension::Texture2D || target.desc.sampleCount != 1 ||
+            target.desc.format != TargetFormat || !target.desc.isRenderTarget || target.range != TextureRange{})
+        {
+            return GraphError{GraphErrorCode::IncompatibleAttachments,
+                Core::BoundedText("UI graph requires the sealed frame's single-sample SRGBA8 2D target")};
+        }
+        // 一旦开始声明便消费该准备值的构图机会. 后续失败由调用方丢弃整张候选图并取消准备值.
+        batch.graphGeneration = bindings.graphGeneration = color.identity.generation;
+        if (auto error = m_Textures.DeclareUploads(graph, batch.uploads, bindings, uploads))
+        {
+            return *error;
+        }
+        for (auto &draw : batch.draws)
+        {
+            if (draw.reset)
+            {
+                continue;
+            }
+            auto resolved = m_Textures.ResolveGraph(graph, draw.token, diagnostic, bindings, batch.residents);
+            if (const auto *error = std::get_if<GraphError>(&resolved))
+            {
+                return *error;
+            }
+            const auto sample = std::get<UiFrameTexture>(resolved);
+            auto found = std::ranges::find_if(bindings.sampled, [&](const auto &item)
+            {
+                return item.texture == sample.texture && item.range == sample.range;
+            });
+            draw.binding = static_cast<std::size_t>(found - bindings.sampled.begin());
+            if (found == bindings.sampled.end())
+            {
+                bindings.sampled.push_back(sample);
+            }
+        }
+        // 持久结果只为实际采样者导出. 未使用创建不会成为活性根.
+        for (const auto &sample : bindings.sampled)
+        {
+            const bool created = std::ranges::any_of(batch.uploads.items, [&](const auto &upload)
+            {
+                return upload.created.IsValid() && upload.written.texture == sample.texture;
+            });
+            if (created || sample.texture == diagnostic || sample.texture == batch.uploads.placeholder.texture)
+            {
+                if (auto error = graph.Export(sample.texture, ExportUsage::ShaderRead, sample.range))
+                {
+                    return *error;
+                }
+            }
+        }
+        if (!batch.hasDraws)
+        {
+            // 空 UI 沿用已初始化颜色, 不制造几何依赖或通过副作用保留未使用上传.
+            return color;
+        }
+        UiRasterData raster;
+        raster.draws = batch.draws;
+        raster.sampled = bindings.sampled;
+        raster.vertexBytes = batch.vertices.size();
+        raster.indexBytes = batch.indices.size();
+        raster.pipeline = m_Pipeline;
+        raster.layout = m_Textures.GetLayout();
+        raster.sampler = m_Textures.GetSampler();
+        raster.recorded = std::addressof(batch.recorded);
+        raster.diagnostics = diagnostics;
+        const std::array<RHI::BufferHandle, 3> buffers{RHI::BufferHandle(m_Textures.GetProjectionBuffer()),
+                                                       batch.vertexBuffer, batch.indexBuffer};
+        const std::array<std::span<const std::byte>, 3> bytes{batch.projection, batch.vertices, batch.indices};
+        const std::array ids{&raster.projection, &raster.vertices, &raster.indices};
+        // 纹理上传都已声明. 产品拓扑中这些 Buffer 写入位于其后, 与设备容量预检的分组次序一致.
+        for (std::size_t index = 0; index < buffers.size(); ++index)
+        {
+            auto imported = graph.ImportBuffer(buffers[index],
+                {RHI::ResourceStates::Common, RHI::ResourceStates::Common, false});
+            if (const auto *error = std::get_if<GraphError>(&imported))
+            {
+                return *error;
+            }
+            auto written = AddBufferUpload(graph, std::get<BufferId>(imported), bytes[index], uploads);
+            if (const auto *error = std::get_if<GraphError>(&written))
+            {
+                return *error;
+            }
+            *ids[index] = std::get<BufferId>(written);
+        }
+        TextureId composed;
+        auto pass = graph.AddPass<UiRasterData>("Editor UI Raster", [&](PassBuilder &builder, auto &data)
+        {
+            data = std::move(raster);
+            for (const auto &sample : data.sampled)
+            {
+                if (!builder.Read(sample.texture, GraphUsage::Sampled, sample.range))
+                {
+                    return false;
+                }
+            }
+            composed = builder.Write(color, GraphUsage::ColorAttachment, {.load = LoadOp::Load});
+            return composed.IsValid() &&
+                builder.Read(data.projection, GraphUsage::ConstantBuffer,
+                             RHI::BufferRange(0, sizeof(UiShader::UiProjection))) &&
+                builder.Read(data.vertices, GraphUsage::VertexBuffer, RHI::BufferRange(0, data.vertexBytes)) &&
+                builder.Read(data.indices, GraphUsage::IndexBuffer, RHI::BufferRange(0, data.indexBytes));
+        }, ExecuteRaster, PrepareRaster);
+        if (const auto *error = std::get_if<GraphError>(&pass))
+        {
+            return *error;
+        }
+        return composed;
+    }
+
     // 先处理借用的纹理请求, 再解除批次关系并释放准备数据与 CPU 持有的 RHI 引用.
-    void UiRenderer::Complete(UiFrameData &frame, bool accepted) noexcept
+    void UiRenderer::Complete(UiFrameData &frame, const UiSubmission *submission) noexcept
     {
         assert(m_Pending == &frame && frame.batch);
-        m_Textures.Finish(frame.batch->uploads, accepted);
-        m_BaseFontReady |= accepted;
+        m_Textures.Finish(frame.batch->uploads, submission);
+        const auto *atlas = ImGui::GetIO().Fonts->TexData;
+        m_BaseFontReady |= atlas && atlas->Status == ImTextureStatus_OK && m_Textures.HasManagedTexture(*atlas);
         m_Pending = nullptr;
         frame.owner = nullptr;
         frame.batch.reset();
@@ -775,13 +841,13 @@ namespace Physara::Editor::Detail
     {
         if (m_Pending != nullptr)
         {
-            Complete(*m_Pending, false);
+            Complete(*m_Pending, nullptr);
         }
     }
 
-    UiTextureResult UiRenderer::RegisterResident(RHI::Texture &texture)
+    UiTextureResult UiRenderer::RegisterResident(RHI::Texture &texture, UiTextureImport imported)
     {
-        return m_Textures.RegisterResident(texture);
+        return m_Textures.RegisterResident(texture, imported);
     }
 
     bool UiRenderer::UnregisterResident(UiTextureId id) noexcept
@@ -815,33 +881,61 @@ namespace Physara::Editor
         return m_Data && m_Data->batch && m_Data->batch->diagnosticUploadPending;
     }
 
-    // 外部准备值可比会话存活更久. 先核对控制对象的 owner 再访问帧槽借用.
-    std::optional<Core::BoundedText> PreparedUiFrame::Record(RHI::CommandList &commands)
+    std::size_t PreparedUiFrame::GraphStorageBytes() const noexcept
     {
-        if (!m_Data || m_Data->owner == nullptr)
-        {
-            return Core::BoundedText("Editor UI record received an expired batch");
-        }
-        auto error = m_Data->owner->Record(*m_Data->batch, commands);
-        if (error)
-        {
-            Cancel();
-        }
-        return error;
+        // 每个请求最多两条上传/复制, 其余为占位, 三个缓冲及 Raster. 每条 recipe 上界 512 字节.
+        return m_Data && m_Data->batch ? (m_Data->batch->uploads.items.size() * 2 + 6) * 512 : 0;
     }
 
+    // 活动准备值只构图一次. 错误转换为有界诊断, 但已建立的图声明仍由候选图析构收拢.
+    Renderer::GraphResult<Renderer::TextureId> PreparedUiFrame::BuildGraph(
+        Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
+        FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
+        Renderer::GraphExecutionDiagnostics diagnostics)
+    {
+        if (!m_Data || !m_Data->owner || m_Data->batch->graphGeneration != 0 || bindings.graphGeneration != 0)
+        {
+            return Renderer::GraphError{Renderer::GraphErrorCode::InvalidPhase,
+                Core::BoundedText("UI graph build requires a live unused preparation and empty frame bindings")};
+        }
+        try
+        {
+            return m_Data->owner->BuildGraph(*m_Data->batch, graph, color, diagnostic, bindings, uploads, diagnostics);
+        }
+        catch (const std::bad_alloc &)
+        {
+            return Renderer::GraphError{Renderer::GraphErrorCode::OutOfStorage,
+                Core::BoundedText("UI graph build ran out of CPU storage")};
+        }
+    }
+
+    // 图代阻止跨图确认, Raster 写回的列表阻止错配录制. 票据与同次提交的关联由调用者保证.
+    // 无论回执是否接受都结束 CPU 协议借用, GPU 引用仍由已发包持有.
     bool PreparedUiFrame::Finish(const UiSubmission &submission) noexcept
     {
         if (!m_Data || m_Data->owner == nullptr)
         {
             return false;
         }
-        // 这里核对列表身份, 同一录制的诊断和接受票据由调用者提供.
-        const bool accepted = m_Data->batch->recorded.Get() == &submission.commands &&
-                              submission.executedWithoutErrors && submission.ticket != 0;
-        m_Data->owner->Complete(*m_Data, accepted);
+        const auto &batch = *m_Data->batch;
+        const bool accepted = batch.graphGeneration != 0 && batch.graphGeneration == submission.plan.graphGeneration &&
+            (!batch.hasDraws || batch.recorded.Get() == &submission.commands) && submission.outputs &&
+            submission.executedWithoutErrors && submission.ticket != 0;
+        m_Data->owner->Complete(*m_Data, accepted ? &submission : nullptr);
         m_Data.reset();
         return accepted;
+    }
+
+    void FrameSlotUiFrameBindings::Reset() noexcept
+    {
+        graphGeneration = 0;
+        tokens.clear();
+        sampled.clear();
+    }
+
+    const UiFrameTexture *FrameSlotUiFrameBindings::Find(std::uint64_t generation, std::size_t index) const noexcept
+    {
+        return generation != 0 && generation == graphGeneration && index < sampled.size() ? &sampled[index] : nullptr;
     }
 
     void PreparedUiFrame::Cancel() noexcept

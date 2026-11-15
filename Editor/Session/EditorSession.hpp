@@ -3,7 +3,7 @@
 /// @file
 /// @brief Editor 在宿主线程上的会话入口. 从窗口输入发布生成 CPU UI 帧.
 /// 会话应用领域意图后向 Runtime 交付视口像素请求及独立的宿主请求.
-/// 接入 renderer 时, 同一份封存 UI 还用于准备离屏 RHI 绘制.
+/// 接入 renderer 时, 同一份封存 UI 还用于准备图内上传与合成, 会话不保存本帧 GraphId.
 
 #include <memory>
 #include <optional>
@@ -60,25 +60,25 @@ namespace Physara::Editor
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
                                            const Platform::WindowSettings *window = nullptr);
 
-        /// @brief 为本轮封存帧准备离屏绘制, 将几何与上传字节复制到调用方的帧槽存储.
-        /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸时不使用 target.
-        /// @pre 在打开列表前调用. 非零目标为会话 Device 的单色单样本 SRGBA8 二维 framebuffer.
+        /// @brief 为本轮封存帧准备图内合成, 将几何与上传字节复制到调用方的帧槽存储.
+        /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸返回空值.
+        /// @pre 在构图和打开列表前调用. 目标格式及像素范围由 BuildGraph 核对.
         /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
         /// outputs 来自本轮视口请求, 仅在准备调用期间借用.
         /// 颜色的 View 身份, 像素范围或比例请求代与封存请求失配时使用占位.
-        /// @param commands 拟录制列表的参数. 上传预检采用它的最小 chunk 大小.
-        /// @see PreparedUiFrame::Record
-        /// @return 无工作, 可录制的准备值, 等待上传容量或有界原因. 同时只允许一份活动准备值.
-        /// 等待时本次准备已结束, 之后可按届时的封存帧和可用容量重试.
-        [[nodiscard]] PrepareUiResult PrepareUiFrame(RHI::Framebuffer *target, Platform::WindowExtent extentPixels,
+        /// @param deferDiagnostic 上传压力下重新准备占位及标签, Runtime 编译后核算实际存活上传.
+        /// 重建候选前须先销毁旧图并取消旧准备值, 然后再清理帧槽载荷和绑定.
+        /// @see PreparedUiFrame::BuildGraph
+        /// @return 无工作, 可构图的准备值或有界原因. 同时只允许一份活动准备值.
+        [[nodiscard]] PrepareUiResult PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                      Core::FrameArena &arena,
                                                      const Renderer::NoSceneOutputs &outputs = {},
-                                                     const RHI::CommandListParameters &commands = {});
+                                                     bool deferDiagnostic = false);
 
         /// @brief 注册已初始化的单样本 RGBA8/SRGBA8 二维 SRV, 以实际格式解释采样域.
-        /// @pre 资源来自会话的 Device, 采样内容和可跟踪前态由调用者准备.
-        /// @return 本会话的逻辑身份或有界错误. 注册成功后会话持有纹理和采样绑定.
-        [[nodiscard]] UiTextureResult RegisterUiTexture(RHI::Texture &texture);
+        /// @pre 资源来自会话的 Device, owner 提供真实状态和定义过的允许采样范围.
+        /// @return 本会话的逻辑身份或有界错误. 会话持有纹理, 绑定留到图执行期创建.
+        [[nodiscard]] UiTextureResult RegisterUiTexture(RHI::Texture &texture, UiTextureImport imported);
 
         /// @brief 结束驻留纹理的新解析, 已准备或已发的引用沿各自的 owner 退休.
         /// @return 本次注销有效的驻留条目时为 true.

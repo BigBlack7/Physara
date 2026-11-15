@@ -211,13 +211,13 @@
 
 **职责位置：** Renderer、Editor/ImGui、Viewport、Runtime。**前置：** [D05-T03](#d05-t03)。**架构依据：** [10.1](../Architecture.md#editor-output)、[10.2](../Architecture.md#imgui-renderer)、[10.3](../Architecture.md#present)、[frame-flow](../Architecture.md#frame-flow)。
 
-- [ ] 用图构建上传、验证视口和 UI Pass，导出窗口 PresentColor；把 D04 的临时顺序编排收敛到唯一 Graph 路径。
-- [ ] UiTextureId 保持稳定，FrameSlotUiFrameBindings 保存本帧 GraphId，执行时从 PassResources 解析实际纹理。
-- [ ] 验证隐藏面板/多次 Image 引用、图资源裁剪、目标换代与绑定在途保活；图 ID 不进入 Session 长期状态。
+- [x] 用图构建上传、验证视口和 UI Pass，导出窗口 PresentColor；把 D04 的临时顺序编排收敛到唯一 Graph 路径。
+- [x] UiTextureId 保持稳定，FrameSlotUiFrameBindings 保存本帧 GraphId，执行时从 PassResources 解析实际纹理。
+- [x] 验证隐藏面板/多次 Image 引用、图资源裁剪、目标换代与绑定在途保活；图 ID 不进入 Session 长期状态。
 
 **完成条件：** 同一帧图可解释 UI 读了哪个视口版本和最终窗口目标，构图过程中不绘制。
 
-**当前状态** D05-T03 前置已验收归档，D05-T04 待立项。 [图执行主规范](../../openspec/specs/render-graph-execution/spec.md)
+**当前状态** B 复核及最终 verify 通过，主规范已同步，`integrate-editor-frame-graph` 已归档。D05-T05 前置已齐备。 [验收归档](../../openspec/changes/archive/2026-11-15-integrate-editor-frame-graph/tasks.md#final-verification) · [图执行主规范](../../openspec/specs/render-graph-execution/spec.md)
 
 <a id="d05-t05"></a>
 ### D05-T05 · 实现图失败、UI fallback 与帧取消
@@ -229,5 +229,7 @@
 - [ ] 注入 UI/读回准备、fallback 准备、首次资源/recipe 创建、构图、部分命令执行和提交失败；准备阶段 Fatal 立即转受控退出，FrameSlot、PresentationFrame、上传请求/版本、历史与在途引用均不失去 owner，UI 纹理更新可重试。
 
 **完成条件：** 错误帧不会推进场景历史、破坏下一帧或泄漏呈现资源，失败诊断可定位实际 Pass/资源。
+
+**当前状态** D05-T04 已验收归档，前置齐备；本工作包待建立下一 change。 [D05-T04 验收](../../openspec/changes/archive/2026-11-15-integrate-editor-frame-graph/tasks.md#final-verification)
 
 **D05 阶段出口：** 产品帧只经统一 Graph 路径；未初始化读、非法 feedback/环会失败，正常帧可到窗口；执行前失败可显示安全旧输出/UI，中途失败走取消，均不推进失败场景的历史。

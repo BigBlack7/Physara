@@ -29,13 +29,16 @@ namespace Physara::Platform
     };
 
     /// @brief 拥有型 RHI 目标快照, extentPixels 是 framebuffer 的物理像素宽高.
-    /// @note 纹理为单层, 单 mip, 单样本 SRGBA8_UNORM, 初态和出口均为 ShaderResource.
-    /// 每次取得的首个写入须清除或完整覆盖. 使用者在宿主 Shutdown 前释放句柄.
+    /// @note 纹理为单层, 单 mip, 单样本 SRGBA8_UNORM. 新代入口为 Common, 接受正常交接后为 ShaderResource.
+    /// 入口状态不证明颜色内容有效. 每次取得的首个写入须清除或完整覆盖, 取消未执行取得不推进状态.
+    /// 使用者在宿主 Shutdown 前释放句柄, 快照不替代 token 的单次取得校验.
     struct PresentTarget
     {
         RHI::TextureHandle texture;
         RHI::FramebufferHandle framebuffer;
         WindowExtent extentPixels;
+        RHI::ResourceStates entryState = RHI::ResourceStates::Common; ///< 本目标代已建立的 RHI 状态事实.
+        RHI::ResourceStates finalState = RHI::ResourceStates::ShaderResource; ///< 图与 Close 交回后供末端复制读取.
     };
 
     /// @brief 本次取得的目标及凭据. 目标供绘制使用, token 由 Runtime 交回同一宿主.

@@ -1,164 +1,129 @@
 #pragma once
 
 /// @file
-/// @brief 私有 ImGui 纹理表和帧内上传协议.
-/// 驻留条目拥有纹理及绑定. 逻辑 View 条目在本帧解析颜色代, 已发工作由提交包保活.
+/// @brief 私有 UI 纹理注册表和逐请求上传协议. 图身份只保存在当前准备值及帧槽中.
 
 #include <array>
-#include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
 
 #include <imgui.h>
-
-#include <RHI.hpp>
-
 #include "Session/UiFrame.hpp"
-
-namespace Physara::Platform
-{
-    class RhiErrorScope;
-}
 
 namespace Physara::Editor::Detail
 {
-    /// @brief 将会话分配的逻辑身份编码为固定 ImGui 的 64 位值, 高位是代, 低位是槽位.
-    /// @pre 代为会话注册分配的非零 32 位值.
+    /// @brief 按固定 ImGui 的 64 位 ImTextureID 协议编码槽位和代, 不编码 RHI 指针.
     [[nodiscard]] ImTextureID EncodeUiTexture(UiTextureId id) noexcept;
 
-    /// @brief 一次管理纹理写入, CPU 像素为紧密排列的 RGBA8 字节.
-    /// @note request 只用于本帧内确认或取消. 更新时先写 staging 的完整 mip, 再复制到 target.
+    /// @brief 请求元数据借用到确认, 紧密 RGBA8 像素借用当前帧槽, 终结 Pass 用于逐项确认.
     struct UiTextureUpload
     {
         ImTextureData *request = nullptr;
-        UiTextureId created; ///< 首次创建的临时身份. 更新已有纹理时无效.
-        RHI::TextureHandle target;
-        RHI::TextureHandle staging;
-        RHI::TextureSlice region; ///< target 的 mip 0 像素区域, 以左上为原点.
-        std::span<const std::byte> pixels; ///< 借用本槽紧密排列的 RGBA8 区段, 在准备阶段填满.
-        /// @brief 已校验区域的紧密写入大小, 准入及像素分配使用同一范围.
+        UiTextureId created;
+        RHI::TextureHandle target; ///< 更新保留原代, 创建在执行前为空.
+        RHI::TextureSlice region;
+        std::span<const std::byte> pixels;
+        Renderer::GraphTextureWrite written;
         [[nodiscard]] std::size_t ByteCount() const noexcept;
     };
 
-    /// @brief 一次准备的上传计划. bytes 为 RGBA8 载荷, 用于 arena 预留.
-    /// 首次解析无效图像时登记本批的占位上传需求.
+    /// @brief 同次准备的请求集合. bytes 只计托管像素, 占位使用静态像素并由存活计划单独记账.
     struct UiTextureUploads
     {
-        // 使用 count 构造, 使 MSVC Debug 的代理分配失败可传播给准备入口.
-        UiTextureUploads() : items(0)
-        {
-        }
-
-        std::vector<UiTextureUpload> items;
+        std::vector<UiTextureUpload> items = std::vector<UiTextureUpload>(0);
         std::size_t bytes = 0;
         bool usesPlaceholder = false;
+        Renderer::GraphTextureWrite placeholder;
     };
 
-    /// @brief 当帧采样失败的原因, 同时用于占位诊断和视口画面.
+    /// @brief 共享占位的具体原因, 主视口还用它选择可见状态文字.
     enum class UiFallback : std::uint8_t
     {
-        None,
-        InvalidIdentity,
-        MissingOutput,
-        UploadPending,
-        InvalidExtent,
-        TextureSizeLimit,
-        DiagnosticBudget
+        None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget
     };
 
-    /// @brief 当前准备期间的诊断颜色及占位解析状态.
-    /// @note output 和 viewportDraw 仅在准备期间借用. 普通 draw 持有解析后的 binding.
-    /// viewportFallback 同时决定图像命令的占位绑定和状态标签.
-    /// uploadPending 供同一逻辑 View 的其它引用解释颜色代为何缺失.
+    /// @brief 成功准备的外部驻留引用. 持有原对象及导入事实, 注销只阻止后续准备的新解析.
+    /// @note 不保存 GraphId 或 BindingSet. 构图导入后由图继续保活, 已发访问再沿 RHI 包退休.
+    struct UiResidentSnapshot
+    {
+        UiTextureId token;
+        RHI::TextureHandle texture;
+        UiTextureImport imported;
+    };
+
+    /// @brief 仅在封存帧解析期间借用诊断候选及主视口命令. 独立 Image 同样参与诊断消费.
+    /// residents 独立持有外部引用, 解析成功后移交批次, 准备失败时随本值释放.
     struct UiFrameBindings
     {
         const Renderer::ViewOutput *output = nullptr;
         bool uploadPending = false;
-        RHI::BindingSetHandle viewBinding;
+        bool usesDiagnostic = false;
         const ImDrawCmd *viewportDraw = nullptr;
         UiFallback viewportFallback = UiFallback::None;
+        std::vector<UiResidentSnapshot> residents = std::vector<UiResidentSnapshot>(0);
     };
 
-    /// @brief 拥有本会话驻留纹理和有界绑定缓存, 协议请求的像素复制到本次帧槽.
-    /// @note 限宿主 owner 线程. 管理纹理的关联必须在 ImGui context 销毁前解除.
+    /// @brief 会话持久身份及已接受物理纹理. 准备失败撤销临时 token, GPU 引用由 RHI 持有.
     class UiTextures final
     {
     public:
         static constexpr int MaxTextureSize = 2048;
-
-        explicit UiTextures(RHI::Device &device) noexcept : m_Device(device)
-        {
-        }
-
-        /// @brief 准备共享布局, 投影缓冲, sampler 和占位绑定. 部分初始化的资源由 owner 回收.
+        explicit UiTextures(RHI::Device &device) noexcept : m_Device(device) {}
+        /// @brief 建立共享布局, 投影缓冲和采样器. 部分失败的句柄由本对象析构收拢.
         [[nodiscard]] std::optional<Core::BoundedText> Initialize(const RHI::BindingLayoutDesc &layout);
         [[nodiscard]] RHI::BindingLayout *GetLayout() const noexcept { return m_Layout.Get(); }
         [[nodiscard]] RHI::Buffer *GetProjectionBuffer() const noexcept { return m_Projection.Get(); }
+        [[nodiscard]] RHI::Sampler *GetSampler() const noexcept { return m_Sampler.Get(); }
 
-        /// @brief 为已初始化的外部 SRV 建立持有型条目. 注销释放注册表引用, 已准备绑定仍然有效.
-        [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture);
+        /// @brief 保存外部纹理强引用及 owner 提供的导入事实, 不在注册阶段创建采样绑定.
+        /// @pre texture 属于本会话设备, imported 描述已定义的单 mip 颜色范围及真实进出状态.
+        [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture, UiTextureImport imported);
+        /// @brief 仅停止外部驻留项的新解析. 已准备快照继续保活, 托管请求和 View 项不能经此入口移除.
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
-        /// @brief 仅登记 View 和角色. 实际颜色代在当帧解析, 不进入跨帧表.
+        /// @brief 为有效 View 登记逻辑输出角色, 不在长期条目中保存 GraphId.
         [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view);
-
-        /// @brief 结束请求销毁的身份, 核对本轮各像素范围和累计预算, 供帧槽统一预留.
+        /// @brief 校验全部请求并结束逻辑销毁, 未使用上传仍可在后续图中裁剪.
         [[nodiscard]] std::optional<Core::BoundedText> PlanUploads(const ImDrawData &drawData,
                                                                   UiTextureUploads &uploads);
-        /// @brief 在已预留的本槽区段复制像素并建立纹理. 失败时由准备值取消临时身份.
+        /// @brief 只复制像素并安装临时逻辑身份, 原生纹理留到图执行时创建.
         [[nodiscard]] std::optional<Core::BoundedText> PrepareUploads(UiTextureUploads &uploads,
                                                                      Core::FrameArena &arena);
-        /// @brief 校验 ImGui 源与表项关联. 临时创建也可匹配, 上传状态由回执确认.
+        /// @brief 核对元数据与 token 是否仍关联, 不表示像素已上传或请求已获接受.
         [[nodiscard]] bool HasManagedTexture(const ImTextureData &source) noexcept;
-
-        /// @brief 普通 draw 对诊断色或共享占位的采样需求. 托管纹理写入由请求计划单独列出.
-        enum class SampleUse : std::uint8_t
-        {
-            Other,
-            Diagnostic,
-            Placeholder
-        };
-
-        /// @brief 取得可见命令所需的诊断或占位写入. 已规划的托管创建视为本帧可用.
-        [[nodiscard]] SampleUse MeasureSample(const ImDrawCmd &draw, const UiTextureUploads &uploads,
-                                              const UiFrameBindings &bindings) noexcept;
-
-        /// @brief 解析驻留或本帧 View 绑定. 普通无效引用使用占位并向 Device 报告原因.
-        /// @return 缺少必需字体或有效颜色的绑定创建失败时返回空.
-        [[nodiscard]] RHI::BindingSetHandle Resolve(const ImDrawCmd &draw, UiTextureUploads &uploads,
-                                                    UiFrameBindings &bindings);
-
-        /// @brief 本批采样需要首次写入占位时返回紧密字节数, 其余情况返回 0.
-        [[nodiscard]] std::size_t PlaceholderUploadBytes(bool used) const noexcept;
-        /// @brief 判断是否有纹理请求写入或首次使用的占位上传.
-        [[nodiscard]] bool HasUploads(const UiTextureUploads &uploads) const noexcept;
-        /// @brief 在本轮 draw 之前上传占位和管理纹理. 写入成功后才从区域暂存复制.
-        /// @pre errors 来自该列表所属宿主, 在本批首条命令前取样且仍有效.
-        /// @return 收到同步错误时停止余下的命令并返回 false, 已发前缀保留在列表中.
-        [[nodiscard]] bool Record(RHI::CommandList &commands, const UiTextureUploads &uploads,
-                                  const Platform::RhiErrorScope &errors) const;
-
-        /// @brief 只有有效执行和提交均成立时确认上传, 否则撤销本次创建的临时身份.
-        void Finish(const UiTextureUploads &uploads, bool accepted) noexcept;
-        /// @brief 在 ImGui context 仍存活且没有借用请求时解除所有管理纹理的关联.
+        /// @brief 返回当前可用 token, 无效 token 表示共享占位, nullopt 表示必需字体缺失.
+        /// 外部驻留项按 token 去重保存拥有型快照, 随成功准备值移交到批次.
+        [[nodiscard]] std::optional<UiTextureId> Resolve(const ImDrawCmd &draw, UiTextureUploads &uploads,
+                                                        UiFrameBindings &bindings);
+        /// @brief 声明创建和局部更新, 将更新后的当前版本登记到帧槽映射.
+        [[nodiscard]] Renderer::GraphFailure DeclareUploads(Renderer::RenderGraph &graph, UiTextureUploads &uploads,
+            FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &writes);
+        /// @brief 从规范导入的当前写版本解析 token. 不把 ImportTexture 返回的版本零当成最新内容.
+        /// @param residents 本批准备时捕获的驻留快照, 构图不再要求这些 token 仍在 registry 中.
+        [[nodiscard]] Renderer::GraphResult<UiFrameTexture> ResolveGraph(Renderer::RenderGraph &graph,
+            UiTextureId token, Renderer::TextureId diagnostic, FrameSlotUiFrameBindings &bindings,
+            std::span<const UiResidentSnapshot> residents);
+        /// @brief 只确认同一成功执行中存活的终结写. 取消和裁剪均撤销尚未发布的 token.
+        /// @pre 非空 submission 已由 PreparedUiFrame 核对整图成功, 非零票据及有效 outputs.
+        /// @note 空回执只取消本轮协议借用, 不撤销已发 GPU 写入; 原请求像素仍由 ImGui 留存重试.
+        void Finish(const UiTextureUploads &uploads, const UiSubmission *submission) noexcept;
+        /// @brief 在 ImGui context 销毁前清除全部托管元数据关联, GPU 引用仍沿原提交退休.
         void Detach() noexcept;
 
     private:
-        /// @brief 一个注册槽位. 驻留和托管条目持有实际绑定, 逻辑 View 条目只记录身份及角色.
-        /// @note managed 借用 ImGui 维护的请求元数据, managedBytes 记录该纹理的驻留字节.
+        /// @brief 一个长期逻辑条目: 外部/托管项持有纹理, View 项只保存身份和输出角色.
+        /// @note WantCreate 临时项已有 managed 关联及预算, 但 texture 要到有效提交后才填入.
         struct Entry
         {
             UiTextureId id;
             RHI::TextureHandle texture;
-            RHI::BindingSetHandle binding;
-            ImTextureData *managed = nullptr; ///< 由固定 ImGui 的 create/destroy 协议维持元数据寿命.
+            UiTextureImport imported;
+            ImTextureData *managed = nullptr;
             std::size_t managedBytes = 0;
-            Renderer::ViewId view; ///< 有效时为逻辑 View 条目.
+            Renderer::ViewId view;
             Renderer::ViewOutputRole role = Renderer::ViewOutputRole::DiagnosticColor;
         };
-
-        /// @brief 现有条目或占位原因. 两者均空时为待创建的托管纹理或缺失的必需字体.
+        /// @brief 本次 CPU 解析的借用结果. 两字段均为空表示必需字体缺失, 由调用方拒绝整批.
         struct Sample
         {
             const Entry *entry = nullptr;
@@ -166,11 +131,8 @@ namespace Physara::Editor::Detail
         };
 
         [[nodiscard]] Entry *Find(UiTextureId id) noexcept;
-        /// @brief 在预检和绑定阶段应用同一套身份、输出匹配及占位规则.
-        [[nodiscard]] Sample FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings,
-                                         std::span<const UiTextureUpload> planned = {}) noexcept;
-        [[nodiscard]] RHI::BindingSetHandle Bind(RHI::Texture *texture) const;
-        [[nodiscard]] RHI::BindingSetHandle Placeholder(UiTextureUploads &uploads, UiFallback reason) const;
+        [[nodiscard]] Sample FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings) noexcept;
+        void Placeholder(UiTextureUploads &uploads, UiFallback reason) const;
         [[nodiscard]] UiTextureResult Register(Entry entry);
         void Erase(Entry &entry) noexcept;
         void Destroy(ImTextureData &source) noexcept;
@@ -182,9 +144,7 @@ namespace Physara::Editor::Detail
         RHI::BufferHandle m_Projection;
         RHI::SamplerHandle m_Sampler;
         RHI::TextureHandle m_Placeholder;
-        RHI::BindingSetHandle m_PlaceholderBinding;
         std::array<Entry, 64> m_Entries;
         std::size_t m_ManagedBytes = 0;
-        bool m_PlaceholderReady = false;
     };
 }

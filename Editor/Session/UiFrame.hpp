@@ -1,20 +1,18 @@
 #pragma once
 
 /// @file
-/// @brief 编辑器离屏 UI 的公开准备值和提交回执.
-/// 会话借用宿主 Device. 准备值持有录制依赖并借用帧槽字节, 调用者负责初始化底色和提交.
-/// 提交回执用于确认本轮纹理协议, 诊断颜色的有效设置由调用者交给 View 发布.
+/// @brief 编辑器封存帧的拥有型准备值, 当前槽的图绑定及同次执行的接受回执.
+/// Runtime 负责目标初始化, 图编译执行和宿主交接, UI 只声明依赖并确认自己的请求.
 
-#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
 #include <Renderer/View.hpp>
-#include <RHI.hpp>
 
 namespace Physara::Editor
 {
@@ -24,65 +22,101 @@ namespace Physara::Editor
         class UiRenderer;
     }
 
-    /// @brief RHI 会话装配输入. 设备须为宿主的就绪 Device, 包路径仅在创建期间借用.
+    /// @brief 设备由宿主持有, 包路径只在创建期间借用, mainView 为稳定逻辑身份.
     struct UiRendererDesc
     {
         RHI::Device &device;
         const std::filesystem::path &packagePath;
-        Renderer::ViewId mainView; ///< 有效时启用产品的诊断视口.
+        Renderer::ViewId mainView;
     };
 
     struct UiTextureTag;
-    /// @brief 本会话的纹理槽位和代. 槽位复用后, 旧身份无法解析到新条目.
+    /// @brief 本会话的槽位和不复用的代, 与当前图的资源身份及原生纹理名无关.
     using UiTextureId = Core::Identity<UiTextureTag>;
     using UiTextureResult = std::variant<UiTextureId, Core::BoundedText>;
 
-    /// @brief 调用者为完整录制提供的关闭和提交回执, 供确认纹理请求.
-    /// @pre commands 为 Record 使用的列表, ticket 来自包含该次录制的 Execute, 提交失败时为 0.
-    /// @note 调用者按实际命令区间填写 executedWithoutErrors, 包括 Close 和 Execute.
-    /// 可用宿主的 CaptureRhiErrors 观察该区间的 Error/Fatal.
-    /// 同一列表对象可跨录制复用, 调用者负责将票据和诊断关联到本次录制.
+    /// @brief 外部 owner 提供的有效内容和进出状态, 范围用于当帧规范导入和采样.
+    struct UiTextureImport
+    {
+        Renderer::ImportState states;
+        Renderer::TextureRange range;
+    };
+
+    /// @brief 当前图中的规范纹理版本. 多个 token 可以引用同一个版本及范围.
+    struct UiFrameTexture
+    {
+        Renderer::TextureId texture;
+        Renderer::TextureRange range;
+    };
+
+    /// @brief 当前槽使用期的解析表. Reset 只可在结束候选图或同槽真实完成后调用.
+    /// @note 表项不进入跨帧 registry. 旧图的索引即使相同, 也不能用于新图代.
+    struct FrameSlotUiFrameBindings
+    {
+        /// @brief token 到当前生产版本的映射. 空 token 专用于共享诊断占位.
+        struct Token
+        {
+            UiTextureId token;
+            UiFrameTexture value;
+        };
+        std::uint64_t graphGeneration = 0;
+        std::vector<Token> tokens = std::vector<Token>(0); ///< 包含上传候选及已解析身份, 不代表全部会被采样.
+        std::vector<UiFrameTexture> sampled = std::vector<UiFrameTexture>(0); ///< 普通可见 draw 的去重读取, 顺序即绑定索引.
+
+        /// @brief 清除本图的身份和读取, 保留容量供后续安全使用期复用.
+        void Reset() noexcept;
+        /// @brief 按准备时的图代读取去重采样. 代或索引不匹配时返回空.
+        /// @note 返回指针借用到表被修改或销毁, 不持有物理资源.
+        [[nodiscard]] const UiFrameTexture *Find(std::uint64_t generation, std::size_t index) const noexcept;
+    };
+
+    /// @brief 同图执行和关闭提交后的回执, 计划和输出只在 Finish 中借用.
+    /// @pre commands, plan, outputs 和 ticket 来自本准备值的同一次图执行和提交.
+    /// @note executedWithoutErrors 包含 Close, Execute 诊断及宿主 colorValid, 前缀票据不足以确认.
     struct UiSubmission
     {
         RHI::CommandList &commands;
+        const Renderer::CompiledGraphPlan &plan;
+        const Renderer::GraphExecutionOutputList *outputs = nullptr;
         std::uint64_t ticket = 0;
         bool executedWithoutErrors = false;
     };
 
-    /// @brief 持有录制引用, 借用帧槽的几何与上传字节. 准备值最多录制一次.
-    /// @note 限宿主 owner 线程. 帧槽区段和纹理请求借用由 Finish 或 Cancel 结束.
-    /// 下一次 Advance 或会话销毁会取消尚未确认的准备值, 外部句柄随之失效.
+    /// @brief 持有本轮请求和绘制值, 借用帧槽已复制的载荷, 最多向一张图声明一次.
+    /// 普通外部驻留引用保留准备时的原纹理和导入事实, 后续注销不影响本准备值构图.
+    /// @note owner 线程调用. 下一次 Advance 或会话销毁取消尚未确认的准备值.
+    /// 候选图须在准备值及载荷失效前结束执行, GPU 已发依赖由 RHI 包继续保活.
     class PreparedUiFrame final
     {
     public:
-        /// @brief 析构或移动赋值替换准备值时, 取消原来尚未确认的工作.
+        /// @brief 析构或移动赋值替换活动准备值时, 取消尚未确认的请求和临时身份.
         ~PreparedUiFrame();
         PreparedUiFrame(PreparedUiFrame &&) noexcept;
         PreparedUiFrame &operator=(PreparedUiFrame &&) noexcept;
         PreparedUiFrame(const PreparedUiFrame &) = delete;
         PreparedUiFrame &operator=(const PreparedUiFrame &) = delete;
 
-        /// @brief 活动批次有普通 draw 解析到本帧诊断颜色时为 true, 供调用者安排本轮写入.
-        /// @note 如候选代需要上传, 在同一列表调用 Record 前写入, 与准入顺序一致.
-        /// 已接受的同尺寸诊断代可直接采样. 是否发布本次有效设置由完整提交回执决定.
+        /// @brief 至少一条普通可见 draw 引用本轮 View 候选, 用于接受提交后的 View 发布判断.
         [[nodiscard]] bool UsesDiagnosticOutput() const noexcept;
-        /// @brief 本轮以占位替代因上传容量暂缓的诊断输出, 调用者据此报告等待原因.
+        /// @brief 本轮因诊断上传额度暂缓而使用占位, 供 View 更新等待原因.
         [[nodiscard]] bool DiagnosticUploadPending() const noexcept;
-
-        /// @brief 在调用者已开放的 Graphics 列表中调用上传和绘制命令.
-        /// @pre 列表使用 Automatic 资源状态跟踪, 且由会话的 Device 创建.
-        /// 列表的最小上传 chunk 与本次准备采用的大小一致, 中间没有其它录制占用预检容量.
-        /// 目标及驻留纹理由调用者提供有效的跟踪前态. 合成前须初始化底色, 可在同一列表先清屏.
-        /// @return 空值表示 UI 录制区间无同步 Error/Fatal. 返回有界错误时取消准备值.
-        /// @note 失败时已发前缀仍归调用者关闭并提交或受控收拢. Finish 只消费完整录制的回执.
-        [[nodiscard]] std::optional<Core::BoundedText> Record(RHI::CommandList &commands);
-
-        /// @brief 消费准备值, 根据本次回执确认纹理. 取消确认时保留待处理请求.
-        /// @return 准备值仍有效且列表, 诊断和票据通过检查时为 true. GPU 完成由 Device 跟踪.
-        /// @note 活动准备值即使收到不匹配的回执也会结束, 请求留待下次准备.
+        /// @brief 按本轮请求数预留图对象上界, 载荷 arena 由 Prepare 单独预留.
+        [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
+        /// @brief 追加纹理/几何上传和 Raster, 返回原窗口对象的合成版本.
+        /// @pre bindings 为本次安全槽或重建候选的空表, diagnostics 借用至执行结束.
+        /// color 是本图已初始化的目标版本; 若 UsesDiagnosticOutput 为 true, diagnostic 须提供同图颜色版本.
+        /// @note 只形成 CPU 声明. 回调仍借用本准备值的投影和回执地址, Finish/Cancel 前须结束图执行.
+        /// 失败不回滚已追加的声明, 调用方须放弃候选图并取消准备值, 重试使用新准备值.
+        [[nodiscard]] Renderer::GraphResult<Renderer::TextureId> BuildGraph(
+            Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
+            FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
+            Renderer::GraphExecutionDiagnostics diagnostics);
+        /// @brief 按存活终结 Pass 和成功导出逐项确认请求, 同时消费准备值.
+        /// @return 回执匹配且完整颜色被接受时为 true, 不表示 GPU 已完成.
+        /// @note 不匹配回执也会取消并消费活动准备值. 已被 Advance 取消的值直接返回 false.
         [[nodiscard]] bool Finish(const UiSubmission &submission) noexcept;
-
-        /// @brief 放弃本次准备值. 已发命令的提交或收拢仍由调用者负责.
+        /// @brief 撤销本轮临时 token 并释放准备值持有的引用, 不撤销图已导入或 RHI 已发的引用.
+        /// @note 已发命令仍由调用者关闭并提交或受控退出.
         void Cancel() noexcept;
 
     private:
@@ -91,12 +125,6 @@ namespace Physara::Editor
         std::unique_ptr<Detail::UiFrameData> m_Data;
     };
 
-    /// @brief 基础 UI 的上传写入等待设备回收. 没有开放列表, 后续帧可重试.
-    enum class UiPrepareStatus : std::uint8_t
-    {
-        UploadPending
-    };
-
-    /// @brief 空值表示本轮没有 UI 工作, 其余结果为可录制的准备值, 可重试状态或有界原因.
-    using PrepareUiResult = std::variant<std::monostate, PreparedUiFrame, UiPrepareStatus, Core::BoundedText>;
+    /// @brief 空值表示没有封存 UI, 其余为可构图的准备值或有界准备失败.
+    using PrepareUiResult = std::variant<std::monostate, PreparedUiFrame, Core::BoundedText>;
 }

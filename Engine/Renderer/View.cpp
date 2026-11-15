@@ -28,13 +28,14 @@ namespace Physara::Renderer
         return static_cast<std::size_t>(extent.width) * extent.height * PixelBytes;
     }
 
-    std::optional<View> View::Create(RHI::Device &device, std::uint32_t maxTextureSize) noexcept
+    // 只分配逻辑身份与能力上限, View 不持有 Device 或原生分配权.
+    std::optional<View> View::Create(std::uint32_t maxTextureSize) noexcept
     {
         if (!Core::AdvanceGeneration(LastViewIdentity))
         {
             return std::nullopt;
         }
-        return View(device, {0, LastViewIdentity}, maxTextureSize);
+        return View({0, LastViewIdentity}, maxTextureSize);
     }
 
     ViewSettings View::Settings() const noexcept
@@ -76,6 +77,7 @@ namespace Physara::Renderer
         }
     }
 
+    // 根据当前请求形成候选, 只更新等待原因; 最后接受的颜色和比例由 Publish 单独推进.
     std::variant<NoSceneOutputs, Core::BoundedText> View::Prepare(const std::optional<ViewportRequest> &request,
                                                                 std::size_t remainingUploadBytes)
     {
@@ -124,21 +126,17 @@ namespace Physara::Renderer
             return outputs;
         }
 
-        const RHI::TextureDesc desc{.width = extent.width, .height = extent.height,
-                                    .format = RHI::Format::SRGBA8_UNORM, .debugName = "Viewport diagnostic color",
-                                    .initialState = RHI::ResourceStates::ShaderResource, .keepInitialState = true};
-        auto texture = m_Device.CreateTexture(desc);
-        if (!texture || !Core::AdvanceGeneration(m_LastGeneration))
+        if (!Core::AdvanceGeneration(m_LastGeneration))
         {
-            return Core::BoundedText("Viewport diagnostic target or generation creation failed");
+            return Core::BoundedText("Viewport diagnostic generation exhausted");
         }
-        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DiagnosticColor, m_LastGeneration, extent,
-                                      std::move(texture)};
+        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DiagnosticColor, m_LastGeneration, extent, {}};
         outputs.m_UploadBytes = bytes;
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
 
+    // 一次填充当前新代的紧密像素. 声明图只借用该区段, 不转移 arena 所有权.
     bool NoSceneOutputs::PrepareUpload(Core::FrameArena &arena) noexcept
     {
         if (m_UploadBytes == 0)
@@ -169,26 +167,46 @@ namespace Physara::Renderer
         return true;
     }
 
-    // 即时上传在调用内消费 arena 字节, 后端持有实际 GPU 使用的上传区及纹理依赖.
-    void NoSceneOutputs::RecordUpload(RHI::CommandList &commands) const
+    // 新代只有描述和上传声明. 实际 UI 读取决定其活性, 执行时才物化.
+    GraphResult<TextureId> NoSceneOutputs::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
     {
-        if (!m_Pixels.empty())
+        assert(m_Output);
+        if (m_Output->texture)
         {
-            commands.WriteTexture(m_Output->texture.Get(), 0, 0, m_Pixels.data(), m_Output->extent.width * PixelBytes);
+            return graph.ImportTexture(m_Output->texture,
+                {RHI::ResourceStates::ShaderResource, RHI::ResourceStates::ShaderResource, true});
         }
+        assert(!m_Pixels.empty());
+        const RHI::TextureDesc desc{.width = m_Output->extent.width, .height = m_Output->extent.height,
+            .format = RHI::Format::SRGBA8_UNORM, .debugName = "Viewport diagnostic color",
+            .initialState = RHI::ResourceStates::ShaderResource, .keepInitialState = true};
+        auto texture = graph.CreateTexture(desc);
+        if (const auto *error = std::get_if<GraphError>(&texture))
+        {
+            return *error;
+        }
+        auto written = AddTextureUpload(graph, std::get<TextureId>(texture), m_Pixels,
+                                        m_Output->extent.width * PixelBytes, uploads);
+        if (const auto *error = std::get_if<GraphError>(&written))
+        {
+            return *error;
+        }
+        return std::get<GraphTextureWrite>(written).texture;
     }
 
     // 换入已接受的新代并释放旧代的 View 引用. 原有 UI 绑定由已提交的 RHI 包继续持有.
-    void View::Publish(NoSceneOutputs &&outputs) noexcept
+    void View::Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept
     {
         // 拒绝已被后继编辑取代的候选, 即使比例随后回到了相同值.
-        if (!outputs.m_Output || outputs.m_Output->view != m_Id || outputs.m_RequestRevision != m_RequestRevision)
+        if (!acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
+            outputs.m_RequestRevision != m_RequestRevision)
         {
             return;
         }
         if (outputs.m_UploadBytes != 0)
         {
             assert(outputs.m_Output->view == m_Id && !outputs.m_Pixels.empty());
+            outputs.m_Output->texture = acceptedTexture;
             m_Diagnostic = std::move(outputs.m_Output);
         }
         // 复用颜色时也使用本轮候选所记录的比例, 尺寸仍来自已接受的颜色代.
