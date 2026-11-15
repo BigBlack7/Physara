@@ -64,16 +64,24 @@ namespace Physara::Editor
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸返回空值.
         /// @pre 在构图和打开列表前调用. 目标格式及像素范围由 BuildGraph 核对.
         /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
-        /// outputs 来自本轮视口请求, 仅在准备调用期间借用.
+        /// outputs 仅在准备调用期间借用. 正常模式要求来自本轮视口请求,
         /// 颜色的 View 身份, 像素范围或比例请求代与封存请求失配时使用占位.
-        /// @param deferDiagnostic 上传压力下重新准备占位及标签, Runtime 编译后核算实际存活上传.
+        /// @param mode 上传压力模式重建占位; SafeUi 只接受同一 View 的只读旧输出快照或无输出.
+        /// 安全图按当前矩形显示旧尺寸并标注恢复状态, 不能把它发布为本轮请求结果.
         /// 重建候选前须先销毁旧图并取消旧准备值, 然后再清理帧槽载荷和绑定.
         /// @see PreparedUiFrame::BuildGraph
         /// @return 无工作, 可构图的准备值或有界原因. 同时只允许一份活动准备值.
         [[nodiscard]] PrepareUiResult PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                      Core::FrameArena &arena,
                                                      const Renderer::NoSceneOutputs &outputs = {},
-                                                     bool deferDiagnostic = false);
+                                                     UiFrameMode mode = UiFrameMode::Normal);
+
+        /// @brief 基础字体曾由完整有效 UI 提交接受, 用于区分启动必需项失败与普通帧取消.
+        [[nodiscard]] bool BaseFontReady() const noexcept;
+        /// @brief 保存本轮失败的拥有型快照. 无新失败时只更新已有记录的恢复状态.
+        /// @note 最迟在下一次可绘制 Advance 的工作区显示, 不重新推进当前 ImGui 帧.
+        void ReportFrameOutcome(FrameRecovery recovery, const std::optional<Core::BoundedText> &primary = {},
+                                const std::optional<Core::BoundedText> &additional = {}) noexcept;
 
         /// @brief 注册已初始化的单样本 RGBA8/SRGBA8 二维 SRV, 以实际格式解释采样域.
         /// @pre 资源来自会话的 Device, owner 提供真实状态和定义过的允许采样范围.

@@ -41,10 +41,14 @@ namespace Physara::Editor::Detail
         /// @note 构图后才按存活上传核算 GPU 容量, 本入口只校验 CPU/驻留预算及固定几何资源.
         /// @pre drawData 及纹理请求来自当前封存帧. arena 及其区段存活到确认或取消.
         /// @note 上一准备值尚有效时拒绝新准备. 构建失败时撤回临时纹理身份和本次分配的尾部范围.
+        /// SafeUi 为旧图像追加恢复标签, 不生成新的 View 像素或改变封存布局.
         [[nodiscard]] PrepareUiResult Prepare(const ImDrawData &drawData,
                                               Platform::WindowExtent extent, Core::FrameArena &arena,
                                               const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
-                                              bool deferDiagnostic);
+                                              UiFrameMode mode);
+
+        /// @brief 基础 atlas 曾由有效 UI 回执确认. 后续取消不撤销这一会话启动事实.
+        [[nodiscard]] bool BaseFontReady() const noexcept { return m_BaseFontReady; }
 
         /// @brief 在推进或销毁 context 前结束纹理请求的借用, 并使外部准备值失效.
         void CancelPending() noexcept;
@@ -59,16 +63,23 @@ namespace Physara::Editor::Detail
         friend class Physara::Editor::PreparedUiFrame;
         friend struct UiFrameData;
 
-        explicit UiRenderer(RHI::Device &device) noexcept;
+        UiRenderer(Platform::DeviceHost &host, RHI::Device &device) noexcept;
+        /// @brief 建立与生成 ABI 匹配的固定 UI 资源, 失败时由尚未发布的 renderer 收拢部分对象.
         [[nodiscard]] std::optional<Core::BoundedText> Initialize(const std::filesystem::path &packagePath);
+        /// @brief 为实际可见绘制准备有界几何缓冲, 两项都成功且无 Fatal 后才替换缓存.
         [[nodiscard]] bool PrepareBuffers(UiBatch &batch);
+        /// @brief 将批次的上传和采样转换为同图版本, 成功回调写入 batch 的录制回执.
+        /// @pre batch 仍属于活动准备值, 图执行结束前不能 Complete.
         [[nodiscard]] Renderer::GraphResult<Renderer::TextureId> BuildGraph(UiBatch &batch,
             Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
             FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
             Renderer::GraphExecutionDiagnostics diagnostics);
+        /// @brief 结束唯一活动批次的元数据借用. 空回执取消请求, 非空回执已核对整图成功.
+        /// @note 同时使外部 PreparedUiFrame 失效, 已发 GPU 引用仍由原 RHI 包退休.
         void Complete(UiFrameData &frame, const UiSubmission *submission) noexcept;
 
         RHI::Device &m_Device; ///< 借用宿主的就绪 Device, 销毁 renderer 后才关闭宿主.
+        Platform::DeviceHost &m_Host; ///< 只用于准备期的 Fatal 门控, 与 Device 共享同一 owner 寿命.
         UiTextures m_Textures;
         RHI::GraphicsPipelineHandle m_Pipeline;
         RHI::BufferHandle m_VertexBuffer;

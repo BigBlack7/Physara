@@ -253,10 +253,12 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // 菜单先收集本轮意图, 再按快照布局面板. 帧诊断来自上一次 RenderFrame, 不在 Draw 内推进渲染或重试.
     WorkspaceFrame Workspace::Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
                                     EditState edits, const Renderer::ViewSettings &view,
                                     const Platform::WindowSettings *window,
-                                    const std::optional<Core::BoundedText> &editError, bool allowActions)
+                                    const std::optional<Core::BoundedText> &editError,
+                                    const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions)
     {
         WorkspaceFrame frame;
         if (ImGui::BeginMainMenuBar())
@@ -286,6 +288,30 @@ namespace Physara::Editor::Detail
                 ImGui::EndMenu();
             }
             DrawWindowMenu(window, frame, allowActions);
+            if (frameDiagnostic && ImGui::BeginMenu("Frame status"))
+            {
+                // 有诊断记录时菜单持续存在. 后继正常帧保留首错正文, 只更新恢复状态.
+                // 按当前视口限制正文宽度, 为菜单边距和可能出现的纵向滚动条预留空间.
+                // 长路径也交给文本换行, 高度超出视口时沿菜单原有的纵向滚动读取, 不再截短正文.
+                const auto &style = ImGui::GetStyle();
+                const float available = ImGui::GetWindowViewport()->WorkSize.x -
+                    2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x) - style.ScrollbarSize;
+                const float width = std::max(1.0f, std::min(40.0f * ImGui::GetFontSize(), available));
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+                const auto recovery = frameDiagnostic->recovery;
+                ImGui::TextUnformatted(recovery == FrameRecovery::Normal ? "Normal rendering recovered" :
+                    recovery == FrameRecovery::SafeUi ? "Safe UI - retaining the last accepted output" :
+                    recovery == FrameRecovery::Cancelled ? "Frame cancelled - retrying on the next iteration" :
+                                                          "Rendering stopped");
+                ImGui::Separator();
+                ImGui::TextUnformatted(frameDiagnostic->primary.View().data());
+                if (frameDiagnostic->additional)
+                {
+                    ImGui::TextUnformatted(frameDiagnostic->additional->View().data());
+                }
+                ImGui::PopTextWrapPos();
+                ImGui::EndMenu();
+            }
             ImGui::EndMainMenuBar();
         }
 
@@ -323,6 +349,7 @@ namespace Physara::Editor::Detail
         return frame;
     }
 
+    // 本轮先消费输入归属, 再写入顺序化编辑意图; 历史可用性由会话实际重放时判断.
     void Workspace::ApplyShortcuts(std::span<const Platform::InputEvent> events, const InputClaims &claims,
                                    WorkspaceFrame &frame)
     {

@@ -68,6 +68,16 @@ namespace Physara::Renderer
         return std::nullopt;
     }
 
+    // 只复制已接受资源的强引用, 不调用 Prepare, 因而不借用当前布局或生成新候选.
+    NoSceneOutputs View::LastAcceptedOutput() const noexcept
+    {
+        NoSceneOutputs outputs;
+        outputs.m_Output = m_Diagnostic;
+        outputs.m_Retained = true;
+        outputs.m_Scale = m_EffectiveScale;
+        return outputs;
+    }
+
     // 只更新待确认状态的原因, 已接受的请求继续报告有效.
     void View::Defer(ViewSettingReason reason) noexcept
     {
@@ -197,8 +207,8 @@ namespace Physara::Renderer
     // 换入已接受的新代并释放旧代的 View 引用. 原有 UI 绑定由已提交的 RHI 包继续持有.
     void View::Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept
     {
-        // 拒绝已被后继编辑取代的候选, 即使比例随后回到了相同值.
-        if (!acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
+        // 拒绝安全图旧快照和已被后继编辑取代的候选, 即使尺寸或比例碰巧相同也不重新确认.
+        if (outputs.m_Retained || !acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision)
         {
             return;

@@ -27,7 +27,8 @@ namespace Physara::Platform::Detail
     // 饱和序号无法再证明区间无错, 与公开 RhiErrorScope 使用相同的取样规则.
     static bool RhiSucceeded(const DeviceHostState &state, std::uint64_t before) noexcept
     {
-        return before != std::numeric_limits<std::uint64_t>::max() &&
+        return !state.rhiMessages.FatalSeen().load(std::memory_order_relaxed) &&
+               before != std::numeric_limits<std::uint64_t>::max() &&
                state.rhiMessages.ErrorCount().load(std::memory_order_relaxed) == before;
     }
 
@@ -59,10 +60,14 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
                              "Presentation token or operation phase is invalid");
         }
+        if (state.rhiMessages.FatalSeen().load(std::memory_order_relaxed))
+        {
+            return PresentationError(state, "Fatal graphics diagnostic requires controlled shutdown");
+        }
         return std::nullopt;
     }
 
-    // 先按窗口事实决定是否取得, 再确认上一笔完成. 只在槽空闲且尺寸变化时替换整组目标.
+    // 先按窗口事实决定是否取得, 再确认上一笔完成. 槽空闲后才因尺寸变化或失败前缀替换整组目标.
     DeviceHost::PresentationAcquire BeginPresentation(DeviceHostState &state, std::size_t slotIndex)
     {
         auto &presentation = state.presentation;
@@ -71,7 +76,8 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
                              "Presentation slot index is out of range");
         }
-        if (presentation.stopped || presentation.phase != PresentationPhase::Idle)
+        if (presentation.stopped || presentation.phase != PresentationPhase::Idle ||
+            state.rhiMessages.FatalSeen().load(std::memory_order_relaxed))
         {
             return MakeError(&state, HostErrorReason::RequestRejected, HostStage::Presentation,
                              "Presentation is stopped or already acquired");
@@ -103,8 +109,9 @@ namespace Physara::Platform::Detail
         {
             return PresentationError(state, "Presentation acquisition identity exhausted");
         }
-        if (!slot.target.texture || slot.target.extentPixels != window.framebufferSizePixels)
+        if (!slot.target.texture || slot.replaceTarget || slot.target.extentPixels != window.framebufferSizePixels)
         {
+            // 上一笔已完成才到达这里. 新候选失败时仍保留旧目标和 replaceTarget, 不发布半组资源.
             if (slot.targetGeneration == std::numeric_limits<std::uint64_t>::max())
             {
                 return PresentationError(state, "Presentation target generation exhausted");
@@ -134,6 +141,7 @@ namespace Physara::Platform::Detail
             // 连同尺寸一起替换该代的状态事实. 即使旧代曾提交, 新纹理首次入口仍为 Common.
             slot.target = std::move(candidate);
             slot.event = std::move(event);
+            slot.replaceTarget = false;
             ++slot.targetGeneration;
         }
         presentation.token = {state.info.identity, slotIndex, slot.targetGeneration, ++presentation.acquisition};
@@ -167,6 +175,7 @@ namespace Physara::Platform::Detail
         // 活动取得先强持列表. 窗口变更时保留列表供提交已发前缀, 有效颜色还需末端复制成功.
         if (!frameSucceeded)
         {
+            // 只登记原闭合列表. 不读取失败颜色, 是否可继续仍须由 Submit 的有效票据和 Event 证明.
             return std::nullopt;
         }
         const auto current = CurrentWindowExtent(state);
@@ -219,8 +228,8 @@ namespace Physara::Platform::Detail
         }
         else
         {
-            // 失败前缀无法证明目标状态. 完成观察仍覆盖已发工作, 但禁止再次取得该代.
-            presentation.stopped = true;
+            // 有效前缀和 Event 允许其它槽继续. 此代末态未知, 同槽完成后必须重建整个目标.
+            slot.replaceTarget = true;
         }
         // Reset 只清旧观察身份. 同一 owner 紧接 Execute 捕获队列尾, 该快照覆盖刚接受的票据.
         // 绑定失败仍返回票据, 同时停止复用并撤销颜色资格.

@@ -31,6 +31,32 @@ namespace Physara::Editor
     };
 
     struct UiTextureTag;
+    /// @brief 正常候选, 上传背压占位和错误恢复的旧输出拥有不同的解析与发布资格.
+    enum class UiFrameMode : std::uint8_t
+    {
+        Normal, ///< 解析当前请求匹配的候选, 完整接受后可确认 View.
+        DeferDiagnostic, ///< 本次共享上传容量不足, 用占位重建普通 UI 图.
+        SafeUi ///< 失败主图未 Open 时的独立图, 只读旧输出且没有 View 发布资格.
+    };
+
+    /// @brief 最近失败当前处于哪种恢复状态, Normal 表示后继正常帧已经恢复.
+    enum class FrameRecovery : std::uint8_t
+    {
+        Normal,
+        SafeUi,
+        Cancelled,
+        Stopped
+    };
+
+    /// @brief 会话保留的一份有界失败快照, 不借用帧 arena, GraphId 或原生资源.
+    /// 主错与一个附加摘要分别拥有正文; recovery 随后继成功/取消更新, 不保存逐帧队列.
+    struct FrameDiagnostic
+    {
+        Core::BoundedText primary;
+        std::optional<Core::BoundedText> additional;
+        FrameRecovery recovery = FrameRecovery::Cancelled;
+    };
+
     /// @brief 本会话的槽位和不复用的代, 与当前图的资源身份及原生纹理名无关.
     using UiTextureId = Core::Identity<UiTextureTag>;
     using UiTextureResult = std::variant<UiTextureId, Core::BoundedText>;

@@ -1,6 +1,7 @@
 # 唯一产品入口装配诊断, 原生宿主, View 和 RHI Editor, 并按提交完成调度帧槽.
 # Runtime 通过各模块的公开接口装配. GLFW 和 ImGui 头留在各自的私有实现.
-add_executable(Physara Main.cpp Resources.hpp Resources.cpp)
+# Frame 负责一次取得内的正常/安全图和取消, Main 负责输入与有界槽调度.
+add_executable(Physara Main.cpp Frame.hpp Frame.cpp Resources.hpp Resources.cpp)
 
 # 从唯一包 target 取得配置产物, 生成相对实际 exe 目录的路径, 不固化本机绝对资源根.
 get_target_property(editorUiPackage PhysaraEditor PHYSARA_UI_PACKAGE)

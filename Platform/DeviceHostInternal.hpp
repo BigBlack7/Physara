@@ -19,8 +19,9 @@
 
 namespace Physara::Platform::Detail
 {
-    /// @brief 先记录 RHI 失败序号, 再写入诊断. 创建/关闭区间额外保存首错和附加错误数.
+    /// @brief 先记录 RHI 失败序号和 Fatal, 再写入诊断. 生命周期或帧候选区间保存首错和附加错误数.
     /// @note 借用 Diagnostics, 同宿主一起存活. 捕获结果不用于推断 device loss.
+    /// 正文及捕获开关由 owner 线程串行维护, 原子计数不是正文的跨线程发布协议.
     class RhiMessageAdapter final : public RHI::MessageCallback
     {
     public:
@@ -29,7 +30,8 @@ namespace Physara::Platform::Detail
         }
         /// @brief 记录 Error/Fatal 后转发诊断. 首错捕获区间还会复制首条失败正文.
         void Message(RHI::MessageSeverity severity, const char *message) noexcept override;
-        /// @brief 开始本次创建或关闭的首错捕获. EndCapture 后保留结果供宿主读取.
+        /// @brief 开始本次生命周期操作或独立帧候选的首错捕获, 不清除 Fatal.
+        /// @note 重开前由调用方复制上一结果. EndCapture 后保留正文供宿主读取.
         void BeginCapture() noexcept;
         void EndCapture() noexcept;
         /// @brief 借用贯穿宿主寿命的失败计数, 供同步命令区间取样.
@@ -37,6 +39,8 @@ namespace Physara::Platform::Detail
         {
             return m_ErrorCount;
         }
+        /// @brief Fatal 停止事实贯穿设备寿命, 新的捕获区间不能清除它.
+        [[nodiscard]] const std::atomic<bool> &FatalSeen() const noexcept { return m_FatalSeen; }
         [[nodiscard]] const std::optional<Core::BoundedText> &First() const noexcept
         {
             return m_First;
@@ -49,7 +53,8 @@ namespace Physara::Platform::Detail
     private:
         Core::Diagnostics &m_Diagnostics;
         std::atomic<std::uint64_t> m_ErrorCount{0}; ///< Error/Fatal 的累计计数, 饱和后保持最大值.
-        // 创建和关闭阶段独立保留首错正文与附加错误数.
+        std::atomic<bool> m_FatalSeen{false}; ///< 只表示停止新工作, 原生健康仍由后端判断.
+        // 创建, 帧候选和关闭阶段独立保留首错正文与附加错误数.
         std::optional<Core::BoundedText> m_First;
         std::uint64_t m_Additional = 0;
         bool m_Capturing = false;
@@ -75,12 +80,14 @@ namespace Physara::Platform::Detail
     /// @brief 固定索引的窗口目标和完成观察. lastSubmission 非零时保留最近一次接受的设备票据.
     /// @note 同槽再取得时用 Event 确认上次完成, 之后才复用或替换目标.
     /// target 同时保存该代的入口状态; 换代重置为 Common, 完整交接获提交后才推进.
+    /// replaceTarget 只标记该槽, 不能提前释放其目标或代替 Event 的真实完成观察.
     struct PresentationSlot
     {
         PresentTarget target;
         RHI::EventQueryHandle event;
         std::uint64_t targetGeneration = 0;
         std::uint64_t lastSubmission = 0;
+        bool replaceTarget = false; ///< 失败前缀结束状态未知, 真实完成后换代再取得.
     };
 
     /// @brief 同一窗口可有多个在途槽, owner 线程一次只推进一个 CPU 取得.

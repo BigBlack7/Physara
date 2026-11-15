@@ -12,7 +12,7 @@
 
 namespace Physara::Editor::Detail
 {
-    // 布局期预备字形和合成期绘制使用同一组原因文字.
+    // 布局期预备字形和合成期绘制使用同一组原因文字. 旧输出标签只解释来源, 不确认当前 View 请求.
     static const char *StatusText(UiFallback reason) noexcept
     {
         switch (reason)
@@ -23,6 +23,8 @@ namespace Physara::Editor::Detail
         case UiFallback::InvalidExtent: return "Invalid viewport pixel extent";
         case UiFallback::TextureSizeLimit: return "Device texture size limit";
         case UiFallback::DiagnosticBudget: return "Diagnostic texture budget exceeded";
+        case UiFallback::RetainedOutput: return "Frame failed - showing last accepted output";
+        case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";
         }
         return "";
@@ -99,6 +101,7 @@ namespace Physara::Editor::Detail
         return Renderer::ViewportRequest{m_View, extent.value_or(Renderer::ViewExtent{}), settings.requestRevision};
     }
 
+    // 只封存逻辑图像和状态文字需要的字形. 正常候选与安全 UI 随后可在同一布局上分别解析.
     ViewportLayout Viewport::Draw() const
     {
         // 先保留标签高度, 剩余区域同时用于图像布局, 命中和离屏尺寸计算.
@@ -125,7 +128,8 @@ namespace Physara::Editor::Detail
             // 封存前先准备各原因的字形, 避免 GPU 准备时重新修改 atlas 请求.
             auto *baked = ImGui::GetFontBaked();
             for (auto reason : {UiFallback::InvalidIdentity, UiFallback::MissingOutput, UiFallback::UploadPending,
-                                UiFallback::InvalidExtent, UiFallback::TextureSizeLimit, UiFallback::DiagnosticBudget})
+                                UiFallback::InvalidExtent, UiFallback::TextureSizeLimit, UiFallback::DiagnosticBudget,
+                                UiFallback::RetainedOutput, UiFallback::FrameFailed})
             {
                 for (const char *character = StatusText(reason); *character != '\0'; ++character)
                 {

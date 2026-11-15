@@ -29,6 +29,7 @@ namespace Physara::Editor
         // 编辑状态在平台适配接入成功后建立, 结束会话时释放事务与历史.
         std::optional<Detail::EditHistory> edits;
         std::optional<Core::BoundedText> editError;
+        std::optional<FrameDiagnostic> frameDiagnostic;
         // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
         std::optional<Renderer::ViewportRequest> viewportRequest;
@@ -150,7 +151,7 @@ namespace Physara::Editor
             const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
             const auto settings = view ? view->Settings() : Renderer::ViewSettings{};
             workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, window, state.editError,
-                                             !discard);
+                                             state.frameDiagnostic, !discard);
             if (!discard)
             {
                 // 布局可释放弹出层或活动项. 已被占用的本批键盘输入不能随后触发工作区动作.
@@ -197,10 +198,11 @@ namespace Physara::Editor
         return frame;
     }
 
-    // 只接受本次封存布局匹配的 View 候选, 不在会话状态中保存图版本或取得原生目标.
+    // 正常模式核对当前布局候选, 安全模式核对已接受快照的来源, 两者共用本轮封存的 UI.
+    // 不重放 Advance 或编辑事务, 不在会话状态中保存图版本或取得原生目标.
     PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                    Core::FrameArena &arena, const Renderer::NoSceneOutputs &outputs,
-                                                   bool deferDiagnostic)
+                                                   UiFrameMode mode)
     {
         auto &state = *m_State;
         // 暂停或零像素范围直接返回, 待处理纹理请求留给下一次有效准备.
@@ -214,14 +216,45 @@ namespace Physara::Editor
         }
         const auto *diagnostic = outputs.Diagnostic();
         const auto &layout = state.viewportLayout;
-        if (diagnostic && (!state.viewportRequest || diagnostic->view != state.viewportRequest->view ||
-                           diagnostic->extent != state.viewportRequest->extent ||
-                           outputs.RequestRevision() != state.viewportRequest->requestRevision))
+        if (mode == UiFrameMode::SafeUi)
+        {
+            // 旧输出无需匹配新尺寸和请求代, 但必须来自已接受快照和本会话的 View/角色.
+            if (!outputs.IsRetained() || (diagnostic &&
+                (diagnostic->view != state.viewport.Id() ||
+                 diagnostic->role != Renderer::ViewOutputRole::DiagnosticColor || !diagnostic->texture)))
+            {
+                return Core::BoundedText("Safe UI requires this View's retained output snapshot");
+            }
+            return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
+        }
+        if (outputs.IsRetained() || (diagnostic &&
+            (!state.viewportRequest || diagnostic->view != state.viewportRequest->view ||
+             diagnostic->extent != state.viewportRequest->extent ||
+             outputs.RequestRevision() != state.viewportRequest->requestRevision)))
         {
             // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
-            return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, deferDiagnostic);
+            return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
         }
-        return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, deferDiagnostic);
+        return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
+    }
+
+    bool EditorSession::BaseFontReady() const noexcept
+    {
+        return m_State->renderer && m_State->renderer->BaseFontReady();
+    }
+
+    // 一份最近失败覆盖旧失败. 正常恢复仅改变恢复状态, 保留原文供维护者回看.
+    void EditorSession::ReportFrameOutcome(FrameRecovery recovery, const std::optional<Core::BoundedText> &primary,
+                                            const std::optional<Core::BoundedText> &additional) noexcept
+    {
+        if (primary)
+        {
+            m_State->frameDiagnostic = FrameDiagnostic{*primary, additional, recovery};
+        }
+        else if (m_State->frameDiagnostic)
+        {
+            m_State->frameDiagnostic->recovery = recovery;
+        }
     }
 
     UiTextureResult EditorSession::RegisterUiTexture(RHI::Texture &texture, UiTextureImport imported)

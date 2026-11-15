@@ -37,10 +37,11 @@ namespace Physara::Editor::Detail
         Renderer::GraphTextureWrite placeholder;
     };
 
-    /// @brief 共享占位的具体原因, 主视口还用它选择可见状态文字.
+    /// @brief 视口解析状态及共享占位原因. RetainedOutput 只加标签, 仍采样已接受的旧图像.
     enum class UiFallback : std::uint8_t
     {
-        None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget
+        None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget,
+        RetainedOutput, FrameFailed
     };
 
     /// @brief 成功准备的外部驻留引用. 持有原对象及导入事实, 注销只阻止后续准备的新解析.
@@ -131,11 +132,17 @@ namespace Physara::Editor::Detail
         };
 
         [[nodiscard]] Entry *Find(UiTextureId id) noexcept;
+        /// @brief 按命令身份选择真实采样或占位原因, 不在此创建 GPU 绑定或确认请求.
         [[nodiscard]] Sample FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings) noexcept;
+        /// @brief 本批首次占位登记共享像素需求并报告 Warning, 不把缺失图像升级为整帧错误.
         void Placeholder(UiTextureUploads &uploads, UiFallback reason) const;
+        /// @brief 从固定槽表分配不复用的代, 并接管条目强引用及托管字节记账.
         [[nodiscard]] UiTextureResult Register(Entry entry);
+        /// @brief 仅解除 CPU 注册和预算. 已封存或已发引用继续由各自 owner 持有.
         void Erase(Entry &entry) noexcept;
+        /// @brief 解除匹配的托管身份后回报 ImGui 销毁, 后续是否重建由其像素寿命决定.
         void Destroy(ImTextureData &source) noexcept;
+        /// @brief 校验并记录一次完整创建或局部更新, 从本批剩余预算扣减, 不复制像素.
         [[nodiscard]] std::optional<Core::BoundedText> PlanUpload(ImTextureData &source, UiTextureUploads &uploads,
                                                                  std::size_t &remainingResident);
 

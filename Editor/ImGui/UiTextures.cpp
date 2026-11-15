@@ -324,7 +324,9 @@ namespace Physara::Editor::Detail
     UiTextures::Sample UiTextures::FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings) noexcept
     {
         // 视口图像已为同一个原因排入可见状态. 按命令身份选用对应的占位绑定.
-        if (&draw == bindings.viewportDraw && bindings.viewportFallback != UiFallback::None)
+        // 保留输出的状态标签不改变采样, 其余失败原因才使用共享占位.
+        if (&draw == bindings.viewportDraw && bindings.viewportFallback != UiFallback::None &&
+            bindings.viewportFallback != UiFallback::RetainedOutput)
         {
             return {nullptr, bindings.viewportFallback};
         }
@@ -401,7 +403,7 @@ namespace Physara::Editor::Detail
         }
     }
 
-    // 每个区域更新分成暂存写和目标复制, 避免同 Pass 的重叠传输读写.
+    /// @brief 区域更新的图值, 源为本轮紧密暂存, 目标 region 使用原图像像素坐标.
     struct UiRegionCopy
     {
         Renderer::TextureId source;
@@ -535,6 +537,7 @@ namespace Physara::Editor::Detail
 
     // 非空回执已证明整图成功, 因而存活终结 Pass 等价于本请求实际执行成功.
     // 创建还需导出句柄才能持久发布; 更新继续使用原对象. 未确认的创建撤销身份并归还预算.
+    // 主图取消和安全图重试各持自己的 uploads. 即使 request 相同, 也只能由成功图的终结 Pass 确认.
     void UiTextures::Finish(const UiTextureUploads &uploads, const UiSubmission *submission) noexcept
     {
         for (const auto &upload : uploads.items)

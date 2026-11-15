@@ -498,20 +498,43 @@ namespace Physara::Platform
 
     bool RhiErrorScope::IsClear() const noexcept
     {
-        // 同步回调在命令返回前更新计数. 区间只比较这一原子值, 使用 relaxed 读取即可.
-        return m_ErrorCount != nullptr && m_InitialCount != std::numeric_limits<std::uint64_t>::max() &&
+        // 同步回调在命令返回前更新计数和 Fatal 锁存. 这里只读取原子事实, 不借此发布其它数据.
+        return m_ErrorCount != nullptr && !m_FatalSeen->load(std::memory_order_relaxed) &&
+               m_InitialCount != std::numeric_limits<std::uint64_t>::max() &&
                m_ErrorCount->load(std::memory_order_relaxed) == m_InitialCount;
     }
 
+    // 每个 scope 只保存计数起点. 普通失败后的 Close/提交可另取区间, Fatal 则对所有区间持续有效.
     RhiErrorScope DeviceHost::CaptureRhiErrors() const noexcept
     {
         RhiErrorScope scope;
         if (GetDevice() != nullptr)
         {
             scope.m_ErrorCount = &m_State->rhiMessages.ErrorCount();
+            scope.m_FatalSeen = &m_State->rhiMessages.FatalSeen();
             scope.m_InitialCount = scope.m_ErrorCount->load(std::memory_order_relaxed);
         }
         return scope;
+    }
+
+    // 新候选取得自己的首错正文, 原候选是否失败由调用方已复制的结果保存, 不因重开捕获而复活.
+    RhiErrorScope DeviceHost::BeginFrameGraphicsDiagnostics() noexcept
+    {
+        if (GetDevice() != nullptr)
+        {
+            m_State->rhiMessages.BeginCapture();
+        }
+        return CaptureRhiErrors();
+    }
+
+    std::optional<Core::BoundedText> DeviceHost::FirstGraphicsError() const noexcept
+    {
+        return m_State->ownerThread == std::this_thread::get_id() ? m_State->rhiMessages.First() : std::nullopt;
+    }
+
+    bool DeviceHost::HasFatalGraphicsError() const noexcept
+    {
+        return m_State->rhiMessages.FatalSeen().load(std::memory_order_relaxed);
     }
 
     // 呈现包装层统一执行宿主操作检查. Suspended 和 Retry 沿值结果返回, 域错误走宿主诊断.

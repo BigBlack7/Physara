@@ -210,17 +210,18 @@ namespace Physara::Platform
     };
 
     /// @brief 从取样时刻起观察同一宿主 Device 的 Error/Fatal, 供同步命令决定是否继续.
-    /// @note 借用宿主回调中的计数. 在 owner 线程使用并在 Shutdown 前结束.
+    /// @note 借用宿主回调中的计数和永久 Fatal 事实, 不拥有诊断正文. 在 owner 线程使用并在 Shutdown 前结束.
     class RhiErrorScope final
     {
     public:
-        /// @brief 取样有效且此后未观察到 Error/Fatal 时为 true. 计数耗尽视为失败.
+        /// @brief 取样有效, 此后无 Error 且宿主从未锁存 Fatal 时为 true. 计数耗尽视为失败.
         /// @note 结果独立于日志写入, 提交是否接受及 GPU 是否完成由调用者另行确认.
         [[nodiscard]] bool IsClear() const noexcept;
 
     private:
         friend class DeviceHost;
         const std::atomic<std::uint64_t> *m_ErrorCount = nullptr;
+        const std::atomic<bool> *m_FatalSeen = nullptr;
         std::uint64_t m_InitialCount = 0;
     };
 
@@ -260,6 +261,14 @@ namespace Physara::Platform
         /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;
+        /// @brief 开始独立帧候选的首错捕获, 并取样其准备/执行区间. 不清除 Fatal.
+        /// @pre owner 线程且宿主就绪. 先结束并保存上一候选结果; 同步捕获至下一候选或 Shutdown.
+        [[nodiscard]] RhiErrorScope BeginFrameGraphicsDiagnostics() noexcept;
+        /// @brief 复制当前候选或生命周期捕获的首个原始 RHI 失败, 无失败时为空.
+        /// @note 仅 owner 线程返回捕获值. CaptureRhiErrors 不重开正文捕获, 重开前须保存需要的旧结果.
+        [[nodiscard]] std::optional<Core::BoundedText> FirstGraphicsError() const noexcept;
+        /// @brief 设备曾报告 Fatal 时停止新渲染, 此事实不代表 context 已失效.
+        [[nodiscard]] bool HasFatalGraphicsError() const noexcept;
 
         /// @brief 预检新 Graphics 包的纹理和缓冲写入. 尺寸为单次写入的紧密字节数, 0 表示省略.
         /// @pre 宿主就绪且 owner 持有 current context. 无开放录制, chunkSize 取自拟使用的列表.
@@ -279,7 +288,8 @@ namespace Physara::Platform
         [[nodiscard]] PresentationAcquire BeginPresentation(std::size_t slotIndex) noexcept;
         /// @brief 关联本次取得和闭合 Graphics 列表. 颜色有效且尺寸仍匹配时发出末端复制.
         /// @param frameSucceeded 表示本次录制已完整初始化颜色, 并且录制与 Close 区间均成功.
-        /// 目标已按取得值的 finalState 交回. 接受失败前缀后停止新取得, 由调用者进入关闭收拢.
+        /// 有效颜色已按取得值的 finalState 交回. 失败前缀的目标在完成后换代, 不作为有效颜色读取.
+        /// 调用者须保证可再用的其它持久导入状态可靠; 无法证明时沿设备关闭收拢.
         /// @pre commands 来自此宿主的验证设备. 准备成功后由 SubmitPresentation 消费同一次录制.
         /// @return 空值表示可进入提交, 失败帧或尺寸过期时提交仅保护已发前缀.
         /// RequestRejected 保留当前取得. 末端原生失败进入宿主关闭收拢.

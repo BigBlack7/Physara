@@ -224,12 +224,14 @@
 
 **职责位置：** Runtime、Renderer、DeviceHost。**前置：** [D05-T04](#d05-t04)。**架构依据：** [frame-flow](../Architecture.md#frame-flow)、[11.2](../Architecture.md#history-commit)、[11.5](../Architecture.md#shutdown)。
 
-- [ ] 实现尚未执行的主图编译失败后的安全 UI-only 图，显式导入未被覆写的上一有效输出；无有效输出时展示明确状态，记录 NoSceneOutputs。
-- [ ] fallback 也失败或执行中途失败时按宿主协议取消；不在部分场景命令后拼 UI 图，不读取无效窗口颜色，已经发出的 GL 工作仍完成提交/退休或受控退出。
-- [ ] 注入 UI/读回准备、fallback 准备、首次资源/recipe 创建、构图、部分命令执行和提交失败；准备阶段 Fatal 立即转受控退出，FrameSlot、PresentationFrame、上传请求/版本、历史与在途引用均不失去 owner，UI 纹理更新可重试。
+- [x] 实现尚未执行的主图编译失败后的安全 UI-only 图，显式导入未被覆写的上一有效输出；无有效输出时展示明确状态，记录 NoSceneOutputs。
+- [x] fallback 也失败或执行中途失败时按宿主协议取消；不在部分场景命令后拼 UI 图，不读取无效窗口颜色，已经发出的 GL 工作仍完成提交/退休或受控退出。
+- [x] 注入 UI/读回准备、fallback 准备、首次资源/recipe 创建、构图、部分命令执行和提交失败；准备阶段 Fatal 立即转受控退出，FrameSlot、PresentationFrame、上传请求/版本、历史与在途引用均不失去 owner，UI 纹理更新可重试。
 
 **完成条件：** 错误帧不会推进场景历史、破坏下一帧或泄漏呈现资源，失败诊断可定位实际 Pass/资源。
 
-**当前状态** D05-T04 已验收归档，前置齐备；本工作包待建立下一 change。 [D05-T04 验收](../../openspec/changes/archive/2026-11-15-integrate-editor-frame-graph/tasks.md#final-verification)
+**当前状态** B 复核与最终原生 verify 通过，四份主规范已同步，`handle-frame-graph-failures` 已归档。 [验收归档](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)
 
 **D05 阶段出口：** 产品帧只经统一 Graph 路径；未初始化读、非法 feedback/环会失败，正常帧可到窗口；执行前失败可显示安全旧输出/UI，中途失败走取消，均不推进失败场景的历史。
+
+**出口状态** 已通过，M0 正式帧骨架在当前 OpenGL 诊断 profile 下完成。下一工作包为 [D06-T01](D06-D07-SceneAndForward.md#d06-t01)。 [最终证据与范围](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)

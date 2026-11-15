@@ -12,6 +12,7 @@
 #include <DeviceHost.hpp>
 
 #include "Commands/EditHistory.hpp"
+#include "Session/UiFrame.hpp"
 #include "Viewport/Viewport.hpp"
 
 namespace Physara::Editor::Detail
@@ -45,11 +46,13 @@ namespace Physara::Editor::Detail
     public:
         /// @brief 在当前 ImGui 帧构建菜单, 控件及可见面板.
         /// @param window 当前宿主设置的短期借用. 空值时省略窗口设置菜单.
+        /// @param frameDiagnostic 会话拥有的最近失败及恢复状态, 本轮只读, 与 Inspector 显隐独立.
         /// @param allowActions 输入可用时才收集动作. 输入失效轮次仍可构建布局.
         [[nodiscard]] WorkspaceFrame Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
                                             EditState edits, const Renderer::ViewSettings &view,
                                             const Platform::WindowSettings *window,
-                                            const std::optional<Core::BoundedText> &editError, bool allowActions);
+                                            const std::optional<Core::BoundedText> &editError,
+                                            const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions);
 
         /// @brief 依到达顺序从当轮有资格的 Press 生成历史或布局动作.
         /// @note 每条历史动作在会话重放时按届时的游标判断可用性.

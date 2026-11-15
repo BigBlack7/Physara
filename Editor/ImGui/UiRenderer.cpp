@@ -300,8 +300,8 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
-    UiRenderer::UiRenderer(RHI::Device &device) noexcept
-        : m_Device(device), m_Textures(device)
+    UiRenderer::UiRenderer(Platform::DeviceHost &host, RHI::Device &device) noexcept
+        : m_Device(device), m_Host(host), m_Textures(device)
     {
     }
 
@@ -327,7 +327,7 @@ namespace Physara::Editor::Detail
         {
             return Core::BoundedText("UI renderer requires the ready host device");
         }
-        auto renderer = std::unique_ptr<UiRenderer>(new UiRenderer(desc.device));
+        auto renderer = std::unique_ptr<UiRenderer>(new UiRenderer(host, desc.device));
         if (auto error = renderer->Initialize(desc.packagePath))
         {
             return *error;
@@ -430,8 +430,12 @@ namespace Physara::Editor::Detail
             indexCapacity = indexBytes;
         }
         batch.vertexBuffer = ReserveGeometry(m_Device, m_VertexBuffer, vertexCapacity, true);
+        if (!batch.vertexBuffer || m_Host.HasFatalGraphicsError())
+        {
+            return false;
+        }
         batch.indexBuffer = ReserveGeometry(m_Device, m_IndexBuffer, indexCapacity, false);
-        if (!batch.vertexBuffer || !batch.indexBuffer)
+        if (!batch.indexBuffer || m_Host.HasFatalGraphicsError())
         {
             return false;
         }
@@ -472,8 +476,13 @@ namespace Physara::Editor::Detail
     PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData,
                                         Platform::WindowExtent extent, Core::FrameArena &arena,
                                         const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
-                                        bool deferDiagnostic)
+                                        UiFrameMode mode)
     {
+        const bool deferDiagnostic = mode == UiFrameMode::DeferDiagnostic;
+        if (m_Host.HasFatalGraphicsError())
+        {
+            return Core::BoundedText("Fatal graphics diagnostic prevents UI preparation");
+        }
         if (m_Pending != nullptr)
         {
             return Core::BoundedText("Editor UI prepare requires the previous batch to be finished or cancelled");
@@ -520,8 +529,14 @@ namespace Physara::Editor::Detail
                 }
                 else if (!bindings.output)
                 {
-                    bindings.viewportFallback = deferDiagnostic ? UiFallback::UploadPending :
+                    bindings.viewportFallback = mode == UiFrameMode::SafeUi ? UiFallback::FrameFailed :
+                                                deferDiagnostic ? UiFallback::UploadPending :
                                                                   MissingViewportOutput(outputs);
+                }
+                else if (mode == UiFrameMode::SafeUi)
+                {
+                    // 恢复标签与采样资格分开. 旧输出保持原对象及尺寸, 当前面板矩形只决定显示区域.
+                    bindings.viewportFallback = UiFallback::RetainedOutput;
                 }
             }
 
@@ -826,6 +841,7 @@ namespace Physara::Editor::Detail
     }
 
     // 先处理借用的纹理请求, 再解除批次关系并释放准备数据与 CPU 持有的 RHI 引用.
+    // 取消不会回滚已发像素写入, 也不会确认请求; 下一次 Prepare 从仍 pending 的元数据重新复制载荷.
     void UiRenderer::Complete(UiFrameData &frame, const UiSubmission *submission) noexcept
     {
         assert(m_Pending == &frame && frame.batch);

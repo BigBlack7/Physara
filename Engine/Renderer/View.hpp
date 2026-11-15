@@ -98,14 +98,17 @@ namespace Physara::Renderer
         RHI::TextureHandle texture;
     };
 
-    /// @brief 本轮的诊断颜色或缺失原因, 同时保存准备时的比例及请求代.
-    /// @note 复用时拥有已接受的颜色句柄, 新候选像素借用本槽 arena. 不含跨帧 GraphId.
+    /// @brief 本轮诊断候选或安全 UI 的只读旧输出, 两者都不代表真实场景历史.
+    /// @note 普通候选保存准备时的比例及请求代. 复用或旧输出拥有颜色句柄, 新像素借用本槽 arena.
+    /// 不含跨帧 GraphId. IsRetained 区分旧输出快照, 不能仅凭纹理非空判断本轮发布资格.
     class NoSceneOutputs final
     {
     public:
         /// @brief 只在本次准备中借用的颜色代, 返回空时由 UI 决定占位.
         [[nodiscard]] const ViewOutput *Diagnostic() const noexcept { return m_Output ? &*m_Output : nullptr; }
-        /// @brief 候选颜色匹配的比例请求代. 仅在 Diagnostic 非空时使用.
+        /// @brief 只读旧输出快照不代表本次请求候选, 只能供安全 UI 读取, 不能再次 Publish.
+        [[nodiscard]] bool IsRetained() const noexcept { return m_Retained; }
+        /// @brief 普通候选颜色匹配的比例请求代. 仅在 Diagnostic 非空且非 IsRetained 时使用.
         [[nodiscard]] std::uint64_t RequestRevision() const noexcept { return m_RequestRevision; }
         /// @brief 本次新代需要的紧密像素字节数. 复用已有代或暂时无候选时为 0.
         [[nodiscard]] std::size_t UploadBytes() const noexcept { return m_UploadBytes; }
@@ -128,6 +131,7 @@ namespace Physara::Renderer
         std::size_t m_UploadBytes = 0;
         std::span<const std::byte> m_Pixels;
         bool m_UploadPending = false;
+        bool m_Retained = false;
         ViewSettingReason m_Rejection = ViewSettingReason::None;
         float m_Scale = MaxRenderScale;
         std::uint64_t m_RequestRevision = 0;
@@ -152,6 +156,10 @@ namespace Physara::Renderer
         [[nodiscard]] ViewId Id() const noexcept { return m_Id; }
         /// @brief 按值读取比例请求, 最后确认的有效设置及当前原因.
         [[nodiscard]] ViewSettings Settings() const noexcept;
+        /// @brief 取得最后接受颜色的拥有型只读快照, 缺失时仍明确表示安全 UI 输入.
+        /// @note 不产生新代或上传, 不改变请求及有效设置. 旧图身份不进入快照.
+        /// 快照可跨后续 View 换代持有; 当前诊断 profile 不原地覆写已接受颜色.
+        [[nodiscard]] NoSceneOutputs LastAcceptedOutput() const noexcept;
 
         /// @brief 在帧边界接收此 View 的有限比例. 同值请求直接成功.
         /// @return 身份或比例无效, 或请求代耗尽时返回原因, 保留已有状态.

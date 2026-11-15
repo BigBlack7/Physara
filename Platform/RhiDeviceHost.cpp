@@ -33,9 +33,15 @@ namespace Physara::Platform
 
 namespace Physara::Platform::Detail
 {
+    // 同步诊断先写停止事实和候选首错, 最后尝试日志输出, 日志后端失败不影响帧判定.
     void RhiMessageAdapter::Message(RHI::MessageSeverity severity, const char *message) noexcept
     {
         const std::string_view text = message != nullptr ? message : "RHI diagnostic without text";
+        if (severity == RHI::MessageSeverity::Fatal)
+        {
+            // 日志可能失败或被覆盖. 永久停止事实独立于本轮错误捕获和原生设备健康.
+            m_FatalSeen.store(true, std::memory_order_relaxed);
+        }
         const bool failed = severity == RHI::MessageSeverity::Error || severity == RHI::MessageSeverity::Fatal;
         if (failed)
         {
@@ -70,7 +76,7 @@ namespace Physara::Platform::Detail
 
     void RhiMessageAdapter::BeginCapture() noexcept
     {
-        // 生命周期操作重新捕获首错, 贯穿宿主寿命的计数继续累积.
+        // 生命周期操作或独立帧候选重新捕获首错, 贯穿宿主寿命的计数和 Fatal 继续保留.
         m_First.reset();
         m_Additional = 0;
         m_Capturing = true;
@@ -136,6 +142,7 @@ namespace Physara::Platform::Detail
     std::optional<HostError> ReleaseResourceDevice(DeviceHostState &state)
     {
         // 调用者已完成外部引用预检. 先恢复 owner context, 再 drain; 不可用时由 Host 最终销毁 context.
+        // Fatal 只禁止新帧, 不能在这里代替后端健康判断; 仍可用的设备必须完成真实收拢.
         if (!state.rawDevice)
         {
             return std::nullopt;
