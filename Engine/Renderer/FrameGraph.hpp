@@ -23,12 +23,12 @@ namespace Physara::Renderer
         PassId pass;
     };
 
-    /// @brief 完整定义单层 mip 0, 载荷在执行结束前由帧槽保活.
-    /// @pre target 的允许范围是二维颜色纹理的 mip 0/layer 0, pixels 覆盖完整紧密像素, rowPitch 匹配行宽.
+    /// @brief 完整定义二维颜色纹理的一层 mip, 载荷在执行结束前由帧槽保活.
+    /// @pre mip 位于 target 的允许范围且 array layer 为 0, pixels 覆盖完整紧密像素, rowPitch 匹配行宽.
     /// @note 声明成功才追加账单. 返回错误或存储分配抛出后放弃候选图, 不在部分图上重试.
     [[nodiscard]] GraphResult<GraphTextureWrite> AddTextureUpload(
         RenderGraph &graph, TextureId target, std::span<const std::byte> pixels, std::size_t rowPitch,
-        std::vector<GraphUpload> &uploads);
+        std::vector<GraphUpload> &uploads, std::uint32_t mip = 0);
     /// @brief 写入从零开始的实际字节区间, 后续消费者须声明同一有效范围.
     /// @pre bytes 非空, 位于 target 的允许范围内, 底层字节在图执行结束前保持地址及内容稳定.
     /// @note 同一 Pass 对应一次 WriteBuffer. 几何缓冲的剩余容量不属于本次已初始化内容.

@@ -11,10 +11,11 @@ namespace Physara::Asset::Gltf
 {
     /// @brief 为有效三角形生成角点切线. 返回顺序与 indices 一致, 原 UV 保持不变.
     /// @pre 索引非空且按三角形分组, 位置/法线/指定 UV 已验证, 索引均在 vertices 内.
+    /// @param location 调用方提供的字段定位, 用于导入 JSON 或运行期覆盖的有界错误正文.
     /// @note scratchLimit 是扣除几何工作存储后的余额. 超限或无可用框架抛出导入失败, 取消单独传播.
     [[nodiscard]] std::vector<std::array<float, 4>>
     GenerateTangents(std::span<const ModelVertex> vertices, std::span<const std::uint32_t> indices,
-                     std::uint32_t uv, const Json &normalSlot, std::size_t scratchLimit, std::stop_token stop);
+                     std::uint32_t uv, std::string_view location, std::size_t scratchLimit, std::stop_token stop);
 
     /// @brief 按导入容差检查单位长度, 非有限结果不通过.
     [[nodiscard]] bool IsUnit(std::span<const float, 3> direction) noexcept;

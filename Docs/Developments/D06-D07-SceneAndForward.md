@@ -69,13 +69,13 @@
 
 **职责位置：** Renderer/Materials、Draw、Paths、Passes、Shaders/Geometry/Material。**前置：** [D06-T04](#d06-t04)。**架构依据：** [5.5](../Architecture.md#gpu-residency)、[5.6](../Architecture.md#draws)、[6.1](../Architecture.md#paths)、[8.2](../Architecture.md#geometry)、[8.5](../Architecture.md#materials)。
 
-- [ ] 实现按 asset+revision 的初始 Geometry/TextureCache、材质 GPU 行、绑定和拥有型 UploadBatch，上传在图内执行。
-- [ ] 实现共享静态 VertexFetch/SurfaceFrame、world 变换与 normal/tangent/handedness，统一当前 depth/color 的 alpha 覆盖；接入标准 UV/normal/ORM、doubleSided、texture_transform、emissive_strength 和 unlit 语义，后续 shadow/ID 消费时复用。
-- [ ] 建立 DrawRecord 与 Forward 的 PrepareSurface/ShadeOpaque 合同；先以标准 unlit 和显式材质/法线诊断入口验证真实几何，lit PBR 在 D07 闭环。
+- [x] 实现按 asset+revision 的初始 Geometry/TextureCache、材质 GPU 行、绑定和拥有型 UploadBatch，上传在图内执行。
+- [x] 实现共享静态 VertexFetch/SurfaceFrame、world 变换与 normal/tangent/handedness，统一当前 depth/color 的 alpha 覆盖；接入标准 UV/normal/ORM、doubleSided、texture_transform、emissive_strength 和 unlit 语义，后续 shadow/ID 消费时复用。
+- [x] 建立 DrawRecord 与 Forward 的 PrepareSurface/ShadeOpaque 合同；先以标准 unlit 和显式材质/法线诊断入口验证真实几何，lit PBR 在 D07 闭环。
 
 **完成条件：** glTF 可以正确出现在真实视口；无灯光模型的诊断输出不标成已完成 PBR，不在 execute 创建或查找资产。
 
-**状态：** 前置已齐备，待建立 change。
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-16-render-static-scenes-forward/tasks.md#final-verification)
 
 <a id="d06-t06"></a>
 ### D06-T06 · 接入最小可用场景编辑与相机导航
@@ -87,6 +87,8 @@
 - [ ] 验证删除选中实体、隐藏/恢复视口、父级缩放下变换及撤销；不为界面建立另一套 Scene。
 
 **完成条件：** 真实场景可用最小编辑器操作，属性变化沿 revision→准备→上传→图输出生效。
+
+**状态：** 前置已齐备，待建立 change。
 
 <a id="d06-t07"></a>
 ### D06-T07 · 建立静态资产到窗口的集成门槛

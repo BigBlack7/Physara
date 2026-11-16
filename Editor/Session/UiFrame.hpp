@@ -31,11 +31,10 @@ namespace Physara::Editor
     };
 
     struct UiTextureTag;
-    /// @brief 正常候选, 上传背压占位和错误恢复的旧输出拥有不同的解析与发布资格.
+    /// @brief 普通图消费匹配候选或带原因的占位. 安全图只读同一 View 的旧输出.
     enum class UiFrameMode : std::uint8_t
     {
         Normal, ///< 解析当前请求匹配的候选, 完整接受后可确认 View.
-        DeferDiagnostic, ///< 本次共享上传容量不足, 用占位重建普通 UI 图.
         SafeUi ///< 失败主图未 Open 时的独立图, 只读旧输出且没有 View 发布资格.
     };
 
@@ -123,14 +122,17 @@ namespace Physara::Editor
         PreparedUiFrame &operator=(const PreparedUiFrame &) = delete;
 
         /// @brief 至少一条普通可见 draw 引用本轮 View 候选, 用于接受提交后的 View 发布判断.
-        [[nodiscard]] bool UsesDiagnosticOutput() const noexcept;
-        /// @brief 本轮因诊断上传额度暂缓而使用占位, 供 View 更新等待原因.
-        [[nodiscard]] bool DiagnosticUploadPending() const noexcept;
+        [[nodiscard]] bool UsesViewOutput() const noexcept;
         /// @brief 按本轮请求数预留图对象上界, 载荷 arena 由 Prepare 单独预留.
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
+        /// @brief 在场景缓冲上传前提交 UI 的纹理生产者. 如需声明后续 UI, 使用同图及相同绑定表.
+        /// @pre 本准备值尚未声明纹理, target 属于当前图且 bindings 为空; 同一准备值只声明一次.
+        /// @note 提前声明只建立生产者和图代, 不确认上传; 失败后放弃整图并取消准备值.
+        [[nodiscard]] Renderer::GraphFailure DeclareTextureUploads(Renderer::RenderGraph &graph,
+            Renderer::TextureId target, FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads);
         /// @brief 追加纹理/几何上传和 Raster, 返回原窗口对象的合成版本.
-        /// @pre bindings 为本次安全槽或重建候选的空表, diagnostics 借用至执行结束.
-        /// color 是本图已初始化的目标版本; 若 UsesDiagnosticOutput 为 true, diagnostic 须提供同图颜色版本.
+        /// @pre bindings 为本次图的空表或已通过 DeclareTextureUploads 追加的表, diagnostics 借用至执行结束.
+        /// color 是本图已初始化的目标版本; 若 UsesViewOutput 为 true, diagnostic 须提供同图颜色版本.
         /// @note 只形成 CPU 声明. 回调仍借用本准备值的投影和回执地址, Finish/Cancel 前须结束图执行.
         /// 失败不回滚已追加的声明, 调用方须放弃候选图并取消准备值, 重试使用新准备值.
         [[nodiscard]] Renderer::GraphResult<Renderer::TextureId> BuildGraph(

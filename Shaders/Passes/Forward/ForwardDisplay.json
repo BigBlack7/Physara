@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "ForwardDisplay",
+  "interface": "ForwardDisplay",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/Display.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

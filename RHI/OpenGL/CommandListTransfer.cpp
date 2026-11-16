@@ -113,6 +113,9 @@ namespace Physara::RHI::OpenGL
         auto &context = m_Device->m_ContextState;
         context.ApplyClearState(format.isSRGB);
         const auto fbo = context.ClearFramebuffer();
+        // 显式绑定辅助 FBO. 从深度独占目标切换时, 非绑定 DSA clear 在实测驱动上漏清颜色区域.
+        // 绑定走 ContextState, 后续 Draw 根据逻辑 GraphicsState 恢复目标.
+        context.ApplyFramebuffer(fbo);
         const std::array<GLfloat, 4> floats{color.r, color.g, color.b, color.a};
         const std::array<GLuint, 4> uints{value, value, value, value};
         // 有符号清除按相同 32-bit 载荷解释, 不把 UInt 的高位值经浮点或数值窄化转换.
@@ -180,6 +183,8 @@ namespace Physara::RHI::OpenGL
         auto &context = m_Device->m_ContextState;
         context.ApplyClearState(false);
         const auto fbo = context.ClearFramebuffer();
+        // 与颜色清除使用同一明确的 FBO 切换, 不沿用上一 Draw 的目标.
+        context.ApplyFramebuffer(fbo);
         const GLint stencilValue = stencil;
         m_Packet->issuedWork = true;
         for (auto layer = range.baseArraySlice; layer < range.baseArraySlice + range.numArraySlices; ++layer)

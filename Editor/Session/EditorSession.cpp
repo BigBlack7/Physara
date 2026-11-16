@@ -316,8 +316,10 @@ namespace Physara::Editor
             constexpr auto allPopups = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
             const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
             const auto settings = view ? view->Settings() : Renderer::ViewSettings{};
+            const auto *acceptedPreview = view ? view->AcceptedScenePreview() : nullptr;
             const auto document = view ? SceneStatus(*view) : std::nullopt;
-            workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, window, state.editError,
+            workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, acceptedPreview,
+                                             window, state.editError,
                                              state.frameDiagnostic, !discard, document, frozen);
             if (!discard)
             {
@@ -360,6 +362,11 @@ namespace Physara::Editor
             editError.emplace(error.what());
         }
         state.RetireSelection();
+        if (view && workspace.preview)
+        {
+            // 预览不是文档事务, 仅决定本轮随后的 Forward 准备; 像素生效仍等待 Runtime 接受回执.
+            view->RequestPreview(*workspace.preview);
+        }
         if (editError || workspace.scale.preview || !workspace.edits.empty() || workspace.cancelDocument)
         {
             state.editError = std::move(editError);
@@ -410,7 +417,7 @@ namespace Physara::Editor
     // 正常模式核对当前布局候选, 安全模式核对已接受快照的来源, 两者共用本轮封存的 UI.
     // 不重放 Advance 或编辑事务, 不在会话状态中保存图版本或取得原生目标.
     PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
-                                                   Core::FrameArena &arena, const Renderer::NoSceneOutputs &outputs,
+                                                   Core::FrameArena &arena, const Renderer::PreparedViewOutput &outputs,
                                                    UiFrameMode mode)
     {
         auto &state = *m_State;
@@ -423,7 +430,7 @@ namespace Physara::Editor
         {
             return Core::BoundedText("Editor UI prepare requires a renderer and the sealed frame's pixel extent");
         }
-        const auto *diagnostic = outputs.Diagnostic();
+        const auto *diagnostic = outputs.Color();
         const auto &layout = state.viewportLayout;
         if (!diagnostic || mode != UiFrameMode::Normal)
         {
@@ -435,7 +442,7 @@ namespace Physara::Editor
             // 旧输出无需匹配新尺寸和请求代, 但必须来自已接受快照和本会话的 View/角色.
             if (!outputs.IsRetained() || (diagnostic &&
                 (diagnostic->view != state.viewport.Id() ||
-                 diagnostic->role != Renderer::ViewOutputRole::DiagnosticColor || !diagnostic->texture)))
+                 diagnostic->role != Renderer::ViewOutputRole::DisplayColor || !diagnostic->texture)))
             {
                 return Core::BoundedText("Safe UI requires this View's retained output snapshot");
             }

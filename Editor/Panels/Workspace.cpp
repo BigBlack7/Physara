@@ -60,6 +60,12 @@ namespace Physara::Editor::Detail
         case InvalidImageRect: return "Failed - camera image does not fit the viewport";
         case InvalidSampling: return "Failed - invalid camera sampling profile";
         case ScenePreparationFailed: return "Failed - scene preparation";
+        case ScenePipelineUnavailable: return "Failed - Forward pipeline unavailable";
+        case SceneResidencyPending: return "Pending - waiting for scene residency";
+        case SceneResidencyLimit: return "Failed - scene residency budget";
+        case SceneAttachmentLimit: return "Failed - Forward attachment limit";
+        case SceneUnsupported: return "Failed - unsupported visible surfaces";
+        case SceneUploadLimit: return "Failed - Forward upload limit";
         }
         return "";
     }
@@ -303,6 +309,7 @@ namespace Physara::Editor::Detail
     // 菜单先收集本轮意图, 再按快照布局面板. 帧诊断来自上一次 RenderFrame, 不在 Draw 内推进渲染或重试.
     WorkspaceFrame Workspace::Draw(const std::optional<Scene::EntityHandle> &selection, const Viewport &viewport,
                                     EditState edits, const Renderer::ViewSettings &view,
+                                    const Renderer::RenderedScene *acceptedPreview,
                                     const Platform::WindowSettings *window,
                                     const std::optional<Core::BoundedText> &editError,
                                     const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions,
@@ -340,26 +347,40 @@ namespace Physara::Editor::Detail
             {
                 DrawDocumentStatus(*document, allowActions, frame);
             }
-            if (frameDiagnostic && ImGui::BeginMenu("Frame status"))
+            const bool degraded = acceptedPreview && acceptedPreview->degradation.has_value();
+            if ((frameDiagnostic || degraded) && ImGui::BeginMenu("Frame status"))
             {
-                // 有诊断记录时菜单持续存在. 后继正常帧保留首错正文, 只更新恢复状态.
-                // 按当前视口限制正文宽度, 为菜单边距和可能出现的纵向滚动条预留空间.
-                // 长路径也交给文本换行, 高度超出视口时沿菜单原有的纵向滚动读取, 不再截短正文.
+                // 使用窗口内容范围为正文换行, 不受 Viewport 面板宽度约束. 高度超出时沿菜单滚动.
                 const auto &style = ImGui::GetStyle();
                 const float available = ImGui::GetWindowViewport()->WorkSize.x -
                     2.0f * (style.DisplaySafeAreaPadding.x + style.WindowPadding.x) - style.ScrollbarSize;
                 const float width = std::max(1.0f, std::min(40.0f * ImGui::GetFontSize(), available));
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
-                const auto recovery = frameDiagnostic->recovery;
-                ImGui::TextUnformatted(recovery == FrameRecovery::Normal ? "Normal rendering recovered" :
-                    recovery == FrameRecovery::SafeUi ? "Safe UI - retaining the last accepted output" :
-                    recovery == FrameRecovery::Cancelled ? "Frame cancelled - retrying on the next iteration" :
-                                                          "Rendering stopped");
-                ImGui::Separator();
-                ImGui::TextUnformatted(frameDiagnostic->primary.View().data());
-                if (frameDiagnostic->additional)
+                if (frameDiagnostic)
                 {
-                    ImGui::TextUnformatted(frameDiagnostic->additional->View().data());
+                    const auto recovery = frameDiagnostic->recovery;
+                    ImGui::TextUnformatted(recovery == FrameRecovery::Normal ? "Normal rendering recovered" :
+                        recovery == FrameRecovery::SafeUi ? "Safe UI - retaining the last accepted output" :
+                        recovery == FrameRecovery::Cancelled ? "Frame cancelled - retrying on the next iteration" :
+                                                              "Rendering stopped");
+                    ImGui::Separator();
+                    ImGui::TextUnformatted(frameDiagnostic->primary.View().data());
+                    if (frameDiagnostic->additional)
+                    {
+                        ImGui::TextUnformatted(frameDiagnostic->additional->View().data());
+                    }
+                }
+                if (degraded)
+                {
+                    if (frameDiagnostic)
+                    {
+                        ImGui::Separator();
+                    }
+                    // 通过接受的像素代读取摘要和实际模式. 帧失败诊断仍沿原入口保留.
+                    ImGui::Text("Last accepted Forward preview - %s",
+                                PreviewNames[static_cast<std::size_t>(acceptedPreview->mode)]);
+                    const auto summary = acceptedPreview->degradation->View();
+                    ImGui::TextUnformatted(summary.data(), summary.data() + summary.size());
                 }
                 ImGui::PopTextWrapPos();
                 ImGui::EndMenu();
@@ -382,8 +403,19 @@ namespace Physara::Editor::Detail
                 switch (panel.action)
                 {
                 case ActionId::ToggleViewport:
+                {
+                    // 控件显示请求模式, 图像内标签显示实际候选模式. 封存后由会话统一应用请求.
+                    int preview = static_cast<int>(view.preview);
+                    ImGui::BeginDisabled(!allowActions || !view.view.IsValid());
+                    const bool changed = ImGui::Combo("Preview", &preview, PreviewNames, IM_ARRAYSIZE(PreviewNames));
+                    ImGui::EndDisabled();
+                    if (changed)
+                    {
+                        frame.preview = static_cast<Renderer::PreviewMode>(preview);
+                    }
                     frame.viewport = viewport.Draw();
                     break;
+                }
                 case ActionId::ToggleHierarchy:
                     DrawHierarchy();
                     break;

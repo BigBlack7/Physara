@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "name": "StaticForward",
+  "blocks": [
+    {
+      "name": "ForwardView",
+      "layout": "std140",
+      "fields": [
+        { "name": "clipFromWorld", "type": "float4x4" },
+        { "name": "mode", "type": "uint32" }
+      ]
+    },
+    {
+      "name": "ForwardObject",
+      "layout": "std140",
+      "fields": [
+        { "name": "worldFromLocal", "type": "float4x4" },
+        { "name": "normalFromLocal", "type": "float4x4" },
+        { "name": "orientation", "type": "float32" }
+      ]
+    },
+    {
+      "name": "ForwardMaterial",
+      "layout": "std140",
+      "fields": [
+        { "name": "baseColor", "type": "float4" },
+        { "name": "emissive", "type": "float4" },
+        { "name": "surface", "type": "float4" },
+        { "name": "normalBasis", "type": "float4" },
+        { "name": "uvX", "type": "float4", "array": 5 },
+        { "name": "uvY", "type": "float4", "array": 5 },
+        { "name": "alphaCutoff", "type": "float32" },
+        { "name": "masked", "type": "uint32" },
+        { "name": "unlit", "type": "uint32" }
+      ]
+    }
+  ],
+  "resources": [
+    { "name": "perView", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["vertex", "fragment"], "block": "ForwardView" },
+    { "name": "perObject", "kind": "constant-buffer", "set": 1, "slot": 0, "stages": ["vertex"], "block": "ForwardObject" },
+    { "name": "material", "kind": "constant-buffer", "set": 2, "slot": 0, "stages": ["vertex", "fragment"], "block": "ForwardMaterial" },
+    { "name": "baseColorImage", "kind": "texture2d", "set": 2, "slot": 0, "stages": ["fragment"] },
+    { "name": "baseColorSampler", "kind": "sampler", "set": 2, "slot": 0, "stages": ["fragment"] },
+    { "name": "metallicRoughnessImage", "kind": "texture2d", "set": 2, "slot": 1, "stages": ["fragment"] },
+    { "name": "metallicRoughnessSampler", "kind": "sampler", "set": 2, "slot": 1, "stages": ["fragment"] },
+    { "name": "normalImage", "kind": "texture2d", "set": 2, "slot": 2, "stages": ["fragment"] },
+    { "name": "normalSampler", "kind": "sampler", "set": 2, "slot": 2, "stages": ["fragment"] },
+    { "name": "occlusionImage", "kind": "texture2d", "set": 2, "slot": 3, "stages": ["fragment"] },
+    { "name": "occlusionSampler", "kind": "sampler", "set": 2, "slot": 3, "stages": ["fragment"] },
+    { "name": "emissiveImage", "kind": "texture2d", "set": 2, "slot": 4, "stages": ["fragment"] },
+    { "name": "emissiveSampler", "kind": "sampler", "set": 2, "slot": 4, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },
+    { "stage": "vertex", "direction": "in", "name": "aNormal", "location": 1, "type": "float3" },
+    { "stage": "vertex", "direction": "in", "name": "aColor", "location": 2, "type": "float4" },
+    { "stage": "vertex", "direction": "in", "name": "aUv0", "location": 3, "type": "float2" },
+    { "stage": "vertex", "direction": "in", "name": "aUv1", "location": 4, "type": "float2" },
+    { "stage": "vertex", "direction": "in", "name": "aTangent", "location": 5, "type": "float4" },
+    { "stage": "vertex", "direction": "out", "name": "vColor", "location": 0, "type": "float4" },
+    { "stage": "vertex", "direction": "out", "name": "vUv0", "location": 1, "type": "float2" },
+    { "stage": "vertex", "direction": "out", "name": "vUv1", "location": 2, "type": "float2" },
+    { "stage": "vertex", "direction": "out", "name": "vNormal", "location": 3, "type": "float3" },
+    { "stage": "vertex", "direction": "out", "name": "vTangent", "location": 4, "type": "float4" },
+    { "stage": "fragment", "direction": "in", "name": "vColor", "location": 0, "type": "float4" },
+    { "stage": "fragment", "direction": "in", "name": "vUv0", "location": 1, "type": "float2" },
+    { "stage": "fragment", "direction": "in", "name": "vUv1", "location": 2, "type": "float2" },
+    { "stage": "fragment", "direction": "in", "name": "vNormal", "location": 3, "type": "float3" },
+    { "stage": "fragment", "direction": "in", "name": "vTangent", "location": 4, "type": "float4" },
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

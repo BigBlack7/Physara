@@ -34,6 +34,7 @@ namespace Physara::Editor::Detail
     {
         ViewportLayout viewport;
         ScaleGesture scale;
+        std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;
@@ -45,6 +46,7 @@ namespace Physara::Editor::Detail
     {
     public:
         /// @brief 在当前 ImGui 帧构建菜单, 控件及可见面板.
+        /// @param acceptedPreview 最近接受的显示色所关联的场景预览, 仅在本次布局中借用.
         /// @param window 当前宿主设置的短期借用. 空值时省略窗口设置菜单.
         /// @param frameDiagnostic 会话拥有的最近失败及恢复状态, 本轮只读, 与 Inspector 显隐独立.
         /// @param allowActions 输入可用时才收集动作. 输入失效轮次仍可构建布局.
@@ -52,6 +54,7 @@ namespace Physara::Editor::Detail
         /// @param frozen 禁止持久化比例编辑, 窗口与布局动作仍按各自合同收集.
         [[nodiscard]] WorkspaceFrame Draw(const std::optional<Scene::EntityHandle> &selection, const Viewport &viewport,
                                             EditState edits, const Renderer::ViewSettings &view,
+                                            const Renderer::RenderedScene *acceptedPreview,
                                             const Platform::WindowSettings *window,
                                             const std::optional<Core::BoundedText> &editError,
                                             const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions,

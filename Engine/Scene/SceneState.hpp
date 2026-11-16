@@ -76,8 +76,4 @@ namespace Physara::Scene
     [[nodiscard]] std::optional<Core::BoundedText> ValidateOverride(const Asset::ModelRecord &model,
                                                                     const Asset::ModelPrimitive &primitive,
                                                                     const PrimitiveOverride &value);
-    /// @brief 解析已验证的稀疏覆盖. 模型图像仍借用 model, 外置图像由返回值保有.
-    [[nodiscard]] EffectiveMaterial ResolveMaterial(const Asset::ModelRecord &model,
-                                                     const Asset::ModelPrimitive &primitive,
-                                                     const PrimitiveOverride *value) noexcept;
 }

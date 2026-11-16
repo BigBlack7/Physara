@@ -44,7 +44,7 @@ namespace Physara::Editor::Detail
         /// SafeUi 为旧图像追加恢复标签, 不生成新的 View 像素或改变封存布局.
         [[nodiscard]] PrepareUiResult Prepare(const ImDrawData &drawData,
                                               Platform::WindowExtent extent, Core::FrameArena &arena,
-                                              const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
+                                              const Renderer::PreparedViewOutput &outputs, const ViewportImage &viewport,
                                               UiFrameMode mode);
 
         /// @brief 基础 atlas 曾由有效 UI 回执确认. 后续取消不撤销这一会话启动事实.

@@ -55,21 +55,23 @@ namespace Physara::Runtime
     /// @brief 本候选的能力存储, options 的 span 只借用到当前编译返回.
     struct EditorGraphProfile
     {
-        std::array<GraphTextureSupport, 2> textures;
+        std::array<GraphTextureSupport, 4> textures;
         std::array<RHI::ResourceStates, 2> states{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
         GraphCompileOptions options;
 
-        // 只声明当前 UI 实际使用的格式和用途, 不把 RHI 未实现的能力交给图编译器.
+        // 基础 UI 和场景候选使用各自的格式集合, 不把未启用路径或 RHI 未实现的能力交给编译器.
         // options 的借用依赖本对象地址稳定, 因此在 TryFrame 的同一局部作用域内构造并消费.
-        explicit EditorGraphProfile(Platform::DeviceHost &host)
+        explicit EditorGraphProfile(Platform::DeviceHost &host, bool scene)
         {
             const auto info = host.GetInfo();
-            const auto extent = std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels);
-            constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM};
-            for (std::size_t index = 0; index < formats.size(); ++index)
+            constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
+                                         RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
+            const auto count = scene ? formats.size() : 2;
+            for (std::size_t index = 0; index < count; ++index)
             {
                 textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
-                    .sampleCount = 1, .maxWidth = extent, .maxHeight = extent, .maxDepth = 1, .maxLayers = 1,
+                    .sampleCount = 1, .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
+                    .maxDepth = 1, .maxLayers = 1,
                     .formatSupport = host.GetDevice()->QueryFormatSupport(formats[index]),
                     .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
                     .presentation = formats[index] == RHI::Format::SRGBA8_UNORM};
@@ -78,16 +80,17 @@ namespace Physara::Runtime
                     return;
                 }
             }
-            options = {.textures = textures,
-                .buffers = {.maxBytes = 8 * 1024 * 1024, .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
+            options = {.textures = std::span(textures).first(count),
+                .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
+                            .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
                             .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes},
                 .textureBoundaryStates = states, .bufferBoundaryStates = states, .maxColorAttachments = 1,
-                .transientByteBudget = DiagnosticUploadBudget + 32 * 1024 * 1024 + 4};
+                .transientByteBudget = (scene ? ForwardAttachmentBudget : DiagnosticUploadBudget) + 32 * 1024 * 1024 + 4};
         }
     };
 
     /// @brief 尝试结果只有一种动作. GraphRejected 才允许调用方在无录制阶段建立安全图.
-    enum class AttemptStatus { Succeeded, DeferDiagnostic, UploadPending, GraphRejected, Cancelled, Stopped };
+    enum class AttemptStatus { Succeeded, RebuildWithoutViewport, UploadPending, GraphRejected, Cancelled, Stopped };
 
     /// @brief 一张候选图的最终动作与拥有型失败摘要, 返回后不再依赖该图或准备值.
     /// error 保留该候选首错, additional 说明后续收拢为何失败; 票据另记在原帧槽中.
@@ -96,6 +99,7 @@ namespace Physara::Runtime
         AttemptStatus status;
         std::optional<Core::BoundedText> error;
         std::optional<Core::BoundedText> additional;
+        ViewSettingReason viewportReason = ViewSettingReason::None; ///< 仅重建占位时交给 View, 区分等待和硬拒绝.
     };
 
     // 在离开图/准备作用域前复制阶段和原始 RHI 首错, 不让诊断借用图字符串或 arena.
@@ -117,14 +121,15 @@ namespace Physara::Runtime
     struct FrameDeclaration
     {
         TextureId color;
-        TextureId diagnostic;
+        TextureId viewport;
+        std::optional<ForwardOutput> scene;
         PassId diagnosticUpload;
         std::vector<GraphUpload> uploads = std::vector<GraphUpload>(0);
     };
 
     // 正常和安全 UI 共用声明路径. 旧输出只 import, 安全模式不会生成诊断像素或附带消费者.
     static GraphResult<FrameDeclaration> DeclareFrame(RenderGraph &graph, const Platform::PresentTarget &target,
-        NoSceneOutputs &outputs, Editor::PreparedUiFrame *prepared, Editor::UiFrameMode mode,
+        PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared, Editor::UiFrameMode mode,
         FrameSlot &slot, GraphExecutionDiagnostics diagnostics)
     {
         FrameDeclaration declared;
@@ -146,26 +151,44 @@ namespace Physara::Runtime
         {
             return *error;
         }
-        if (outputs.Diagnostic() && mode != Editor::UiFrameMode::DeferDiagnostic && prepared)
+        if (outputs.Color() && prepared && prepared->UsesViewOutput())
         {
-            if (!outputs.PrepareUpload(slot.arena))
+            if (outputs.Color()->scene && mode == Editor::UiFrameMode::Normal)
             {
-                return GraphError{GraphErrorCode::OutOfStorage, Core::BoundedText("Cannot prepare diagnostic pixels")};
+                // 设备准入按实际纹理、缓冲顺序记账. UI 纹理须在场景缓冲写前声明.
+                if (auto error = prepared->DeclareTextureUploads(graph, declared.color, slot.bindings, declared.uploads))
+                {
+                    return *error;
+                }
+                auto forward = slot.forward.Declare(graph, declared.uploads);
+                if (const auto *error = std::get_if<GraphError>(&forward))
+                {
+                    return *error;
+                }
+                declared.scene = std::get<ForwardOutput>(std::move(forward));
+                declared.viewport = declared.scene->displayColor;
             }
-            auto diagnostic = outputs.Declare(graph, declared.uploads);
-            if (const auto *error = std::get_if<GraphError>(&diagnostic))
+            else
             {
-                return *error;
-            }
-            declared.diagnostic = std::get<TextureId>(diagnostic);
-            if (outputs.UploadBytes() != 0)
-            {
-                declared.diagnosticUpload = declared.uploads.back().pass;
+                if (!outputs.PrepareUpload(slot.arena))
+                {
+                    return GraphError{GraphErrorCode::OutOfStorage, Core::BoundedText("Cannot prepare diagnostic pixels")};
+                }
+                auto viewport = outputs.Declare(graph, declared.uploads);
+                if (const auto *error = std::get_if<GraphError>(&viewport))
+                {
+                    return *error;
+                }
+                declared.viewport = std::get<TextureId>(viewport);
+                if (outputs.UploadBytes() != 0)
+                {
+                    declared.diagnosticUpload = declared.uploads.back().pass;
+                }
             }
         }
         if (prepared)
         {
-            auto composed = prepared->BuildGraph(graph, declared.color, declared.diagnostic,
+            auto composed = prepared->BuildGraph(graph, declared.color, declared.viewport,
                                                  slot.bindings, declared.uploads, diagnostics);
             if (const auto *error = std::get_if<GraphError>(&composed))
             {
@@ -211,7 +234,7 @@ namespace Physara::Runtime
     static AttemptResult ExecuteFrame(Platform::DeviceHost &host, Editor::EditorSession &editor,
         View &view, const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
         Core::Diagnostics &diagnostics, RenderGraph &graph, const CompiledGraphPlan &plan,
-        const FrameDeclaration &declared, NoSceneOutputs &outputs, Editor::PreparedUiFrame *prepared,
+        const FrameDeclaration &declared, PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared,
         Editor::UiFrameMode mode, const Platform::RhiErrorScope &errors, GraphExecutionDiagnostics graphErrors,
         bool &opened)
     {
@@ -293,7 +316,7 @@ namespace Physara::Runtime
                                                        Core::BoundedText("Submission has no reliable receipt"));
         }
         const bool accepted = recorded && receipt.colorValid;
-        const bool useDiagnostic = prepared && prepared->UsesDiagnosticOutput();
+        const bool usedViewport = prepared && prepared->UsesViewOutput();
         // 确认只消费当前图实际执行的 UI 请求. 安全图可以确认自己的上传, 但永不发布旧 View 快照.
         if (prepared)
         {
@@ -301,9 +324,16 @@ namespace Physara::Runtime
             assert(confirmed == accepted);
             static_cast<void>(confirmed);
         }
-        if (accepted && useDiagnostic && mode != Editor::UiFrameMode::SafeUi)
+        const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
+            view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.viewport)));
+        if (published && declared.scene)
         {
-            view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.diagnostic)));
+            // 先确认同一候选确实成为 View 输出, 再允许其静态上传复用. 前缀和安全图均不进入此处.
+            slot.forward.Confirm(*declared.scene, plan);
+        }
+        if (!published)
+        {
+            editor.SetPreparedViewport(nullptr);
         }
         const auto result = host.Present(presentation.token, hostError);
         if (hostError)
@@ -335,7 +365,7 @@ namespace Physara::Runtime
     // 宿主首错捕获持续到下一候选或 Shutdown; 本次错误须在返回前复制到 AttemptResult.
     static AttemptResult TryFrame(Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
         const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
-        Core::Diagnostics &diagnostics, NoSceneOutputs &outputs, Editor::UiFrameMode mode)
+        Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode)
     {
         bool opened = false;
         try
@@ -356,11 +386,9 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UiPrepare", Core::BoundedText("UI preparation failed"));
             }
             auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
-            if (prepared && prepared->DiagnosticUploadPending())
-            {
-                view.Defer(ViewSettingReason::UploadPending);
-            }
-            if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024))
+            const auto sceneBytes = mode == Editor::UiFrameMode::Normal && outputs.Color() && outputs.Color()->scene &&
+                prepared && prepared->UsesViewOutput() ? slot.forward.GraphStorageBytes() : 0;
+            if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024 + sceneBytes))
             {
                 return Failed(host, preparationFailure, "Frame.Prepare",
                               Core::BoundedText("Cannot reserve graph storage"));
@@ -381,7 +409,8 @@ namespace Physara::Runtime
             {
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Seal", error->description);
             }
-            EditorGraphProfile profile(host);
+            const auto &declared = std::get<FrameDeclaration>(declaration);
+            EditorGraphProfile profile(host, declared.scene.has_value());
             if (!errors.IsClear())
             {
                 return Failed(host, preparationFailure, "Frame.Profile",
@@ -393,7 +422,6 @@ namespace Physara::Runtime
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Compile", error->description);
             }
             const auto &plan = *std::get<std::unique_ptr<const CompiledGraphPlan>>(compiled);
-            const auto &declared = std::get<FrameDeclaration>(declaration);
             auto measured = CollectGraphUploads(plan, declared.uploads);
             if (const auto *error = std::get_if<GraphError>(&measured))
             {
@@ -409,10 +437,17 @@ namespace Physara::Runtime
             }
             if ((admission == Platform::UploadAdmission::Pending ||
                  admission == Platform::UploadAdmission::ExceedsLimit) &&
-                mode == Editor::UiFrameMode::Normal && IsLivePass(plan, declared.diagnosticUpload))
+                mode == Editor::UiFrameMode::Normal && ((declared.scene && declared.scene->HasLiveUploads(plan)) ||
+                                                        IsLivePass(plan, declared.diagnosticUpload)))
             {
-                // 仅正常候选可去掉诊断上传重建一次. 安全图没有新的 View 像素, 不进入此分支.
-                return {AttemptStatus::DeferDiagnostic, {}};
+                // 只在尚未开放列表时移除视口生产者, 重新为实际存活的 UI 写入准入.
+                if (admission == Platform::UploadAdmission::Pending)
+                {
+                    return {AttemptStatus::RebuildWithoutViewport, {}, {}, ViewSettingReason::UploadPending};
+                }
+                return {AttemptStatus::RebuildWithoutViewport,
+                        Core::BoundedText("Viewport and UI uploads exceed the Graphics list limit"), {},
+                        declared.scene ? ViewSettingReason::SceneUploadLimit : ViewSettingReason::DiagnosticBudget};
             }
             if (admission == Platform::UploadAdmission::Pending)
             {
@@ -439,10 +474,11 @@ namespace Physara::Runtime
         }
     }
 
-    // 一次取得最多经过正常候选, 去诊断候选和安全 UI 候选, 每次转移都不回到前一模式.
+    // 一次取得最多尝试带视口的普通图, 去掉视口的普通图和安全 UI 图.
+    // 去掉视口后仍为 Normal, 但空颜色阻止再次进入视口上传分支; SafeUi 不返回普通图.
     // 可恢复分支在此消费取得或沿已提交前缀返回; Stopped 将尚未收拢的 owner 留给主循环退出.
     std::variant<FrameStatus, Core::BoundedText> RenderFrame(
-        Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
+        Platform::DeviceHost &host, Editor::EditorSession &editor, View &view, ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics)
     {
@@ -469,19 +505,49 @@ namespace Physara::Runtime
             return stop();
         }
         // 本轮事务已提交且同槽已 Ready. 在图尝试外准备, 安全 UI 和上传重试不再读取 Scene.
+        slot.forward.Reset();
         const auto *scene = editor.ActiveScene();
         assert(scene);
         const auto prepared = slot.mainView.Prepare(slot.sceneFrame, *scene, view, editorFrame.viewport);
         editor.SetPreparedViewport(&prepared);
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
-        auto candidate = view.PrepareDiagnostic(prepared, remainingDiagnosticBytes);
+        std::variant<PreparedViewOutput, Core::BoundedText> candidate;
+        const bool hasScene = prepared.camera && std::ranges::any_of(prepared.scene.primitives,
+            [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); });
+        if (hasScene)
+        {
+            const auto errors = host.BeginFrameGraphicsDiagnostics();
+            auto failure = forward.Prepare(slot.forward, prepared, view.Preview());
+            if (!failure && !errors.IsClear())
+            {
+                failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                                         Core::BoundedText("Forward resource preparation failed")};
+            }
+            if (failure)
+            {
+                remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
+                candidate = view.Unavailable(failure->reason);
+            }
+            else
+            {
+                candidate = view.PreparePreview(prepared, slot.forward.Degradation());
+            }
+            if (host.HasFatalGraphicsError())
+            {
+                return stop();
+            }
+        }
+        else
+        {
+            candidate = view.PrepareDiagnostic(prepared, remainingDiagnosticBytes);
+        }
         if (const auto *error = std::get_if<Core::BoundedText>(&candidate))
         {
             remember(*error);
             return stop();
         }
-        auto outputs = std::move(std::get<NoSceneOutputs>(candidate));
+        auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
         // 本次取得已证明同槽上次工作完成. 后续失败分支只检查本轮是否真的提交过前缀.
         slot.lastSubmission = 0;
         slot.diagnosticUploadBytes = 0;
@@ -493,6 +559,8 @@ namespace Physara::Runtime
             slot.arena.Reset();
             slot.bindings.Reset();
             const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode);
+            // TryFrame 已结束图回调和 CPU 借用. 后继尝试只含 UI, Draw 强引用仍保留到同槽完成.
+            slot.forward.ReleasePayload();
             remember(attempt.error);
             remember(attempt.additional);
             if (attempt.status == AttemptStatus::Stopped || host.HasFatalGraphicsError())
@@ -505,10 +573,10 @@ namespace Physara::Runtime
                 outputs = view.LastAcceptedOutput();
                 continue;
             }
-            if (attempt.status == AttemptStatus::DeferDiagnostic)
+            if (attempt.status == AttemptStatus::RebuildWithoutViewport)
             {
-                mode = Editor::UiFrameMode::DeferDiagnostic;
-                view.Defer(ViewSettingReason::UploadPending);
+                // 普通 UI 沿同一原因合成占位. 无可发布的颜色, 因此不会重复进入视口上传分支.
+                outputs = view.Unavailable(attempt.viewportReason);
                 continue;
             }
             if (attempt.status == AttemptStatus::Succeeded)

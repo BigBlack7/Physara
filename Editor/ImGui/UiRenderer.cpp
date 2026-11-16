@@ -71,10 +71,10 @@ namespace Physara::Editor::Detail
         UiTextureUploads uploads;
         RHI::BufferHandle vertexBuffer;
         RHI::BufferHandle indexBuffer;
+        std::uint64_t uploadsGeneration = 0; ///< 可早于 Raster 声明, 但必须消费同一图和帧槽绑定表.
         std::uint64_t graphGeneration = 0;
         bool hasDraws = false;
         bool usesDiagnosticOutput = false;
-        bool diagnosticUploadPending = false;
     };
 
     /// @brief 准备值的控制对象. owner 与 batch 一起解除后, 外部句柄可以安全地过期.
@@ -456,15 +456,13 @@ namespace Physara::Editor::Detail
         return detail;
     }
 
-    // 将 View 的像素、相机或场景准备失败转换为本轮占位标签, 不要求失败 View 提供纹理.
-    static UiFallback MissingViewportOutput(const Renderer::NoSceneOutputs &outputs) noexcept
+    // 从 View 的唯一原因转换占位标签, 不要求失败 View 提供纹理.
+    // UI 只解释等待或硬拒绝, 不再把合成模式推导成等待状态回写 View.
+    static UiFallback MissingViewportOutput(const Renderer::PreparedViewOutput &outputs) noexcept
     {
-        if (outputs.UploadPending())
+        switch (outputs.UnavailableReason())
         {
-            return UiFallback::UploadPending;
-        }
-        switch (outputs.Rejection())
-        {
+        case Renderer::ViewSettingReason::UploadPending: return UiFallback::UploadPending;
         case Renderer::ViewSettingReason::InvalidExtent: return UiFallback::InvalidExtent;
         case Renderer::ViewSettingReason::TextureSizeLimit: return UiFallback::TextureSizeLimit;
         case Renderer::ViewSettingReason::DiagnosticBudget: return UiFallback::DiagnosticBudget;
@@ -473,6 +471,12 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::InvalidImageRect: return UiFallback::InvalidImageRect;
         case Renderer::ViewSettingReason::InvalidSampling: return UiFallback::InvalidSampling;
         case Renderer::ViewSettingReason::ScenePreparationFailed: return UiFallback::ScenePreparationFailed;
+        case Renderer::ViewSettingReason::ScenePipelineUnavailable: return UiFallback::ScenePipelineUnavailable;
+        case Renderer::ViewSettingReason::SceneResidencyPending: return UiFallback::SceneResidencyPending;
+        case Renderer::ViewSettingReason::SceneResidencyLimit: return UiFallback::SceneResidencyLimit;
+        case Renderer::ViewSettingReason::SceneAttachmentLimit: return UiFallback::SceneAttachmentLimit;
+        case Renderer::ViewSettingReason::SceneUnsupported: return UiFallback::SceneUnsupported;
+        case Renderer::ViewSettingReason::SceneUploadLimit: return UiFallback::SceneUploadLimit;
         default: return UiFallback::MissingOutput;
         }
     }
@@ -480,10 +484,9 @@ namespace Physara::Editor::Detail
     // 先解析视口及状态标签, 再统一预留 arena 并复制数据. GPU 上传准入在编译后进行.
     PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData,
                                         Platform::WindowExtent extent, Core::FrameArena &arena,
-                                        const Renderer::NoSceneOutputs &outputs, const ViewportImage &viewport,
+                                        const Renderer::PreparedViewOutput &outputs, const ViewportImage &viewport,
                                         UiFrameMode mode)
     {
-        const bool deferDiagnostic = mode == UiFrameMode::DeferDiagnostic;
         if (m_Host.HasFatalGraphicsError())
         {
             return Core::BoundedText("Fatal graphics diagnostic prevents UI preparation");
@@ -521,8 +524,9 @@ namespace Physara::Editor::Detail
                 return TexturePreparationError(*error, m_BaseFontReady);
             }
 
-            UiFrameBindings bindings{.output = deferDiagnostic ? nullptr : outputs.Diagnostic(),
-                                     .uploadPending = deferDiagnostic || outputs.UploadPending(),
+            UiFrameBindings bindings{.output = outputs.Color(),
+                                     .missingView = mode == UiFrameMode::SafeUi ? UiFallback::FrameFailed :
+                                                                                 MissingViewportOutput(outputs),
                                      .viewportDraw = viewport.FindDraw(drawData)};
             if (bindings.viewportDraw)
             {
@@ -534,10 +538,7 @@ namespace Physara::Editor::Detail
                 }
                 else if (!bindings.output)
                 {
-                    // 安全图、上传等待与普通准备拒绝各保留自己的原因, 不用通用缺图覆盖相机诊断.
-                    bindings.viewportFallback = mode == UiFrameMode::SafeUi ? UiFallback::FrameFailed :
-                                                deferDiagnostic ? UiFallback::UploadPending :
-                                                                  MissingViewportOutput(outputs);
+                    bindings.viewportFallback = bindings.missingView;
                 }
                 else if (mode == UiFrameMode::SafeUi)
                 {
@@ -552,12 +553,12 @@ namespace Physara::Editor::Detail
             std::optional<std::vector<ImDrawList *>> composed;
             const auto addStatus = [&]
             {
-                if (bindings.viewportFallback == UiFallback::None)
+                if (!bindings.viewportDraw)
                 {
                     return true;
                 }
                 status.emplace(ImGui::GetDrawListSharedData());
-                viewport.DrawStatus(*status, *bindings.viewportDraw, bindings.viewportFallback);
+                viewport.DrawStatus(*status, *bindings.viewportDraw, bindings.viewportFallback, bindings.output);
                 if (status->VtxBuffer.empty())
                 {
                     return true;
@@ -601,7 +602,6 @@ namespace Physara::Editor::Detail
             // 所有 draw 校验后移交强引用. 后续缓冲准备失败仍由 frame 析构一并结束快照和 pending 关系.
             batch.residents = std::move(bindings.residents);
             batch.usesDiagnosticOutput = bindings.usesDiagnostic;
-            batch.diagnosticUploadPending = bindings.uploadPending;
             if (batch.hasDraws && !PrepareBuffers(batch))
             {
                 return Core::BoundedText("Editor UI prepare failed to allocate geometry buffers");
@@ -724,7 +724,8 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
-    // 按目标校验, 上传声明, 采样去重, 持久导出和 Raster 的顺序构图; 不取得瞬态物理纹理.
+    // 纹理生产者已由公共准备值声明, 此处核对目标, 去重采样, 导出并追加几何上传和 Raster.
+    // 场景路径可提前声明 UI 纹理, 保证所有纹理写先于场景及 UI 缓冲写; 不取得瞬态物理纹理.
     Renderer::GraphResult<Renderer::TextureId> UiRenderer::BuildGraph(UiBatch &batch,
         Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
         FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
@@ -744,11 +745,7 @@ namespace Physara::Editor::Detail
                 Core::BoundedText("UI graph requires the sealed frame's single-sample SRGBA8 2D target")};
         }
         // 一旦开始声明便消费该准备值的构图机会. 后续失败由调用方丢弃整张候选图并取消准备值.
-        batch.graphGeneration = bindings.graphGeneration = color.identity.generation;
-        if (auto error = m_Textures.DeclareUploads(graph, batch.uploads, bindings, uploads))
-        {
-            return *error;
-        }
+        batch.graphGeneration = color.identity.generation;
         for (auto &draw : batch.draws)
         {
             if (draw.reset)
@@ -893,14 +890,9 @@ namespace Physara::Editor
     PreparedUiFrame::PreparedUiFrame(PreparedUiFrame &&) noexcept = default;
     PreparedUiFrame &PreparedUiFrame::operator=(PreparedUiFrame &&) noexcept = default;
 
-    bool PreparedUiFrame::UsesDiagnosticOutput() const noexcept
+    bool PreparedUiFrame::UsesViewOutput() const noexcept
     {
         return m_Data && m_Data->batch && m_Data->batch->usesDiagnosticOutput;
-    }
-
-    bool PreparedUiFrame::DiagnosticUploadPending() const noexcept
-    {
-        return m_Data && m_Data->batch && m_Data->batch->diagnosticUploadPending;
     }
 
     std::size_t PreparedUiFrame::GraphStorageBytes() const noexcept
@@ -909,16 +901,49 @@ namespace Physara::Editor
         return m_Data && m_Data->batch ? (m_Data->batch->uploads.items.size() * 2 + 6) * 512 : 0;
     }
 
+    Renderer::GraphFailure PreparedUiFrame::DeclareTextureUploads(Renderer::RenderGraph &graph,
+        Renderer::TextureId target, FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads)
+    try
+    {
+        if (!target.IsValid() || !m_Data || !m_Data->owner || m_Data->batch->uploadsGeneration ||
+            bindings.graphGeneration != 0)
+        {
+            return Renderer::GraphError{Renderer::GraphErrorCode::InvalidPhase,
+                Core::BoundedText("UI texture declaration requires a live preparation and empty frame bindings")};
+        }
+        auto &batch = *m_Data->batch;
+        batch.uploadsGeneration = bindings.graphGeneration = target.identity.generation;
+        return m_Data->owner->m_Textures.DeclareUploads(graph, batch.uploads, bindings, uploads);
+    }
+    catch (const std::bad_alloc &)
+    {
+        return Renderer::GraphError{Renderer::GraphErrorCode::OutOfStorage,
+            Core::BoundedText("UI texture declaration ran out of CPU storage")};
+    }
+
     // 活动准备值只构图一次. 错误转换为有界诊断, 但已建立的图声明仍由候选图析构收拢.
     Renderer::GraphResult<Renderer::TextureId> PreparedUiFrame::BuildGraph(
         Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
         FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
         Renderer::GraphExecutionDiagnostics diagnostics)
     {
-        if (!m_Data || !m_Data->owner || m_Data->batch->graphGeneration != 0 || bindings.graphGeneration != 0)
+        if (!m_Data || !m_Data->owner || m_Data->batch->graphGeneration != 0)
         {
             return Renderer::GraphError{Renderer::GraphErrorCode::InvalidPhase,
-                Core::BoundedText("UI graph build requires a live unused preparation and empty frame bindings")};
+                Core::BoundedText("UI graph build requires a live unused preparation")};
+        }
+        if (m_Data->batch->uploadsGeneration == 0)
+        {
+            if (auto failure = DeclareTextureUploads(graph, color, bindings, uploads))
+            {
+                return *failure;
+            }
+        }
+        if (m_Data->batch->uploadsGeneration != color.identity.generation ||
+            bindings.graphGeneration != color.identity.generation)
+        {
+            return Renderer::GraphError{Renderer::GraphErrorCode::InvalidPhase,
+                Core::BoundedText("UI raster and texture uploads must belong to the same graph")};
         }
         try
         {

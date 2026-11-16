@@ -11,8 +11,7 @@
 #include "Prepare/ViewPreparation.hpp"
 
 /// @file
-/// @brief 生成用于验证视口尺寸, 颜色和方向的静态诊断纹理.
-/// 将范围校验, 候选准备和提交确认分开, 便于等待期间保留最后接受的颜色与比例.
+/// @brief 准备视口候选和测试图, 仅用被实际采样的接受回执发布显示色与场景记录.
 /// 持久请求单独预检并发布, 纯相机变化不推进用于诊断尺寸的比例请求代.
 
 namespace Physara::Renderer
@@ -57,12 +56,22 @@ namespace Physara::Renderer
     ViewSettings View::Settings() const noexcept
     {
         ViewSettings snapshot{.view = m_Id, .requestedScale = m_Document.renderScale, .reason = m_Reason,
-                              .requestRevision = m_RequestRevision};
-        if (m_Diagnostic)
+                              .requestRevision = m_RequestRevision, .preview = m_Preview};
+        if (m_Accepted)
         {
-            snapshot.effective = EffectiveViewport{m_EffectiveScale, m_Diagnostic->layout};
+            snapshot.effective = EffectiveViewport{m_EffectiveScale, m_Accepted->layout};
         }
         return snapshot;
+    }
+
+    void View::RequestPreview(PreviewMode mode) noexcept
+    {
+        assert(mode <= PreviewMode::Emissive);
+        if (m_Preview != mode)
+        {
+            m_Preview = mode;
+            m_Reason = ViewSettingReason::SubmissionPending;
+        }
     }
 
     std::optional<Core::BoundedText> View::RequestRenderScale(ViewId view, float scale) noexcept
@@ -162,13 +171,18 @@ namespace Physara::Renderer
     }
 
     // 只复制已接受资源的强引用, 不调用 Prepare, 因而不借用当前布局或生成新候选.
-    NoSceneOutputs View::LastAcceptedOutput() const noexcept
+    PreparedViewOutput View::LastAcceptedOutput() const noexcept
     {
-        NoSceneOutputs outputs;
-        outputs.m_Output = m_Diagnostic;
+        PreparedViewOutput outputs;
+        outputs.m_Output = m_Accepted;
         outputs.m_Retained = true;
         outputs.m_Scale = m_EffectiveScale;
         return outputs;
+    }
+
+    const RenderedScene *View::AcceptedScenePreview() const noexcept
+    {
+        return m_Accepted && m_Accepted->scene ? &*m_Accepted->scene : nullptr;
     }
 
     // 只更新待确认状态的原因, 已接受的请求继续报告有效.
@@ -195,14 +209,14 @@ namespace Physara::Renderer
         {
             return ViewSettingReason::TextureSizeLimit;
         }
-        return DiagnosticPixelBytes(extent) == 0 ? ViewSettingReason::DiagnosticBudget : ViewSettingReason::None;
+        return ViewSettingReason::None;
     }
 
     // 准备只推进待确认状态. 已接受的画布、有效图像和比例由正常提交单独确认.
-    std::variant<NoSceneOutputs, Core::BoundedText> View::PrepareDiagnostic(const PreparedView &prepared,
+    std::variant<PreparedViewOutput, Core::BoundedText> View::PrepareDiagnostic(const PreparedView &prepared,
                                                                           std::size_t remainingUploadBytes)
     {
-        NoSceneOutputs outputs;
+        PreparedViewOutput outputs;
         if (prepared.reason == ViewSettingReason::LayoutPending || prepared.view != m_Id ||
             prepared.requestRevision != m_RequestRevision || prepared.cameraRevision != m_CameraRevision)
         {
@@ -211,17 +225,16 @@ namespace Physara::Renderer
         }
         if (prepared.reason != ViewSettingReason::None)
         {
-            outputs.m_Rejection = m_Reason = prepared.reason;
-            return outputs;
+            return Unavailable(prepared.reason);
         }
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
         // 画布尺寸相同且有效矩形吻合时, 可以直接读取已接受的颜色代.
         // 当前图案只依赖布局. 纯相机位姿变化不改写像素, 也不发布场景渲染历史.
-        if (m_Diagnostic && m_Diagnostic->layout == prepared.layout)
+        if (m_Accepted && !m_Accepted->scene && m_Accepted->layout == prepared.layout)
         {
-            outputs.m_Output = m_Diagnostic;
+            outputs.m_Output = m_Accepted;
             if (m_Reason != ViewSettingReason::None || m_Document.renderScale != m_EffectiveScale)
             {
                 m_Reason = ViewSettingReason::SubmissionPending;
@@ -229,27 +242,55 @@ namespace Physara::Renderer
             return outputs;
         }
         const auto bytes = DiagnosticPixelBytes(prepared.layout.outputExtent);
-        assert(bytes != 0);
+        if (bytes == 0)
+        {
+            return Unavailable(ViewSettingReason::DiagnosticBudget);
+        }
         // 保留无颜色结果供 Editor 解析占位. 未创建新纹理, 下次按届时布局重新判断额度.
         if (bytes > remainingUploadBytes)
         {
-            outputs.m_UploadPending = true;
-            m_Reason = ViewSettingReason::UploadPending;
-            return outputs;
+            return Unavailable(ViewSettingReason::UploadPending);
         }
 
         if (!Core::AdvanceGeneration(m_LastGeneration))
         {
             return Core::BoundedText("Viewport diagnostic generation exhausted");
         }
-        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DiagnosticColor, m_LastGeneration, prepared.layout, {}};
+        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {}, {}};
         outputs.m_UploadBytes = bytes;
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
 
+    std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
+        const PreparedView &prepared, std::optional<Core::BoundedText> degradation)
+    {
+        // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
+        assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
+        if (!Core::AdvanceGeneration(m_LastGeneration))
+        {
+            return Core::BoundedText("Viewport scene output generation exhausted");
+        }
+        PreparedViewOutput outputs;
+        outputs.m_RequestRevision = prepared.requestRevision;
+        outputs.m_CameraRevision = prepared.cameraRevision;
+        outputs.m_Scale = m_Document.renderScale;
+        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {},
+            RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, m_Preview,
+                          std::move(degradation)}};
+        m_Reason = ViewSettingReason::SubmissionPending;
+        return outputs;
+    }
+
+    PreparedViewOutput View::Unavailable(ViewSettingReason reason) noexcept
+    {
+        PreparedViewOutput outputs;
+        outputs.m_UnavailableReason = m_Reason = reason;
+        return outputs;
+    }
+
     // 一次填充当前新代的紧密像素. 声明图只借用该区段, 不转移 arena 所有权.
-    bool NoSceneOutputs::PrepareUpload(Core::FrameArena &arena) noexcept
+    bool PreparedViewOutput::PrepareUpload(Core::FrameArena &arena) noexcept
     {
         if (m_UploadBytes == 0)
         {
@@ -283,7 +324,7 @@ namespace Physara::Renderer
     }
 
     // 新代只有描述和上传声明. 实际 UI 读取决定其活性, 执行时才物化.
-    GraphResult<TextureId> NoSceneOutputs::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
+    GraphResult<TextureId> PreparedViewOutput::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
     {
         assert(m_Output);
         if (m_Output->texture)
@@ -311,22 +352,24 @@ namespace Physara::Renderer
     }
 
     // 换入已接受的新代并释放旧代的 View 引用. 原有 UI 绑定由已提交的 RHI 包继续持有.
-    void View::Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept
+    bool View::Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept
     {
         // 拒绝安全图旧快照和已被后继编辑取代的候选, 即使尺寸或比例碰巧相同也不重新确认.
         if (outputs.m_Retained || !acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
-            outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision)
+            outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
+            (outputs.m_Output->scene && outputs.m_Output->scene->mode != m_Preview))
         {
-            return;
+            return false;
         }
-        if (outputs.m_UploadBytes != 0)
+        if (outputs.m_Output->scene)
         {
-            assert(outputs.m_Output->view == m_Id && !outputs.m_Pixels.empty());
-            outputs.m_Output->texture = acceptedTexture;
-            m_Diagnostic = std::move(outputs.m_Output);
+            // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
+            m_RenderedScene = outputs.m_Output->scene;
         }
-        // 复用颜色时也使用本轮候选所记录的比例, 完整布局仍来自已接受的颜色代.
+        outputs.m_Output->texture = acceptedTexture;
+        m_Accepted = std::move(outputs.m_Output);
         m_EffectiveScale = outputs.m_Scale;
         m_Reason = ViewSettingReason::None;
+        return true;
     }
 }

@@ -43,7 +43,8 @@ namespace Physara::Editor::Detail
     {
         None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget,
         CameraUnavailable, InvalidProjection, InvalidImageRect, InvalidSampling, ScenePreparationFailed,
-        RetainedOutput, FrameFailed
+        ScenePipelineUnavailable, SceneResidencyPending, SceneResidencyLimit, SceneAttachmentLimit,
+        SceneUnsupported, SceneUploadLimit, RetainedOutput, FrameFailed
     };
 
     /// @brief 成功准备的外部驻留引用. 持有原对象及导入事实, 注销只阻止后续准备的新解析.
@@ -55,13 +56,13 @@ namespace Physara::Editor::Detail
         UiTextureImport imported;
     };
 
-    /// @brief 仅在封存帧解析期间借用诊断候选及主视口命令. 独立 Image 同样参与诊断消费.
+    /// @brief 仅在封存帧解析期间借用 View 显示色及主视口命令. 独立 Image 同样参与颜色消费.
     /// residents 独立持有外部引用, 解析成功后移交批次, 准备失败时随本值释放.
     struct UiFrameBindings
     {
         const Renderer::ViewOutput *output = nullptr;
-        bool uploadPending = false;
-        bool usesDiagnostic = false;
+        UiFallback missingView = UiFallback::MissingOutput; ///< 无本 View 输出时使用的占位原因.
+        bool usesDiagnostic = false; ///< 沿用原字段名, 现在表示实际消费任一种 View 输出.
         const ImDrawCmd *viewportDraw = nullptr;
         UiFallback viewportFallback = UiFallback::None;
         std::vector<UiResidentSnapshot> residents = std::vector<UiResidentSnapshot>(0);
@@ -84,7 +85,7 @@ namespace Physara::Editor::Detail
         [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture, UiTextureImport imported);
         /// @brief 仅停止外部驻留项的新解析. 已准备快照继续保活, 托管请求和 View 项不能经此入口移除.
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
-        /// @brief 为有效 View 登记逻辑输出角色, 不在长期条目中保存 GraphId.
+        /// @brief 为有效 View 登记稳定显示色角色, 测试图/场景切换不换 token, 不保存跨帧 GraphId.
         [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view);
         /// @brief 校验全部请求并结束逻辑销毁, 未使用上传仍可在后续图中裁剪.
         [[nodiscard]] std::optional<Core::BoundedText> PlanUploads(const ImDrawData &drawData,
@@ -124,7 +125,7 @@ namespace Physara::Editor::Detail
             ImTextureData *managed = nullptr;
             std::size_t managedBytes = 0;
             Renderer::ViewId view;
-            Renderer::ViewOutputRole role = Renderer::ViewOutputRole::DiagnosticColor;
+            Renderer::ViewOutputRole role = Renderer::ViewOutputRole::DisplayColor;
         };
         /// @brief 本次 CPU 解析的借用结果. 两字段均为空表示必需字体缺失, 由调用方拒绝整批.
         struct Sample

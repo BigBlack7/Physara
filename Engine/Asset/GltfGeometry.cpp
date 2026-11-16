@@ -1,10 +1,13 @@
 #include "GltfGeometry.hpp"
 #include "GltfTangents.hpp"
+#include "StaticTangents.hpp"
 
 /// @file
 /// @brief 分两阶段收集 Primitive 输入并构建静态三角形, 处理逐面法线、切线拆点和保有预算.
+/// Renderer 的有效 normal UV 覆盖复用末尾的类型化入口, 不重新解析 glTF 或改写已发布资产.
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -317,9 +320,10 @@ namespace Physara::Asset::Gltf
     }
 
     /// @brief 生成的切线只在源下标和整个角点结果相同的情况下共享顶点.
+    /// @note reserve 在分配输出顶点前检查调用方预算, 导入与 Renderer 重建各自承担保有责任.
+    template <typename Reserve>
     static void SplitTangents(std::span<const ModelVertex> source, std::span<const std::array<float, 4>> tangents,
-                              ModelPrimitive &out, const GeometryBudget &budget, const Json &where,
-                              std::stop_token stop)
+                              ModelPrimitive &out, Reserve &&reserve, std::stop_token stop)
     {
         std::vector<std::uint32_t> order(tangents.size());
         std::iota(order.begin(), order.end(), std::uint32_t{0});
@@ -336,7 +340,7 @@ namespace Physara::Asset::Gltf
                 ++count;
             }
         }
-        budget.Retain(count * sizeof(ModelVertex), where);
+        reserve(count * sizeof(ModelVertex));
         out.vertices.resize(count);
         auto previous = key(order.front());
         std::uint32_t index = 0;
@@ -429,7 +433,7 @@ namespace Physara::Asset::Gltf
             MakeFlatVertices(source, out, budget, plan.field, stop);
             if (plan.normalUv)
             {
-                const auto tangents = GenerateTangents(out.vertices, out.indices, *plan.normalUv, normalSlot,
+                const auto tangents = GenerateTangents(out.vertices, out.indices, *plan.normalUv, normalSlot.Location(),
                                                        tangentScratch, stop);
                 for (std::size_t i = 0; i < tangents.size(); ++i)
                 {
@@ -439,8 +443,9 @@ namespace Physara::Asset::Gltf
         }
         else if (plan.normalUv && !plan.tangent)
         {
-            const auto tangents = GenerateTangents(source, out.indices, *plan.normalUv, normalSlot, tangentScratch, stop);
-            SplitTangents(source, tangents, out, budget, normalSlot, stop);
+            const auto tangents = GenerateTangents(source, out.indices, *plan.normalUv, normalSlot.Location(),
+                                                   tangentScratch, stop);
+            SplitTangents(source, tangents, out, [&](std::size_t bytes) { budget.Retain(bytes, normalSlot); }, stop);
         }
         else
         {
@@ -466,6 +471,43 @@ namespace Physara::Asset::Gltf
                 CheckStop(m_Stop);
                 out.primitives.push_back(BuildPrimitive(mesh.primitives[i], i, quota, m_Stop));
             }
+        }
+    }
+}
+
+namespace Physara::Asset
+{
+    std::variant<ModelPrimitive, AssetFailure> BuildNormalUvGeometry(
+        const ModelPrimitive &primitive, std::uint32_t uv, std::size_t workLimit)
+    {
+        assert(uv < primitive.hasUv.size() && primitive.hasUv[uv] && !primitive.indices.empty());
+        constexpr std::string_view location = "normalTexture.texCoord";
+        try
+        {
+            // 先取得有效 UV 的逐角点结果, 再复制索引并拆分接缝; 任一失败仅丢弃局部结果.
+            const auto tangents = Gltf::GenerateTangents(primitive.vertices, primitive.indices, uv, location,
+                                                        workLimit, {});
+            ModelPrimitive out;
+            out.indices = primitive.indices;
+            // 两份索引分别用于输出及排序. 角点数组在整个拆点阶段存活.
+            const auto working = tangents.size() * (sizeof(tangents.front()) + 2 * sizeof(std::uint32_t));
+            Gltf::SplitTangents(primitive.vertices, tangents, out, [&](std::size_t bytes)
+            {
+                if (working > workLimit || bytes > workLimit - working)
+                {
+                    Gltf::Reject(AssetError::ModelByteLimit, location, "Tangent split exceeds the geometry work budget");
+                }
+            }, {});
+            out.sourceSlot = primitive.sourceSlot;
+            out.material = primitive.material;
+            out.hasUv = primitive.hasUv;
+            out.hasTangent = true;
+            out.bounds = primitive.bounds;
+            return out;
+        }
+        catch (const Gltf::ImportFailure &failure)
+        {
+            return failure.error;
         }
     }
 }

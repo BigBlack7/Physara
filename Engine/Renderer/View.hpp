@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 持有主 View 的持久化相机与比例请求, 以及最后接受的诊断颜色.
+/// @brief 持有主 View 的持久化相机/比例请求, 会话预览模式及最后接受的显示颜色.
 /// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
 /// Prepare 解析相机及图像范围, View 只在匹配颜色被接受时确认有效布局.
 
@@ -17,6 +17,7 @@
 #include <RHI.hpp>
 #include <Scene/Scene.hpp>
 #include "FrameGraph.hpp"
+#include "Prepare/CameraSnapshot.hpp"
 
 namespace Physara::Core
 {
@@ -100,7 +101,7 @@ namespace Physara::Renderer
         std::uint64_t requestRevision = 0; ///< 用于计算像素范围的比例请求代.
     };
 
-    /// @brief 最后一次被接受的诊断比例和实际像素范围.
+    /// @brief 最后一次被接受的视口比例和实际像素范围.
     struct EffectiveViewport
     {
         float scale;
@@ -122,11 +123,26 @@ namespace Physara::Renderer
         InvalidProjection,
         InvalidImageRect,
         InvalidSampling,
-        ScenePreparationFailed
+        ScenePreparationFailed,
+        ScenePipelineUnavailable,
+        SceneResidencyPending,
+        SceneResidencyLimit,
+        SceneAttachmentLimit,
+        SceneUnsupported,
+        SceneUploadLimit
+    };
+
+    /// @brief 会话内 Forward 预览. 数值与 StaticPreview.glsl 的模式合同一致.
+    enum class PreviewMode : std::uint32_t
+    {
+        BaseColor,
+        WorldNormal,
+        MaterialChannels,
+        Emissive
     };
 
     /// @brief 同一 View 的请求和确认快照, 可独立用于面板显示.
-    /// effective 在首个匹配的诊断输出获接受前为空. 等待或拒绝时保留上次确认值.
+    /// effective 在首个匹配的测试图或场景预览获接受前为空. 等待或拒绝时保留上次确认值.
     struct ViewSettings
     {
         ViewId view;
@@ -134,52 +150,62 @@ namespace Physara::Renderer
         std::optional<EffectiveViewport> effective;
         ViewSettingReason reason = ViewSettingReason::LayoutPending;
         std::uint64_t requestRevision = 0; ///< 随已接受的比例修改递增, 初始为零.
+        PreviewMode preview = PreviewMode::BaseColor; ///< 当前请求模式; 已接受像素的模式由 ViewOutput::scene 表达.
     };
 
     /// @brief Runtime 对诊断纹理像素记账的总字节上限, 同时约束单张诊断图的尺寸.
     inline constexpr std::size_t DiagnosticUploadBudget = 32 * 1024 * 1024;
 
-    /// @brief 当前仅提供静态诊断颜色, 不表示真实场景输出或可推进的时域历史.
+    /// @brief 视口 token 持有的显示色角色. 测试图和场景预览共享该角色.
     enum class ViewOutputRole : std::uint8_t
     {
-        DiagnosticColor
+        DisplayColor
     };
 
-    /// @brief 诊断颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
+    /// @brief 一代场景预览的身份, 相机与模式. 候选携带准备值, View 接受后才成为已渲染记录.
+    struct RenderedScene
+    {
+        Scene::SceneId scene;
+        std::uint64_t contentRevision;
+        CameraSnapshot camera;
+        PreviewMode mode;
+        std::optional<Core::BoundedText> degradation;
+    };
+
+    /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
     /// @note 候选代的 texture 为空. 图执行并获得有效提交后才交付持久句柄.
     struct ViewOutput
     {
         ViewId view;
-        ViewOutputRole role = ViewOutputRole::DiagnosticColor;
+        ViewOutputRole role = ViewOutputRole::DisplayColor;
         std::uint64_t generation = 0;
         ViewImageLayout layout;
         RHI::TextureHandle texture;
+        std::optional<RenderedScene> scene; ///< 缺席表示空文档诊断图.
     };
 
-    /// @brief 本轮诊断候选或安全 UI 的只读旧输出, 两者都不代表真实场景历史.
+    /// @brief 本轮视口候选或安全 UI 的只读旧输出.
     /// @note 普通候选保存准备时的比例及请求代. 复用或旧输出拥有颜色句柄, 新像素借用本槽 arena.
     /// 不含跨帧 GraphId. IsRetained 区分旧输出快照, 不能仅凭纹理非空判断本轮发布资格.
-    class NoSceneOutputs final
+    class PreparedViewOutput final
     {
     public:
         /// @brief 只在本次准备中借用的颜色代, 返回空时由 UI 决定占位.
-        [[nodiscard]] const ViewOutput *Diagnostic() const noexcept { return m_Output ? &*m_Output : nullptr; }
+        [[nodiscard]] const ViewOutput *Color() const noexcept { return m_Output ? &*m_Output : nullptr; }
         /// @brief 只读旧输出快照不代表本次请求候选, 只能供安全 UI 读取, 不能再次 Publish.
         [[nodiscard]] bool IsRetained() const noexcept { return m_Retained; }
-        /// @brief 普通候选颜色匹配的比例请求代. 仅在 Diagnostic 非空且非 IsRetained 时使用.
+        /// @brief 普通候选颜色匹配的比例请求代. 仅在 Color 非空且非 IsRetained 时使用.
         [[nodiscard]] std::uint64_t RequestRevision() const noexcept { return m_RequestRevision; }
-        /// @brief 本次新代需要的紧密像素字节数. 复用已有代或暂时无候选时为 0.
+        /// @brief 本次测试图需要的紧密像素字节数. 场景上传另由 ForwardFrame 持有, 不计入此值.
         [[nodiscard]] std::size_t UploadBytes() const noexcept { return m_UploadBytes; }
-        /// @brief 诊断上传剩余额度不足, 可在后续布局请求中再次准备.
-        [[nodiscard]] bool UploadPending() const noexcept { return m_UploadPending; }
-        /// @brief 本轮可见占位所需的像素、相机或场景准备拒绝原因, 无拒绝时为 None.
-        [[nodiscard]] ViewSettingReason Rejection() const noexcept { return m_Rejection; }
+        /// @brief 本轮缺少匹配颜色的等待或拒绝原因, 供 UI 选择占位.
+        [[nodiscard]] ViewSettingReason UnavailableReason() const noexcept { return m_UnavailableReason; }
 
-        /// @brief 在已预留的本槽空间中生成新代像素. 复用已有代时直接成功.
+        /// @brief 在已预留的本槽空间中生成测试图像素. 复用已有代或无测试图上传时直接成功.
         /// @return 可供本轮录制时为 true. 空间不足时返回 false, 由调用方结束本次准备.
         [[nodiscard]] bool PrepareUpload(Core::FrameArena &arena) noexcept;
         /// @brief 将候选上传或已接受颜色的导入加入当前图, 不创建原生纹理.
-        /// @pre Diagnostic 非空, PrepareUpload 已成功, 像素区段借用至图执行结束.
+        /// @pre Color 非空且为测试图或旧输出, PrepareUpload 已成功, 像素区段借用至图执行结束.
         /// @note 返回本图版本, 由实际消费者决定活性与持久导出. 声明本身不发布有效设置.
         [[nodiscard]] GraphResult<TextureId> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const;
 
@@ -188,9 +214,8 @@ namespace Physara::Renderer
         std::optional<ViewOutput> m_Output;
         std::size_t m_UploadBytes = 0;
         std::span<const std::byte> m_Pixels;
-        bool m_UploadPending = false;
         bool m_Retained = false;
-        ViewSettingReason m_Rejection = ViewSettingReason::None;
+        ViewSettingReason m_UnavailableReason = ViewSettingReason::None;
         float m_Scale = MaxRenderScale;
         std::uint64_t m_RequestRevision = 0;
         std::uint64_t m_CameraRevision = 0;
@@ -199,8 +224,8 @@ namespace Physara::Renderer
     /// @brief 计算紧密 RGBA8 像素字节数. 零尺寸或超出 32 MiB 诊断预算时返回 0.
     [[nodiscard]] std::size_t DiagnosticPixelBytes(ViewExtent extent) noexcept;
 
-    /// @brief 在 owner 线程管理持久化请求及独立 revision, 准备并发布诊断输出.
-    /// @note 画布及有效图像矩形均相同时可复用已接受颜色. GPU 在途访问由原提交的引用保活.
+    /// @brief 在 owner 线程管理持久化请求及会话模式, 准备并发布测试图或场景预览.
+    /// @note 测试图在布局相同时可复用, 场景预览逐次分配新颜色代. GPU 在途访问由原提交保活.
     class View final
     {
     public:
@@ -219,6 +244,13 @@ namespace Physara::Renderer
         [[nodiscard]] const ViewDocumentRequests &DocumentRequests() const noexcept { return m_Document; }
         [[nodiscard]] std::uint64_t DocumentRevision() const noexcept { return m_DocumentRevision; }
         [[nodiscard]] std::uint64_t CameraRevision() const noexcept { return m_CameraRevision; }
+        [[nodiscard]] PreviewMode Preview() const noexcept { return m_Preview; }
+        /// @brief 借用最近一次已接受的真实场景记录, 测试图和安全 UI 不推进此值; 后续 Publish 可替换它.
+        [[nodiscard]] const std::optional<RenderedScene> &LastRenderedScene() const noexcept { return m_RenderedScene; }
+
+        /// @brief 在完成 UI 布局后选择本轮预览模式. 该请求不参与场景 JSON.
+        /// @pre mode 为四种已声明模式之一. 修改只进入待确认状态, 不重命名已接受像素.
+        void RequestPreview(PreviewMode mode) noexcept;
 
         /// @brief 只校验值域. 具体相机实体归 Scene, 由组合调用者校验.
         [[nodiscard]] static std::optional<Core::BoundedText>
@@ -227,12 +259,18 @@ namespace Physara::Renderer
         /// @note 返回值拥有候选请求, 准备本身不改写 owner; 有效输出仍由图形提交确认.
         [[nodiscard]] std::variant<ViewDocumentUpdate, Core::BoundedText>
             PrepareDocumentUpdate(ViewId view, ViewDocumentRequests requests) const noexcept;
-        /// @pre 来自此 View, 且准备后本 View 的持久请求未变更. 不影响已采纳的诊断资源.
+        /// @pre 来自此 View, 且准备后本 View 的持久请求未变更. 不影响已采纳的显示资源.
         void PublishDocumentUpdate(ViewDocumentUpdate &&update) noexcept;
         /// @brief 取得最后接受颜色的拥有型只读快照, 缺失时仍明确表示安全 UI 输入.
         /// @note 不产生新代或上传, 不改变请求及有效设置. 旧图身份不进入快照.
-        /// 快照可跨后续 View 换代持有; 当前诊断 profile 不原地覆写已接受颜色.
-        [[nodiscard]] NoSceneOutputs LastAcceptedOutput() const noexcept;
+        /// 快照可跨后续 View 换代持有; 测试图和 Forward 预览均不原地覆写已接受颜色.
+        [[nodiscard]] PreparedViewOutput LastAcceptedOutput() const noexcept;
+
+        /// @brief 借用最近接受的显示色所关联的场景预览, 供会话同步布局.
+        /// @return 若尚无显示色或最近接受的是测试图, 返回空.
+        /// 与保留场景历史的 LastRenderedScene 分开, 防止测试图继续显示先前场景的降级摘要.
+        /// @note 借用止于下一次成功 Publish 或 View 销毁.
+        [[nodiscard]] const RenderedScene *AcceptedScenePreview() const noexcept;
 
         /// @brief 在帧边界接收此 View 的有限比例. 同值请求直接成功.
         /// @return 身份或比例无效, 或请求代耗尽时返回原因, 保留已有状态.
@@ -241,19 +279,27 @@ namespace Physara::Renderer
         /// @brief 本轮没有提交候选颜色时记录真实等待原因, 已确认的当前请求保持有效.
         void Defer(ViewSettingReason reason) noexcept;
 
-        /// @brief 在场景准备前核对本轮像素请求和诊断颜色能力, 不修改已确认设置.
+        /// @brief 在场景准备前核对请求身份及设备纹理尺寸, 各生产者随后核对自己的字节/附件预算.
         [[nodiscard]] ViewSettingReason CheckViewport(const std::optional<ViewportRequest> &request) const noexcept;
-        /// @brief 复用布局相同的已接受颜色, 或按当前有效矩形建立诊断候选.
+        /// @brief 复用布局相同的已接受测试图, 或按当前有效矩形建立测试图候选.
         /// @pre prepared 来自本轮已封存的布局和已应用的 Scene/View 请求.
         /// @param remainingUploadBytes 本轮可用的诊断像素额度, 由 Runtime 按槽记账.
         /// @return 无有效范围或上传额度不足时返回无颜色的结果. 身份代耗尽时返回原因.
-        [[nodiscard]] std::variant<NoSceneOutputs, Core::BoundedText>
+        [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PrepareDiagnostic(const PreparedView &prepared, std::size_t remainingUploadBytes);
-        /// @brief 接受本轮匹配的颜色, 发布对应比例和布局. 复用的同布局颜色也可确认新比例.
+        /// @brief 通过已准备的场景和相机建立本轮显示色候选, 由 Forward 图生产实际内容.
+        /// @pre prepared 为当前已校验的 View, 场景 Draw 已准备. degradation 只描述被报告的局部不支持项.
+        [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
+            PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation);
+        /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
+        /// @note 已接受的显示色和有效设置仍归 View 持有.
+        [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
+        /// @brief 接受本轮匹配的颜色, 发布比例、布局与实际场景记录. 复用测试图也可确认新比例.
         /// @pre outputs 属于本轮准备, 且被已接受的完整合成实际采样.
         /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
         /// @note View、比例请求代或 View 相机请求代过期时保持原状态. 旧代由原 RHI 包保活.
-        void Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
+        /// @return true 表示输出和有效设置已发布, false 表示候选无资格且原状态保留.
+        [[nodiscard]] bool Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
 
     private:
         View(ViewId id, std::uint32_t maxTextureSize) noexcept
@@ -269,6 +315,8 @@ namespace Physara::Renderer
         std::uint64_t m_CameraRevision = 0;
         float m_EffectiveScale = MaxRenderScale;
         ViewSettingReason m_Reason = ViewSettingReason::LayoutPending;
-        std::optional<ViewOutput> m_Diagnostic;
+        PreviewMode m_Preview = PreviewMode::BaseColor;
+        std::optional<ViewOutput> m_Accepted;
+        std::optional<RenderedScene> m_RenderedScene;
     };
 }

@@ -38,7 +38,7 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 ## Shader 构建
 
-PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认构建为 PhysaraEditor 生成 EditorUi 接口及 `Shaders/<Debug|Release>/EditorUi.pshader`. Runtime 共享该包的唯一生成目标, CMake 按配置生成从产品目录到包的相对路径, 运行时从实际 exe 位置解析. 从其他工作目录启动也使用同一配置的包. 缺失或不匹配的包使启动返回 1. [声明说明](../Engine/Shader/Interface/README.md)
+PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认产品构建在 `Shaders/<Debug|Release>/` 下生成 `EditorUi.pshader`、`StaticForward.pshader`、`StaticDepth.pshader` 和 `ForwardDisplay.pshader`. Runtime 共享各包的唯一生成目标, 按配置和实际 exe 目录解析. `EditorUi` 包不匹配或缺失时启动返回 1. Forward 包在首次准备真实场景时读取, 包或 Pipeline 不可用时视口说明原因, 其余 UI 可继续运行. [声明说明](../Engine/Shader/Interface/README.md)
 
 运行期消费使用 [RhiProgram.hpp](../Engine/Shader/RhiProgram.hpp) 的 `LoadRhiProgram(device, packagePath, expectedAbiHash)`, 通常从生成 Data.hpp 的 `AbiHash` 传入期望值. 成功结果拥有 VS/PS RHI 句柄和包身份, 包原始 CPU 存储可释放; 返回前任一阶段失败不交付部分集合. 此入口只链接通用 RHI, 不反向依赖 native backend; 所用 Device 的 owner/context 前提由实际消费者满足. 原生 GL 的绑定展平、GLSL 460 编译/link 在 `CreateGraphicsPipeline` 中发生, 随后通过公共集合/Framebuffer、SetGraphicsState 和直接 Draw/DrawIndexed 消费. 当前普通单样本执行范围见 [RHI](../RHI/README.md#opengl-原生消费边界), Dispatch、间接命令仍待后续工作包.
 

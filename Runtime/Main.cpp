@@ -1,7 +1,7 @@
 /// @file
 /// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主, CPU 资产及带空 Scene 的 Editor.
 /// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
-/// 有界帧槽持有载荷和图绑定, 同一张图组织上传与 UI 合成, 由宿主提交并呈现窗口颜色.
+/// 设备级 Forward 缓存和有界帧槽分别保有驻留代及本帧 Draw, 同图组织场景, 显示转换与 UI.
 /// 继续的输入轮次在取得帧槽前发布 CPU 资产和场景文件结果. 退出按依赖顺序收拢作业.
 
 #include <algorithm>
@@ -148,7 +148,7 @@ namespace Physara::Runtime
     // 先判定宿主输入是否终止, 继续的轮次才依次发布 CPU 资产, 文档结果并推进 Editor/呈现.
     // 暂停与槽忙共享发布入口和有限等待; 本函数不等待文件或资产 worker, 退出收拢由外层 owner 负责.
     static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
-                         Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
+                         Renderer::ForwardRenderer &forward, Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
                          std::optional<std::uint64_t> pollLimit)
     {
         std::optional<bool> previousFrame;
@@ -261,7 +261,7 @@ namespace Physara::Runtime
                     }
                 }
                 const auto rendered =
-                    RenderFrame(host, editor, view, frame, *presentation, slot, remaining, *commands, diagnostics);
+                    RenderFrame(host, editor, view, forward, frame, *presentation, slot, remaining, *commands, diagnostics);
                 if (const auto *error = std::get_if<Core::BoundedText>(&rendered))
                 {
                     PrintError(*error);
@@ -337,7 +337,12 @@ namespace Physara::Runtime
             return 1;
         }
         auto &manager = *std::get<std::unique_ptr<Asset::AssetManager>>(assets);
-        const auto result = RunEditor(host, editor, *view, manager, diagnostics, options.pollLimit);
+        const auto info = host.GetInfo();
+        // 场景包延迟到首次真实预览才消费. forward 和帧槽在宿主关闭前释放, 已发引用由 RHI 收拢.
+        Renderer::ForwardRenderer forward(*host.GetDevice(),
+            {resources.staticForwardPackage, resources.staticDepthPackage, resources.forwardDisplayPackage},
+            info.maxTextureSizePixels, std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels));
+        const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, options.pollLimit);
         editor.ShutdownSceneDocument();
         manager.Shutdown();
         return result;

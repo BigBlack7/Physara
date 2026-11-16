@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "ForwardDisplay",
+  "blocks": [],
+  "resources": [
+    { "name": "workingColor", "kind": "texture2d", "set": 3, "slot": 0, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

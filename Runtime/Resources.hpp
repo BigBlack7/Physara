@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 从实际产品模块目录解析 CPU 资产根和同配置 UI 包.
+/// @brief 从实际产品模块目录解析 CPU 资产根和同配置 Shader 包.
 
 #include <filesystem>
 #include <variant>
@@ -15,6 +15,10 @@ namespace Physara::Runtime
     {
         std::filesystem::path projectRoot; ///< Assets/... 相对该目录.
         std::filesystem::path editorUiPackage; ///< 由 CMake 为当前配置生成的 UI 包位置, 不属于 Assets 输入.
+        /// @brief 同配置的场景颜色, 共用覆盖深度及预览显示包. 解析路径不代表包已加载或可用.
+        std::filesystem::path staticForwardPackage;
+        std::filesystem::path staticDepthPackage;
+        std::filesystem::path forwardDisplayPackage;
     };
 
     /// @brief 定位资源根并拼接当前配置的生成包路径. 此步骤不打开任何资产.

@@ -28,6 +28,12 @@ namespace Physara::Editor::Detail
         case UiFallback::InvalidImageRect: return "Camera image does not fit the viewport";
         case UiFallback::InvalidSampling: return "Invalid camera sampling profile";
         case UiFallback::ScenePreparationFailed: return "Scene preparation failed";
+        case UiFallback::ScenePipelineUnavailable: return "Forward pipeline unavailable";
+        case UiFallback::SceneResidencyPending: return "Waiting for scene residency";
+        case UiFallback::SceneResidencyLimit: return "Scene residency budget exceeded";
+        case UiFallback::SceneAttachmentLimit: return "Forward attachment limit exceeded";
+        case UiFallback::SceneUnsupported: return "No supported visible surface";
+        case UiFallback::SceneUploadLimit: return "Forward upload limit exceeded";
         case UiFallback::RetainedOutput: return "Frame failed - showing last accepted output";
         case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";
@@ -62,13 +68,14 @@ namespace Physara::Editor::Detail
         {
             return std::nullopt;
         }
-        // 整张诊断画布映射到本轮逻辑 Image. 第二步只在有效像素矩形内产生图像 UV.
+        // 整张显示画布映射到本轮逻辑 Image. 第二步只在有效像素矩形内产生图像 UV.
         return layout.ImageUv((x - origin.x) * layout.outputExtent.width / size.x,
                               (y - origin.y) * layout.outputExtent.height / size.y);
     }
 
     // 在视口图像和原绘制裁剪的交集内生成状态标签, 供合成器紧接图像使用.
-    void ViewportImage::DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason) const
+    void ViewportImage::DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
+                                   const Renderer::ViewOutput *output) const
     {
         const auto clip = draw.ClipRect;
         const ImVec2 min(std::max(origin.x, clip.x), std::max(origin.y, clip.y));
@@ -78,13 +85,28 @@ namespace Physara::Editor::Detail
             return;
         }
         constexpr float Inset = 4.0f;
+        Core::BoundedText label(StatusText(reason));
+        if (reason == UiFallback::None && output)
+        {
+            if (output->scene)
+            {
+                // 窄视口先显示降级标识. 完整摘要由接受后的 Frame status 菜单显示.
+                label = Core::BoundedText(output->scene->degradation ? "Degraded - " : "Forward preview - ");
+                label.Append(PreviewNames[static_cast<std::size_t>(output->scene->mode)]);
+            }
+            else
+            {
+                label = Core::BoundedText("Test viewport - no scene output");
+            }
+        }
         // 独立列表沿用视口图像的裁剪. 字形已在布局期进入本帧 atlas, 此处只生成顶点.
         status._ResetForNewFrame();
         status.PushClipRect(min, max);
         status.PushTexture(font->OwnerAtlas->TexRef);
-        status.AddRectFilled(min, ImVec2(max.x, std::min(max.y, min.y + fontSize + 2 * Inset)),
+        const auto height = fontSize + 2 * Inset;
+        status.AddRectFilled(min, ImVec2(max.x, std::min(max.y, min.y + height)),
                              IM_COL32(30, 24, 32, 255));
-        status.AddText(font, fontSize, ImVec2(min.x + Inset, min.y + Inset), IM_COL32_WHITE, StatusText(reason));
+        status.AddText(font, fontSize, ImVec2(min.x + Inset, min.y + Inset), IM_COL32_WHITE, label.View().data());
     }
 
     std::optional<Renderer::ViewExtent> MeasureViewport(double width, double height,
@@ -123,8 +145,6 @@ namespace Physara::Editor::Detail
     // 只封存逻辑图像和状态文字需要的字形. 正常候选与安全 UI 随后可在同一布局上分别解析.
     ViewportLayout Viewport::Draw() const
     {
-        // 先保留标签高度, 剩余区域同时用于图像布局, 命中和离屏尺寸计算.
-        ImGui::TextUnformatted(m_View.IsValid() ? "Test viewport | Scene preview pending." : "Viewport output pending.");
         const auto min = ImGui::GetCursorScreenPos();
         const auto size = ImGui::GetContentRegionAvail();
         const ImVec2 max{min.x + size.x, min.y + size.y};
@@ -145,19 +165,11 @@ namespace Physara::Editor::Detail
         {
             result.image = {list, static_cast<unsigned>(firstIndex), token, min, size,
                             ImGui::GetFont(), ImGui::GetFontSize()};
-            // 封存前先准备各原因的字形, 避免 GPU 准备时重新修改 atlas 请求.
+            // 封存前准备状态文字及源槽数字需要的 ASCII 字形, 避免 GPU 准备时修改 atlas 请求.
             auto *baked = ImGui::GetFontBaked();
-            for (auto reason : {UiFallback::InvalidIdentity, UiFallback::MissingOutput, UiFallback::UploadPending,
-                                UiFallback::InvalidExtent, UiFallback::TextureSizeLimit, UiFallback::DiagnosticBudget,
-                                UiFallback::CameraUnavailable, UiFallback::InvalidProjection,
-                                UiFallback::InvalidImageRect, UiFallback::InvalidSampling,
-                                UiFallback::ScenePreparationFailed,
-                                UiFallback::RetainedOutput, UiFallback::FrameFailed})
+            for (ImWchar character = 32; character <= 126; ++character)
             {
-                for (const char *character = StatusText(reason); *character != '\0'; ++character)
-                {
-                    static_cast<void>(baked->FindGlyph(static_cast<ImWchar>(*character)));
-                }
+                static_cast<void>(baked->FindGlyph(character));
             }
         }
         return result;

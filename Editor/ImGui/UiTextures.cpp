@@ -122,7 +122,7 @@ namespace Physara::Editor::Detail
     UiTextureResult UiTextures::RegisterView(Renderer::ViewId view)
     {
         assert(view.IsValid());
-        return Register(Entry{.view = view, .role = Renderer::ViewOutputRole::DiagnosticColor});
+        return Register(Entry{.view = view, .role = Renderer::ViewOutputRole::DisplayColor});
     }
 
     // 解除注册表持有并归还逻辑驻留预算, 已准备的驻留快照及 GPU 在途引用由各自 owner 释放.
@@ -341,7 +341,7 @@ namespace Physara::Editor::Detail
             {
                 return {entry};
             }
-            return {nullptr, bindings.uploadPending ? UiFallback::UploadPending : UiFallback::MissingOutput};
+            return {nullptr, bindings.output ? UiFallback::MissingOutput : bindings.missingView};
         }
         if (ref._TexData != nullptr)
         {

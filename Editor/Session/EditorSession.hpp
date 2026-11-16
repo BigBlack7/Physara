@@ -121,7 +121,7 @@ namespace Physara::Editor
         /// @return 无工作, 可构图的准备值或有界原因. 同时只允许一份活动准备值.
         [[nodiscard]] PrepareUiResult PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                      Core::FrameArena &arena,
-                                                     const Renderer::NoSceneOutputs &outputs = {},
+                                                     const Renderer::PreparedViewOutput &outputs = {},
                                                      UiFrameMode mode = UiFrameMode::Normal);
 
         /// @brief 基础字体曾由完整有效 UI 提交接受, 用于区分启动必需项失败与普通帧取消.

@@ -14,24 +14,26 @@ namespace Physara::Renderer
         TextureId texture;
         std::span<const std::byte> pixels;
         std::size_t rowPitch = 0;
+        TextureRange range;
     };
 
-    // setup 发布完整覆盖的新版本, execute 到首次物化后才取得实际纹理.
+    // 每次只完整定义指定 mip, 其它层的内容由各自生产者回溯. 执行使用同一层号及行距.
     GraphResult<GraphTextureWrite> AddTextureUpload(RenderGraph &graph, TextureId target,
-        std::span<const std::byte> pixels, std::size_t rowPitch, std::vector<GraphUpload> &uploads)
+        std::span<const std::byte> pixels, std::size_t rowPitch, std::vector<GraphUpload> &uploads, std::uint32_t mip)
     {
+        const TextureRange range{.firstMip = mip};
         TextureId written;
         auto pass = graph.AddPass<TextureUploadData>("Texture upload", [&](PassBuilder &builder, auto &data)
         {
-            written = builder.Write(target, GraphUsage::CopyDestination, {.coverage = WriteCoverage::Full});
-            data = {written, pixels, rowPitch};
+            written = builder.Write(target, GraphUsage::CopyDestination, {.coverage = WriteCoverage::Full}, range);
+            data = {written, pixels, rowPitch, range};
             return written.IsValid();
         }, +[](PassResources &resources, const TextureUploadData &data, RHI::CommandList &commands) noexcept
             -> GraphFailure
         {
-            if (auto *texture = resources.Resolve(data.texture, GraphUsage::CopyDestination))
+            if (auto *texture = resources.Resolve(data.texture, GraphUsage::CopyDestination, data.range))
             {
-                commands.WriteTexture(texture, 0, 0, data.pixels.data(), data.rowPitch);
+                commands.WriteTexture(texture, 0, data.range.firstMip, data.pixels.data(), data.rowPitch);
             }
             return std::nullopt;
         });
@@ -56,7 +58,7 @@ namespace Physara::Renderer
         std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads)
     {
         BufferId written;
-        auto pass = graph.AddPass<BufferUploadData>("UI buffer upload", [&](PassBuilder &builder, auto &data)
+        auto pass = graph.AddPass<BufferUploadData>("Buffer upload", [&](PassBuilder &builder, auto &data)
         {
             written = builder.Write(target, GraphUsage::CopyDestination, RHI::BufferRange(0, bytes.size()));
             data = {written, bytes};

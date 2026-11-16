@@ -17,6 +17,7 @@
 namespace Physara::Editor::Detail
 {
     enum class UiFallback : std::uint8_t;
+    inline constexpr const char *PreviewNames[] = {"Base Color", "World Normal", "Material Channels", "Emissive"};
 
     /// @brief 本轮视口图像的逻辑矩形及 token. 记录索引以便定位合并后的封存命令.
     /// @note 列表和字体来自本轮 ImGui. 图像命令与 token 在准备期一起验证.
@@ -32,8 +33,10 @@ namespace Physara::Editor::Detail
 
         /// @brief 在参与合成的列表中按索引定位图像命令. 无对应列表或索引范围时为空.
         [[nodiscard]] const ImDrawCmd *FindDraw(const ImDrawData &data) const noexcept;
-        /// @brief 用布局期间已准备的字体绘制原因, 裁剪在图像及其命令的可见范围内.
-        void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason) const;
+        /// @brief 用封存字体绘制输出来源, 实际预览模式或失败原因, 裁剪在本图像命令内.
+        /// @note output 只在调用期间借用, 模式标签来自该候选而非之后的 View 请求.
+        void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
+                        const Renderer::ViewOutput *output) const;
         /// @brief 使用同轮封存的图像裁剪和物理像素布局解释逻辑窗口位置.
         /// @pre layout 对应该 Image 的整张画布. 输入捕获与窗口遮挡归路由层, 此处仅作坐标映射.
         [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(const ImDrawData &data,

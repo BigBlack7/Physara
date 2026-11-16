@@ -81,4 +81,11 @@ namespace Physara::Scene
         std::array<std::optional<EffectiveTexture>, MaterialSlotCount> textures;
         std::optional<std::uint32_t> sourceTangentUv; ///< 原切线生成所用 UV, 可能与当前法线槽不同.
     };
+
+    /// @brief 从固定模型解析已验证的稀疏覆盖. value 为空时解析标准源材质.
+    /// @pre primitive 属于 model, 非空 value 已按该 Primitive 校验. 本入口只解析, 不重复校验领域输入.
+    /// @note 模型图像仍借用 model, 外置图像由返回值保有.
+    [[nodiscard]] EffectiveMaterial ResolveMaterial(const Asset::ModelRecord &model,
+                                                     const Asset::ModelPrimitive &primitive,
+                                                     const PrimitiveOverride *value) noexcept;
 }

@@ -114,7 +114,8 @@ namespace Physara::Asset::Gltf
     }
 
     /// @brief 固定实现会沿焊接扇区递归, 单组还会保留最多平方级的子组索引.
-    static void CheckMikkScratch(const TangentInput &input, const Json &slot, std::size_t limit, std::stop_token stop)
+    static void CheckMikkScratch(const TangentInput &input, std::string_view location, std::size_t limit,
+                                 std::stop_token stop)
     {
         const auto corners = input.indices.size();
         // 包含适配层角点数组和 C 库按三角形、角点以及固定散列表申请的线性空间.
@@ -123,7 +124,7 @@ namespace Physara::Asset::Gltf
         const auto linear = BytesPerCorner * corners + HashBytes;
         if (linear > limit || corners > (std::numeric_limits<int>::max)() / 4)
         {
-            slot.Error("Tangent generation exceeds the model geometry budget", AssetError::ModelByteLimit);
+            Reject(AssetError::ModelByteLimit, location, "Tangent generation exceeds the model geometry budget");
         }
 
         std::vector<std::uint32_t> order(corners);
@@ -140,13 +141,13 @@ namespace Physara::Asset::Gltf
         // 1024 层给线程默认的 1 MiB 栈保留调用空间. 较大扇区不能直接进入该 C 实现.
         if (maxFan > 1024 || maxFan * maxFan * sizeof(int) + 64 * maxFan > limit - linear)
         {
-            slot.Error("Welded tangent fan exceeds the geometry work budget", AssetError::ModelByteLimit);
+            Reject(AssetError::ModelByteLimit, location, "Welded tangent fan exceeds the geometry work budget");
         }
     }
 
     std::vector<std::array<float, 4>>
     GenerateTangents(std::span<const ModelVertex> vertices, std::span<const std::uint32_t> indices,
-                     std::uint32_t uv, const Json &normalSlot, std::size_t scratchLimit, std::stop_token stop)
+                     std::uint32_t uv, std::string_view location, std::size_t scratchLimit, std::stop_token stop)
     {
         float positionMagnitude = 0;
         float uvMagnitude = 0;
@@ -167,7 +168,7 @@ namespace Physara::Asset::Gltf
             }
         }
         TangentInput input{vertices, indices, {}, uv, ScaleFor(positionMagnitude), ScaleFor(uvMagnitude)};
-        CheckMikkScratch(input, normalSlot, scratchLimit, stop);
+        CheckMikkScratch(input, location, scratchLimit, stop);
         for (std::size_t i = 0; i < indices.size(); i += 3)
         {
             if (i % (4096 * 3) == 0)
@@ -176,7 +177,7 @@ namespace Physara::Asset::Gltf
             }
             if (!HasTangentBasis(input, i))
             {
-                normalSlot.Error("Triangle cannot form a tangent frame in the effective UV set", AssetError::UnsupportedModel);
+                Reject(AssetError::UnsupportedModel, location, "Triangle cannot form a tangent frame in the effective UV set");
             }
         }
 
@@ -210,7 +211,7 @@ namespace Physara::Asset::Gltf
         const SMikkTSpaceContext context{&callbacks, &input};
         if (!genTangSpaceDefault(&context))
         {
-            normalSlot.Error("MikkTSpace could not generate tangents", AssetError::UnsupportedModel);
+            Reject(AssetError::UnsupportedModel, location, "MikkTSpace could not generate tangents");
         }
         CheckStop(stop);
         for (std::size_t i = 0; i < tangents.size(); ++i)
@@ -223,7 +224,7 @@ namespace Physara::Asset::Gltf
             vertex.tangent = tangents[i];
             if (!IsTangentFrame(vertex))
             {
-                normalSlot.Error("MikkTSpace did not produce a usable tangent frame", AssetError::UnsupportedModel);
+                Reject(AssetError::UnsupportedModel, location, "MikkTSpace did not produce a usable tangent frame");
             }
         }
         return tangents;
