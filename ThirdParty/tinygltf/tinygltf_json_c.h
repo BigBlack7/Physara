@@ -79,6 +79,7 @@ typedef struct tg3json_parse_options {
     size_t max_single_alloc;  /* 0 = unlimited */
     size_t max_string_length; /* 0 = unlimited */
     int parse_float32;        /* 1 = round JSON reals to float */
+    int *allocation_failed;   /* Physara: optional allocation failure output */
 } tg3json_parse_options;
 int tg3json_parse_n_opts(const char *data, size_t len,
                          const tg3json_parse_options *options,
@@ -727,6 +728,7 @@ typedef struct tg3json__parser {
     size_t max_string_length;
     size_t allocated;
     int parse_float32;
+    int *allocation_failed;
 } tg3json__parser;
 
 typedef struct tg3json__buffer {
@@ -753,13 +755,17 @@ static char *tg3json__strndup_local(const char *src, size_t len) {
 static void *tg3json__parser_alloc(tg3json__parser *parser, size_t size) {
     void *ptr;
     if (!parser) return TINYGLTF_JSON_MALLOC(size);
-    if (parser->max_single_alloc && size > parser->max_single_alloc) return NULL;
-    if (parser->memory_budget &&
-        (size > parser->memory_budget || parser->allocated > parser->memory_budget - size)) {
+    if ((parser->max_single_alloc && size > parser->max_single_alloc) ||
+        (parser->memory_budget &&
+         (size > parser->memory_budget || parser->allocated > parser->memory_budget - size))) {
+        if (parser->allocation_failed) *parser->allocation_failed = 1;
         return NULL;
     }
     ptr = TINYGLTF_JSON_MALLOC(size);
-    if (!ptr) return NULL;
+    if (!ptr) {
+        if (parser->allocation_failed) *parser->allocation_failed = 1;
+        return NULL;
+    }
     parser->allocated += size;
     return ptr;
 }
@@ -810,15 +816,19 @@ static int tg3json__reserve_bytes_parser(tg3json__parser *parser, void **ptr,
     new_bytes = elem_size * new_cap;
     if (parser) {
         size_t delta = (new_bytes > old_bytes) ? (new_bytes - old_bytes) : 0;
-        if (parser->max_single_alloc && new_bytes > parser->max_single_alloc) return 0;
-        if (parser->memory_budget && delta > 0 &&
-            (delta > parser->memory_budget ||
-             parser->allocated > parser->memory_budget - delta)) {
+        if ((parser->max_single_alloc && new_bytes > parser->max_single_alloc) ||
+            (parser->memory_budget && delta > 0 &&
+             (delta > parser->memory_budget ||
+              parser->allocated > parser->memory_budget - delta))) {
+            if (parser->allocation_failed) *parser->allocation_failed = 1;
             return 0;
         }
     }
     new_ptr = TINYGLTF_JSON_REALLOC(*ptr, new_bytes);
-    if (!new_ptr) return 0;
+    if (!new_ptr) {
+        if (parser && parser->allocation_failed) *parser->allocation_failed = 1;
+        return 0;
+    }
     if (parser && new_bytes > old_bytes) parser->allocated += new_bytes - old_bytes;
     *ptr = new_ptr;
     *capacity = new_cap;
@@ -1296,6 +1306,8 @@ int tg3json_parse_n_opts(const char *data, size_t len,
     parser.max_string_length = options ? options->max_string_length : 0;
     parser.allocated = 0;
     parser.parse_float32 = options ? options->parse_float32 : 0;
+    parser.allocation_failed = options ? options->allocation_failed : NULL;
+    if (parser.allocation_failed) *parser.allocation_failed = 0;
 
     parser.cur = tg3json__skip_ws(parser.cur, parser.end);
     if (parser.cur >= parser.end) {

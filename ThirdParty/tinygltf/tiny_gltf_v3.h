@@ -957,6 +957,8 @@ typedef struct tg3_memory_config {
     tg3_allocator  allocator;         /* All zero = use malloc/free */
 } tg3_memory_config;
 
+struct tg3json_value;
+
 typedef struct tg3_parse_options {
     uint32_t             required_sections; /* TG3_REQUIRE_* flags */
     tg3_strictness       strictness;
@@ -985,6 +987,13 @@ typedef struct tg3_parse_options {
                                         *     dereference attacker-controlled indices.
                                         *     Default: 1. Set to 0 to skip (raw mode). */
     uint64_t max_external_file_size;    /* 0 = no limit */
+
+    /* Physara C11 metadata import. Leave URI buffers unloaded and check the
+     * GLB chunk ordering and padding. The default remains eager parsing. */
+    int32_t defer_uri_buffers;
+    /* Optional null-initialized output. On success the caller owns the
+     * original parsed JSON tree and must free it with tg3json_value_free. */
+    struct tg3json_value *metadata_json;
 } tg3_parse_options;
 
 typedef struct tg3_write_options {

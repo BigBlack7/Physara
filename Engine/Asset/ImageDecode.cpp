@@ -60,26 +60,6 @@ namespace Physara::Asset
 
 namespace Physara::Asset
 {
-    bool PixelBudget::TryReserve(std::size_t bytes) noexcept
-    {
-        // 这里只同步额度计数. 像素和完成数据的可见性由作业交接提供.
-        auto used = m_Used.load(std::memory_order_relaxed);
-        do
-        {
-            if (bytes > m_Limit - used)
-            {
-                return false;
-            }
-        } while (!m_Used.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed));
-        return true;
-    }
-
-    void PixelBudget::Release(std::size_t bytes) noexcept
-    {
-        [[maybe_unused]] const auto previous = m_Used.fetch_sub(bytes, std::memory_order_relaxed);
-        assert(previous >= bytes);
-    }
-
     /// @brief C 库像素及其额度的唯一所有者. 共享像素指针借用此对象的引用计数.
     struct DecodedPixels final
     {

@@ -24,7 +24,11 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 首版接受每样本至多 8 位的标准 PNG 和 8 位 JPEG, 解码为顶部起行的 RGBA8. CgBI PNG 返回 UnsupportedEncoding. 用途描述区分 sRGB 颜色、线性数据与 alpha 语义. HDR/EXR 提供源类别与线性辐亮度标定描述, 环境像素导入归 D07. CpuReady 是可固定版本的 CPU 记录, GPU 驻留由后续 Renderer 消费. [图像语义](Architecture.md#asset-images)
 
-产品从实际 exe 目录解析 Assets, 作业线程在首次有效请求时启动. 当前编辑器的模型和场景入口随后续 D06 工作包接入. 从任意工作目录启动时, 资产根和 UI Shader 包位置均以 exe 为基准.
+模型消费者链接 PhysaraAsset, 用 `RequestModel` 提交 `Assets/Models` 内的项目相对路径, 并可指定 glTF scene 下标. 在同一 owner 轮次调用 `PublishCompleted`, 再用 `StatusModel` 取得请求状态和 `ModelVersion`. 文件、外部依赖和内嵌图片统一通过该模型作业取得. 显式调用 `InvalidateSource` 再请求时重新核对依赖指纹, 旧记录可由调用方固定. [请求入口](../Engine/Asset/AssetManager.hpp) · [模型数据](../Engine/Asset/ModelAsset.hpp)
+
+静态 profile 接受 glTF 2.0 和 GLB 2, 支持三角形、带及扇、UV0/UV1 和核心 metallic-roughness. GPU 上传和 Scene 实例化由后续 D06 工作包消费 CPU 记录. `PhysaraAsset` 私有链接随仓库提供的 TinyGLTF C11 与 MikkTSpace. `ImportLimits` 约束累计模型输入、解析和几何准备, 像素与几何保有额度覆盖候选和旧版本. MikkTSpace 切线生成要求同一焊接顶点至多有 1024 个面角点, 超限返回 `ModelByteLimit`, 以约束固定实现的递归深度. [导入合同](Architecture.md#asset-import) · [第三方来源](../ThirdParty/README.md)
+
+产品从实际 exe 目录解析 Assets, 作业线程在首次有效请求时启动. 编辑器模型和场景入口随后续 D06 工作包接入. 从任意工作目录启动时, 资产根和 UI Shader 包位置均以 exe 为基准.
 
 ## Shader 构建
 

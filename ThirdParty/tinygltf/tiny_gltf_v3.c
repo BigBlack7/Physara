@@ -152,6 +152,7 @@ struct tg3_arena {
     size_t max_single_alloc;
     size_t block_size;
     tg3_allocator alloc;
+    int allocation_failed;
 };
 
 typedef struct tg3__parse_ctx {
@@ -248,12 +249,18 @@ static void *tg3__arena_alloc(tg3_arena *arena, size_t size) {
     tg3__arena_block *block;
     void *ptr;
     if (!arena || size == 0) return NULL;
-    if (arena->max_single_alloc && size > arena->max_single_alloc) return NULL;
+    if (arena->max_single_alloc && size > arena->max_single_alloc) {
+        arena->allocation_failed = 1;
+        return NULL;
+    }
     size = (size + (TG3__ARENA_ALIGNMENT - 1u)) & ~(size_t)(TG3__ARENA_ALIGNMENT - 1u);
     block = arena->current;
     if (!block || (block->used + size > block->capacity)) {
         block = tg3__arena_new_block(arena, size);
-        if (!block) return NULL;
+        if (!block) {
+            arena->allocation_failed = 1;
+            return NULL;
+        }
     }
     ptr = block->base + block->used;
     block->used += size;
@@ -1250,12 +1257,31 @@ static int tg3__parse_buffer(tg3__parse_ctx *ctx, const tg3json_value *o,
     tg3__parse_string(ctx, o, "uri", &buf->uri, 0, "/buffer");
     tg3__parse_uint64(ctx, o, "byteLength", &byte_length, 1, "/buffer");
     buf->byte_length = byte_length;
+    if (ctx->opts.defer_uri_buffers && buf->uri.len != 0) {
+        tg3__parse_extras_and_extensions(ctx, o, &buf->ext);
+        return 1;
+    }
     if (ctx->is_binary && buf_idx == 0 && buf->uri.len == 0) {
         uint8_t *data;
         if (!ctx->bin_data || ctx->bin_size < byte_length) {
             tg3__error_push(ctx->errors, TG3_SEVERITY_ERROR, TG3_ERR_BUFFER_SIZE_MISMATCH,
                             "GLB BIN chunk missing or smaller than buffer.byteLength", NULL, -1);
             return 0;
+        }
+        if (ctx->opts.defer_uri_buffers) {
+            uint64_t i;
+            if (ctx->bin_size - byte_length > 3) {
+                tg3__error_push(ctx->errors, TG3_SEVERITY_ERROR, TG3_ERR_BUFFER_SIZE_MISMATCH,
+                                "GLB BIN chunk exceeds the allowed padding", "/buffers/0", -1);
+                return 0;
+            }
+            for (i = byte_length; i < ctx->bin_size; ++i) {
+                if (ctx->bin_data[i] != 0) {
+                    tg3__error_push(ctx->errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_CHUNK_ERROR,
+                                    "GLB BIN padding must be zero", "/buffers/0", -1);
+                    return 0;
+                }
+            }
         }
         if (ctx->opts.borrow_input_buffers) {
             buf->data.data = ctx->bin_data;
@@ -1750,6 +1776,7 @@ static int tg3__parse_audio_emitter(tg3__parse_ctx *ctx, const tg3json_value *o,
                         const tg3json_value *_it = tg3json_array_get(_arr, _i); \
                         if (!tg3__json_is_object(_it)) { \
                             tg3__error_pushf((ctx)->errors, (ctx)->arena, TG3_SEVERITY_ERROR, TG3_ERR_JSON_TYPE_MISMATCH, (json_key), "Element %u must be an object", (unsigned)_i); \
+                            if ((ctx)->opts.metadata_json) return TG3_ERR_JSON_PARSE; \
                             continue; \
                         } \
                         parse_fn((ctx), _it, &_items[_i]); \
@@ -1774,6 +1801,7 @@ static int tg3__parse_audio_emitter(tg3__parse_ctx *ctx, const tg3json_value *o,
                         const tg3json_value *_it = tg3json_array_get(_arr, _i); \
                         if (!tg3__json_is_object(_it)) { \
                             tg3__error_pushf((ctx)->errors, (ctx)->arena, TG3_SEVERITY_ERROR, TG3_ERR_JSON_TYPE_MISMATCH, (json_key), "Element %u must be an object", (unsigned)_i); \
+                            if ((ctx)->opts.metadata_json) return TG3_ERR_JSON_PARSE; \
                             continue; \
                         } \
                         parse_fn((ctx), _it, &_items[_i], (int32_t)_i); \
@@ -2214,6 +2242,12 @@ static tg3_error_code tg3__parse_from_json(tg3__parse_ctx *ctx, const tg3json_va
         }
     }
     tg3__parse_extras_and_extensions(ctx, json_doc, &model->ext);
+    if (ctx->opts.metadata_json && ctx->arena->allocation_failed) {
+        /* The retained JSON may contain entries missing from a partial arena. */
+        tg3__error_push(ctx->errors, TG3_SEVERITY_ERROR, TG3_ERR_OUT_OF_MEMORY,
+                        "Model metadata arena allocation failed", "/", -1);
+        return TG3_ERR_OUT_OF_MEMORY;
+    }
     if (ctx->opts.validate_indices) {
         if (!tg3__validate_indices(ctx, model)) {
             return TG3_ERR_INVALID_INDEX;
@@ -2238,10 +2272,11 @@ static void tg3__json_parse_options_from_tg3(const tg3_parse_options *options,
 static tg3_error_code tg3__parse_glb_header(const uint8_t *data, uint64_t size,
                                             const uint8_t **json_out, uint64_t *json_size_out,
                                             const uint8_t **bin_out, uint64_t *bin_size_out,
-                                            tg3_error_stack *errors) {
+                                            tg3_error_stack *errors, int metadata) {
     uint32_t version;
     uint32_t total_length;
     uint64_t offset = 12;
+    unsigned chunk_index = 0;
     *json_out = NULL; *json_size_out = 0; *bin_out = NULL; *bin_size_out = 0;
     if (size < 12) {
         tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_INVALID_HEADER,
@@ -2270,6 +2305,14 @@ static tg3_error_code tg3__parse_glb_header(const uint8_t *data, uint64_t size,
         uint32_t chunk_type;
         TINYGLTF3_MEMCPY(&chunk_length, data + offset, 4); offset += 4;
         TINYGLTF3_MEMCPY(&chunk_type, data + offset, 4); offset += 4;
+        if (metadata && ((chunk_length & 3u) != 0u ||
+                         ((chunk_index == 0) != (chunk_type == 0x4E4F534Au)) ||
+                         (chunk_type == 0x004E4942u && chunk_index != 1))) {
+            tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_CHUNK_ERROR,
+                            "Invalid GLB JSON/BIN order or chunk alignment", NULL, -1);
+            return TG3_ERR_GLB_CHUNK_ERROR;
+        }
+        ++chunk_index;
         if (offset + chunk_length > (uint64_t)total_length) {
             tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_CHUNK_ERROR,
                             "GLB chunk exceeds data size", NULL, -1);
@@ -2284,6 +2327,11 @@ static tg3_error_code tg3__parse_glb_header(const uint8_t *data, uint64_t size,
         }
         offset += chunk_length;
         while ((offset & 3u) != 0u && offset < size) ++offset;
+    }
+    if (metadata && offset != (uint64_t)total_length) {
+        tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_CHUNK_ERROR,
+                        "Trailing bytes do not form a GLB chunk", NULL, -1);
+        return TG3_ERR_GLB_CHUNK_ERROR;
     }
     if (!*json_out) {
         tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_GLB_CHUNK_ERROR,
@@ -2305,6 +2353,7 @@ TINYGLTF3_API tg3_error_code tg3_parse(tg3_model *model, tg3_error_stack *errors
     const char *error_pos = NULL;
     tg3_error_code ret;
     int parsed_ok;
+    int allocation_failed = 0;
     if (!model) return TG3_ERR_JSON_PARSE;
     tg3__model_init(model);
     if (!json_data) return TG3_ERR_JSON_PARSE;
@@ -2316,9 +2365,15 @@ TINYGLTF3_API tg3_error_code tg3_parse(tg3_model *model, tg3_error_stack *errors
     }
     model->arena_ = arena;
     tg3__json_parse_options_from_tg3(options, &json_options);
+    if (options->metadata_json) json_options.allocation_failed = &allocation_failed;
     parsed_ok = tg3json_parse_n_opts((const char *)json_data, (size_t)json_size,
                                      &json_options, &json_doc, &error_pos);
     if (!parsed_ok || json_doc.type != TG3JSON_OBJECT) {
+        if (allocation_failed) {
+            tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_OUT_OF_MEMORY,
+                            "Model JSON allocation failed", "/", -1);
+            return TG3_ERR_OUT_OF_MEMORY;
+        }
         tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_JSON_PARSE, "Failed to parse JSON", NULL,
                         error_pos ? (int64_t)(error_pos - (const char *)json_data) : -1);
         if (parsed_ok) tg3json_value_free(&json_doc);
@@ -2336,7 +2391,11 @@ TINYGLTF3_API tg3_error_code tg3_parse(tg3_model *model, tg3_error_stack *errors
     tg3__set_default_fs(&ctx.opts.fs);
 #endif
     ret = tg3__parse_from_json(&ctx, &json_doc, model);
-    tg3json_value_free(&json_doc);
+    if (ret == TG3_OK && options->metadata_json) {
+        *options->metadata_json = json_doc;
+    } else {
+        tg3json_value_free(&json_doc);
+    }
     /* Arena stays attached to model->arena_ on both success and failure;
      * tg3_model_free reclaims it. Destroying here would dangle arena-allocated
      * error messages on the user-facing tg3_error_stack. */
@@ -2359,15 +2418,17 @@ TINYGLTF3_API tg3_error_code tg3_parse_glb(tg3_model *model, tg3_error_stack *er
     const char *error_pos = NULL;
     tg3_error_code err;
     int parsed_ok;
+    int allocation_failed = 0;
     /* Initialize model before any failure-return so callers can safely call
      * tg3_model_free() on the error path; the GLB header parse must not run
      * against a model whose arena_ field is uninitialized garbage. */
     if (!model) return TG3_ERR_GLB_INVALID_HEADER;
     tg3__model_init(model);
     if (!glb_data) return TG3_ERR_GLB_INVALID_HEADER;
-    err = tg3__parse_glb_header(glb_data, glb_size, &json_chunk, &json_chunk_size, &bin_chunk, &bin_chunk_size, errors);
-    if (err != TG3_OK) return err;
     if (!options) { tg3_parse_options_init(&default_opts); options = &default_opts; }
+    err = tg3__parse_glb_header(glb_data, glb_size, &json_chunk, &json_chunk_size, &bin_chunk, &bin_chunk_size,
+                               errors, options->defer_uri_buffers);
+    if (err != TG3_OK) return err;
     arena = tg3__arena_create(&options->memory);
     if (!arena) {
         tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_OUT_OF_MEMORY, "Failed to create arena", NULL, -1);
@@ -2375,9 +2436,15 @@ TINYGLTF3_API tg3_error_code tg3_parse_glb(tg3_model *model, tg3_error_stack *er
     }
     model->arena_ = arena;
     tg3__json_parse_options_from_tg3(options, &json_options);
+    if (options->metadata_json) json_options.allocation_failed = &allocation_failed;
     parsed_ok = tg3json_parse_n_opts((const char *)json_chunk, (size_t)json_chunk_size,
                                      &json_options, &json_doc, &error_pos);
     if (!parsed_ok || json_doc.type != TG3JSON_OBJECT) {
+        if (allocation_failed) {
+            tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_OUT_OF_MEMORY,
+                            "GLB JSON allocation failed", "/", -1);
+            return TG3_ERR_OUT_OF_MEMORY;
+        }
         tg3__error_push(errors, TG3_SEVERITY_ERROR, TG3_ERR_JSON_PARSE, "Failed to parse GLB JSON chunk", NULL,
                         error_pos ? (int64_t)(error_pos - (const char *)json_chunk) : -1);
         if (parsed_ok) tg3json_value_free(&json_doc);
@@ -2397,7 +2464,11 @@ TINYGLTF3_API tg3_error_code tg3_parse_glb(tg3_model *model, tg3_error_stack *er
     tg3__set_default_fs(&ctx.opts.fs);
 #endif
     err = tg3__parse_from_json(&ctx, &json_doc, model);
-    tg3json_value_free(&json_doc);
+    if (err == TG3_OK && options->metadata_json) {
+        *options->metadata_json = json_doc;
+    } else {
+        tg3json_value_free(&json_doc);
+    }
     /* Arena stays attached to model->arena_ on both paths; model_free owns it. */
     return err;
 }

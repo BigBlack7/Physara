@@ -68,10 +68,15 @@ add_library(imguizmo STATIC imguizmo/src/ImGuizmo.cpp)
 target_include_directories(imguizmo SYSTEM PUBLIC imguizmo/src)
 target_link_libraries(imguizmo PUBLIC imgui)
 
-# TinyGLTF 3 使用上游 C11 实现; JSON 场景文件由 nlohmann_json 单独处理.
+# TinyGLTF 3 使用固定 C11 源码及 Physara 元数据适配; JSON 场景文件由 nlohmann_json 单独处理.
 add_library(tinygltf STATIC tinygltf/tiny_gltf_v3.c)
 target_include_directories(tinygltf SYSTEM PUBLIC tinygltf)
 set_target_properties(tinygltf PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# 固定 MikkTSpace 的 C 实现由静态模型导入私有链接, 逐角点返回切线.
+add_library(mikktspace STATIC mikktspace/mikktspace.c)
+target_include_directories(mikktspace SYSTEM PUBLIC mikktspace)
+set_target_properties(mikktspace PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
 # TinyEXR 使用上游实现文件, 配套 miniz 仅供其内部压缩/解压使用.
 add_library(tinyexr STATIC tinyexr/tinyexr.cc tinyexr/deps/miniz/miniz.c)
@@ -83,11 +88,10 @@ foreach(target IN ITEMS imgui imguizmo tinyexr)
 endforeach()
 
 # 编译编码仅作用于这些第三方 target, 不设置全局编译选项.
-foreach(target IN ITEMS glfw glad imgui imguizmo tinygltf tinyexr)
+foreach(target IN ITEMS glfw glad imgui imguizmo tinygltf mikktspace tinyexr)
     target_compile_options(${target} PRIVATE /utf-8)
 endforeach()
 
-# MikkTSpace 在资产导入实际需要生成切线时接入, 目前仅保留源码.
 # NVRHI 仅供 RHI 开发参考, 不添加 target, include 路径或链接依赖.
 
 # 固定 Shader 编译/验证/反射依赖以精简源码直接组织, 目标与私有 flags 集中在本子目录.

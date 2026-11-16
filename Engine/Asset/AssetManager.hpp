@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief CPU 图片请求、拥有型版本及采样语义. 主线程掌管请求和发布, 只读版本独立保活.
+/// @brief CPU 资产请求、拥有型版本及图片采样语义. 主线程掌管请求与发布.
 
 #include <cstddef>
 #include <cstdint>
@@ -63,7 +63,10 @@ namespace Physara::Asset
         IdentityExhausted,
         OutOfMemory,
         WorkerUnavailable,
-        UnexpectedFailure
+        UnexpectedFailure,
+        InvalidModel,
+        UnsupportedModel,
+        ModelByteLimit
     };
 
     /// @brief 跨 worker/owner 传递的自持失败值, 文本截断不影响可判断的错误类别.
@@ -184,7 +187,27 @@ namespace Physara::Asset
         std::optional<AssetFailure> failure;
     };
 
-    /// @brief 每个服务的工作及存储额度. 三项字节上限分别约束源文件、单图输出及全部保有像素.
+    struct ModelRecord;
+    using ModelVersion = std::shared_ptr<const ModelRecord>;
+
+    /// @brief 有效源 scene 下标. 空值表示使用文件默认, 未声明默认时仅自动选择唯一 scene.
+    struct ModelImportOptions
+    {
+        std::optional<std::uint32_t> scene;
+        bool operator==(const ModelImportOptions &) const = default;
+    };
+
+    /// @brief 模型请求的当前状态与最后发布版本. ModelAsset.hpp 定义记录内容.
+    /// 状态是调用时的快照, 失败/取消可与旧 published 共存; 持有 published 同时保有其几何和像素额度.
+    struct ModelStatus
+    {
+        AssetState state = AssetState::Unloaded;
+        RequestId request;
+        ModelVersion published;
+        std::optional<AssetFailure> failure;
+    };
+
+    /// @brief 每个服务的工作及存储额度. 模型依赖同样受单文件上限约束, 内嵌图像同样使用像素额度.
     struct ImportLimits
     {
         std::uint32_t assetCount = 256; ///< 服务寿命内登记的不同来源数; 当前不提供卸载表项入口.
@@ -193,6 +216,10 @@ namespace Physara::Asset
         std::size_t sourceBytes = 32 * 1024 * 1024;
         std::size_t imageBytes = 64 * 1024 * 1024;
         std::size_t retainedPixels = 256 * 1024 * 1024; ///< 包含候选和仍被旧版本读者持有的像素.
+        std::size_t modelInputBytes = 128 * 1024 * 1024; ///< 每个模型及其实际依赖的累计输入.
+        std::size_t modelParseBytes = 48 * 1024 * 1024; ///< JSON 树和 C 元数据 arena 各自上限.
+        std::size_t modelGeometryBytes = 128 * 1024 * 1024; ///< 单模型输出与几何准备的上界.
+        std::size_t retainedGeometry = 256 * 1024 * 1024; ///< 候选及所有保有模型的几何.
     };
 
     /// @brief 主线程独占请求表和完成发布. worker 只拥有 CPU 输入和结果.
@@ -218,6 +245,12 @@ namespace Physara::Asset
         /// Assets/Environments 的像素请求明确返回 UnsupportedEncoding, 本包只提供环境元数据.
         [[nodiscard]] Submission RequestImage(const std::filesystem::path &source);
 
+        /// @brief 在同一队列中请求 Assets/Models 下的静态模型. 来源与 scene 选项共同标识请求.
+        /// @return 成功准入或合并后的请求身份; 拒绝不建立 Loading 状态, 不清除旧版本.
+        /// @note 与图片共用 pendingJobs. 默认选择和显式 scene 是不同逻辑 key, 即使最终选择相同 scene.
+        /// 外部依赖变化后也须对该 AssetId 调用 InvalidateSource 再请求, 不隐式轮询文件.
+        [[nodiscard]] Submission RequestModel(const std::filesystem::path &source, ModelImportOptions options = {});
+
         /// @brief 显式推进已知源代, 撤销旧请求的发布资格. 调用者可另行请求新代.
         /// @return 空值表示失效已生效; 后继请求暂满不会恢复旧资格, 最后有效版本仍可取得.
         /// 当前 Loading 变为 Cancelled, 其它状态变为 Unloaded; 不改变 ContentRevision.
@@ -229,6 +262,9 @@ namespace Physara::Asset
 
         /// @brief 返回自持状态. 未登记身份返回 Unloaded, 已持有的旧版本独立有效.
         [[nodiscard]] AssetStatus Status(AssetId asset) const noexcept;
+
+        /// @brief 查询模型状态. 未登记或其它种类身份返回 Unloaded.
+        [[nodiscard]] ModelStatus StatusModel(AssetId asset) const noexcept;
 
         /// @brief 主线程在继续的 CPU 输入轮次调用. 仅处理已经交接的结果.
         /// @return 本次实际发布的新内容版本数, 不计失败、取消、过期与相同内容.

@@ -28,11 +28,13 @@
 
 **职责位置：** Engine/Asset。**前置：** [D06-T01](#d06-t01)。**架构依据：** [3.2](../Architecture.md#asset-import)、[3.3](../Architecture.md#asset-images)、[3.4](../Architecture.md#asset-persistence)。
 
-- [ ] 支持 glTF/GLB、URI/buffer/accessor 的 offset/stride/normalized/sparse、索引与合法拓扑处理，校验尺寸溢出和预算。
-- [ ] 解码静态层级、核心材质/纹理、相机和灯；明确三角形拓扑转换、缺 NORMAL 的逐面法线及忽略源 TANGENT、MikkTSpace 面角点输出的拆顶点/重建索引、UV0/UV1、负缩放和扩展报告，缺必需 UV 不伪造输入。
-- [ ] 在 Asset 导入入口完成 CPU 校验；未知 required 拒绝，实际使用 Skin/Morph 的实例明确拒绝，静态节点按初始变换导入，动画曲线不播放并报告；其余可选未支持项报告可见降级。
+- [x] 支持 glTF/GLB、URI/buffer/accessor 的 offset/stride/normalized/sparse、索引与合法拓扑处理，校验尺寸溢出和预算。
+- [x] 解码静态层级、核心材质/纹理、相机和灯；明确三角形拓扑转换、缺 NORMAL 的逐面法线及忽略源 TANGENT、MikkTSpace 面角点输出的拆顶点/重建索引、UV0/UV1、负缩放和扩展报告，缺必需 UV 不伪造输入。
+- [x] 在 Asset 导入入口完成 CPU 校验；未知 required 拒绝，实际使用 Skin/Morph 的实例明确拒绝，静态节点按初始变换导入，动画曲线不播放并报告；其余可选未支持项报告可见降级。
 
 **完成条件：** 正常与异常输入可无 GPU/UI 地校验，glTF/GLB 模型只读且只提供静态资产，不承担场景 JSON 或模型写出。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-16-import-static-gltf-models/tasks.md#final-verification)
 
 <a id="d06-t03"></a>
 ### D06-T03 · 实现 Scene 实例、变换与 JSON 场景读写

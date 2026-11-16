@@ -14,7 +14,7 @@
 | imgui | v1.93.0-docking / [b916186e66aa3c02b72c6ca17455516512ed8049](https://github.com/ocornut/imgui/tree/b916186e66aa3c02b72c6ca17455516512ed8049) | MIT，见 LICENSE.txt | 核心和官方 GLFW 平台适配，无 demo 或原生图形绘制适配 |
 | imguizmo | 固定源码快照 / [105e4fde45e4e74aae8973d98750820ef7aca7e2](https://github.com/CedricGuillemet/ImGuizmo/tree/105e4fde45e4e74aae8973d98750820ef7aca7e2) | MIT，见 LICENSE | ImGuizmo.cpp/.h，不带 GraphEditor、Sequencer 等附属工具 |
 | json | v3.12.0 / [55f93686c01528224f448c19128836e7df245f72](https://github.com/nlohmann/json/tree/55f93686c01528224f448c19128836e7df245f72) | MIT，见 LICENSE.MIT | nlohmann 单头及 forward 声明，用于编辑器场景 JSON |
-| mikktspace | 固定源码快照 / [3e895b49d05ea07e4c2133156cfa94369e19e409](https://github.com/mmikk/MikkTSpace/tree/3e895b49d05ea07e4c2133156cfa94369e19e409) | Zlib，见源码头 | .c/.h；资产导入需要生成切线时再接入构建 |
+| mikktspace | 固定源码快照 / [3e895b49d05ea07e4c2133156cfa94369e19e409](https://github.com/mmikk/MikkTSpace/tree/3e895b49d05ea07e4c2133156cfa94369e19e409) | Zlib，见源码头 | .c/.h；静态模型导入的逐角点切线生成 |
 | nvrhi | 参考快照 / [6b96fb03e07539f08327aea76c56d55f1de9d906](https://github.com/NVIDIA-RTX/NVRHI/tree/6b96fb03e07539f08327aea76c56d55f1de9d906) | MIT，见 LICENSE.txt、ThirdPartyLicenses.txt | include/src/doc、README 和许可；只供源码参考，不加入 CMake |
 | spdlog | v1.17.0 / [79524ddd08a4ec981b7fea76afd08ee05f83755d](https://github.com/gabime/spdlog/tree/79524ddd08a4ec981b7fea76afd08ee05f83755d) | MIT，含配套 fmt 许可 | include 头文件及内置 fmt |
 | spirv-cross | vulkan-sdk-1.4.363.0 / [f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7](https://github.com/KhronosGroup/SPIRV-Cross/tree/f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7) | Apache-2.0 或 MIT 及所附第三方许可, 见 LICENSE、LICENSES | core 反射的 4 个实现、GLSL lowering 的 spirv_glsl.cpp/.hpp 及实际传递头/许可, 无上游工程、版本脚本、其他语言后端、CLI 或测试语料 |
@@ -30,9 +30,10 @@
 
 - stb 仅提供头文件路径。首次实现图像解码时，在实际承担该职责的一个 cpp 中定义 STB_IMAGE_IMPLEMENTATION；需要图像写出时同样只定义一次 STB_IMAGE_WRITE_IMPLEMENTATION。实现宏不放公开头，不传播到所有消费者。
 - TinyGLTF 3 使用 C API。模型解析与编辑器场景 JSON 是两条独立的数据入口，不通过 TinyGLTF 保存编辑器场景。
+- D06-T02 的固定 C11 适配增加 opt-in 元数据读取，保留原始 JSON 字段，推迟 URI buffer 载荷，检查 GLB 块顺序、对齐和 BIN 填充。该模式将 JSON 或 arena 分配失败返回给 Asset，并在验证前拒绝非对象条目。Asset 负责所选 scene 的依赖和范围验证。适配涉及 `tiny_gltf_v3.c`、`tiny_gltf_v3.h` 与 `tinygltf_json_c.h` 的可选分配结果输出，默认调用继续使用上游载荷解析，沿用 MIT 许可。
 - ImGuizmo 的头文件要求先包含 imgui.h；其公开依赖由 CMake 的 PUBLIC 链接关系传递。
 - NVRHI 只供后续 RHI 开发参考，没有 target、include 路径或链接关系。移植时在第一方 RHI 中记录来源与差异。
-- MikkTSpace 暂不编译。后续遇到缺少切线且使用法线贴图的模型时，再由资产导入接入。
+- `PhysaraAsset` 私有链接 `mikktspace` C11 静态目标，使用固定的 `mikktspace.c` 与 `mikktspace.h`。源算法和许可均沿用对应快照。适配器以所选法线纹理 UV 集提交局部几何并接收逐角点切线。
 - Shader 工具链的 Tools/Headers 固定输入取自上述 glslang commit 的 known_good.json, 当前由 ShaderToolchain/CMakeLists.txt 直接声明五个必要静态目标: glslang、默认资源限制、SPIRV-Tools-static、spirv-cross-core 和 spirv-cross-glsl, 不加载上游 CMake 或调用获取脚本. MSVC 对这些目标及 Shader 核心使用 /EHs, 允许 C ABI 桥接中的 C++ 分配异常正确展开, 保持 RTTI 与 Debug 迭代器检查; Tools 的 context 检查仅在 Debug 启用, PCH 为目标私有. SPIRV-Cross 编译 core 与当前 GL 准备消费的 GLSL backend, 不导出其它语言后端.
 - 保留的上游实现与头文件不修改算法, build_info.h 与 Tools 六份生成源码的来源见下节. 普通配置/构建不需要 Python、语法 JSON、生成脚本、Git 或 Vulkan SDK. 上次上游 source/CMakeLists.txt 与 update_build_version.py 的构建适配已随未使用的上游构建流程移除.
 - glslang 有两项 Physara 私有协议适配: Public/ShaderLang.h 声明 IsReservedIdentifier 并为 Includer 增加默认空操作 RecordInclude; MachineIndependent/Scan.cpp 只读查询原 KeywordMap/ReservedSet, preprocessor/Pp.cpp 在成功 include 处报告原文件/行. 第一方据此提前拒绝词法器关键字及准确记录展开边. 三处源码保留原版权, 不改变语法、搜索、条件处理或 IR 算法. 第一方将源文件的 CRLF/CR 统一为 LF 编译视图以保持行号, 原始字节仍参与身份; 具体合同见 [Interface 说明](../Engine/Shader/Interface/README.md). 该私有头/库须一起重建, 指纹包含实际适配字节.

@@ -7,7 +7,7 @@
 <a id="current-stage"></a>
 ## 当前阶段
 
-当前阶段为 D06 · 接入标准资产、场景与首个真实视口。D06-T01 已验收归档。当前工作包为 D06-T02 · 实现标准 glTF 模型解码与校验，前置已齐备，待建立下一 change。 [D06 阶段](D06-D07-SceneAndForward.md#dev-d06) · [D06-T02](D06-D07-SceneAndForward.md#d06-t02) · [D06-T01 验收与证据](../../openspec/changes/archive/2026-11-15-publish-versioned-cpu-assets/tasks.md#final-verification) · [D05 阶段出口验收](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)
+当前阶段为 D06 · 接入标准资产、场景与首个真实视口。D06-T02 已验收归档。当前工作包为 D06-T03 · 实现 Scene 实例、变换与 JSON 场景读写，前置已齐备，待建立 change。 [D06 阶段](D06-D07-SceneAndForward.md#dev-d06) · [D06-T03](D06-D07-SceneAndForward.md#d06-t03) · [D06-T02 验收与证据](../../openspec/changes/archive/2026-11-16-import-static-gltf-models/tasks.md#final-verification) · [D06-T01 验收与证据](../../openspec/changes/archive/2026-11-15-publish-versioned-cpu-assets/tasks.md#final-verification) · [D05 阶段出口验收](../../openspec/changes/archive/2026-11-15-handle-frame-graph-failures/tasks.md#final-verification)
 
 ## 阅读与使用
 
