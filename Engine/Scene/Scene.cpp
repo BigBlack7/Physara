@@ -133,6 +133,25 @@ namespace Physara::Scene
             std::nullopt;
     }
 
+    std::optional<CameraState> Scene::FindCamera(std::string_view id) const noexcept
+    {
+        const auto *node = m_State->Find(id);
+        if (!node || !node->record.properties.camera)
+        {
+            return std::nullopt;
+        }
+        // 位姿和投影来自同次已接受状态, 按值交付后不再借用 ECS 组件.
+        return CameraState{node->handle, node->world.pose, *node->record.properties.camera};
+    }
+
+    void Scene::VisitEntities(const std::function<void(EntityHandle, const EntityView &)> &visit) const
+    {
+        for (const auto &[id, node] : m_State->entities)
+        {
+            visit(node->handle, EntityView{node->record, node->world, node->Model(), node->sourceNode});
+        }
+    }
+
     std::vector<EntityRecord> Scene::Snapshot() const
     {
         std::vector<EntityRecord> records;
@@ -324,6 +343,24 @@ namespace Physara::Scene
             }
         }
 
+        /// @brief 检查重挂根是否还需约束 local 旋转. 保住根的刚体朝向即可保住其后代的朝向.
+        [[nodiscard]] static bool HasOrientedComponent(const SceneNode &root)
+        {
+            std::vector<const SceneNode *> pending{&root};
+            while (!pending.empty())
+            {
+                const auto *node = pending.back();
+                pending.pop_back();
+                const auto &props = node->record.properties;
+                if (props.camera || (props.light && props.light->type != Asset::ModelLightKind::Point))
+                {
+                    return true;
+                }
+                pending.insert(pending.end(), node->children.begin(), node->children.end());
+            }
+            return false;
+        }
+
         /// @brief 以当前已接受的 world 推导候选 local, 环及最终组合范围在提交时检查.
         void Prepare(const Reparent &command)
         {
@@ -337,7 +374,9 @@ namespace Physara::Scene
             after.parent = parent ? std::optional(parent->record.id) : std::nullopt;
             if (command.policy == ReparentPolicy::KeepWorld)
             {
-                const auto local = RelativeLocal(node.world, parent ? &parent->world : nullptr);
+                // 约束覆盖实际层级子树. 无相机或定向灯时仍允许原有的几何 TRS 分解自由度.
+                const bool preservePose = HasOrientedComponent(node);
+                const auto local = RelativeLocal(node.world, parent ? &parent->world : nullptr, preservePose);
                 if (!local)
                 {
                     Reject(after.id, "parent", "World pose cannot be preserved with a local TRS");

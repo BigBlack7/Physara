@@ -38,9 +38,11 @@ namespace Physara::Editor::Detail
     };
 
     /// @brief 视口解析状态及共享占位原因. RetainedOutput 只加标签, 仍采样已接受的旧图像.
+    /// 相机/场景准备失败沿同一占位通路呈现, 不改变其它 UI 纹理的解析资格.
     enum class UiFallback : std::uint8_t
     {
         None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget,
+        CameraUnavailable, InvalidProjection, InvalidImageRect, InvalidSampling, ScenePreparationFailed,
         RetainedOutput, FrameFailed
     };
 

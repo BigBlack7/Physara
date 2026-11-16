@@ -27,11 +27,17 @@ add_subdirectory(Scene)
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
-# Renderer 管理 View 的持久请求, 诊断颜色代和产品上传声明.
+# Renderer 准备帧槽拥有的 Scene 与 View 数据, 管理持久请求、诊断颜色代和产品上传声明.
 # 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
+# 相机和裁剪的 GLM 运算仅供实现.
 # Editor 与 Runtime 经此依赖消费公共图接口; Renderer 本身不反向依赖窗口或 UI.
-add_library(PhysaraRenderer STATIC Renderer/View.hpp Renderer/View.cpp Renderer/FrameGraph.hpp Renderer/FrameGraph.cpp)
-target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph)
+add_library(PhysaraRenderer STATIC
+    Renderer/View.hpp Renderer/View.cpp
+    Renderer/FrameGraph.hpp Renderer/FrameGraph.cpp
+    Renderer/Prepare/SceneFrame.hpp Renderer/Prepare/SceneFrame.cpp
+    Renderer/Prepare/ViewPreparation.hpp Renderer/Prepare/ViewPreparation.cpp
+)
+target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph PRIVATE glm)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)

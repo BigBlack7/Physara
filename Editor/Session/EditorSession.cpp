@@ -7,6 +7,7 @@
 #include <imgui.h>
 
 #include <DeviceHost.hpp>
+#include <Renderer/Prepare/ViewPreparation.hpp>
 
 #include "ActionRouter.hpp"
 #include "ImGui/GlfwPlatform.hpp"
@@ -36,6 +37,7 @@ namespace Physara::Editor
         // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
         std::optional<Renderer::ViewportRequest> viewportRequest;
+        std::optional<Renderer::ViewImageLayout> preparedViewport;
         std::optional<Scene::EntityHandle> selection;
         std::unique_ptr<Detail::SceneDocuments> documents;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
@@ -279,6 +281,7 @@ namespace Physara::Editor
         state.drawData = nullptr;
         state.viewportLayout = {};
         state.viewportRequest.reset();
+        state.preparedViewport.reset();
         auto &history = *state.edits;
         const bool frozen = state.documents && state.documents->Frozen();
         const auto edits = history.Snapshot(frozen);
@@ -324,9 +327,10 @@ namespace Physara::Editor
                     .blockingPopup = ImGui::IsPopupOpen(nullptr, allPopups),
                     .uiKeyboard = keyboardOwnedBeforeLayout || activeItem,
                     .uiPointer = activeItem ||
-                                 (!workspace.viewport.hit && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
+                                 (!workspace.viewport.panelHovered &&
+                                  ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
                     .cursorMode = input.state.cursorMode,
-                    .viewportHit = workspace.viewport.hit};
+                    .viewportHit = workspace.viewport.panelHovered};
                 state.workspace.ApplyShortcuts(events, claims, workspace);
             }
             // 先封存逻辑布局, 再应用事务. 准备期只消费应用后的比例及同批窗口度量.
@@ -379,6 +383,30 @@ namespace Physara::Editor
         return frame;
     }
 
+    void EditorSession::SetPreparedViewport(const Renderer::PreparedView *prepared) noexcept
+    {
+        auto &state = *m_State;
+        const auto &request = state.viewportRequest;
+        state.preparedViewport.reset();
+        if (prepared && prepared->reason == Renderer::ViewSettingReason::None && request &&
+            prepared->view == request->view && prepared->requestRevision == request->requestRevision &&
+            prepared->layout.outputExtent == request->extent)
+        {
+            // 只保存与本轮逻辑布局对应的像素映射, 相机和 SceneFrame 仍留在渲染准备结果中.
+            state.preparedViewport = prepared->layout;
+        }
+    }
+
+    std::optional<std::array<double, 2>> EditorSession::ViewportImageUv(double x, double y) const noexcept
+    {
+        const auto &state = *m_State;
+        if (!state.drawData || !state.preparedViewport)
+        {
+            return std::nullopt;
+        }
+        return state.viewportLayout.image.ImageUv(*state.drawData, *state.preparedViewport, x, y);
+    }
+
     // 正常模式核对当前布局候选, 安全模式核对已接受快照的来源, 两者共用本轮封存的 UI.
     // 不重放 Advance 或编辑事务, 不在会话状态中保存图版本或取得原生目标.
     PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
@@ -397,6 +425,11 @@ namespace Physara::Editor
         }
         const auto *diagnostic = outputs.Diagnostic();
         const auto &layout = state.viewportLayout;
+        if (!diagnostic || mode != UiFrameMode::Normal)
+        {
+            // 占位与只读旧颜色都没有本轮图像输入资格.
+            state.preparedViewport.reset();
+        }
         if (mode == UiFrameMode::SafeUi)
         {
             // 旧输出无需匹配新尺寸和请求代, 但必须来自已接受快照和本会话的 View/角色.
@@ -409,11 +442,12 @@ namespace Physara::Editor
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
         }
         if (outputs.IsRetained() || (diagnostic &&
-            (!state.viewportRequest || diagnostic->view != state.viewportRequest->view ||
-             diagnostic->extent != state.viewportRequest->extent ||
+            (!state.viewportRequest || !state.preparedViewport || diagnostic->view != state.viewportRequest->view ||
+             diagnostic->layout != *state.preparedViewport ||
              outputs.RequestRevision() != state.viewportRequest->requestRevision)))
         {
             // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
+            state.preparedViewport.reset();
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
         }
         return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);

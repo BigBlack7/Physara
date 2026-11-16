@@ -23,6 +23,11 @@ namespace Physara::Editor::Detail
         case UiFallback::InvalidExtent: return "Invalid viewport pixel extent";
         case UiFallback::TextureSizeLimit: return "Device texture size limit";
         case UiFallback::DiagnosticBudget: return "Diagnostic texture budget exceeded";
+        case UiFallback::CameraUnavailable: return "Scene camera unavailable";
+        case UiFallback::InvalidProjection: return "Invalid camera projection";
+        case UiFallback::InvalidImageRect: return "Camera image does not fit the viewport";
+        case UiFallback::InvalidSampling: return "Invalid camera sampling profile";
+        case UiFallback::ScenePreparationFailed: return "Scene preparation failed";
         case UiFallback::RetainedOutput: return "Frame failed - showing last accepted output";
         case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";
@@ -46,6 +51,20 @@ namespace Physara::Editor::Detail
             }
         }
         return nullptr;
+    }
+
+    std::optional<std::array<double, 2>> ViewportImage::ImageUv(const ImDrawData &data,
+        const Renderer::ViewImageLayout &layout, double x, double y) const noexcept
+    {
+        const auto *draw = FindDraw(data);
+        if (!draw || !(x >= draw->ClipRect.x && x < draw->ClipRect.z &&
+                       y >= draw->ClipRect.y && y < draw->ClipRect.w))
+        {
+            return std::nullopt;
+        }
+        // 整张诊断画布映射到本轮逻辑 Image. 第二步只在有效像素矩形内产生图像 UV.
+        return layout.ImageUv((x - origin.x) * layout.outputExtent.width / size.x,
+                              (y - origin.y) * layout.outputExtent.height / size.y);
     }
 
     // 在视口图像和原绘制裁剪的交集内生成状态标签, 供合成器紧接图像使用.
@@ -105,13 +124,14 @@ namespace Physara::Editor::Detail
     ViewportLayout Viewport::Draw() const
     {
         // 先保留标签高度, 剩余区域同时用于图像布局, 命中和离屏尺寸计算.
-        ImGui::TextUnformatted(m_View.IsValid() ? "Test viewport | No scene loaded." : "Viewport output pending.");
+        ImGui::TextUnformatted(m_View.IsValid() ? "Test viewport | Scene preview pending." : "Viewport output pending.");
         const auto min = ImGui::GetCursorScreenPos();
         const auto size = ImGui::GetContentRegionAvail();
         const ImVec2 max{min.x + size.x, min.y + size.y};
         ViewportLayout result;
-        // 命中服务输入路由. 图像及尺寸准备依据面板的实际绘制区域.
-        result.hit = size.x > 0 && size.y > 0 && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(min, max);
+        // hover 仅提供面板级输入归属, 尚不代表命中相机有效图像. 留边须在准备后用 ImageUv 排除.
+        result.panelHovered = size.x > 0 && size.y > 0 && ImGui::IsWindowHovered() &&
+            ImGui::IsMouseHoveringRect(min, max);
         if (!m_View.IsValid() || size.x <= 0 || size.y <= 0)
         {
             return result;
@@ -129,6 +149,9 @@ namespace Physara::Editor::Detail
             auto *baked = ImGui::GetFontBaked();
             for (auto reason : {UiFallback::InvalidIdentity, UiFallback::MissingOutput, UiFallback::UploadPending,
                                 UiFallback::InvalidExtent, UiFallback::TextureSizeLimit, UiFallback::DiagnosticBudget,
+                                UiFallback::CameraUnavailable, UiFallback::InvalidProjection,
+                                UiFallback::InvalidImageRect, UiFallback::InvalidSampling,
+                                UiFallback::ScenePreparationFailed,
                                 UiFallback::RetainedOutput, UiFallback::FrameFailed})
             {
                 for (const char *character = StatusText(reason); *character != '\0'; ++character)

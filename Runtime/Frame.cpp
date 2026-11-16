@@ -15,6 +15,7 @@
 /// @file
 /// @brief 分别完成候选准备, 图声明/编译和原列表执行, 在明确边界选择恢复或退出.
 /// 失败尝试销毁后才重建图; 一旦 Open, 只处理原前缀而不追加恢复命令.
+/// Scene/View 在候选循环前准备一次, 图尝试只消费准备结果及各 owner 已持有的依赖.
 
 namespace Physara::Runtime
 {
@@ -458,6 +459,7 @@ namespace Physara::Runtime
         };
         const auto stop = [&]() -> std::variant<FrameStatus, Core::BoundedText>
         {
+            editor.SetPreparedViewport(nullptr);
             editor.ReportFrameOutcome(Editor::FrameRecovery::Stopped, primary, additional);
             return primary.value_or(Core::BoundedText("Graphics work requires controlled shutdown"));
         };
@@ -466,7 +468,14 @@ namespace Physara::Runtime
             remember(host.FirstGraphicsError());
             return stop();
         }
-        auto candidate = view.Prepare(editorFrame.viewport, remainingDiagnosticBytes);
+        // 本轮事务已提交且同槽已 Ready. 在图尝试外准备, 安全 UI 和上传重试不再读取 Scene.
+        const auto *scene = editor.ActiveScene();
+        assert(scene);
+        const auto prepared = slot.mainView.Prepare(slot.sceneFrame, *scene, view, editorFrame.viewport);
+        editor.SetPreparedViewport(&prepared);
+        // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
+        remember(prepared.failure);
+        auto candidate = view.PrepareDiagnostic(prepared, remainingDiagnosticBytes);
         if (const auto *error = std::get_if<Core::BoundedText>(&candidate))
         {
             remember(*error);
@@ -509,6 +518,7 @@ namespace Physara::Runtime
                                           primary, additional);
                 return safe ? FrameStatus::SafeUi : FrameStatus::Rendered;
             }
+            editor.SetPreparedViewport(nullptr);
             // 已发前缀的取得由 ExecuteFrame 消费; 没有票据的剩余普通分支均尚未 Open.
             if (slot.lastSubmission == 0)
             {

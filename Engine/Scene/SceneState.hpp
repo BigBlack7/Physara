@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief Scene 实现中的 ECS 实体及事务共享入口. EnTT 类型由此文件隔离.
+/// 命令计划借用活动节点, 提交先准备记录、关系与世界数据, 成功后才共同发布及推进版本.
 
 #include "Scene.hpp"
 
@@ -60,10 +61,11 @@ namespace Physara::Scene
     [[nodiscard]] bool ValidLight(const Light &light) noexcept;
     /// @brief 将已导入的矩阵或 TRS 转为 Scene local; 无法表示为有限 TRS 时返回空.
     [[nodiscard]] std::optional<LocalTransform> ImportLocal(const Asset::ModelTransform &value) noexcept;
-    /// @brief 从当前世界数据反解新父级下的 local. 空父级表示根, 奇异或含 shear 的结果被拒绝.
-    [[nodiscard]] std::optional<LocalTransform> RelativeLocal(const WorldState &world,
-                                                              const WorldState *parent) noexcept;
-    /// @brief 合成 world, 反射方向及可选网格范围, 非有限结果返回空; 输入只在调用中借用.
+    /// @brief 反解新父级下可保持原 world 的 local. 空父级表示根.
+    /// @param preservePose 同时要求保留刚体朝向, 任一要求无法表示为有限 TRS 时返回空.
+    [[nodiscard]] std::optional<LocalTransform> RelativeLocal(const WorldState &world, const WorldState *parent,
+                                                              bool preservePose) noexcept;
+    /// @brief 合成 world、刚体位姿、绕序及可选网格范围, 非有限结果返回空.
     [[nodiscard]] std::optional<WorldState> ComputeWorld(const LocalTransform &local, const WorldState *parent,
                                                          const Asset::ModelMesh *mesh);
 

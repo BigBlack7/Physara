@@ -6,6 +6,7 @@
 /// 接入 renderer 时, 同一份封存 UI 还用于准备图内上传与合成, 会话不保存本帧 GraphId.
 /// 装配 Scene 后还拥有单文档操作与选择, 文件结果在 CPU 输入边界整体发布.
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -99,12 +100,20 @@ namespace Physara::Editor
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
                                            const Platform::WindowSettings *window = nullptr);
 
+        /// @brief 为本轮封存布局接入 CPU 有效图像矩形. 空输入、失配或失败均清除映射.
+        /// @pre 非空输入来自本次 Advance 后的准备. 此入口不确认图输出.
+        /// @note 只复制布局值; 安全 UI、占位或帧取消时清除, 不借用 PreparedView 的索引存储.
+        void SetPreparedViewport(const Renderer::PreparedView *prepared) noexcept;
+        /// @brief 将本轮逻辑窗口位置映射为左上原点的有效图像 UV. 裁掉的区域和留边返回空.
+        /// @note 只在本轮准备布局仍有效时可用, 下一次 Advance 即失效; 输入归属由调用者另行判断.
+        [[nodiscard]] std::optional<std::array<double, 2>> ViewportImageUv(double x, double y) const noexcept;
+
         /// @brief 为本轮封存帧准备图内合成, 将几何与上传字节复制到调用方的帧槽存储.
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸返回空值.
         /// @pre 在构图和打开列表前调用. 目标格式及像素范围由 BuildGraph 核对.
         /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
         /// outputs 仅在准备调用期间借用. 正常模式要求来自本轮视口请求,
-        /// 颜色的 View 身份, 像素范围或比例请求代与封存请求失配时使用占位.
+        /// 颜色的 View 身份, 有效图像或比例请求代与本轮失配时使用占位.
         /// @param mode 上传压力模式重建占位; SafeUi 只接受同一 View 的只读旧输出快照或无输出.
         /// 安全图按当前矩形显示旧尺寸并标注恢复状态, 不能把它发布为本轮请求结果.
         /// 重建候选前须先销毁旧图并取消旧准备值, 然后再清理帧槽载荷和绑定.

@@ -55,6 +55,11 @@ namespace Physara::Editor::Detail
         case InvalidExtent: return "Failed - invalid viewport pixel extent";
         case TextureSizeLimit: return "Failed - device texture size limit";
         case DiagnosticBudget: return "Failed - diagnostic texture budget";
+        case CameraUnavailable: return "Failed - scene camera unavailable";
+        case InvalidProjection: return "Failed - invalid camera projection";
+        case InvalidImageRect: return "Failed - camera image does not fit the viewport";
+        case InvalidSampling: return "Failed - invalid camera sampling profile";
+        case ScenePreparationFailed: return "Failed - scene preparation";
         }
         return "";
     }
@@ -119,8 +124,10 @@ namespace Physara::Editor::Detail
         ImGui::Text("Requested %.2fx", view.requestedScale);
         if (view.effective)
         {
+            // 显示最后已接受的整张画布尺寸, 不是当前请求或留边后的相机采样尺寸.
+            const auto extent = view.effective->layout.outputExtent;
             ImGui::Text("Effective %.2fx (%u x %u)", view.effective->scale,
-                        view.effective->extent.width, view.effective->extent.height);
+                        extent.width, extent.height);
         }
         else
         {

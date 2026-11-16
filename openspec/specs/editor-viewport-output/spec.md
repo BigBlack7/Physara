@@ -31,6 +31,8 @@
 
 Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口比例和主 View 当前请求的渲染比例计算 View 像素请求。各轴 SHALL 在比例相乘后向下取整并检查范围和算术。窗口 PresentColor 和离屏 View 输出 SHALL 按各自尺寸准备。布局及相关资源请求 SHALL 在录制前确定，录制期间到达的变化只供后续帧消费。零面积或隐藏视口 SHALL 不发起新的离屏输出分配。
 
+编辑器 SHALL 以同批逻辑布局和 View 准备的有效图像矩形建立内容映射。图像及其输入坐标 SHALL 采用该有效区域，留边或失效布局返回无有效图像位置。
+
 #### Scenario: Resize the window and viewport independently
 - **WHEN** 连续改变窗口像素尺寸、视口停靠布局或 framebuffer 比例
 - **THEN** 新帧的窗口目标匹配最新有效窗口像素范围，离屏输出对应当帧内容区域的像素请求，内容缩放不被重复计入，单独改变布局不重建窗口目标
@@ -41,11 +43,13 @@ Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口
 
 #### Scenario: Scale diagnostic pixels independently of window pixels
 - **WHEN** 本帧内容矩形有效，View 的渲染比例在准备前改变
-- **THEN** 离屏请求使用新比例和各轴实际 framebuffer 比例，窗口目标仍由窗口像素决定，视口逻辑矩形和输入命中继续使用布局坐标
+- **THEN** 离屏请求使用新比例和各轴实际 framebuffer 比例，窗口目标仍由窗口像素决定，逻辑输入经当帧布局和有效图像矩形映射
 
 ### Requirement: Present a diagnostic editor without advancing scene history
 
 当渲染结果为 `NoSceneOutputs` 时，Runtime SHALL 仍能通过清屏和基础 UI 合成呈现窗口。视口 SHALL 明确显示无场景或场景准备状态，诊断测试图 SHALL 有独立的可见标识。测试图不可用时 SHALL 显示带原因的占位。该路径 SHALL 保持 View 的已渲染相机、曝光和颜色/深度历史状态。
+
+正常帧的诊断测试图 SHALL 在匹配的有效图像矩形内呈现内容，并令留边显示为背景。相机或图像区域准备被拒绝时 SHALL 通过可见的 View 状态或占位提供原因，其他可用 UI 继续运行。
 
 #### Scenario: Present a labeled test viewport with no scene
 - **WHEN** 没有可渲染场景且基础 UI 与本帧测试输出都可用
@@ -55,9 +59,15 @@ Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口
 - **WHEN** 场景尚无有效输出，本帧也未能准备匹配的诊断纹理，且基础 UI 可正常录制
 - **THEN** 有效的窗口帧仍包含清除的底色、可用的面板和说明状态的视口占位，View 历史保持原值
 
+#### Scenario: Show diagnostic content only within a fixed camera image
+- **WHEN** 固定比例的 Camera 已准备且当前面板比例不同，本帧合成采样该 View 的诊断纹理
+- **THEN** 图案仅覆盖有效图像区域，留边为背景，诊断标识可见，场景相机和颜色／深度历史保持原值
+
 ### Requirement: Confirm effective viewport settings from accepted output
 
 View SHALL 分别公开最新合法请求比例、最后接受的有效比例及其输出像素范围。首次确认前有效值 SHALL 显示为尚未确认。待确认的请求缺少可用布局、槽或暂时可用的上传容量时 SHALL 报告 Pending 及原因。请求尺寸超出设备能力、有效像素范围或单目标预算时 SHALL 报告具体拒绝原因。两种结果均保留最后接受的有效状态。只有匹配当前请求的诊断输出实际用于完整正常图合成且该提交被接受后, View 才可发布其有效比例和尺寸。窗口交换结果 SHALL 与该确认独立。正常帧无匹配颜色时 SHALL 沿现有诊断占位合同呈现。
+
+正常诊断候选 SHALL 同时匹配输出像素范围和有效图像矩形。相机变化导致矩形变化时 SHALL 等待匹配候选被采纳，准备失败或等待期间保有最后接受的输出及其矩形。
 
 安全 UI 图读取旧输出或显示占位 SHALL 不确认当前请求, 即使旧输出的尺寸碰巧相同。最近主图失败及使用旧输出的状态 SHALL 可见, 原有效比例、尺寸和颜色代保持不变; 后续正常图成功才能清除该请求的失败/等待状态并发布匹配结果。
 
@@ -69,7 +79,7 @@ View SHALL 分别公开最新合法请求比例、最后接受的有效比例及
 #### Scenario: Publish the setting with the matching accepted frame
 
 - **WHEN** 新比例对应的诊断颜色在完整正常图合成中被采样, 且该次提交已接受
-- **THEN** View 发布该比例与实际输出尺寸, 如果取整后的尺寸仍相同则可沿用已经接受的匹配颜色代
+- **THEN** View 发布该比例与实际输出尺寸, 如果取整后的尺寸与有效图像矩形均相同则可沿用已经接受的匹配颜色代
 
 #### Scenario: Recover from an unsupported extent
 
@@ -80,3 +90,8 @@ View SHALL 分别公开最新合法请求比例、最后接受的有效比例及
 
 - **WHEN** 新请求的主图失败, 旧输出通过安全 UI 图成功呈现, 随后一次正常图按新请求成功
 - **THEN** 安全图期间请求及失败原因可见而有效值不变, 只有后续正常图的匹配回执推进有效比例、尺寸和输出代
+
+#### Scenario: Replace the matching image layout without resizing the canvas
+
+- **WHEN** 同一输出像素范围改用不同固定 aspect 的相机，有效图像矩形随之变化
+- **THEN** 先前内容只具备旧输出资格，当前正常合成采用匹配矩形的候选，接受后才确认该布局和颜色代

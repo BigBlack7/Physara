@@ -11,7 +11,7 @@
 #include <Core/Diagnostics.hpp>
 #include <Core/FrameArena.hpp>
 #include <DeviceHost.hpp>
-#include <Renderer/View.hpp>
+#include <Renderer/Prepare/ViewPreparation.hpp>
 #include <Session/EditorSession.hpp>
 
 namespace Physara::Runtime
@@ -20,8 +20,11 @@ namespace Physara::Runtime
 
     /// @brief 同槽 Ready 后才可复用的 CPU 载荷, 图存储和最近提交记账.
     /// @note Platform 拥有 Event 和目标代. 本值只保存 Runtime 的存储与预算, 不自行判定 GPU 完成.
+    /// sceneFrame/mainView 独立于两份 arena, 同次取得中的图重试不会使静态记录或可见索引失效.
     struct FrameSlot
     {
+        Renderer::SceneFrameStorage sceneFrame; ///< 同槽 Ready 后按 Scene 和内容版本更新.
+        Renderer::ViewWork mainView; ///< 本轮主 View 的独立索引区间.
         Core::FrameArena arena;
         Core::FrameArena graphArena; ///< 图析构回退不影响 UI/上传载荷.
         Editor::FrameSlotUiFrameBindings bindings;
@@ -45,7 +48,8 @@ namespace Physara::Runtime
 
     /// @brief 从封存 UI 推进一次取得, 执行前最多建立一张独立安全图.
     /// @pre slot 对应 presentation 的安全取得, commands 来自同一宿主且无活动录制.
-    /// editorFrame 来自本轮尚未失效的 Advance. remainingDiagnosticBytes 已扣除其它槽的在途额度.
+    /// editorFrame 来自本轮尚未失效的 Advance, editor 已装配 Scene 文档.
+    /// remainingDiagnosticBytes 已扣除其它槽的在途额度.
     /// @return 正常或可恢复状态; 文本错误表示必须退出, 未证明完成的工作仍归 RHI/宿主收拢.
     /// @note 准备值和图的 CPU 借用在返回前结束, 已发 GPU 引用由原物理包保活.
     [[nodiscard]] std::variant<FrameStatus, Core::BoundedText> RenderFrame(

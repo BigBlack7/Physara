@@ -114,6 +114,7 @@ namespace Physara::Scene
             std::vector<SceneNode *> sources;
         };
 
+        /// @brief 发布前独立持有的一项派生数据, 包括完整矩阵、刚体位姿及网格范围.
         struct WorldUpdate
         {
             SceneNode *node;
@@ -493,6 +494,24 @@ namespace Physara::Scene
             return &Record(Instance(node)).model->meshes[*source->mesh];
         }
 
+        /// @brief 几何看完整仿射变换, 相机和灯分别看自己使用的刚体分量.
+        void ClassifyWorld(const EntityProperties &props, const WorldState &before, const WorldState &after) noexcept
+        {
+            // 零缩放可能掩盖矩阵中的旋转变化, 因此相机和灯不能只比较 worldFromLocal.
+            const bool translated = before.pose.translation != after.pose.translation;
+            const bool rotated = before.pose.rotation != after.pose.rotation;
+            m_CameraChanged |= props.camera.has_value() && (translated || rotated);
+            m_RenderChanged |= props.castsShadow.has_value() &&
+                (before.worldFromLocal != after.worldFromLocal || before.orientation != after.orientation);
+            if (props.light)
+            {
+                // 方向灯不消费位置, 点光不消费朝向; 定向灯绕自身光轴旋转也不改变发射方向.
+                const auto type = props.light->type;
+                m_RenderChanged |= (translated && type != Asset::ModelLightKind::Directional) ||
+                    (rotated && type != Asset::ModelLightKind::Point && before.Forward() != after.Forward());
+            }
+        }
+
         /// @brief 合并被脏祖先覆盖的根, 以父结果索引传递世界数据, 避免 vector 扩容使指针失效.
         void PrepareWorld()
         {
@@ -530,11 +549,7 @@ namespace Physara::Scene
                 {
                     Reject(record.id, "local", "World transform or bounds exceeds representation");
                 }
-                if (world->worldFromLocal != node->world.worldFromLocal)
-                {
-                    m_RenderChanged |= Renderable(record.properties);
-                    m_CameraChanged |= record.properties.camera.has_value();
-                }
+                ClassifyWorld(record.properties, node->world, *world);
                 const auto index = m_World.size();
                 m_World.push_back({node, std::move(*world)});
                 const auto updated = m_Links.find(node);

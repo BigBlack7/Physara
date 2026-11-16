@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -112,12 +113,17 @@ namespace Physara::Scene
     };
 
     /// @brief 实例世界数据, 矩阵按列主序. orientation 表达 -1/0/+1 的绕序变换.
+    /// 几何使用完整仿射矩阵; 相机与定向灯使用 pose, 缩放只经层级矩阵影响其原点.
     struct WorldState
     {
         std::array<double, 16> worldFromLocal{};
+        Pose pose; ///< 世界原点及忽略缩放的单位朝向, 与几何矩阵随同一事务提交.
         int orientation = 1;
         std::vector<std::optional<Bounds>> primitives;
         std::optional<Bounds> bounds;
+
+        /// @brief 相机和定向灯使用的世界单位方向, 对应局部 -Z.
+        [[nodiscard]] std::array<double, 3> Forward() const noexcept;
     };
 
     /// @brief 分开标识保存内容, 非相机渲染内容, 相机输入和世界数据更新.
@@ -139,6 +145,14 @@ namespace Physara::Scene
         const WorldState &world;
         const Asset::ModelVersion *model; ///< 实例根或源节点解析到的模型. 普通实体为空.
         const Asset::ModelNode *sourceNode;
+    };
+
+    /// @brief 当前 Scene 相机的独立值, 可在借用结束后用于同帧准备.
+    struct CameraState
+    {
+        EntityHandle entity;
+        Pose pose;
+        Camera projection;
     };
 
     enum class ReparentPolicy : std::uint8_t
@@ -169,6 +183,7 @@ namespace Physara::Scene
     };
 
     /// @brief 按显式策略重挂实体. KeepWorld 对不可逆父级或不可表示的 local TRS 返回失败.
+    /// 子树含相机或定向灯时同时保留其刚体朝向, 与几何无法兼容则整体拒绝.
     struct Reparent
     {
         EntityHandle entity;
@@ -224,6 +239,11 @@ namespace Physara::Scene
         [[nodiscard]] Revisions Versions() const noexcept;
         [[nodiscard]] std::optional<EntityHandle> Find(std::string_view id) const noexcept;
         [[nodiscard]] std::optional<EntityView> Get(EntityHandle entity) const noexcept;
+        /// @brief 从本 Scene 解析相机资产实例或自建相机. 缺少实体或组件时返回空.
+        [[nodiscard]] std::optional<CameraState> FindCamera(std::string_view id) const noexcept;
+        /// @brief 在 owner 线程同步访问已提交实体. 回调不得编辑本 Scene 或保留借用跨越下一次编辑.
+        /// @note 回调异常向调用者传播, 遍历本身不修改 Scene; 接收方负责丢弃未完成的提取结果.
+        void VisitEntities(const std::function<void(EntityHandle, const EntityView &)> &visit) const;
         /// @brief 复制当前创作记录及固定资产引用, 不含运行期 handle 和可再计算的世界数据.
         [[nodiscard]] std::vector<EntityRecord> Snapshot() const;
         /// @brief 文件操作可重新核对并复用这些只读模型, 引用独立于活动 Scene 的寿命.

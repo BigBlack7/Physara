@@ -56,13 +56,13 @@
 
 **职责位置：** Renderer/Prepare、View、Engine/Scene Camera。**前置：** [D06-T03](#d06-t03)。**架构依据：** [5.2](../Architecture.md#prepare)、[5.3](../Architecture.md#view-preparation)、[4.3](../Architecture.md#camera)、[5.1](../Architecture.md#frame-state)。
 
-- [ ] 从 Scene 提取一次连续只读对象/Primitive/灯描述和索引，多 View 共享 SceneFrame，静态资产由 handle/revision 引用。
-- [ ] 实现 glTF perspective/orthographic 与编辑器相机，校验已声明投影 profile 的 FOV/magnification/near/far；区分有限稳定裁剪投影与渲染投影，固定 aspect 使用 letterbox 与有效图像矩形，正交视线方向不套透视公式；相机移动与静态内容版本分别更新，带灯/可渲染组件或影响渲染子树的相机实体变换同时更新内容版本。
-- [ ] 实现可解释的 CPU bounds/culling 与无效/零尺寸 View 处理，稳定视锥为最大 jitter/滤波范围留 guard band；相机坐标与裁剪结果使用固定非对称场景验证。
+- [x] 从 Scene 提取一次连续只读对象/Primitive/灯描述和索引，多 View 共享 SceneFrame，静态资产由 handle/revision 引用。
+- [x] 实现 glTF perspective/orthographic 与编辑器相机，校验已声明投影 profile 的 FOV/magnification/near/far；区分有限稳定裁剪投影与渲染投影，固定 aspect 使用 letterbox 与有效图像矩形，正交视线方向不套透视公式；相机移动与静态内容版本分别更新，带灯/可渲染组件或影响渲染子树的相机实体变换同时更新内容版本。
+- [x] 实现可解释的 CPU bounds/culling 与无效/零尺寸 View 处理，稳定视锥为最大 jitter/滤波范围留 guard band；相机坐标与裁剪结果使用固定非对称场景验证。
 
 **完成条件：** 构图和 execute 不遍历/修改 ECS，多视口不会复制整份材质与场景数据。
 
-**状态：** 前置已齐备，待建立 change。
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-16-prepare-static-scene-views/tasks.md#final-verification)
 
 <a id="d06-t05"></a>
 ### D06-T05 · 建立几何/纹理驻留和首个 Forward 子图
@@ -74,6 +74,8 @@
 - [ ] 建立 DrawRecord 与 Forward 的 PrepareSurface/ShadeOpaque 合同；先以标准 unlit 和显式材质/法线诊断入口验证真实几何，lit PBR 在 D07 闭环。
 
 **完成条件：** glTF 可以正确出现在真实视口；无灯光模型的诊断输出不标成已完成 PBR，不在 execute 创建或查找资产。
+
+**状态：** 前置已齐备，待建立 change。
 
 <a id="d06-t06"></a>
 ### D06-T06 · 接入最小可用场景编辑与相机导航

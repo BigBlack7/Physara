@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief 场景局部 TRS、世界矩阵和包围盒. 仅在外部值或父子组合改变时求值.
+/// 几何沿完整仿射链传播, 刚体朝向沿单位四元数链传播; KeepWorld 检查二者能否共同保留.
 
 #include <algorithm>
 #include <cmath>
@@ -74,11 +75,40 @@ namespace Physara::Scene
         return false;
     }
 
-    /// @brief 将已验证的 xyzw 四元数用于局部求值, 按列应用有符号缩放.
-    static glm::dmat4 Compose(const LocalTransform &local) noexcept
+    /// @brief 将 Scene 的 xyzw 值交给 GLM 的 wxyz 构造入口.
+    static glm::dquat Quaternion(const Pose &pose) noexcept
     {
-        const auto &q = local.rotation;
-        auto out = glm::mat4_cast(glm::normalize(glm::dquat(q[3], q[0], q[1], q[2])));
+        const auto &q = pose.rotation;
+        return {q[3], q[0], q[1], q[2]};
+    }
+
+    /// @brief 四元数的两种符号编码归并为同一世界朝向, 避免仅编码改变就推进相机版本.
+    static std::array<double, 4> RotationComponents(const glm::dquat &rotation) noexcept
+    {
+        for (const double component : {rotation.w, rotation.x, rotation.y, rotation.z})
+        {
+            if (component < 0)
+            {
+                return {-rotation.x, -rotation.y, -rotation.z, -rotation.w};
+            }
+            if (component > 0)
+            {
+                break;
+            }
+        }
+        return {rotation.x, rotation.y, rotation.z, rotation.w};
+    }
+
+    std::array<double, 3> WorldState::Forward() const noexcept
+    {
+        const auto direction = Quaternion(pose) * glm::dvec3(0.0, 0.0, -1.0);
+        return {direction.x, direction.y, direction.z};
+    }
+
+    /// @brief 几何矩阵继续按列应用有符号缩放, 旋转可同时用于求刚体朝向.
+    static glm::dmat4 Compose(const LocalTransform &local, const glm::dquat &rotation) noexcept
+    {
+        auto out = glm::mat4_cast(rotation);
         for (glm::length_t axis = 0; axis < 3; ++axis)
         {
             out[axis] *= local.scale[static_cast<std::size_t>(axis)];
@@ -97,8 +127,32 @@ namespace Physara::Scene
         return glm::normalize(basis - glm::dot(basis, direction) * direction);
     }
 
-    /// @brief 从仿射列提取 TRS. 补齐零轴, 保留镜像, 用重组误差拒绝 shear.
-    static std::optional<LocalTransform> Decompose(const glm::dmat4 &matrix) noexcept
+    /// @brief 用指定旋转重组各列. 共线时保存对应的有符号缩放, 零列保留该旋转的轴信息.
+    static std::optional<LocalTransform> FitRotation(LocalTransform local, const std::array<glm::dvec3, 3> &columns,
+                                                      const glm::dquat &rotation) noexcept
+    {
+        local.rotation = {rotation.x, rotation.y, rotation.z, rotation.w};
+        const auto recomposed = glm::mat3_cast(rotation);
+        for (glm::length_t axis = 0; axis < 3; ++axis)
+        {
+            const auto index = static_cast<std::size_t>(axis);
+            if (local.scale[index] == 0)
+            {
+                continue;
+            }
+            const double sign = glm::dot(recomposed[axis], columns[index]) < 0 ? -1.0 : 1.0;
+            if (glm::length(sign * recomposed[axis] - columns[index]) > TransformTolerance)
+            {
+                return std::nullopt;
+            }
+            local.scale[index] *= sign;
+        }
+        return local;
+    }
+
+    /// @brief 从仿射列提取 TRS. 有指定朝向时直接验证重组, 其余情况从非零列恢复正交基.
+    static std::optional<LocalTransform> Decompose(const glm::dmat4 &matrix,
+                                                   const glm::dquat *requiredRotation = nullptr) noexcept
     {
         if (!Finite(std::span(glm::value_ptr(matrix), 16)) || matrix[0][3] != 0 ||
             matrix[1][3] != 0 || matrix[2][3] != 0 || matrix[3][3] != 1)
@@ -133,6 +187,10 @@ namespace Physara::Scene
             ++nonzero;
             last = i;
         }
+        if (requiredRotation)
+        {
+            return FitRotation(local, columns, *requiredRotation);
+        }
         if (nonzero == 0)
         {
             return local;
@@ -154,24 +212,9 @@ namespace Physara::Scene
             }
             basis[c] = glm::normalize(cross);
             basis[b] = glm::cross(basis[c], basis[a]);
-            if (nonzero == 3 && glm::dot(basis[c], columns[c]) < 0)
-            {
-                local.scale[c] = -local.scale[c];
-            }
         }
         const auto rotation = glm::normalize(glm::quat_cast(glm::dmat3(basis[0], basis[1], basis[2])));
-        local.rotation = {rotation.x, rotation.y, rotation.z, rotation.w};
-        const auto recomposed = glm::mat3_cast(rotation);
-        for (glm::length_t index = 0; index < 3; ++index)
-        {
-            const auto i = static_cast<std::size_t>(index);
-            const double sign = local.scale[i] < 0 ? -1.0 : 1.0;
-            if (local.scale[i] != 0 && glm::length(sign * recomposed[index] - columns[i]) > TransformTolerance)
-            {
-                return std::nullopt;
-            }
-        }
-        return local;
+        return FitRotation(local, columns, rotation);
     }
 
     std::optional<LocalTransform> ImportLocal(const Asset::ModelTransform &value) noexcept
@@ -184,7 +227,8 @@ namespace Physara::Scene
         return ValidLocal(local) ? std::optional(local) : std::nullopt;
     }
 
-    std::optional<LocalTransform> RelativeLocal(const WorldState &world, const WorldState *parent) noexcept
+    std::optional<LocalTransform> RelativeLocal(const WorldState &world, const WorldState *parent,
+                                                bool preservePose) noexcept
     {
         auto local = glm::make_mat4(world.worldFromLocal.data());
         if (parent)
@@ -219,7 +263,14 @@ namespace Physara::Scene
                 local[i] = {value.x / length.x, value.y / length.y, value.z / length.z, i == 3 ? 1.0 : 0.0};
             }
         }
-        return Decompose(local);
+        if (!preservePose)
+        {
+            return Decompose(local);
+        }
+        // 先按朝向链求唯一要求的 local 旋转, 再检验它能否重组几何各列, 不让镜像分解改变视线.
+        const auto rotation = parent ? glm::normalize(glm::conjugate(Quaternion(parent->pose)) *
+                                                       Quaternion(world.pose)) : Quaternion(world.pose);
+        return Decompose(local, &rotation);
     }
 
     /// @brief 完整变换局部盒, 保留父子合成产生的 shear 与零缩放.
@@ -253,11 +304,14 @@ namespace Physara::Scene
     std::optional<WorldState> ComputeWorld(const LocalTransform &local, const WorldState *parent,
                                             const Asset::ModelMesh *mesh)
     {
-        auto matrix = Compose(local);
+        auto rotation = glm::normalize(Quaternion(local));
+        auto matrix = Compose(local, rotation);
         WorldState result;
         if (parent)
         {
+            // 父级缩放影响矩阵和子节点位置, 不进入相机/灯的正交朝向基.
             matrix = glm::make_mat4(parent->worldFromLocal.data()) * matrix;
+            rotation = glm::normalize(Quaternion(parent->pose) * rotation);
             result.orientation = parent->orientation;
         }
         if (!Finite(std::span(glm::value_ptr(matrix), 16)))
@@ -265,6 +319,8 @@ namespace Physara::Scene
             return std::nullopt;
         }
         std::copy_n(glm::value_ptr(matrix), 16, result.worldFromLocal.begin());
+        std::copy_n(glm::value_ptr(matrix[3]), 3, result.pose.translation.begin());
+        result.pose.rotation = RotationComponents(rotation);
         for (const double scale : local.scale)
         {
             result.orientation *= (scale > 0) - (scale < 0);

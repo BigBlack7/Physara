@@ -456,7 +456,7 @@ namespace Physara::Editor::Detail
         return detail;
     }
 
-    // 将 View 的无颜色结果转换为本轮占位及状态标签的原因.
+    // 将 View 的像素、相机或场景准备失败转换为本轮占位标签, 不要求失败 View 提供纹理.
     static UiFallback MissingViewportOutput(const Renderer::NoSceneOutputs &outputs) noexcept
     {
         if (outputs.UploadPending())
@@ -468,6 +468,11 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::InvalidExtent: return UiFallback::InvalidExtent;
         case Renderer::ViewSettingReason::TextureSizeLimit: return UiFallback::TextureSizeLimit;
         case Renderer::ViewSettingReason::DiagnosticBudget: return UiFallback::DiagnosticBudget;
+        case Renderer::ViewSettingReason::CameraUnavailable: return UiFallback::CameraUnavailable;
+        case Renderer::ViewSettingReason::InvalidProjection: return UiFallback::InvalidProjection;
+        case Renderer::ViewSettingReason::InvalidImageRect: return UiFallback::InvalidImageRect;
+        case Renderer::ViewSettingReason::InvalidSampling: return UiFallback::InvalidSampling;
+        case Renderer::ViewSettingReason::ScenePreparationFailed: return UiFallback::ScenePreparationFailed;
         default: return UiFallback::MissingOutput;
         }
     }
@@ -529,6 +534,7 @@ namespace Physara::Editor::Detail
                 }
                 else if (!bindings.output)
                 {
+                    // 安全图、上传等待与普通准备拒绝各保留自己的原因, 不用通用缺图覆盖相机诊断.
                     bindings.viewportFallback = mode == UiFrameMode::SafeUi ? UiFallback::FrameFailed :
                                                 deferDiagnostic ? UiFallback::UploadPending :
                                                                   MissingViewportOutput(outputs);

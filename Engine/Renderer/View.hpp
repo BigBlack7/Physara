@@ -3,8 +3,9 @@
 /// @file
 /// @brief 持有主 View 的持久化相机与比例请求, 以及最后接受的诊断颜色.
 /// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
-/// 相机实体有效性由 Scene/View 的组合调用者确认, 本阶段不计算场景相机投影.
+/// Prepare 解析相机及图像范围, View 只在匹配颜色被接受时确认有效布局.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -24,6 +25,7 @@ namespace Physara::Core
 
 namespace Physara::Renderer
 {
+    struct PreparedView;
     struct ViewIdentityTag;
     /// @brief 跨布局和纹理换代保持稳定的逻辑 View 身份.
     using ViewId = Core::Identity<ViewIdentityTag>;
@@ -66,6 +68,29 @@ namespace Physara::Renderer
         bool operator==(const ViewExtent &) const = default;
     };
 
+    /// @brief 在左上原点的输出画布内定位有效图像, 像素区间为半开.
+    struct ViewImageRect
+    {
+        std::uint32_t x = 0;
+        std::uint32_t y = 0;
+        ViewExtent extent;
+
+        bool operator==(const ViewImageRect &) const = default;
+    };
+
+    /// @brief 独立记录画布与有效图像. 当前无独立升采样, 渲染像素尺寸等于有效矩形尺寸.
+    struct ViewImageLayout
+    {
+        ViewExtent outputExtent;
+        ViewImageRect rect;
+
+        [[nodiscard]] ViewExtent RenderExtent() const noexcept { return rect.extent; }
+        /// @brief 由连续画布像素坐标得到左上原点的图像 UV. 留边与无效范围返回空.
+        [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(double x, double y) const noexcept;
+
+        bool operator==(const ViewImageLayout &) const = default;
+    };
+
     /// @brief CPU UI 封存后按当前比例换算的一次离屏像素请求.
     /// @note View 用请求代确认换算依据, 颜色纹理另有自己的资源代.
     struct ViewportRequest
@@ -79,10 +104,10 @@ namespace Physara::Renderer
     struct EffectiveViewport
     {
         float scale;
-        ViewExtent extent;
+        ViewImageLayout layout;
     };
 
-    /// @brief 待确认或失败的具体原因. None 表示当前请求已获接受.
+    /// @brief 准备或设置确认的原因. PreparedView 中 None 表示可消费, ViewSettings 中表示已接受.
     enum class ViewSettingReason : std::uint8_t
     {
         None,
@@ -92,7 +117,12 @@ namespace Physara::Renderer
         UploadPending,
         InvalidExtent,
         TextureSizeLimit,
-        DiagnosticBudget
+        DiagnosticBudget,
+        CameraUnavailable,
+        InvalidProjection,
+        InvalidImageRect,
+        InvalidSampling,
+        ScenePreparationFailed
     };
 
     /// @brief 同一 View 的请求和确认快照, 可独立用于面板显示.
@@ -122,7 +152,7 @@ namespace Physara::Renderer
         ViewId view;
         ViewOutputRole role = ViewOutputRole::DiagnosticColor;
         std::uint64_t generation = 0;
-        ViewExtent extent;
+        ViewImageLayout layout;
         RHI::TextureHandle texture;
     };
 
@@ -142,7 +172,7 @@ namespace Physara::Renderer
         [[nodiscard]] std::size_t UploadBytes() const noexcept { return m_UploadBytes; }
         /// @brief 诊断上传剩余额度不足, 可在后续布局请求中再次准备.
         [[nodiscard]] bool UploadPending() const noexcept { return m_UploadPending; }
-        /// @brief 本轮可见占位所需的范围拒绝原因, 无拒绝时为 None.
+        /// @brief 本轮可见占位所需的像素、相机或场景准备拒绝原因, 无拒绝时为 None.
         [[nodiscard]] ViewSettingReason Rejection() const noexcept { return m_Rejection; }
 
         /// @brief 在已预留的本槽空间中生成新代像素. 复用已有代时直接成功.
@@ -163,13 +193,14 @@ namespace Physara::Renderer
         ViewSettingReason m_Rejection = ViewSettingReason::None;
         float m_Scale = MaxRenderScale;
         std::uint64_t m_RequestRevision = 0;
+        std::uint64_t m_CameraRevision = 0;
     };
 
     /// @brief 计算紧密 RGBA8 像素字节数. 零尺寸或超出 32 MiB 诊断预算时返回 0.
     [[nodiscard]] std::size_t DiagnosticPixelBytes(ViewExtent extent) noexcept;
 
     /// @brief 在 owner 线程管理持久化请求及独立 revision, 准备并发布诊断输出.
-    /// @note 同尺寸可复用已接受的颜色. GPU 在途访问由原提交的引用保活.
+    /// @note 画布及有效图像矩形均相同时可复用已接受颜色. GPU 在途访问由原提交的引用保活.
     class View final
     {
     public:
@@ -210,16 +241,18 @@ namespace Physara::Renderer
         /// @brief 本轮没有提交候选颜色时记录真实等待原因, 已确认的当前请求保持有效.
         void Defer(ViewSettingReason reason) noexcept;
 
-        /// @brief 复用已接受的同尺寸颜色, 或为本次有效布局建立新代候选.
-        /// @note 请求缺失或 View 与比例请求代失配时, 返回无颜色并等待当前布局.
+        /// @brief 在场景准备前核对本轮像素请求和诊断颜色能力, 不修改已确认设置.
+        [[nodiscard]] ViewSettingReason CheckViewport(const std::optional<ViewportRequest> &request) const noexcept;
+        /// @brief 复用布局相同的已接受颜色, 或按当前有效矩形建立诊断候选.
+        /// @pre prepared 来自本轮已封存的布局和已应用的 Scene/View 请求.
         /// @param remainingUploadBytes 本轮可用的诊断像素额度, 由 Runtime 按槽记账.
         /// @return 无有效范围或上传额度不足时返回无颜色的结果. 身份代耗尽时返回原因.
         [[nodiscard]] std::variant<NoSceneOutputs, Core::BoundedText>
-            Prepare(const std::optional<ViewportRequest> &request, std::size_t remainingUploadBytes);
-        /// @brief 接受本轮匹配的颜色, 发布对应比例和像素尺寸. 复用的同尺寸颜色也可确认新比例.
+            PrepareDiagnostic(const PreparedView &prepared, std::size_t remainingUploadBytes);
+        /// @brief 接受本轮匹配的颜色, 发布对应比例和布局. 复用的同布局颜色也可确认新比例.
         /// @pre outputs 属于本轮准备, 且被已接受的完整合成实际采样.
         /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
-        /// @note 已过期的 View 或请求代保持原状态. 旧代的 GPU 访问由原 RHI 包持有.
+        /// @note View、比例请求代或 View 相机请求代过期时保持原状态. 旧代由原 RHI 包保活.
         void Publish(NoSceneOutputs &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
 
     private:

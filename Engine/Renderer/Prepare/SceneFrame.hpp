@@ -1,0 +1,96 @@
+#pragma once
+
+/// @file
+/// @brief 从已提交 Scene 提取帧槽内的只读对象、几何、材质引用和灯.
+/// 资产正文由固定 CPU 版本保活, 每个 View 可独立索引同一份记录.
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <variant>
+#include <vector>
+
+#include <Scene/Scene.hpp>
+
+namespace Physara::Renderer
+{
+    /// @brief 每个网格实体只存一个完整仿射变换. orientation 是有符号绕序, 0 表示奇异.
+    struct SceneObject
+    {
+        Scene::EntityHandle entity;
+        std::array<double, 16> worldFromLocal;
+        int orientation;
+    };
+
+    /// @brief 模型、对象与覆盖索引只在同一 SceneFrame 内使用.
+    /// mesh/material 索引固定模型的紧凑表, sourceSlot 保持源 Primitive 顺序.
+    /// materialOverride 索引帧内有效材质; 缺省时直接读取模型材质. 空源表面的 bounds 为空.
+    struct PrimitiveRef
+    {
+        std::uint32_t object;
+        std::uint32_t model;
+        std::uint32_t mesh;
+        std::uint32_t sourceSlot;
+        std::uint32_t material;
+        std::optional<std::uint32_t> materialOverride;
+        std::optional<Scene::Bounds> bounds;
+        bool visible;
+        bool castsShadow;
+    };
+
+    /// @brief 灯的世界描述. 方向灯只用 direction, 点光只用 position, 聚光灯使用二者.
+    /// 位置和 range 用米, direction 为发射方向, 颜色与强度保留导入合同.
+    struct LightRecord
+    {
+        Scene::EntityHandle entity;
+        Scene::Light light;
+        Asset::ModelLightUnit intensityUnit;
+        std::array<double, 3> position{};
+        std::array<double, 3> direction{};
+        bool visible;
+    };
+
+    /// @brief 借用同一安全帧槽中的连续记录, 仅在该槽本次使用内有效.
+    /// @note 读资产正文用 models 中的固定版本, 覆盖中借用的模型图像也由该表保活.
+    /// 活动 Scene 可在提取后被替换, 但不能据此延长本值对槽内数组的借用期.
+    struct SceneFrame
+    {
+        Scene::SceneId scene;
+        std::uint64_t contentRevision = 0;
+        std::span<const SceneObject> objects;
+        std::span<const PrimitiveRef> primitives;
+        std::span<const LightRecord> lights;
+        std::span<const Asset::ModelVersion> models;
+        std::span<const Scene::EffectiveMaterial> materialOverrides;
+        std::optional<Scene::Bounds> drawableBounds;
+    };
+
+    /// @brief 一个 FrameSlot 的拥有型提取存储, 独立于每次图尝试的 arena.
+    class SceneFrameStorage final
+    {
+    public:
+        SceneFrameStorage() = default;
+        SceneFrameStorage(const SceneFrameStorage &) = delete;
+        SceneFrameStorage &operator=(const SceneFrameStorage &) = delete;
+
+        /// @brief 复用匹配 Scene 和内容版本的记录, 否则同步提取后完整发布.
+        /// @pre 槽已安全取得. 旧借用须在换 Scene 或内容版本前结束.
+        /// @return 成功值仅借用本槽, 失败交付有界原因且本槽无部分帧可读.
+        /// @note 失败清除本槽的旧缓存及资产引用, 保留数组容量; 其它槽不受影响.
+        [[nodiscard]] std::variant<SceneFrame, Core::BoundedText> Prepare(const Scene::Scene &scene);
+
+    private:
+        /// @brief 使缓存身份失效并释放记录中的引用, 不归还连续数组的容量.
+        void Clear() noexcept;
+
+        Scene::SceneId m_Scene;
+        std::uint64_t m_ContentRevision = 0;
+        std::vector<SceneObject> m_Objects;
+        std::vector<PrimitiveRef> m_Primitives;
+        std::vector<LightRecord> m_Lights;
+        std::vector<Asset::ModelVersion> m_Models;
+        std::vector<Scene::EffectiveMaterial> m_MaterialOverrides;
+        std::optional<Scene::Bounds> m_DrawableBounds;
+    };
+}

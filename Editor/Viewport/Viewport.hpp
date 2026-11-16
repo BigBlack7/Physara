@@ -2,7 +2,9 @@
 
 /// @file
 /// @brief 保存主视口逻辑身份. 布局封存图像区域, 编辑应用后再换算离屏请求.
+/// View 准备提供画布内的有效矩形, 输入映射再排除裁剪区域与相机留边.
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -32,12 +34,16 @@ namespace Physara::Editor::Detail
         [[nodiscard]] const ImDrawCmd *FindDraw(const ImDrawData &data) const noexcept;
         /// @brief 用布局期间已准备的字体绘制原因, 裁剪在图像及其命令的可见范围内.
         void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason) const;
+        /// @brief 使用同轮封存的图像裁剪和物理像素布局解释逻辑窗口位置.
+        /// @pre layout 对应该 Image 的整张画布. 输入捕获与窗口遮挡归路由层, 此处仅作坐标映射.
+        [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(const ImDrawData &data,
+            const Renderer::ViewImageLayout &layout, double x, double y) const noexcept;
     };
 
-    /// @brief 单次布局的逻辑命中及图像区域. 隐藏或被裁掉时没有采样命令.
+    /// @brief 单次面板布局. 面板 hover 用于界面归属, 有效图像命中在 View 准备后解析.
     struct ViewportLayout
     {
-        bool hit = false;
+        bool panelHovered = false;
         ViewportImage image;
     };
 
@@ -58,7 +64,7 @@ namespace Physara::Editor::Detail
         }
         [[nodiscard]] Renderer::ViewId Id() const noexcept { return m_View; }
 
-        /// @brief 为可见面板测量逻辑图像区域, 记录命中和图像命令.
+        /// @brief 为可见面板测量逻辑图像区域, 记录面板 hover 和图像命令.
         /// @pre Workspace 已开始当前可见的 ImGui 面板.
         [[nodiscard]] ViewportLayout Draw() const;
 
