@@ -1,8 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 会话的字段编辑与历史. 布局显隐由会话持有, 比例经 View 的字段入口应用.
-/// 历史保存值和目标身份, 生命周期与 EditorSession 一致.
+/// @brief 会话的布局、View 字段和场景事务历史. 同一游标按接受顺序回放.
+/// 文档替换退休旧记录, 布局值继续由会话持有.
 
 #include <array>
 #include <optional>
@@ -58,7 +58,7 @@ namespace Physara::Editor::Detail
         bool canRedo;
     };
 
-    /// @brief 管理主视口显隐, 单活动比例事务和有界历史. 活动事务期间暂停历史重放.
+    /// @brief 管理主视口显隐, 单活动比例事务及 Scene/View 的有界历史. 活动事务期间暂停历史重放.
     /// @note 在会话 owner 线程使用. Apply 只在本次调用期间借用 View 及动作序列.
     class EditHistory final
     {
@@ -70,14 +70,27 @@ namespace Physara::Editor::Detail
         EditHistory &operator=(const EditHistory &) = delete;
 
         [[nodiscard]] EditSessionId Id() const noexcept { return m_Id; }
-        [[nodiscard]] EditState Snapshot() const noexcept;
+        [[nodiscard]] EditState Snapshot(bool frozen = false) const noexcept;
+        /// @brief 退役旧文档的历史, 固定资产引用及活动手势, 保留会话实际视口显隐.
+        void Clear() noexcept;
+        /// @brief 通过 View 入口恢复比例手势首值并结束手势, 返回恢复请求的拒绝原因.
+        [[nodiscard]] std::optional<Core::BoundedText> CancelGesture(Renderer::View &view) noexcept;
+
+        /// @brief 按 Scene 的真实事务准备历史, 同步失效的主 View 相机引用.
+        /// @note Scene 提交前已准备好相机回退和历史存储, 拒绝不会留下半个跨 owner 事务.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            ApplyScene(Scene::Scene &scene, Renderer::View &view, const Scene::Command &command);
+        /// @brief 校验场景相机引用并提交主 View 请求, 按完成顺序加入历史.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            ApplyView(const Scene::Scene &scene, Renderer::View &view, Renderer::ViewDocumentRequests value);
 
         /// @brief 封存 UI 后消费本会话的一批意图. 先处理连续手势, 再按序处理离散及重放动作.
         /// @param view 本会话当轮借用的主 View. 空指针时比例修改返回拒绝原因.
         /// @return 首个拒绝原因, 已应用的有效前缀保留. 会话身份失配时整批拒绝.
         [[nodiscard]] std::optional<Core::BoundedText> Apply(EditSessionId session, Renderer::View *view,
                                                              const ScaleGesture &gesture,
-                                                             std::span<const EditAction> actions) noexcept;
+                                                             std::span<const EditAction> actions,
+                                                             Scene::Scene *scene = nullptr, bool frozen = false);
 
     private:
         struct ScaleChange
@@ -93,12 +106,28 @@ namespace Physara::Editor::Detail
             bool after;
         };
 
-        using Entry = std::variant<VisibilityChange, ScaleChange>;
+        /// @brief 完整主 View 请求的前后值, 包括导航位姿, 相机引用和请求比例.
+        struct ViewChange
+        {
+            Renderer::ViewId view;
+            Renderer::ViewDocumentRequests before;
+            Renderer::ViewDocumentRequests after;
+        };
+
+        /// @brief 只保有所改实体的记录和资产; 删除相机引起的 View 回退随本条一起重放.
+        struct SceneChange
+        {
+            Scene::Change change;
+            std::optional<ViewChange> cameraFallback;
+        };
+
+        using Entry = std::variant<VisibilityChange, ScaleChange, ViewChange, SceneChange>;
 
         void Commit(Entry entry) noexcept;
         [[nodiscard]] std::optional<Core::BoundedText> ApplyGesture(Renderer::View *view,
                                                                     const ScaleGesture &gesture) noexcept;
-        [[nodiscard]] std::optional<Core::BoundedText> Replay(Renderer::View *view, HistoryAction action) noexcept;
+        [[nodiscard]] std::optional<Core::BoundedText> Replay(Renderer::View *view, Scene::Scene *scene,
+                                                              HistoryAction action, bool frozen);
 
         EditSessionId m_Id;
         /// @brief 已应用记录位于 [0, m_Applied), 待重做记录位于 [m_Applied, m_Count).

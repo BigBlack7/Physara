@@ -32,7 +32,7 @@ namespace Physara::Editor::Detail
         Panel{ActionId::ToggleInspector, "Inspector", "Inspector###Physara.Inspector", "Ctrl+Shift+I"},
         Panel{ActionId::ToggleViewport, "Viewport", "Viewport###Physara.Viewport", nullptr}};
 
-    // 空场景提供层级入口, 实体创建等到有对应领域数据时才启用.
+    // D06-T06 接入实际层级和创作面板前保留占位, 这里尚未消费活动 Scene 的实体表.
     static void DrawHierarchy()
     {
         ImGui::TextUnformatted("No scene loaded.");
@@ -60,7 +60,7 @@ namespace Physara::Editor::Detail
     }
 
     // 用权威比例快照初始化本轮控件, 从 ImGui 项状态提取比例意图.
-    static void DrawInspector(const std::optional<SelectionId> &selection, const Renderer::ViewSettings &view,
+    static void DrawInspector(const std::optional<Scene::EntityHandle> &selection, const Renderer::ViewSettings &view,
                               const std::optional<Core::BoundedText> &editError, bool allowActions,
                               WorkspaceFrame &frame)
     {
@@ -87,8 +87,10 @@ namespace Physara::Editor::Detail
             // 让它用原有抓取偏移和舍入计算末段位置. 真实的释放边沿仍供手势判断.
             mouseDown = true;
         }
+        ImGui::BeginDisabled(!allowActions);
         const bool changed = ImGui::SliderFloat(scaleLabel, &scale, Renderer::MinRenderScale,
                                                 Renderer::MaxRenderScale, "%.2fx", ImGuiSliderFlags_NoInput);
+        ImGui::EndDisabled();
         if (sampleRelease)
         {
             // 先恢复真实按钮状态并结束活动项, 再读取项状态以提交本次末段采样.
@@ -253,12 +255,51 @@ namespace Physara::Editor::Detail
         }
     }
 
+    /// @brief 文件业务由会话推进. 显示对应阶段, 并用该操作的编号产生取消意图.
+    static void DrawDocumentStatus(const SceneDocumentStatus &document, bool allowActions, WorkspaceFrame &frame)
+    {
+        if (!document.modified && !document.lastFailure && document.phase == SceneFilePhase::Idle)
+        {
+            return;
+        }
+        if (ImGui::BeginMenu("Scene status"))
+        {
+            using enum SceneFilePhase;
+            switch (document.phase)
+            {
+            case Idle: break;
+            case Reading: ImGui::TextUnformatted("Reading scene file"); break;
+            case LoadingAssets: ImGui::TextUnformatted("Loading referenced assets"); break;
+            case Validating: ImGui::TextUnformatted("Validating scene"); break;
+            case Saving: ImGui::TextUnformatted("Saving scene"); break;
+            case Cancelling: ImGui::TextUnformatted("Cancelling scene file operation"); break;
+            }
+            if (document.modified)
+            {
+                ImGui::TextUnformatted("Unsaved changes");
+            }
+            if (document.lastFailure)
+            {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 35.0f * ImGui::GetFontSize());
+                ImGui::TextUnformatted(document.lastFailure->View().data());
+                ImGui::PopTextWrapPos();
+            }
+            if (document.operation != 0 && document.phase != Cancelling &&
+                ImGui::MenuItem("Cancel scene operation", nullptr, false, allowActions))
+            {
+                frame.cancelDocument = document.operation;
+            }
+            ImGui::EndMenu();
+        }
+    }
+
     // 菜单先收集本轮意图, 再按快照布局面板. 帧诊断来自上一次 RenderFrame, 不在 Draw 内推进渲染或重试.
-    WorkspaceFrame Workspace::Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
+    WorkspaceFrame Workspace::Draw(const std::optional<Scene::EntityHandle> &selection, const Viewport &viewport,
                                     EditState edits, const Renderer::ViewSettings &view,
                                     const Platform::WindowSettings *window,
                                     const std::optional<Core::BoundedText> &editError,
-                                    const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions)
+                                    const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions,
+                                    const std::optional<SceneDocumentStatus> &document, bool frozen)
     {
         WorkspaceFrame frame;
         if (ImGui::BeginMainMenuBar())
@@ -288,6 +329,10 @@ namespace Physara::Editor::Detail
                 ImGui::EndMenu();
             }
             DrawWindowMenu(window, frame, allowActions);
+            if (document)
+            {
+                DrawDocumentStatus(*document, allowActions, frame);
+            }
             if (frameDiagnostic && ImGui::BeginMenu("Frame status"))
             {
                 // 有诊断记录时菜单持续存在. 后继正常帧保留首错正文, 只更新恢复状态.
@@ -336,7 +381,7 @@ namespace Physara::Editor::Detail
                     DrawHierarchy();
                     break;
                 case ActionId::ToggleInspector:
-                    DrawInspector(selection, view, editError, allowActions, frame);
+                    DrawInspector(selection, view, editError, allowActions && !frozen, frame);
                     break;
                 }
             }

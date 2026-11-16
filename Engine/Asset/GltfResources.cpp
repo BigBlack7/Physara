@@ -216,6 +216,8 @@ namespace Physara::Asset::Gltf
                 throw ImportCancelled{};
             case Core::ResourceError::CannotOpen:
                 uri.Error(error->description.View(), AssetError::CannotOpen);
+            case Core::ResourceError::IncompleteWrite:
+                uri.Error(error->description.View(), AssetError::UnexpectedFailure);
             }
         }
         auto snapshot = std::get<Core::ResourceBytes>(std::move(read));
@@ -402,5 +404,15 @@ namespace Physara::Asset::Gltf
             return *digest;
         }
         Reject(AssetError::HashFailed, "/", "Cannot compute model sourceVersion");
+    }
+
+    void Resources::AppendInputFiles(std::vector<ModelInputFile> &inputs) const
+    {
+        inputs.reserve(inputs.size() + m_External.size());
+        for (const auto &[path, file] : m_External)
+        {
+            CheckStop(m_Stop);
+            inputs.push_back({path, file.fingerprint, file.bytes.size()});
+        }
     }
 }

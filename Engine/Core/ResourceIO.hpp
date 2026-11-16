@@ -1,9 +1,11 @@
 #pragma once
 
 /// @file
-/// @brief 规范化项目相对资源路径, 在实际文件句柄上校验并取得有界字节快照.
+/// @brief 规范化项目相对资源路径, 在实际文件句柄上校验读取, 并在受控目录安全替换文件.
 
+#include <atomic>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -21,6 +23,7 @@ namespace Physara::Core
         InvalidPath,
         CannotOpen,
         IncompleteRead,
+        IncompleteWrite,
         ByteLimit,
         HashFailed,
         Cancelled
@@ -68,4 +71,27 @@ namespace Physara::Core
     [[nodiscard]] std::variant<ResourceBytes, ResourceFailure>
     ReadResourceFile(const std::filesystem::path &root, const ResourcePath &source, std::size_t maxBytes,
                      std::stop_token stop = {});
+
+    /// @brief 文件替换与取消的一次性裁决. 取得提交资格后只能报告实际文件结果.
+    class ResourceCommit final
+    {
+    public:
+        /// @brief 撤销尚未取得的提交资格. 已取消时仍返回 true, 已进入提交时返回 false.
+        [[nodiscard]] bool Cancel() noexcept;
+        [[nodiscard]] bool IsCancelled() const noexcept;
+        /// @brief writer 在最后可取消点竞争一次提交资格, 失败时不得替换目标.
+        [[nodiscard]] bool Begin() noexcept;
+
+    private:
+        enum class Phase { Pending, Cancelled, Committing };
+        std::atomic<Phase> m_Phase{Phase::Pending};
+    };
+
+    /// @brief 写入已校验目录的独占临时文件, 刷新并关闭写入句柄后按同目录替换.
+    /// @note 同步 worker 入口. 失败或提交前取消保留目标, 清理只作用于本次取得的临时句柄.
+    /// 目标父目录须已存在; data 仅在调用中借用, 编码与大小预算由调用方确定.
+    /// @return 空值表示实际替换成功. commit 只用于这一次写入, 取得资格后不再接受取消.
+    [[nodiscard]] std::optional<ResourceFailure>
+    WriteResourceFile(const std::filesystem::path &root, const ResourcePath &target, std::span<const std::byte> data,
+                      ResourceCommit &commit, std::stop_token stop = {});
 }

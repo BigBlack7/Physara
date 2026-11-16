@@ -4,7 +4,8 @@ physara_add_shader_interface(EditorUi "../Engine/Shader/Interface/EditorUi.json"
 physara_add_shader_program(EditorUi EditorUi "../Shaders/UI/EditorUi.json" "../Shaders")
 
 # Editor 拥有 UI 会话, 编辑历史, 工作区, 原生输入适配及公共 RHI 绘制入口.
-# Commands 随会话编译, 通过 Renderer 的公开 View 入口应用及重放比例.
+# Commands 随会话编译, 通过 Scene/View 的领域入口应用和重放事务.
+# Session 组合文档与资产工作, JSON 只在私有编解码边界出现.
 add_library(PhysaraEditor STATIC
     Commands/EditHistory.hpp
     Commands/EditHistory.cpp
@@ -13,6 +14,12 @@ add_library(PhysaraEditor STATIC
     Session/UiFrame.hpp
     Session/ActionRouter.hpp
     Session/ActionRouter.cpp
+    Session/SceneDocument.hpp
+    Session/SceneDocumentRead.cpp
+    Session/SceneDocumentWrite.cpp
+    Session/SceneDocumentTypes.hpp
+    Session/SceneDocuments.hpp Session/SceneDocuments.cpp
+    Session/SceneDocumentAssets.hpp Session/SceneDocumentAssets.cpp
     Panels/Workspace.hpp
     Panels/Workspace.cpp
     Viewport/Viewport.hpp
@@ -32,8 +39,9 @@ set_property(TARGET PhysaraEditor PROPERTY PHYSARA_UI_PACKAGE_TARGET "${EditorUi
 target_include_directories(PhysaraEditor PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
 # Session 公开 Platform 输入, RHI 绘制值和 Renderer 的 View 请求. Shader 加载及 ImGui/GLFW 留在私有实现.
-# 适配直接读取归还后的指针位置, 因此私有链接 glfw.
-target_link_libraries(PhysaraEditor PUBLIC PhysaraPlatform PhysaraRHI PhysaraRenderer PRIVATE PhysaraShader imgui glfw)
+# 适配直接读取归还后的指针位置. 场景 JSON 类型只在文件编解码内部使用.
+target_link_libraries(PhysaraEditor PUBLIC PhysaraPlatform PhysaraRHI PhysaraRenderer
+    PRIVATE PhysaraShader imgui glfw nlohmann_json)
 target_compile_definitions(PhysaraEditor PRIVATE GLFW_INCLUDE_NONE)
 target_compile_features(PhysaraEditor PUBLIC cxx_std_20)
 set_target_properties(PhysaraEditor PROPERTIES CXX_EXTENSIONS OFF)

@@ -6,6 +6,7 @@ add_library(PhysaraAsset STATIC
     ByteBudget.hpp
     ImageDecode.hpp ImageDecode.cpp
     ModelAsset.hpp
+    SourceVerification.hpp SourceVerification.cpp
     GltfDocument.hpp GltfDocument.cpp
     GltfScene.hpp GltfScene.cpp
     GltfResources.hpp GltfResources.cpp

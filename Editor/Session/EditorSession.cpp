@@ -1,6 +1,7 @@
 #include "EditorSession.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 #include <imgui.h>
@@ -11,10 +12,12 @@
 #include "ImGui/GlfwPlatform.hpp"
 #include "ImGui/UiRenderer.hpp"
 #include "Panels/Workspace.hpp"
+#include "SceneDocuments.hpp"
 
 /// @file
 /// @brief 将宿主发布推进为一次 Editor 轮次. 先处理输入失效边沿, 再封存布局和 DrawData.
 /// 编辑历史在封存后应用字段意图, 视口像素请求采用同批度量与此时的 View 请求.
+/// 文档协调器另由 CPU 输入边界推进, 与本轮 UI 准备及 GPU 合成的成功与否分离.
 
 namespace Physara::Editor
 {
@@ -33,13 +36,29 @@ namespace Physara::Editor
         // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
         std::optional<Renderer::ViewportRequest> viewportRequest;
-        std::optional<Detail::SelectionId> selection;
+        std::optional<Scene::EntityHandle> selection;
+        std::unique_ptr<Detail::SceneDocuments> documents;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
         Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
         // 上一轮是否可接收交互, 与本批次的窗口事实合用.
         bool inputAvailable = true;
         // 上一轮是否跳过 UI 帧, 用于恢复时重建时间基线.
         bool suspended = false;
+
+        /// @brief 同时核对文档和主 View 身份, 不让上一文档的意图作用于当前 owner.
+        [[nodiscard]] bool MatchesDocument(Scene::SceneId id, const Renderer::View &view) const noexcept
+        {
+            return documents && documents->MainView() == view.Id() && documents->Active().Id() == id;
+        }
+
+        /// @brief 删除, 历史重放或文档替换后清理失效选择, 不按稳定 ID 自动选择重建后的实体.
+        void RetireSelection() noexcept
+        {
+            if (selection && documents && !documents->Active().Get(*selection))
+            {
+                selection.reset();
+            }
+        }
     };
 
     EditorSession::EditorSession() : m_State(std::make_unique<State>())
@@ -104,6 +123,149 @@ namespace Physara::Editor
         return session;
     }
 
+    std::optional<Core::BoundedText>
+    EditorSession::AttachSceneDocument(std::filesystem::path root, std::unique_ptr<Scene::Scene> scene,
+                                       const Renderer::View &view)
+    {
+        auto &state = *m_State;
+        if (state.documents || !scene || !root.is_absolute() ||
+            (state.viewport.Id().IsValid() && state.viewport.Id() != view.Id()))
+        {
+            return Core::BoundedText("Cannot attach a scene document to this session and main View");
+        }
+        state.documents = std::make_unique<Detail::SceneDocuments>(std::move(root), std::move(scene), view);
+        if (!state.viewport.Id().IsValid())
+        {
+            state.viewport = Detail::Viewport(view.Id(), {});
+        }
+        return std::nullopt;
+    }
+
+    const Scene::Scene *EditorSession::ActiveScene() const noexcept
+    {
+        return m_State->documents ? &m_State->documents->Active() : nullptr;
+    }
+
+    std::optional<SceneDocumentStatus> EditorSession::SceneStatus(const Renderer::View &view) const
+    {
+        const auto &docs = m_State->documents;
+        return docs && docs->MainView() == view.Id() ? std::optional(docs->Status(view)) : std::nullopt;
+    }
+
+    std::optional<Scene::EntityHandle> EditorSession::Selection() const noexcept
+    {
+        return m_State->selection;
+    }
+
+    bool EditorSession::Select(std::optional<Scene::EntityHandle> entity) noexcept
+    {
+        const auto *scene = ActiveScene();
+        if (entity && (!scene || !scene->Get(*entity)))
+        {
+            return false;
+        }
+        m_State->selection = entity;
+        return true;
+    }
+
+    std::optional<Core::BoundedText> EditorSession::EditScene(Scene::SceneId scene, Renderer::View &view,
+                                                             const Scene::Command &command)
+    {
+        auto &state = *m_State;
+        if (!state.MatchesDocument(scene, view) || state.documents->Frozen())
+        {
+            return Core::BoundedText("Scene edit requires the active, editable document");
+        }
+        try
+        {
+            auto result = state.edits->ApplyScene(state.documents->Active(), view, command);
+            state.RetireSelection();
+            return result;
+        }
+        catch (const std::exception &error)
+        {
+            return Core::BoundedText(error.what());
+        }
+    }
+
+    std::optional<Core::BoundedText> EditorSession::EditMainView(Scene::SceneId scene, Renderer::View &view,
+                                                                Renderer::ViewDocumentRequests requests)
+    {
+        auto &state = *m_State;
+        if (!state.MatchesDocument(scene, view) || state.documents->Frozen())
+        {
+            return Core::BoundedText("Main View edit requires the active, editable document");
+        }
+        try
+        {
+            return state.edits->ApplyView(state.documents->Active(), view, std::move(requests));
+        }
+        catch (const std::exception &error)
+        {
+            return Core::BoundedText(error.what());
+        }
+    }
+
+    std::optional<Core::BoundedText> EditorSession::ReplayEdit(Scene::SceneId scene, Renderer::View &view, bool undo)
+    {
+        auto &state = *m_State;
+        // 停机拒绝整个入口. Open 只冻结文档条目, 交给共享历史按实际条目类型判断重放资格.
+        if (!state.MatchesDocument(scene, view) || state.documents->IsStopped())
+        {
+            return Core::BoundedText("History replay requires an active document session and its main View");
+        }
+        try
+        {
+            auto &documents = *state.documents;
+            const Detail::EditAction action = undo ? Detail::HistoryAction::Undo : Detail::HistoryAction::Redo;
+            auto error = state.edits->Apply(state.edits->Id(), &view, {}, std::span(&action, 1),
+                                            &documents.Active(), documents.Frozen());
+            state.RetireSelection();
+            return error;
+        }
+        catch (const std::exception &error)
+        {
+            return Core::BoundedText(error.what());
+        }
+    }
+
+    std::optional<Core::BoundedText> EditorSession::RequestSceneFile(const SceneFileRequest &request,
+                                                                    Renderer::View &view)
+    {
+        auto &state = *m_State;
+        if (!state.documents)
+        {
+            return Core::BoundedText("No scene document is attached");
+        }
+        auto result = state.documents->Begin(request, view, *state.edits);
+        state.RetireSelection();
+        return result;
+    }
+
+    std::optional<Core::BoundedText> EditorSession::CancelSceneFile(std::uint64_t operation) noexcept
+    {
+        return m_State->documents ? m_State->documents->Cancel(operation) :
+            std::optional(Core::BoundedText("No scene document is attached"));
+    }
+
+    void EditorSession::AdvanceSceneDocument(Asset::AssetManager &assets, Renderer::View &view)
+    {
+        auto &state = *m_State;
+        if (state.documents)
+        {
+            state.documents->Advance(assets, view, *state.edits);
+            state.RetireSelection();
+        }
+    }
+
+    void EditorSession::ShutdownSceneDocument() noexcept
+    {
+        if (m_State->documents)
+        {
+            m_State->documents->Shutdown();
+        }
+    }
+
     // 结束前一轮 UI 借用, 在当前窗口输入边界生成布局, 编辑和宿主值请求.
     EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input, Renderer::View *view,
                                         const Platform::WindowSettings *window)
@@ -118,7 +280,8 @@ namespace Physara::Editor
         state.viewportLayout = {};
         state.viewportRequest.reset();
         auto &history = *state.edits;
-        const auto edits = history.Snapshot();
+        const bool frozen = state.documents && state.documents->Frozen();
+        const auto edits = history.Snapshot(frozen);
         if (view && view->Id() != state.viewport.Id())
         {
             state.editError.emplace("Editor frame received a View outside its session");
@@ -150,8 +313,9 @@ namespace Physara::Editor
             constexpr auto allPopups = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
             const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
             const auto settings = view ? view->Settings() : Renderer::ViewSettings{};
+            const auto document = view ? SceneStatus(*view) : std::nullopt;
             workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, window, state.editError,
-                                             state.frameDiagnostic, !discard);
+                                             state.frameDiagnostic, !discard, document, frozen);
             if (!discard)
             {
                 // 布局可释放弹出层或活动项. 已被占用的本批键盘输入不能随后触发工作区动作.
@@ -174,8 +338,25 @@ namespace Physara::Editor
         }
         // 暂停时也消费事务取消, 由活动 View 尝试还原拖拽起点.
         workspace.scale.cancelled |= discard;
-        auto editError = history.Apply(history.Id(), view, workspace.scale, workspace.edits);
-        if (editError || workspace.scale.preview || !workspace.edits.empty())
+        std::optional<Core::BoundedText> editError;
+        try
+        {
+            if (workspace.cancelDocument)
+            {
+                editError = CancelSceneFile(*workspace.cancelDocument);
+            }
+            if (!editError)
+            {
+                editError = history.Apply(history.Id(), view, workspace.scale, workspace.edits,
+                                          state.documents ? &state.documents->Active() : nullptr, frozen);
+            }
+        }
+        catch (const std::exception &error)
+        {
+            editError.emplace(error.what());
+        }
+        state.RetireSelection();
+        if (editError || workspace.scale.preview || !workspace.edits.empty() || workspace.cancelDocument)
         {
             state.editError = std::move(editError);
         }

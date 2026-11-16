@@ -3,6 +3,7 @@
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include <Core/FrameArena.hpp>
@@ -10,6 +11,7 @@
 /// @file
 /// @brief 生成用于验证视口尺寸, 颜色和方向的静态诊断纹理.
 /// 将范围校验, 候选准备和提交确认分开, 便于等待期间保留最后接受的颜色与比例.
+/// 持久请求单独预检并发布, 纯相机变化不推进用于诊断尺寸的比例请求代.
 
 namespace Physara::Renderer
 {
@@ -40,7 +42,7 @@ namespace Physara::Renderer
 
     ViewSettings View::Settings() const noexcept
     {
-        ViewSettings snapshot{.view = m_Id, .requestedScale = m_RequestedScale, .reason = m_Reason,
+        ViewSettings snapshot{.view = m_Id, .requestedScale = m_Document.renderScale, .reason = m_Reason,
                               .requestRevision = m_RequestRevision};
         if (m_Diagnostic)
         {
@@ -55,17 +57,90 @@ namespace Physara::Renderer
         {
             return Core::BoundedText("Render scale requires the active View and a finite value in [0.5, 1.0]");
         }
-        if (scale != m_RequestedScale)
+        if (scale != m_Document.renderScale)
         {
             // 每次实际变化分配请求代, 使回到同一比例也无法接受早先准备的候选.
-            if (!Core::AdvanceGeneration(m_RequestRevision))
+            if (m_RequestRevision == std::numeric_limits<std::uint64_t>::max() ||
+                !Core::AdvanceGeneration(m_DocumentRevision))
             {
                 return Core::BoundedText("View request revision exhausted");
             }
-            m_RequestedScale = scale;
-            m_Reason = ViewSettingReason::LayoutPending;
+            ApplyRenderScale(scale);
         }
         return std::nullopt;
+    }
+
+    ViewDocumentUpdate::ViewDocumentUpdate(ViewId view, std::uint64_t revision,
+                                           ViewDocumentRequests value) noexcept
+        : m_View(view), m_Revision(revision), m_Value(std::move(value))
+    {
+    }
+
+    std::optional<Core::BoundedText> View::ValidateDocumentRequests(const ViewDocumentRequests &requests) noexcept
+    {
+        if (!(requests.renderScale >= MinRenderScale && requests.renderScale <= MaxRenderScale))
+        {
+            return Core::BoundedText("Invalid mainView.requested.renderScale");
+        }
+        if (!Scene::IsValidPose(requests.cameraPose))
+        {
+            return Core::BoundedText("Invalid mainView.cameraPose");
+        }
+        if (requests.cameraEntityId && requests.cameraEntityId->empty())
+        {
+            return Core::BoundedText("Empty mainView.cameraEntityId");
+        }
+        return std::nullopt;
+    }
+
+    std::variant<ViewDocumentUpdate, Core::BoundedText>
+    View::PrepareDocumentUpdate(ViewId view, ViewDocumentRequests requests) const noexcept
+    {
+        if (view != m_Id)
+        {
+            return Core::BoundedText("Document update targets an expired View");
+        }
+        if (auto failure = ValidateDocumentRequests(requests))
+        {
+            return *failure;
+        }
+        constexpr auto Max = std::numeric_limits<std::uint64_t>::max();
+        const bool cameraChanged = requests.cameraPose != m_Document.cameraPose ||
+            requests.cameraEntityId != m_Document.cameraEntityId;
+        if ((requests != m_Document && m_DocumentRevision == Max) ||
+            (requests.renderScale != m_Document.renderScale && m_RequestRevision == Max) ||
+            (cameraChanged && m_CameraRevision == Max))
+        {
+            return Core::BoundedText("View document revision exhausted");
+        }
+        return ViewDocumentUpdate(m_Id, m_DocumentRevision, std::move(requests));
+    }
+
+    void View::PublishDocumentUpdate(ViewDocumentUpdate &&update) noexcept
+    {
+        assert(update.m_View == m_Id && update.m_Revision == m_DocumentRevision);
+        if (m_Document != update.m_Value)
+        {
+            ++m_DocumentRevision;
+            if (m_Document.cameraPose != update.m_Value.cameraPose ||
+                m_Document.cameraEntityId != update.m_Value.cameraEntityId)
+            {
+                ++m_CameraRevision;
+            }
+            if (m_Document.renderScale != update.m_Value.renderScale)
+            {
+                ApplyRenderScale(update.m_Value.renderScale);
+            }
+            m_Document = std::move(update.m_Value);
+        }
+    }
+
+    /// @brief 版号已经预留. 只更新比例使用的布局代, 保留最后被接受的输出.
+    void View::ApplyRenderScale(float scale) noexcept
+    {
+        ++m_RequestRevision;
+        m_Document.renderScale = scale;
+        m_Reason = ViewSettingReason::LayoutPending;
     }
 
     // 只复制已接受资源的强引用, 不调用 Prepare, 因而不借用当前布局或生成新候选.
@@ -117,12 +192,12 @@ namespace Physara::Renderer
             return outputs;
         }
         outputs.m_RequestRevision = request->requestRevision;
-        outputs.m_Scale = m_RequestedScale;
+        outputs.m_Scale = m_Document.renderScale;
         // 静态诊断图由实际采样尺寸确定. 相同尺寸可沿 Graphics 队列顺序直接读取已接受代.
         if (m_Diagnostic && m_Diagnostic->extent == extent)
         {
             outputs.m_Output = m_Diagnostic;
-            if (m_Reason != ViewSettingReason::None || m_RequestedScale != m_EffectiveScale)
+            if (m_Reason != ViewSettingReason::None || m_Document.renderScale != m_EffectiveScale)
             {
                 m_Reason = ViewSettingReason::SubmissionPending;
             }

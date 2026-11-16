@@ -1,8 +1,9 @@
 #pragma once
 
 /// @file
-/// @brief 持有主 View 的请求比例及最后接受的诊断颜色.
+/// @brief 持有主 View 的持久化相机与比例请求, 以及最后接受的诊断颜色.
 /// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
+/// 相机实体有效性由 Scene/View 的组合调用者确认, 本阶段不计算场景相机投影.
 
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
 #include <RHI.hpp>
+#include <Scene/Scene.hpp>
 #include "FrameGraph.hpp"
 
 namespace Physara::Core
@@ -29,6 +31,32 @@ namespace Physara::Renderer
     /// @brief 无单位渲染比例的闭区间. 初始请求使用上界.
     inline constexpr float MinRenderScale = 0.5f;
     inline constexpr float MaxRenderScale = 1.0f;
+
+    /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
+    struct ViewDocumentRequests
+    {
+        Scene::Pose cameraPose;
+        std::optional<Scene::EntityId> cameraEntityId;
+        float renderScale = MaxRenderScale;
+
+        bool operator==(const ViewDocumentRequests &) const = default;
+    };
+
+    /// @brief 已校验的 View 文档更新. 只可由创建它的 View 在同一请求代发布.
+    class ViewDocumentUpdate final
+    {
+    public:
+        ViewDocumentUpdate(ViewDocumentUpdate &&) noexcept = default;
+        ViewDocumentUpdate &operator=(ViewDocumentUpdate &&) noexcept = default;
+
+    private:
+        friend class View;
+        ViewDocumentUpdate(ViewId view, std::uint64_t revision, ViewDocumentRequests value) noexcept;
+
+        ViewId m_View;
+        std::uint64_t m_Revision;
+        ViewDocumentRequests m_Value;
+    };
 
     /// @brief 离屏目标的物理像素宽高. Editor 从本帧布局请求生成有效范围.
     struct ViewExtent
@@ -140,7 +168,7 @@ namespace Physara::Renderer
     /// @brief 计算紧密 RGBA8 像素字节数. 零尺寸或超出 32 MiB 诊断预算时返回 0.
     [[nodiscard]] std::size_t DiagnosticPixelBytes(ViewExtent extent) noexcept;
 
-    /// @brief 在 Device 的 owner 线程接收比例请求, 准备并发布诊断输出.
+    /// @brief 在 owner 线程管理持久化请求及独立 revision, 准备并发布诊断输出.
     /// @note 同尺寸可复用已接受的颜色. GPU 在途访问由原提交的引用保活.
     class View final
     {
@@ -156,6 +184,20 @@ namespace Physara::Renderer
         [[nodiscard]] ViewId Id() const noexcept { return m_Id; }
         /// @brief 按值读取比例请求, 最后确认的有效设置及当前原因.
         [[nodiscard]] ViewSettings Settings() const noexcept;
+        /// @brief 当前持久请求的借用, 不得跨请求更新保留其内部字符串引用.
+        [[nodiscard]] const ViewDocumentRequests &DocumentRequests() const noexcept { return m_Document; }
+        [[nodiscard]] std::uint64_t DocumentRevision() const noexcept { return m_DocumentRevision; }
+        [[nodiscard]] std::uint64_t CameraRevision() const noexcept { return m_CameraRevision; }
+
+        /// @brief 只校验值域. 具体相机实体归 Scene, 由组合调用者校验.
+        [[nodiscard]] static std::optional<Core::BoundedText>
+            ValidateDocumentRequests(const ViewDocumentRequests &requests) noexcept;
+        /// @brief 预检全部请求和版号, 允许调用者与 Scene 事务一起发布.
+        /// @note 返回值拥有候选请求, 准备本身不改写 owner; 有效输出仍由图形提交确认.
+        [[nodiscard]] std::variant<ViewDocumentUpdate, Core::BoundedText>
+            PrepareDocumentUpdate(ViewId view, ViewDocumentRequests requests) const noexcept;
+        /// @pre 来自此 View, 且准备后本 View 的持久请求未变更. 不影响已采纳的诊断资源.
+        void PublishDocumentUpdate(ViewDocumentUpdate &&update) noexcept;
         /// @brief 取得最后接受颜色的拥有型只读快照, 缺失时仍明确表示安全 UI 输入.
         /// @note 不产生新代或上传, 不改变请求及有效设置. 旧图身份不进入快照.
         /// 快照可跨后续 View 换代持有; 当前诊断 profile 不原地覆写已接受颜色.
@@ -183,12 +225,15 @@ namespace Physara::Renderer
     private:
         View(ViewId id, std::uint32_t maxTextureSize) noexcept
             : m_Id(id), m_MaxTextureSize(maxTextureSize) {}
+        void ApplyRenderScale(float scale) noexcept;
 
         ViewId m_Id;
         std::uint32_t m_MaxTextureSize;
         std::uint64_t m_LastGeneration = 0;
         std::uint64_t m_RequestRevision = 0;
-        float m_RequestedScale = MaxRenderScale;
+        ViewDocumentRequests m_Document;
+        std::uint64_t m_DocumentRevision = 0;
+        std::uint64_t m_CameraRevision = 0;
         float m_EffectiveScale = MaxRenderScale;
         ViewSettingReason m_Reason = ViewSettingReason::LayoutPending;
         std::optional<ViewOutput> m_Diagnostic;

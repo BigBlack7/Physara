@@ -1,4 +1,4 @@
-# Engine 在此装配 Core, CPU Asset, 独立 RenderGraph, View 和 Shader 目标.
+# Engine 在此装配 Core, CPU Asset 和 Scene, 独立 RenderGraph, View 和 Shader 目标.
 # Core 提供 CPU 基础机制. FrameArena 的复用时机由 Runtime 决定, 日志和 CNG 后端私有链接.
 add_library(PhysaraCore STATIC
     Core/Identity.hpp
@@ -22,14 +22,16 @@ target_compile_options(PhysaraCore PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Asset 使用 Core 的受控 I/O 和作业, 只在解码实现中消费 stb.
 add_subdirectory(Asset)
+add_subdirectory(Scene)
 
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
-# Renderer 管理诊断 View 的颜色代和产品上传声明. 公开头使用图值, 因此传播 RenderGraph 依赖.
+# Renderer 管理 View 的持久请求, 诊断颜色代和产品上传声明.
+# 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
 # Editor 与 Runtime 经此依赖消费公共图接口; Renderer 本身不反向依赖窗口或 UI.
 add_library(PhysaraRenderer STATIC Renderer/View.hpp Renderer/View.cpp Renderer/FrameGraph.hpp Renderer/FrameGraph.cpp)
-target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraRHI PhysaraRenderGraph)
+target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)

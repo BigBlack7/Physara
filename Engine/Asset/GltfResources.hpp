@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <Core/ResourceIO.hpp>
+#include <Asset/ModelAsset.hpp>
 
 namespace Physara::Asset::Gltf
 {
@@ -55,6 +56,9 @@ namespace Physara::Asset::Gltf
         [[nodiscard]] ImageInput Image(std::uint32_t index);
         /// @brief 对主源摘要、实际 scene 和已读取外部快照生成稳定指纹; 调用前须收集全部有效依赖.
         [[nodiscard]] Core::Sha256Digest Fingerprint(const Core::Sha256Digest &source, std::uint32_t scene) const;
+        /// @brief 保留已经验证的外部路径和摘要, 供固定版本直接核对当前磁盘输入.
+        /// @pre 已收集全部实际依赖; 主文件由调用者另行加入, 本入口不再次读取文件.
+        void AppendInputFiles(std::vector<ModelInputFile> &inputs) const;
 
     private:
         struct Backing

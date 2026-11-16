@@ -50,6 +50,7 @@ namespace Physara::Asset
     {
         Core::Sha256Digest fingerprint;
         Rgba8Image image;
+        std::size_t sourceByteCount; ///< 与 fingerprint 来自同一次受控读快照.
     };
 
     /// @brief 输入指纹与准入时的已发布版本相同, 直接复用该版本.
@@ -135,6 +136,7 @@ namespace Physara::Asset
         case Core::ResourceError::HashFailed:
             return {AssetError::HashFailed, error.description};
         case Core::ResourceError::Cancelled:
+        case Core::ResourceError::IncompleteWrite:
             break;
         }
         return {AssetError::UnexpectedFailure, error.description};
@@ -187,7 +189,8 @@ namespace Physara::Asset
             {
                 return {job.ticket, *error};
             }
-            return {job.ticket, ImageCandidate{snapshot.fingerprint, std::move(std::get<Rgba8Image>(decoded))}};
+            return {job.ticket, ImageCandidate{snapshot.fingerprint, std::move(std::get<Rgba8Image>(decoded)),
+                                               snapshot.bytes.size()}};
         }
         catch (const Gltf::ImportCancelled &)
         {
@@ -395,7 +398,7 @@ namespace Physara::Asset
                 {
                     // 新记录构造成功后才替换 owner 的引用. 旧读者继续保活旧像素及其预算.
                     auto record = std::make_shared<const ImageRecord>(entry->id, revision, entry->source.Relative(),
-                        candidate.fingerprint, std::move(candidate.image));
+                        candidate.fingerprint, std::move(candidate.image), candidate.sourceByteCount);
                     entry->published = std::move(record);
                     entry->state = AssetState::CpuReady;
                     return true;

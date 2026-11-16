@@ -4,6 +4,7 @@
 /// @brief Editor 在宿主线程上的会话入口. 从窗口输入发布生成 CPU UI 帧.
 /// 会话应用领域意图后向 Runtime 交付视口像素请求及独立的宿主请求.
 /// 接入 renderer 时, 同一份封存 UI 还用于准备图内上传与合成, 会话不保存本帧 GraphId.
+/// 装配 Scene 后还拥有单文档操作与选择, 文件结果在 CPU 输入边界整体发布.
 
 #include <memory>
 #include <optional>
@@ -13,6 +14,7 @@
 #include <DeviceHost.hpp>
 
 #include "UiFrame.hpp"
+#include "SceneDocumentTypes.hpp"
 
 namespace Physara::Editor
 {
@@ -28,7 +30,7 @@ namespace Physara::Editor
         std::optional<Renderer::ViewportRequest> viewport; ///< 本轮主 View 与可见布局匹配时发布, 单位为离屏像素.
     };
 
-    /// @brief 拥有单窗口 UI context, 工作区, 编辑历史, 输入适配和可选的 RHI renderer.
+    /// @brief 拥有单窗口 UI context, 工作区, 文档与编辑历史, 输入适配和可选的 RHI renderer.
     /// @note 在宿主 owner 线程创建, 推进和销毁. 会话必须在宿主关闭前析构以恢复原回调.
     class EditorSession final
     {
@@ -48,6 +50,43 @@ namespace Physara::Editor
         ~EditorSession();
         EditorSession(const EditorSession &) = delete;
         EditorSession &operator=(const EditorSession &) = delete;
+
+        /// @brief 在首帧前接入实际项目资源根和活动 Scene. 会话拥有 Scene 并负责其整体替换.
+        /// @note 只能接入一次, View 须与会话主视口一致. root 在实际文件操作时核对物理位置.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            AttachSceneDocument(std::filesystem::path root, std::unique_ptr<Scene::Scene> scene,
+                                const Renderer::View &view);
+        /// @brief 返回活动 Scene 的只读借用, 成功 New/Open 或会话销毁后失效; 未接入时为空.
+        [[nodiscard]] const Scene::Scene *ActiveScene() const noexcept;
+        /// @brief 复制当前文档状态, 主 View 失配或未接入文档时为空.
+        [[nodiscard]] std::optional<SceneDocumentStatus> SceneStatus(const Renderer::View &view) const;
+        [[nodiscard]] std::optional<Scene::EntityHandle> Selection() const noexcept;
+        /// @brief 只接受活动 Scene 中仍有效的 handle, 空值清除选择; 选择不改变文档保存版本.
+        [[nodiscard]] bool Select(std::optional<Scene::EntityHandle> entity) noexcept;
+
+        /// @brief CPU 编辑边界的类型化入口. 当前文档的有效修改和历史共享同一提交路径.
+        /// @note Open 冻结期间拒绝文档编辑. 删除或撤销后退役无效选择, 相机回退由同一历史事务处理.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            EditScene(Scene::SceneId scene, Renderer::View &view, const Scene::Command &command);
+        [[nodiscard]] std::optional<Core::BoundedText>
+            EditMainView(Scene::SceneId scene, Renderer::View &view, Renderer::ViewDocumentRequests requests);
+        /// @brief 为活动文档和主 View 撤销或重做会话历史.
+        /// @note Open 期间可重放会话显隐. 冻结的文档条目保留原状态和历史游标.
+        /// @return 成功, 无可重放记录或文档条目被 Open 门控时返回空, 后两者不移动游标.
+        /// 身份失配, 会话停机或领域重放失败时返回原因.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            ReplayEdit(Scene::SceneId scene, Renderer::View &view, bool undo);
+
+        /// @brief 接收本轮文件意图. 打开和保存的异步结果由 CPU 输入边界推进.
+        /// @return 空值表示意图已接受, 不代表异步 I/O 已成功; 后续进度和错误由 SceneStatus 返回.
+        [[nodiscard]] std::optional<Core::BoundedText>
+            RequestSceneFile(const SceneFileRequest &request, Renderer::View &view);
+        /// @brief 按操作编号请求取消, 进入替换提交后返回不可取消原因.
+        [[nodiscard]] std::optional<Core::BoundedText> CancelSceneFile(std::uint64_t operation) noexcept;
+        /// @brief 在资产发布之后推进文件工作并退役旧选择, 不依赖可绘制状态或空闲 GPU 槽.
+        void AdvanceSceneDocument(Asset::AssetManager &assets, Renderer::View &view);
+        /// @brief 所有退出路径在销毁发布目标前收拢后台文件任务.
+        void ShutdownSceneDocument() noexcept;
 
         /// @brief 消费继续运行的输入, 封存 UI 后应用本会话的字段编辑.
         /// @pre 调用方已处理终止条件. input 由本会话借用的宿主发布, 每批按发布顺序最多调用一次.

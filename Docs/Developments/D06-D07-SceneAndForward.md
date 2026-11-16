@@ -41,13 +41,15 @@
 
 **职责位置：** Engine/Scene、Editor/Session。**前置：** [D06-T02](#d06-t02)。**架构依据：** [4.1](../Architecture.md#scene)、[3.4](../Architecture.md#asset-persistence)。
 
-- [ ] 落地 entt、EntityHandle generation、稳定实体身份、父子关系和 SourceRef；从 glTF 资产节点实例化独立 Scene 实例。
-- [ ] 验证无环层级、TRS 可表达性和非均匀/负缩放，按脏根传播 world transform/bounds，无脏根不推进版本；区分保存用 DocumentRevision、非相机静态内容的 RenderContentRevision 和 CameraRevision，撤销/重做沿同一入口更新。
-- [ ] 实现新增/删除/重设父级及实例参数覆盖的领域入口；材质字段和纹理资源/UV/sampler 覆盖归 Scene，未覆盖值引用只读模型，删除后旧请求/选中身份失效，Scene 不创建 GPU 资源。
-- [ ] 由 EditorSession 串行组合单个 `Assets/Scenes/*.scene.json` 的读写；Scene 提供实体/实例覆盖快照和候选校验，主 View 提供相机及 requested 配置；资源引用统一相对资源根，不复制模型或纹理正文。
-- [ ] 打开期间冻结文档编辑并保留 UI/取消；校验通过后整体替换 Scene 和主 View，失败保留原状态。保存使用只读快照并允许后续编辑，成功仅标记对应版本，另存路径只在对应操作成功后更新。
+- [x] 落地 entt、EntityHandle generation、稳定实体身份、父子关系和 SourceRef；从 glTF 资产节点实例化独立 Scene 实例。
+- [x] 验证无环层级、TRS 可表达性和非均匀/负缩放，按脏根传播 world transform/bounds，无脏根不推进版本；区分保存用 DocumentRevision、非相机静态内容的 RenderContentRevision 和 CameraRevision，撤销/重做沿同一入口更新。
+- [x] 实现新增/删除/重设父级及实例参数覆盖的领域入口；材质字段和纹理资源/UV/sampler 覆盖归 Scene，未覆盖值引用只读模型，删除后旧请求/选中身份失效，Scene 不创建 GPU 资源。
+- [x] 由 EditorSession 串行组合单个 `Assets/Scenes/*.scene.json` 的读写；Scene 提供实体/实例覆盖快照和候选校验，主 View 提供相机及 requested 配置；资源引用统一相对资源根，不复制模型或纹理正文。
+- [x] 打开期间冻结文档编辑并保留 UI/取消；校验通过后整体替换 Scene 和主 View，失败保留原状态。保存使用只读快照并允许后续编辑，成功仅标记对应版本，另存路径只在对应操作成功后更新。
 
 **完成条件：** 父子更新和实体复用可测，同一资产可多实例使用且不共享可变场景状态；JSON 保存重开能恢复当前承诺的实例与设置，模型正文仍由 glTF/GLB 提供。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-16-add-static-scene-documents/tasks.md#final-verification)
 
 <a id="d06-t04"></a>
 ### D06-T04 · 提取 SceneFrame 并准备相机与可见集
@@ -59,6 +61,8 @@
 - [ ] 实现可解释的 CPU bounds/culling 与无效/零尺寸 View 处理，稳定视锥为最大 jitter/滤波范围留 guard band；相机坐标与裁剪结果使用固定非对称场景验证。
 
 **完成条件：** 构图和 execute 不遍历/修改 ECS，多视口不会复制整份材质与场景数据。
+
+**状态：** 前置已齐备，待建立 change。
 
 <a id="d06-t05"></a>
 ### D06-T05 · 建立几何/纹理驻留和首个 Forward 子图

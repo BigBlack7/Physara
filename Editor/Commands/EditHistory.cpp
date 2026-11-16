@@ -1,8 +1,8 @@
 #include "EditHistory.hpp"
 
 /// @file
-/// @brief 在 CPU 帧边界应用比例手势, 离散编辑和历史重放.
-/// 活动手势保存首值和最近接受值, 完成的实际修改才进入有界历史.
+/// @brief 在 CPU 帧边界应用布局, 比例手势, Scene/View 事务及其历史重放.
+/// 活动手势保存首值和最近接受值. Scene 记录按稳定 ID 重放, 相机回退与实体事务一起提交.
 
 #include <algorithm>
 #include <utility>
@@ -20,9 +20,31 @@ namespace Physara::Editor::Detail
         }
     }
 
-    EditState EditHistory::Snapshot() const noexcept
+    EditState EditHistory::Snapshot(bool frozen) const noexcept
     {
-        return {m_ViewportVisible, !m_Active && m_Applied != 0, !m_Active && m_Applied < m_Count};
+        const auto mayReplay = [this, frozen](std::size_t index)
+        {
+            return !m_Active && (!frozen || std::holds_alternative<VisibilityChange>(m_Entries[index]));
+        };
+        return {m_ViewportVisible, m_Applied != 0 && mayReplay(m_Applied - 1),
+                m_Applied < m_Count && mayReplay(m_Applied)};
+    }
+
+    void EditHistory::Clear() noexcept
+    {
+        for (std::size_t i = 0; i < m_Count; ++i)
+        {
+            m_Entries[i] = VisibilityChange{};
+        }
+        m_Count = m_Applied = 0;
+        m_Active.reset();
+    }
+
+    std::optional<Core::BoundedText> EditHistory::CancelGesture(Renderer::View &view) noexcept
+    {
+        ScaleGesture cancelled{};
+        cancelled.cancelled = true;
+        return ApplyGesture(&view, cancelled);
     }
 
     // 预览, 恢复和重放都借用同一个比例入口, 由 View 确认目标和取值.
@@ -39,13 +61,17 @@ namespace Physara::Editor::Detail
     // 在当前应用位置追加记录. 撤销与重做共享同一固定容量.
     void EditHistory::Commit(Entry entry) noexcept
     {
-        // 只在新编辑完成时截断 Redo. 满时移除最早的一项, 值不拥有外部资源.
+        // 只在新编辑完成时截断 Redo. 满时移除最早的一项, 同时释放它保有的固定模型和图像引用.
         if (m_Applied == Capacity)
         {
             std::move(m_Entries.begin() + 1, m_Entries.end(), m_Entries.begin());
             --m_Applied;
         }
         m_Entries[m_Applied++] = std::move(entry);
+        for (std::size_t i = m_Applied; i < m_Count; ++i)
+        {
+            m_Entries[i] = VisibilityChange{};
+        }
         m_Count = m_Applied;
     }
 
@@ -102,9 +128,10 @@ namespace Physara::Editor::Detail
     }
 
     // 先应用栈顶记录对应的字段值, 接受后才推进历史游标.
-    std::optional<Core::BoundedText> EditHistory::Replay(Renderer::View *view, HistoryAction action) noexcept
+    std::optional<Core::BoundedText> EditHistory::Replay(Renderer::View *view, Scene::Scene *scene,
+                                                        HistoryAction action, bool frozen)
     {
-        const auto state = Snapshot();
+        const auto state = Snapshot(frozen);
         const bool undo = action == HistoryAction::Undo;
         if (undo ? !state.canUndo : !state.canRedo)
         {
@@ -118,10 +145,47 @@ namespace Physara::Editor::Detail
                 return error;
             }
         }
+        else if (const auto *visibility = std::get_if<VisibilityChange>(&entry))
+        {
+            m_ViewportVisible = undo ? visibility->before : visibility->after;
+        }
         else
         {
-            const auto &visibility = std::get<VisibilityChange>(entry);
-            m_ViewportVisible = undo ? visibility.before : visibility.after;
+            const auto *sceneChange = std::get_if<SceneChange>(&entry);
+            if (sceneChange && !scene)
+            {
+                return Core::BoundedText("Scene edit belongs to an expired document");
+            }
+            const auto *viewChange = sceneChange ?
+                (sceneChange->cameraFallback ? &*sceneChange->cameraFallback : nullptr) : &std::get<ViewChange>(entry);
+            std::optional<Renderer::ViewDocumentUpdate> viewUpdate;
+            if (viewChange)
+            {
+                // 先准备可能失败的 View 更新. Scene 接受后才能无分配地发布, 避免撤销只恢复一个 owner.
+                const auto &expected = undo ? viewChange->after : viewChange->before;
+                if (!view || view->DocumentRequests() != expected)
+                {
+                    return Core::BoundedText("View history no longer matches its target");
+                }
+                auto update = view->PrepareDocumentUpdate(viewChange->view, undo ? viewChange->before :
+                                                                                  viewChange->after);
+                if (auto *error = std::get_if<Core::BoundedText>(&update))
+                {
+                    return *error;
+                }
+                viewUpdate = std::get<Renderer::ViewDocumentUpdate>(std::move(update));
+            }
+            if (sceneChange)
+            {
+                if (auto error = scene->Replay(sceneChange->change, undo))
+                {
+                    return error;
+                }
+            }
+            if (viewUpdate)
+            {
+                view->PublishDocumentUpdate(std::move(*viewUpdate));
+            }
         }
         if (undo)
         {
@@ -136,15 +200,19 @@ namespace Physara::Editor::Detail
 
     std::optional<Core::BoundedText> EditHistory::Apply(EditSessionId session, Renderer::View *view,
                                                        const ScaleGesture &gesture,
-                                                       std::span<const EditAction> actions) noexcept
+                                                       std::span<const EditAction> actions,
+                                                       Scene::Scene *scene, bool frozen)
     {
         if (!m_Id.IsValid() || session != m_Id)
         {
             return Core::BoundedText("Editor edit belongs to an expired session");
         }
-        if (auto error = ApplyGesture(view, gesture))
+        if (!frozen)
         {
-            return error;
+            if (auto error = ApplyGesture(view, gesture))
+            {
+                return error;
+            }
         }
         // 每项按届时的 owner 状态应用. 返回失败时, 前面已接受的字段和历史仍有效.
         for (const auto &action : actions)
@@ -159,6 +227,10 @@ namespace Physara::Editor::Detail
             }
             else if (const auto *scale = std::get_if<SetViewScale>(&action))
             {
+                if (frozen)
+                {
+                    return Core::BoundedText("Document edits are frozen while opening");
+                }
                 if (m_Active)
                 {
                     return Core::BoundedText("Render scale already has an active edit");
@@ -173,11 +245,94 @@ namespace Physara::Editor::Detail
                     Commit(ScaleChange{scale->view, before, scale->scale});
                 }
             }
-            else if (auto error = Replay(view, std::get<HistoryAction>(action)))
+            else if (auto error = Replay(view, scene, std::get<HistoryAction>(action), frozen))
             {
                 return error;
             }
         }
+        return std::nullopt;
+    }
+
+    std::optional<Core::BoundedText> EditHistory::ApplyScene(Scene::Scene &scene, Renderer::View &view,
+                                                            const Scene::Command &command)
+    {
+        if (m_Active)
+        {
+            return Core::BoundedText("Finish the active edit before changing the scene");
+        }
+        auto planned = scene.Plan(command);
+        if (const auto *failure = std::get_if<Core::BoundedText>(&planned))
+        {
+            return *failure;
+        }
+        SceneChange entry{std::get<Scene::Change>(std::move(planned)), {}};
+        if (entry.change.Empty())
+        {
+            return std::nullopt;
+        }
+        const auto &current = view.DocumentRequests();
+        std::optional<Renderer::ViewDocumentUpdate> viewUpdate;
+        if (current.cameraEntityId)
+        {
+            const auto &id = *current.cameraEntityId;
+            const auto hasCamera = [&id](const Scene::EntityRecord &record)
+            {
+                return record.id == id && record.properties.camera.has_value();
+            };
+            if (std::ranges::any_of(entry.change.before, hasCamera) &&
+                std::ranges::none_of(entry.change.after, hasCamera))
+            {
+                auto next = current;
+                next.cameraEntityId.reset();
+                auto update = view.PrepareDocumentUpdate(view.Id(), next);
+                if (auto *error = std::get_if<Core::BoundedText>(&update))
+                {
+                    return *error;
+                }
+                viewUpdate = std::get<Renderer::ViewDocumentUpdate>(std::move(update));
+                entry.cameraFallback = ViewChange{view.Id(), current, std::move(next)};
+            }
+        }
+        if (auto failure = scene.Replay(entry.change, false))
+        {
+            return failure;
+        }
+        // Scene 已接受实际前后记录, 此后的 View 发布和历史移动都不再分配.
+        if (viewUpdate)
+        {
+            view.PublishDocumentUpdate(std::move(*viewUpdate));
+        }
+        Commit(std::move(entry));
+        return std::nullopt;
+    }
+
+    std::optional<Core::BoundedText> EditHistory::ApplyView(const Scene::Scene &scene, Renderer::View &view,
+                                                           Renderer::ViewDocumentRequests value)
+    {
+        if (m_Active)
+        {
+            return Core::BoundedText("Finish the active edit before changing the main View");
+        }
+        if (value.cameraEntityId)
+        {
+            const auto entity = scene.Find(*value.cameraEntityId);
+            if (!entity || !scene.Get(*entity)->record.properties.camera)
+            {
+                return Core::BoundedText("Main View requires a camera in the active scene");
+            }
+        }
+        if (value == view.DocumentRequests())
+        {
+            return std::nullopt;
+        }
+        auto update = view.PrepareDocumentUpdate(view.Id(), value);
+        if (const auto *error = std::get_if<Core::BoundedText>(&update))
+        {
+            return *error;
+        }
+        auto previous = view.DocumentRequests();
+        view.PublishDocumentUpdate(std::get<Renderer::ViewDocumentUpdate>(std::move(update)));
+        Commit(ViewChange{view.Id(), std::move(previous), std::move(value)});
         return std::nullopt;
     }
 }

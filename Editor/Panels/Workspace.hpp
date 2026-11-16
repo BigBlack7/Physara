@@ -12,14 +12,13 @@
 #include <DeviceHost.hpp>
 
 #include "Commands/EditHistory.hpp"
+#include "Session/SceneDocumentTypes.hpp"
 #include "Session/UiFrame.hpp"
 #include "Viewport/Viewport.hpp"
 
 namespace Physara::Editor::Detail
 {
     struct InputClaims;
-    struct SelectionIdentityTag;
-    using SelectionId = Core::Identity<SelectionIdentityTag>;
 
     /// @brief 固定面板的显隐动作. 前两项的序号同时索引本地展示状态.
     enum class ActionId : std::uint8_t
@@ -38,6 +37,7 @@ namespace Physara::Editor::Detail
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;
+        std::optional<std::uint64_t> cancelDocument; ///< 本轮看到的文件操作编号, 会话接受时再次核对资格.
     };
 
     /// @brief 管理主窗口停靠和展示状态. 主视口显隐及比例由领域快照提供.
@@ -48,11 +48,14 @@ namespace Physara::Editor::Detail
         /// @param window 当前宿主设置的短期借用. 空值时省略窗口设置菜单.
         /// @param frameDiagnostic 会话拥有的最近失败及恢复状态, 本轮只读, 与 Inspector 显隐独立.
         /// @param allowActions 输入可用时才收集动作. 输入失效轮次仍可构建布局.
-        [[nodiscard]] WorkspaceFrame Draw(const std::optional<SelectionId> &selection, const Viewport &viewport,
+        /// @param document 单文档进度快照, 本面板只展示和取消, 不读取文件或接管 Scene.
+        /// @param frozen 禁止持久化比例编辑, 窗口与布局动作仍按各自合同收集.
+        [[nodiscard]] WorkspaceFrame Draw(const std::optional<Scene::EntityHandle> &selection, const Viewport &viewport,
                                             EditState edits, const Renderer::ViewSettings &view,
                                             const Platform::WindowSettings *window,
                                             const std::optional<Core::BoundedText> &editError,
-                                            const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions);
+                                            const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions,
+                                            const std::optional<SceneDocumentStatus> &document, bool frozen);
 
         /// @brief 依到达顺序从当轮有资格的 Press 生成历史或布局动作.
         /// @note 每条历史动作在会话重放时按届时的游标判断可用性.

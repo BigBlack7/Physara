@@ -146,6 +146,8 @@ namespace Physara::Asset
         double znear{};
         std::optional<double> zfar;
         std::optional<double> aspectRatio;
+
+        bool operator==(const ModelPerspective &) const = default;
     };
 
     /// @brief 正交半宽/半高和有限裁剪区间, 单位为米; 导入 profile 要求正 magnification.
@@ -155,6 +157,8 @@ namespace Physara::Asset
         double ymag{};
         double znear{};
         double zfar{};
+
+        bool operator==(const ModelOrthographic &) const = default;
     };
 
     /// @brief 可由多个节点引用的源投影描述, 位姿来自引用节点, 不预生成 GPU 投影矩阵.
@@ -203,6 +207,14 @@ namespace Physara::Asset
         std::vector<std::uint32_t> children;
     };
 
+    /// @brief 模型源校验所需的规范相对路径、字节上界和摘要. 仅保留实际消费的输入.
+    struct ModelInputFile
+    {
+        std::filesystem::path source;
+        Core::Sha256Digest fingerprint{};
+        std::size_t byteCount{};
+    };
+
     /// @brief 源位置与局部索引均以当前记录为基准. sourceVersion 是持久指纹, 与进程内 revision 分开.
     /// source 相对项目资源根, roots 索引 nodes; 指纹含模型正文、选定 scene 和实际外部依赖快照.
     /// AssetManager 发布后仅交付 const 共享引用, 旧版本可跨请求和 manager 寿命持有.
@@ -224,5 +236,6 @@ namespace Physara::Asset
         std::vector<ModelSampler> samplers;
         std::vector<ModelCamera> cameras;
         std::vector<ModelLight> lights;
+        std::vector<ModelInputFile> inputFiles; ///< 首项为模型主文件, 后续为去重后的外部文件.
     };
 }

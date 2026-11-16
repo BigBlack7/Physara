@@ -1,8 +1,8 @@
 /// @file
-/// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主, Editor 和 CPU 资产服务.
+/// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主, CPU 资产及带空 Scene 的 Editor.
 /// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
 /// 有界帧槽持有载荷和图绑定, 同一张图组织上传与 UI 合成, 由宿主提交并呈现窗口颜色.
-/// 继续的输入轮次在取得帧槽前发布 CPU 资产, 退出先收拢资产作业再释放其余 owner.
+/// 继续的输入轮次在取得帧槽前发布 CPU 资产和场景文件结果. 退出按依赖顺序收拢作业.
 
 #include <algorithm>
 #include <array>
@@ -24,6 +24,7 @@
 #include <Core/FrameArena.hpp>
 #include <DeviceHost.hpp>
 #include <Renderer/View.hpp>
+#include <Scene/Scene.hpp>
 #include <Session/EditorSession.hpp>
 
 #include "Resources.hpp"
@@ -144,8 +145,8 @@ namespace Physara::Runtime
         return std::nullopt;
     }
 
-    // 先判定宿主输入是否终止, 继续的轮次才发布 CPU 资产并推进 Editor/呈现.
-    // 暂停与槽忙共享发布入口和有限等待; 本函数不等待资产 worker, 退出收拢由外层 owner 负责.
+    // 先判定宿主输入是否终止, 继续的轮次才依次发布 CPU 资产, 文档结果并推进 Editor/呈现.
+    // 暂停与槽忙共享发布入口和有限等待; 本函数不等待文件或资产 worker, 退出收拢由外层 owner 负责.
     static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
                          Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
                          std::optional<std::uint64_t> pollLimit)
@@ -185,6 +186,7 @@ namespace Physara::Runtime
 
             // CPU 发布独立于 GPU 槽. 终止轮次在上面直接退出, 不再接受新版本.
             assets.PublishCompleted();
+            editor.AdvanceSceneDocument(assets, view);
             auto acquired = input.window.Renderable() ? AcquireFrame(host, nextSlot) :
                             Platform::DeviceHost::PresentationAcquire{Platform::PresentationStatus::Suspended};
             if (const auto *error = std::get_if<Platform::HostError>(&acquired))
@@ -298,6 +300,48 @@ namespace Physara::Runtime
             }
         }
     }
+
+    /// @brief 装配场景和会话. 异常退出也先收拢文档 worker, 再释放资产服务和原生宿主.
+    static int RunProduct(Platform::DeviceHost &host, const ResourceLocations &resources,
+                          Core::Diagnostics &diagnostics, const StartupOptions &options)
+    {
+        auto assets = Asset::AssetManager::Create(resources.projectRoot);
+        if (const auto *error = std::get_if<Asset::AssetFailure>(&assets))
+        {
+            PrintError(error->description);
+            return 1;
+        }
+        auto scene = Scene::Scene::Create();
+        if (const auto *error = std::get_if<Core::BoundedText>(&scene))
+        {
+            PrintError(*error);
+            return 1;
+        }
+        auto view = Renderer::View::Create(host.GetInfo().maxTextureSizePixels);
+        if (!view)
+        {
+            PrintError(Core::BoundedText("Cannot allocate the main view identity"));
+            return 1;
+        }
+        auto created = Editor::EditorSession::Create(host, {*host.GetDevice(), resources.editorUiPackage, view->Id()});
+        if (const auto *error = std::get_if<Core::BoundedText>(&created))
+        {
+            PrintError(*error);
+            return 1;
+        }
+        auto &editor = *std::get<std::unique_ptr<Editor::EditorSession>>(created);
+        if (auto error = editor.AttachSceneDocument(resources.projectRoot,
+                                                   std::get<std::unique_ptr<Scene::Scene>>(std::move(scene)), *view))
+        {
+            PrintError(*error);
+            return 1;
+        }
+        auto &manager = *std::get<std::unique_ptr<Asset::AssetManager>>(assets);
+        const auto result = RunEditor(host, editor, *view, manager, diagnostics, options.pollLimit);
+        editor.ShutdownSceneDocument();
+        manager.Shutdown();
+        return result;
+    }
 }
 
 // 退出码: 参数错误为 2, 初始化/运行/关闭失败为 1, 帮助或完整正常关闭为 0.
@@ -342,40 +386,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            const auto &resources = std::get<Runtime::ResourceLocations>(located);
-            auto &device = *host->GetDevice();
-            auto view = Renderer::View::Create(host->GetInfo().maxTextureSizePixels);
-            if (!view)
-            {
-                Runtime::PrintError(Core::BoundedText("Cannot allocate the main view identity"));
-                exitCode = 1;
-            }
-            else
-            {
-                auto editor = Editor::EditorSession::Create(*host, {device, resources.editorUiPackage, view->Id()});
-                if (const auto *editorError = std::get_if<Core::BoundedText>(&editor))
-                {
-                    Runtime::PrintError(*editorError);
-                    exitCode = 1;
-                }
-                else
-                {
-                    auto &session = std::get<std::unique_ptr<Editor::EditorSession>>(editor);
-                    // 资产 owner 在 session 之前停止并 join, 正常退出和异常沿同一析构顺序.
-                    auto assets = Asset::AssetManager::Create(resources.projectRoot);
-                    if (const auto *assetError = std::get_if<Asset::AssetFailure>(&assets))
-                    {
-                        Runtime::PrintError(assetError->description);
-                        exitCode = 1;
-                    }
-                    else
-                    {
-                        auto &manager = std::get<std::unique_ptr<Asset::AssetManager>>(assets);
-                        exitCode = Runtime::RunEditor(*host, *session, *view, *manager, *diagnostics,
-                                                      options.pollLimit);
-                    }
-                }
-            }
+            exitCode = Runtime::RunProduct(*host, std::get<Runtime::ResourceLocations>(located), *diagnostics, options);
         }
     }
     catch (const std::exception &error)

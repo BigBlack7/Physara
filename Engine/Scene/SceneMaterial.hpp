@@ -1,0 +1,84 @@
+#pragma once
+
+/// @file
+/// @brief 静态实例材质的稀疏创作值和按需解析的只读描述.
+
+#include <array>
+#include <cstddef>
+#include <optional>
+#include <variant>
+
+#include <Asset/ModelAsset.hpp>
+
+namespace Physara::Scene
+{
+    /// @brief 缺席的字段沿用固定模型. 颜色因子在线性域.
+    struct MaterialOverride
+    {
+        std::optional<std::array<float, 4>> baseColor;
+        std::optional<std::array<float, 3>> emissive;
+        std::optional<float> metallic;
+        std::optional<float> roughness;
+        std::optional<float> normalScale;
+        std::optional<float> occlusionStrength;
+        std::optional<float> emissiveStrength;
+        std::optional<Asset::ModelAlpha> alphaMode;
+        std::optional<float> alphaCutoff;
+        std::optional<bool> doubleSided;
+
+        bool operator==(const MaterialOverride &) const = default;
+    };
+
+    /// @brief 标准 glTF 过滤和环绕枚举. 空值继承现有槽或使用标准缺省.
+    struct SamplerOverride
+    {
+        std::optional<std::uint32_t> minFilter;
+        std::optional<std::uint32_t> magFilter;
+        std::optional<std::uint32_t> wrapS;
+        std::optional<std::uint32_t> wrapT;
+
+        bool operator==(const SamplerOverride &) const = default;
+    };
+
+    /// @brief 局部纹理修改. 有 image 时固定项目纹理版本, use 必须与槽的用途一致.
+    struct TextureOverride
+    {
+        Asset::ImageVersion image;
+        std::optional<Asset::ImageUse> use;
+        std::optional<std::uint32_t> texCoord;
+        SamplerOverride sampler;
+        std::optional<std::array<float, 2>> offset;
+        std::optional<std::array<float, 2>> scale;
+        std::optional<float> rotationRadians;
+
+        bool operator==(const TextureOverride &) const = default;
+    };
+
+    inline constexpr std::size_t MaterialSlotCount = static_cast<std::size_t>(Asset::MaterialSlot::Count);
+
+    /// @brief 槽位是 glTF 源 Primitive 下标, 由实体固定的模型版本解释.
+    struct PrimitiveOverride
+    {
+        std::uint32_t primitiveSlot{};
+        MaterialOverride material;
+        std::array<std::optional<TextureOverride>, MaterialSlotCount> textures;
+
+        bool operator==(const PrimitiveOverride &) const = default;
+    };
+
+    /// @brief 只读采样描述. ModelImage 借用模型版本, 其余参数为当前有效值.
+    struct EffectiveTexture
+    {
+        std::variant<const Asset::ModelImage *, Asset::ImageVersion> image;
+        Asset::ModelTextureSlot slot;
+        Asset::ModelSampler sampler;
+    };
+
+    /// @brief 临时解析结果, values 的纹理索引仍描述源记录, 实际采样使用 textures.
+    struct EffectiveMaterial
+    {
+        Asset::ModelMaterial values;
+        std::array<std::optional<EffectiveTexture>, MaterialSlotCount> textures;
+        std::optional<std::uint32_t> sourceTangentUv; ///< 原切线生成所用 UV, 可能与当前法线槽不同.
+    };
+}

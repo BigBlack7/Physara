@@ -1,0 +1,39 @@
+# Editor Domain Edits Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Apply field-level editor commands at a frame boundary
+
+编辑器会话 SHALL 在封存 CPU UI 后、视口准备和录制前应用当前批次的有效编辑。View SHALL 持有主视口请求渲染比例及持久化相机请求，Scene SHALL 持有实体、层级及实例创作值，EditorSession SHALL 持有主视口显隐状态、选择和会话编辑历史。面板 SHALL 读取相应 owner 的快照并提交字段级意图。应用入口 SHALL 校验目标身份和字段值。渲染比例 SHALL 为 `[0.5, 1.0]` 内的有限值，初始请求为 `1.0`，主视口初始可见。用户发起的离散编辑实际改变字段时 SHALL 形成一条历史。Open 冻结期间 SHALL 拒绝文档字段的新编辑和相应重放，仍处理非文档动作。CPU UI 在槽忙时仍可推进，已经封存并进入录制的工作只消费属于自己的准备结果。
+
+#### Scenario: Apply edits to separate owners
+- **WHEN** 用户改变主 View 比例，或通过工作区动作改变主视口显隐
+- **THEN** 相应 owner 在帧边界接收字段变化，后续快照反映新的请求比例或显隐状态，两个字段及窗口原生设置各自独立
+
+#### Scenario: Reject an invalid or expired edit
+- **WHEN** 编辑目标属于失效 View、Scene 或会话，或比例为非有限值或越界值
+- **THEN** 应用入口返回有界拒绝原因，已接受的请求、有效输出和撤销重做历史保持有效
+
+#### Scenario: Retire selection and camera references with a deleted entity
+- **WHEN** 一项有效 Scene 事务删除当前选中的实体或主 View 引用的相机
+- **THEN** 当前选择与旧运行期请求身份失效，受影响主 View 同一编辑边界回到导航相机，场景快照与 View 请求保持可一起保存
+
+### Requirement: Replay completed edits with undo and redo
+
+会话 SHALL 在有界历史中按完成顺序保存实际编辑及其可重放的原值和末值。Undo 和 Redo SHALL 通过原字段或 Scene 领域事务入口重放，并在该请求被 owner 接受后移动历史记录。恢复实体时 SHALL 重建运行期身份，通过稳定 ID 复原本条记录负责的领域引用，包括受该事务影响的主 View 相机请求。新完成的有效编辑 SHALL 清除被分叉的 Redo 记录。成功切换文档 SHALL 退役旧编辑历史及选择，保留会话实际布局。输出准备结果和窗口原生设置 SHALL 各自管理其状态。
+
+#### Scenario: Undo and redo an interleaved sequence
+- **WHEN** 比例和主视口显隐分别完成有效编辑，用户连续执行 Undo 再执行 Redo
+- **THEN** 两个 owner 按反序撤销和原序重做，每次仅修改对应字段，视口有效输出继续按当前比例请求的实际准备和接受结果发布
+
+#### Scenario: Replace the redo branch with a new edit
+- **WHEN** Undo 后存在可重做记录，用户完成另一项实际改变字段的编辑
+- **THEN** 新编辑成为最新可撤销记录，原分支的 Redo 不再可用
+
+#### Scenario: Replay a scene edit after restoring its target
+- **WHEN** 实体被编辑后删除，用户撤销删除再撤销该字段编辑，然后依次重做
+- **THEN** 恢复的实体取得新 handle，历史在同一文档按稳定 ID 通过相同领域入口应用，删除和对应相机引用处理随重放保持一致
+
+#### Scenario: Expire the previous document's edit history
+- **WHEN** 编辑记录、选择或旧文档请求仍存在，另一文档成功打开或新建
+- **THEN** 旧记录与身份无法作用于新文档，即使新文档恰好含同名或同 ID 实体，当前工作区布局保持原状

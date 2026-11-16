@@ -106,6 +106,7 @@ namespace Physara::Asset
         std::filesystem::path source;
         Core::Sha256Digest sourceFingerprint;
         Rgba8Image image;
+        std::size_t sourceByteCount{}; ///< 实际源文件字节数, 供文档核对读取上界, 与解码后的 image.byteCount 分开.
     };
 
     using ImageVersion = std::shared_ptr<const ImageRecord>;

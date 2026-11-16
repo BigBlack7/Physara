@@ -14,7 +14,7 @@ cmake --build build --config Release --parallel
 
 依赖源码随仓库保存在 ThirdParty, 配置不下载依赖; 版本与许可见 [ThirdParty/README.md](../ThirdParty/README.md). 所有编译产物进入所选 binary 目录, 不依赖个人机器的绝对路径. 需要选择某个已安装 SDK 时可在 configure 命令中指定 `-DCMAKE_SYSTEM_VERSION=<版本>`.
 
-当前第一方目标是 PhysaraCore、PhysaraAsset、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraRenderGraph 提供 CPU 图声明、封存图编译与即时录制执行, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 链接实际使用的 Core、Asset、Renderer、Platform 和 Editor, ImGui 是 Editor 的私有依赖. NVRHI 源码仅供参考. [图编译入口](../Engine/Renderer/RenderGraph/GraphCompiler.hpp) · [图执行入口](../Engine/Renderer/RenderGraph/GraphExecutor.hpp) · [RHI 来源说明](../RHI/README.md)
+当前第一方目标是 PhysaraCore、PhysaraAsset、PhysaraScene、PhysaraRenderGraph、PhysaraRenderer、PhysaraShader、PhysaraPlatform、PhysaraRHI、PhysaraRHIOpenGL、PhysaraEditor 静态库及产品程序 Physara. PhysaraScene 提供静态实体、实例和类型化场景快照, EnTT 和 GLM 留在实现中. PhysaraRenderGraph 提供 CPU 图声明、封存图编译与即时录制执行, 依赖 Core 与公共 RHI. Shader 模块内的构建入口见下节. PhysaraRHI 提供模块 include/C++20、公共头和 Common/Validation 通用定义. PhysaraRHIOpenGL 单独封闭 loader 和原生实现依赖. Runtime 通过 Core、Asset、Scene、Renderer、Platform 和 Editor 的入口装配. ImGui 和场景 JSON 是 Editor 的私有依赖. NVRHI 源码仅供参考. [图编译入口](../Engine/Renderer/RenderGraph/GraphCompiler.hpp) · [图执行入口](../Engine/Renderer/RenderGraph/GraphExecutor.hpp) · [RHI 来源说明](../RHI/README.md)
 
 Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Validation, 并在释放 context 前收拢. 普通消费者通过 Host 的借用入口访问资源; 直接原生消费者链接 PhysaraRHIOpenGL 并包含 OpenGL.hpp. 只使用通用合同的独立工程仍可单独 add_subdirectory(RHI), 不需要 loader/Platform 或 SDK. 原生 target 包含基础资源、基线图形/传输即时列表、持久映射存储、Event/Timer 查询、状态跟踪及真实提交/完成退休. Platform 用闭合包的末端复制入口消费窗口颜色, 在同一包 Execute 后检查 Win32 交换结果, 源资源沿真实完成保活. [RHI 支持范围](../RHI/README.md#opengl-原生消费边界)
 
@@ -26,9 +26,15 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 模型消费者链接 PhysaraAsset, 用 `RequestModel` 提交 `Assets/Models` 内的项目相对路径, 并可指定 glTF scene 下标. 在同一 owner 轮次调用 `PublishCompleted`, 再用 `StatusModel` 取得请求状态和 `ModelVersion`. 文件、外部依赖和内嵌图片统一通过该模型作业取得. 显式调用 `InvalidateSource` 再请求时重新核对依赖指纹, 旧记录可由调用方固定. [请求入口](../Engine/Asset/AssetManager.hpp) · [模型数据](../Engine/Asset/ModelAsset.hpp)
 
-静态 profile 接受 glTF 2.0 和 GLB 2, 支持三角形、带及扇、UV0/UV1 和核心 metallic-roughness. GPU 上传和 Scene 实例化由后续 D06 工作包消费 CPU 记录. `PhysaraAsset` 私有链接随仓库提供的 TinyGLTF C11 与 MikkTSpace. `ImportLimits` 约束累计模型输入、解析和几何准备, 像素与几何保有额度覆盖候选和旧版本. MikkTSpace 切线生成要求同一焊接顶点至多有 1024 个面角点, 超限返回 `ModelByteLimit`, 以约束固定实现的递归深度. [导入合同](Architecture.md#asset-import) · [第三方来源](../ThirdParty/README.md)
+静态 profile 接受 glTF 2.0 和 GLB 2, 支持三角形、带及扇、UV0/UV1 和核心 metallic-roughness. Scene 实例固定已发布的 CPU 模型记录, GPU 上传由后续渲染准备消费. `PhysaraAsset` 私有链接随仓库提供的 TinyGLTF C11 与 MikkTSpace. `ImportLimits` 约束累计模型输入、解析和几何准备, 像素与几何保有额度覆盖候选和旧版本. MikkTSpace 切线生成要求同一焊接顶点至多有 1024 个面角点, 超限返回 `ModelByteLimit`, 以约束固定实现的递归深度. [导入合同](Architecture.md#asset-import) · [第三方来源](../ThirdParty/README.md)
 
-产品从实际 exe 目录解析 Assets, 作业线程在首次有效请求时启动. 编辑器模型和场景入口随后续 D06 工作包接入. 从任意工作目录启动时, 资产根和 UI Shader 包位置均以 exe 为基准.
+产品从实际 exe 目录解析 Assets, 作业线程在首次有效请求时启动. 从任意工作目录启动时, 资产根和 UI Shader 包位置均以 exe 为基准.
+
+## 静态场景文档
+
+正式程序启动时装配空 Scene 和默认主 View. Scene 消费固定的 `ModelVersion`, 提供类型化领域事务、稳定 ID 查找、世界变换和只读记录. EditorSession 在编辑边界通过 `EditScene`、`EditMainView` 和 `ReplayEdit` 应用或重放意图. 通过 `RequestSceneFile` 请求新建、打开、保存或另存, 用 `SceneStatus` 读取未保存版本、路径和操作进度. Runtime 在每个继续运行的 CPU 轮次于资产完成发布后推进文件结果. 工作区的 Scene status 提供进度和取消, 文件菜单和属性面板随 D06-T06 接入. [Scene 入口](../Engine/Scene/Scene.hpp) · [会话入口](../Editor/Session/EditorSession.hpp)
+
+首版文档为 `Assets/Scenes` 中的 UTF-8 `*.scene.json`, `version` 为整数 1. 保存稳定实体、层级、local TRS、静态网格标志、灯、相机、实例源和已修改的核心材质与纹理槽. 主 View 保存导航位姿、可选相机实体 ID 及请求渲染比例. 透视相机的 `far: null` 表达无限远. 首次保存用 Save As 选定所在目录已存在的项目相对路径. 模型与外置 PNG/JPEG 覆盖分别定位到 `Assets/Models` 和 `Assets/Textures`, 打开或保存时按固定模型的实际依赖核对源版本. 单文件上限为 16 MiB, JSON 值数量上限为 200 万, 输入解析深度上限为 32. [持久化合同](Architecture.md#asset-persistence)
 
 ## Shader 构建
 

@@ -56,6 +56,9 @@ namespace Physara::Asset::Gltf
         }
 
         // 完整构建后才交还候选. 任一步抛出时先销毁局部记录, 再退还已取得的几何/像素额度.
+        // 依赖已在 Fingerprint 前全部固定, 文档核对信息与内容版本使用同一批真实字节.
+        record.inputFiles.push_back({record.source, source.fingerprint, source.bytes.size()});
+        resources.AppendInputFiles(record.inputFiles);
         mesh.Build(limits.modelGeometryBytes, *geometry, storage->reservation.bytes);
         tables.DecodeImages(limits, pixels, stop);
         CheckStop(stop);
