@@ -95,15 +95,15 @@
 
 **职责位置：** Engine/Asset、Engine/Scene、Renderer、Editor。**前置：** [D06-T02](#d06-t02)、[D06-T05](#d06-t05)、[D06-T06](#d06-t06)。**架构依据：** [12.1](../Architecture.md#tests)、[12.4](../Architecture.md#feature-closure)、[11.5](../Architecture.md#shutdown)。
 
-- [ ] 覆盖多 Primitive/材质、UV0/UV1、缺切线、稀疏 accessor、负缩放、遮挡、正交/透视和双实例场景。
-- [ ] 在导入中取消/退出、重复加载、资产失败和快速删除/resize，核对 CPU 发布、GPU 引用与旧 View 输出寿命。
-- [ ] 把标准输入解释、几何诊断图及编辑操作加入可重现检查，保留明确的当前支持 profile。
+- [x] 覆盖多 Primitive/材质、UV0/UV1、缺切线、稀疏 accessor、负缩放、遮挡、正交/透视和双实例场景。
+- [x] 在导入中取消/退出、重复加载、资产失败和快速删除/resize，核对 CPU 发布、GPU 引用与旧 View 输出寿命。
+- [x] 把标准输入解释、几何诊断图及编辑操作加入可重现检查，保留明确的当前支持 profile。
 
 **完成条件：** 第一次完整输入→场景→准备→图→RHI→UI→呈现的纵向链通过，后续增加物理模型无需重构入口。
 
-**状态：** 前置已齐备，待建立 change。
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-17-verify-static-asset-to-window/tasks.md#final-verification)
 
-**D06 阶段出口：** 可导入、查看、变换和删除 glTF 模型实例，并用 JSON 保存、重开编辑器场景；几何/纹理/相机语义正确，Scene 不持 GPU 对象，导入失败/取消不会发布半份资产。
+**D06 阶段出口：** 已通过。可导入、查看、变换和删除 glTF 模型实例，并用 JSON 保存、重开编辑器场景；几何/纹理/相机语义正确，Scene 不持 GPU 对象，导入失败/取消不会发布半份资产。
 
 <a id="dev-d07"></a>
 ## D07 · 形成可用的物理 Forward 渲染器

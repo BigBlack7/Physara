@@ -510,6 +510,8 @@ namespace Physara::Runtime
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
+        // 由场景全集判断是否已有真实表面, 不用裁剪后的可见项数决定是否退回测试图.
+        // 全部表面隐藏或移出视锥时仍由 Forward 清除颜色和深度, 避免把空可见集显示成空文档诊断.
         const bool hasScene = prepared.camera && std::ranges::any_of(prepared.scene.primitives,
             [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); });
         if (hasScene)

@@ -250,6 +250,7 @@ namespace Physara::Renderer
         [[nodiscard]] std::uint64_t CameraRevision() const noexcept { return m_CameraRevision; }
         [[nodiscard]] PreviewMode Preview() const noexcept { return m_Preview; }
         /// @brief 借用最近一次已接受的真实场景记录, 测试图和安全 UI 不推进此值; 后续 Publish 可替换它.
+        /// @note 记录可能属于上一文档. 使用前须核对 Scene 身份及相关版本; 当前显示说明用 AcceptedScenePreview.
         [[nodiscard]] const std::optional<RenderedScene> &LastRenderedScene() const noexcept { return m_RenderedScene; }
 
         /// @brief 在完成 UI 布局后选择本轮预览模式. 该请求不参与场景 JSON.

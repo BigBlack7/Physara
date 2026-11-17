@@ -144,6 +144,8 @@ namespace Physara::Renderer::Detail
             out.uvY[i].value = {s * slot.scale[0], c * slot.scale[1], slot.offset[1], 0.f};
             if (i == NormalSlot)
             {
+                // 此预览 profile 用 Q=R*diag(signX,signY) 的逆确定框架朝向.
+                // scale 的绝对值只改变采样频率, 零轴沿正向作常量坐标采样, 不在此对完整 UV 仿射求逆.
                 const auto sx = slot.scale[0] < 0.f ? -1.f : 1.f;
                 const auto sy = slot.scale[1] < 0.f ? -1.f : 1.f;
                 out.normalBasis = {sx * c, -sy * s, sx * sy, 0.f};

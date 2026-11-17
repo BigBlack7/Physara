@@ -53,6 +53,8 @@ namespace Physara::Renderer
     {
         const auto sceneId = scene.Id();
         const auto content = scene.Versions().renderContent;
+        // 相机矩阵由 ViewWork 每轮另取, 名称等文档字段也不进入这些静态记录.
+        // 影响网格或灯求值的自身或祖先变换仍由 Scene 推进 renderContent, 不会被纯相机复用路径漏掉.
         if (m_Scene == sceneId && m_ContentRevision == content)
         {
             return SceneFrame{m_Scene, m_ContentRevision, m_Objects, m_Primitives, m_Lights, m_Models,
