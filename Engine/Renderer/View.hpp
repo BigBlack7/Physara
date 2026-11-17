@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <variant>
@@ -34,6 +35,9 @@ namespace Physara::Renderer
     /// @brief 无单位渲染比例的闭区间. 初始请求使用上界.
     inline constexpr float MinRenderScale = 0.5f;
     inline constexpr float MaxRenderScale = 1.0f;
+    /// @brief 所有导航 View 共用的透视: 垂直 FOV 为 pi/3 弧度, 近面为 0.10 m, 远面无限.
+    /// 宽高比来自有效画布, Prepare 与 Editor Pan 共用本值, 不改变实体相机的 glTF 投影.
+    inline constexpr Asset::ModelPerspective NavigationProjection{std::numbers::pi / 3, 0.10, {}, {}};
 
     /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
     struct ViewDocumentRequests

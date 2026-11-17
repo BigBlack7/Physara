@@ -173,6 +173,7 @@ namespace Physara::Editor::Detail
         std::stop_source stop;
         std::shared_ptr<Core::ResourceCommit> commit;
         std::shared_ptr<SceneOpenInputs> open;
+        std::optional<SceneFileRequest> replaceAfterSave; ///< 只随匹配的保存成功终态继续.
     };
 
     /// @brief 活动文档, 保存基线和串行操作的唯一 owner, 与 worker 的结果存储分离.
@@ -295,7 +296,7 @@ namespace Physara::Editor::Detail
             if (replacing)
             {
                 // 放弃授权绑定结束手势后的真实版本. 授权只允许尝试替换, 不会预先清除未保存状态.
-                if (const auto error = history.CancelGesture(view))
+                if (const auto error = history.CancelGesture(state.scene.get(), &view))
                 {
                     return error;
                 }
@@ -334,7 +335,7 @@ namespace Physara::Editor::Detail
             auto path = std::get<Core::ResourcePath>(std::move(target));
             ActiveFileOperation started{state.serial, replacing ? SceneFilePhase::Reading : SceneFilePhase::Saving,
                 state.Current(view), path, path.Relative(), std::stop_source{},
-                std::make_shared<Core::ResourceCommit>(), {}};
+                std::make_shared<Core::ResourceCommit>(), {}, {}};
             if (replacing)
             {
                 state.Submit(started, ReadDocument{state.scene->PinnedModels()});
@@ -355,6 +356,24 @@ namespace Physara::Editor::Detail
         {
             return Core::BoundedText(error.what());
         }
+    }
+
+    // 继续意图随已接受的保存任务持有, 取消和失败会和任务一起释放.
+    std::optional<Core::BoundedText> SceneDocuments::SaveBeforeReplacing(SceneFileRequest replacement,
+        const std::filesystem::path &saveAs, Renderer::View &view, EditHistory &history)
+    {
+        auto &state = *m_State;
+        if (replacement.action != SceneFileAction::New && replacement.action != SceneFileAction::Open)
+        {
+            return Core::BoundedText("Save continuation requires New or Open");
+        }
+        const auto action = state.path ? SceneFileAction::Save : SceneFileAction::SaveAs;
+        if (const auto error = Begin({action, replacement.scene, saveAs, {}}, view, history))
+        {
+            return error;
+        }
+        state.active->replaceAfterSave = std::move(replacement);
+        return std::nullopt;
     }
 
     std::optional<Core::BoundedText> SceneDocuments::Cancel(std::uint64_t operation) noexcept
@@ -401,7 +420,8 @@ namespace Physara::Editor::Detail
                 }
                 if (active.phase == SceneFilePhase::Cancelling)
                 {
-                    state.Finish();
+                    const Core::BoundedText notice("Save cancelled. Start New or Open again to replace this scene.");
+                    state.Finish(active.replaceAfterSave ? &notice : nullptr);
                     return;
                 }
                 auto &result = completed->result;
@@ -433,7 +453,20 @@ namespace Physara::Editor::Detail
                     // 记录捕获时的两个 revision, 不用届时的新值把保存期间的编辑误标为已保存.
                     state.saved = active.captured;
                     state.path = std::move(active.nextPath);
+                    auto replacement = std::move(active.replaceAfterSave);
+                    // 先结束原保存并释放串行槽, 才能请求 New/Open. 成功保存不授权丢弃随后接受的编辑.
                     state.Finish();
+                    if (replacement)
+                    {
+                        if (state.Current(view) != state.saved)
+                        {
+                            state.failure.emplace("Scene changed during save. Start New or Open again.");
+                        }
+                        else
+                        {
+                            state.failure = Begin(*replacement, view, history);
+                        }
+                    }
                     return;
                 }
             }

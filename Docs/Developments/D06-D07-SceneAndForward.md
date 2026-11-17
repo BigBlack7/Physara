@@ -82,13 +82,13 @@
 
 **职责位置：** Editor/Panels、Commands、Viewport、Session。**前置：** [D06-T03](#d06-t03)、[D06-T04](#d06-t04)、[D06-T05](#d06-t05)。**架构依据：** [2.3](../Architecture.md#edits)、[2.4](../Architecture.md#viewport-input)、[10.1](../Architecture.md#editor-output)。
 
-- [ ] 接入层级树、选择、Transform Inspector、导入状态和 View 面板，以及 JSON 场景的新建/打开/保存；属性修改通过既有事务与 undo/redo。
-- [ ] 实现 fly/orbit/pan、窗口到视口的单次坐标映射和帧边界 extent 请求；主 View 的导航 cameraPose、可选 cameraEntityId 和渲染请求可保存，额外 View 保持会话状态。
-- [ ] 验证删除选中实体、隐藏/恢复视口、父级缩放下变换及撤销；不为界面建立另一套 Scene。
+- [x] 接入层级树、选择、Transform Inspector、导入状态和 View 面板，以及 JSON 场景的新建/打开/保存；属性修改通过既有事务与 undo/redo。
+- [x] 实现 fly/orbit/pan、窗口到视口的单次坐标映射和帧边界 extent 请求；主 View 的导航 cameraPose、可选 cameraEntityId 和渲染请求可保存，额外 View 保持会话状态。
+- [x] 验证删除选中实体、隐藏/恢复视口、父级缩放下变换及撤销；不为界面建立另一套 Scene。
 
 **完成条件：** 真实场景可用最小编辑器操作，属性变化沿 revision→准备→上传→图输出生效。
 
-**状态：** 前置已齐备，待建立 change。
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-17-edit-static-scenes/tasks.md#final-verification)
 
 <a id="d06-t07"></a>
 ### D06-T07 · 建立静态资产到窗口的集成门槛
@@ -100,6 +100,8 @@
 - [ ] 把标准输入解释、几何诊断图及编辑操作加入可重现检查，保留明确的当前支持 profile。
 
 **完成条件：** 第一次完整输入→场景→准备→图→RHI→UI→呈现的纵向链通过，后续增加物理模型无需重构入口。
+
+**状态：** 前置已齐备，待建立 change。
 
 **D06 阶段出口：** 可导入、查看、变换和删除 glTF 模型实例，并用 JSON 保存、重开编辑器场景；几何/纹理/相机语义正确，Scene 不持 GPU 对象，导入失败/取消不会发布半份资产。
 

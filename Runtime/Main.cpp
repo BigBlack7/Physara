@@ -2,7 +2,7 @@
 /// @brief 唯一产品入口. 先验证启动参数, 再装配诊断, 宿主, CPU 资产及带空 Scene 的 Editor.
 /// 会话封存布局后应用领域编辑, 宿主在录制前处理窗口请求.
 /// 设备级 Forward 缓存和有界帧槽分别保有驻留代及本帧 Draw, 同图组织场景, 显示转换与 UI.
-/// 继续的输入轮次在取得帧槽前发布 CPU 资产和场景文件结果. 退出按依赖顺序收拢作业.
+/// 继续的输入轮次在取得帧槽前发布 CPU 资产, 场景文件和有效模型实例. 退出按依赖顺序收拢作业.
 
 #include <algorithm>
 #include <array>
@@ -204,7 +204,7 @@ namespace Physara::Runtime
             const auto *presentation = std::get_if<Platform::PresentationFrame>(&acquired);
 
             // CPU 仍在槽忙时推进. Advance 封存 UI 并应用领域编辑, 窗口请求随后在录制前处理.
-            const auto frame = editor.Advance(input, &view, host.GetWindowSettings());
+            const auto frame = editor.Advance(input, &view, host.GetWindowSettings(), &assets);
             if (host.HasFatalGraphicsError())
             {
                 PrintError(host.FirstGraphicsError().value_or(Core::BoundedText("Fatal UI preparation")));
@@ -212,18 +212,29 @@ namespace Physara::Runtime
             }
             if (frame.hostRequest)
             {
+                const auto *cursor = std::get_if<Platform::SetCursorMode>(&*frame.hostRequest);
                 const std::span requests(&*frame.hostRequest, 1);
                 if (auto error = host.ApplyDeferredRequests(requests))
                 {
-                    if (presentation)
+                    // 焦点可在输入发布后、捕获生效前丢失. 已收拢光标时由下一次输入发布终止手势.
+                    const bool rejectedCapture = cursor && cursor->mode == Platform::CursorMode::Relative &&
+                        error->reason == Platform::HostErrorReason::RequestRejected && !error->cleanupError;
+                    if (!rejectedCapture)
                     {
-                        static_cast<void>(host.CancelPresentation(presentation->token));
+                        if (presentation)
+                        {
+                            static_cast<void>(host.CancelPresentation(presentation->token));
+                        }
+                        PrintError(Platform::DescribeHostError(*error));
+                        return 1;
                     }
-                    PrintError(Platform::DescribeHostError(*error));
-                    return 1;
+                    static_cast<void>(diagnostics.Write(Core::Severity::Info, Platform::DescribeHostError(*error).View()));
                 }
-                // 请求成功后通知会话. 若本轮已恢复交互, 指针基线先于 Wait 分发的新回调入队.
-                editor.CompleteCursorRelease();
+                else if (cursor && cursor->mode == Platform::CursorMode::Normal)
+                {
+                    // 只有真实归还后才重建 ImGui 逻辑指针, 相对捕获成功不能触发这条恢复路径.
+                    editor.CompleteCursorRelease();
+                }
             }
             if (auto error = ApplyWindowSettings(host, frame))
             {

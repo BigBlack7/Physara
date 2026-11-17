@@ -8,7 +8,6 @@
 #include <cmath>
 #include <limits>
 #include <new>
-#include <numbers>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -317,9 +316,9 @@ namespace Physara::Renderer
             return result;
         }
         const auto &document = view.DocumentRequests();
-        constexpr Asset::ModelPerspective Navigation{std::numbers::pi / 3, 0.10, {}, {}};
+        // 实体相机读取 Scene 已传播的世界刚体和资产投影; 导航相机读取 View 位姿和共享缺省投影.
         const auto camera = document.cameraEntityId ? scene.FindCamera(*document.cameraEntityId) :
-            std::optional(Scene::CameraState{{}, document.cameraPose, Navigation});
+            std::optional(Scene::CameraState{{}, document.cameraPose, NavigationProjection});
         if (!camera)
         {
             result.reason = ViewSettingReason::CameraUnavailable;

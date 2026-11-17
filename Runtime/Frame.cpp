@@ -100,6 +100,7 @@ namespace Physara::Runtime
         std::optional<Core::BoundedText> error;
         std::optional<Core::BoundedText> additional;
         ViewSettingReason viewportReason = ViewSettingReason::None; ///< 仅重建占位时交给 View, 区分等待和硬拒绝.
+        bool viewportPublished = false; ///< 仅完整正常图采样并实际发布时确认输入映射.
     };
 
     // 在离开图/准备作用域前复制阶段和原始 RHI 首错, 不让诊断借用图字符串或 arena.
@@ -331,10 +332,6 @@ namespace Physara::Runtime
             // 先确认同一候选确实成为 View 输出, 再允许其静态上传复用. 前缀和安全图均不进入此处.
             slot.forward.Confirm(*declared.scene, plan);
         }
-        if (!published)
-        {
-            editor.SetPreparedViewport(nullptr);
-        }
         const auto result = host.Present(presentation.token, hostError);
         if (hostError)
         {
@@ -357,7 +354,7 @@ namespace Physara::Runtime
         {
             ReportTicket(diagnostics, "Editor window presented", result.ticket);
         }
-        return {AttemptStatus::Succeeded, {}};
+        return {.status = AttemptStatus::Succeeded, .viewportPublished = published};
     }
 
     // 先准备 UI, 再声明/封存/编译图, 只按存活上传账单准入后 Open.
@@ -495,7 +492,7 @@ namespace Physara::Runtime
         };
         const auto stop = [&]() -> std::variant<FrameStatus, Core::BoundedText>
         {
-            editor.SetPreparedViewport(nullptr);
+            editor.SetAcceptedViewport(nullptr, view);
             editor.ReportFrameOutcome(Editor::FrameRecovery::Stopped, primary, additional);
             return primary.value_or(Core::BoundedText("Graphics work requires controlled shutdown"));
         };
@@ -582,11 +579,13 @@ namespace Physara::Runtime
             if (attempt.status == AttemptStatus::Succeeded)
             {
                 const bool safe = mode == Editor::UiFrameMode::SafeUi;
+                // 准备值可用不等于已显示. 只有正常合成实际采样且 View 已接受, 才交回导航命中依据.
+                editor.SetAcceptedViewport(attempt.viewportPublished ? &prepared : nullptr, view);
                 editor.ReportFrameOutcome(safe ? Editor::FrameRecovery::SafeUi : Editor::FrameRecovery::Normal,
                                           primary, additional);
                 return safe ? FrameStatus::SafeUi : FrameStatus::Rendered;
             }
-            editor.SetPreparedViewport(nullptr);
+            editor.SetAcceptedViewport(nullptr, view);
             // 已发前缀的取得由 ExecuteFrame 消费; 没有票据的剩余普通分支均尚未 Open.
             if (slot.lastSubmission == 0)
             {

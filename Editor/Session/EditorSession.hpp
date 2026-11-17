@@ -19,11 +19,11 @@
 
 namespace Physara::Editor
 {
-    /// @brief 一次 Advance 的值结果. 暂停轮次也可以返回用于清理交互的宿主请求.
+    /// @brief 一次 Advance 的值结果. 暂停轮次也可以请求归还光标.
     struct EditorFrame
     {
         bool hasDrawData = false; ///< 本轮是否封存了新帧, 暂停期间为 false.
-        /// @brief 失效轮次仍观测到相对模式时请求归还. 成功后在等待或轮询前通知会话.
+        /// @brief 请求相对捕获或归还. 只有归还成功后在等待或轮询前通知会话.
         std::optional<Platform::HostRequest> hostRequest;
         std::optional<Platform::SetWindowTitle> titleRequest; ///< 本轮确认的标题, 消费前保有正文.
         std::optional<Platform::SetWindowVSync> vsyncRequest;
@@ -82,9 +82,21 @@ namespace Physara::Editor
         /// @return 空值表示意图已接受, 不代表异步 I/O 已成功; 后续进度和错误由 SceneStatus 返回.
         [[nodiscard]] std::optional<Core::BoundedText>
             RequestSceneFile(const SceneFileRequest &request, Renderer::View &view);
+        /// @brief 保存当前快照后尝试指定的 New/Open. 仅实际成功且版本匹配才继续.
+        /// @note 已有路径时使用当前路径, 否则使用 saveAs. 接受返回不表示原替换已经完成.
+        /// 保存期间的新编辑使继续意图失效, 后续原因由 SceneStatus 返回.
+        [[nodiscard]] std::optional<Core::BoundedText> SaveBeforeReplacing(SceneFileRequest replacement,
+            const std::filesystem::path &saveAs, Renderer::View &view);
         /// @brief 按操作编号请求取消, 进入替换提交后返回不可取消原因.
         [[nodiscard]] std::optional<Core::BoundedText> CancelSceneFile(std::uint64_t operation) noexcept;
-        /// @brief 在资产发布之后推进文件工作并退役旧选择, 不依赖可绘制状态或空闲 GPU 槽.
+        /// @brief 为当前可编辑文档请求静态模型. 成功准入后由 CPU 边界提交实例.
+        [[nodiscard]] std::optional<Core::BoundedText> RequestModelImport(Asset::AssetManager &assets,
+            Scene::SceneId scene, const std::filesystem::path &path, std::optional<std::uint32_t> sourceScene = {});
+        [[nodiscard]] const SceneImportStatus &ImportStatus() const noexcept;
+        /// @brief 取消匹配的实例意图, 其它消费者可继续使用共享解码结果.
+        [[nodiscard]] bool CancelModelImport(std::uint64_t operation) noexcept;
+        /// @brief 在资产发布之后推进文件及模型实例, 不依赖可绘制状态或空闲 GPU 槽.
+        /// @note 先处理文件替换和选择退役, 再提交仍属于活动 Scene 的模型; 活动手势期间等待.
         void AdvanceSceneDocument(Asset::AssetManager &assets, Renderer::View &view);
         /// @brief 所有退出路径在销毁发布目标前收拢后台文件任务.
         void ShutdownSceneDocument() noexcept;
@@ -94,18 +106,23 @@ namespace Physara::Editor
         /// events 在调用期间有效. 会话只将接入后到达的事件用于交互路由.
         /// @param view 可借用本会话登记的主 View. 面板取快照, 会话应用比例后生成本轮像素请求.
         /// 缺省或身份失配时仍可封存 UI, 可见视口由合成器显示占位.
+        /// @param assets 仅在本次调用中借用, 用于 UI 导入准入; 实例结果由 AdvanceSceneDocument 推进.
         /// @param window 可借用活动宿主的窗口设置, 供本轮菜单生成请求和显示回执.
         /// @return 当前 CPU 帧状态, 本轮离屏及独立宿主请求. 暂停时 hasDrawData 为 false.
         /// @note 进入下一次 Advance 即结束前一轮封存数据的借用, 并取消未确认的离屏准备值.
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
-                                           const Platform::WindowSettings *window = nullptr);
+            const Platform::WindowSettings *window = nullptr, Asset::AssetManager *assets = nullptr);
 
-        /// @brief 为本轮封存布局接入 CPU 有效图像矩形. 空输入、失配或失败均清除映射.
-        /// @pre 非空输入来自本次 Advance 后的准备. 此入口不确认图输出.
-        /// @note 只复制布局值; 安全 UI、占位或帧取消时清除, 不借用 PreparedView 的索引存储.
+        /// @brief 为 UI 正常候选设定本次准备布局, 仅用于渲染校验.
+        /// @pre 非空输入来自本次 Advance 后的 View 准备.
         void SetPreparedViewport(const Renderer::PreparedView *prepared) noexcept;
+        /// @brief 记录本轮由正常图实际采样并发布的图像依据. 空值使旧输入映射失效.
+        /// @pre 非空输入来自本轮实际接受的正常输出, View 已发布该颜色.
+        /// @note 只保存关联布局和身份值, 无 PreparedView 或图的借用.
+        /// 候选准备与实际接受分别由 SetPreparedViewport 和本入口管理, 安全 UI 不授予新命中资格.
+        void SetAcceptedViewport(const Renderer::PreparedView *accepted, const Renderer::View &view) noexcept;
         /// @brief 将本轮逻辑窗口位置映射为左上原点的有效图像 UV. 裁掉的区域和留边返回空.
-        /// @note 只在本轮准备布局仍有效时可用, 下一次 Advance 即失效; 输入归属由调用者另行判断.
+        /// @note 仅在本轮布局有匹配的正常已接受图像时可用; 输入归属由调用者另行判断.
         [[nodiscard]] std::optional<std::array<double, 2>> ViewportImageUv(double x, double y) const noexcept;
 
         /// @brief 为本轮封存帧准备图内合成, 将几何与上传字节复制到调用方的帧槽存储.

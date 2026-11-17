@@ -12,6 +12,8 @@
 #include <DeviceHost.hpp>
 
 #include "Commands/EditHistory.hpp"
+#include "DocumentPanel.hpp"
+#include "ScenePanels.hpp"
 #include "Session/SceneDocumentTypes.hpp"
 #include "Session/UiFrame.hpp"
 #include "Viewport/Viewport.hpp"
@@ -20,12 +22,27 @@ namespace Physara::Editor::Detail
 {
     struct InputClaims;
 
-    /// @brief 固定面板的显隐动作. 前两项的序号同时索引本地展示状态.
+    /// @brief 菜单及快捷键的共享动作. 前三项的序号同时索引本地面板展示状态.
     enum class ActionId : std::uint8_t
     {
         ToggleHierarchy,
         ToggleInspector,
-        ToggleViewport
+        ToggleViewSettings,
+        ToggleViewport,
+        NewScene,
+        OpenScene,
+        SaveScene,
+        SaveSceneAs,
+        ImportModel,
+        DeleteSelection,
+        Undo,
+        Redo
+    };
+
+    /// @brief 相机来源意图只修改 View 的实体引用, 保留该 View 已保存的导航位姿.
+    struct CameraSource
+    {
+        std::optional<Scene::EntityId> entity; ///< 空引用选择导航相机.
     };
 
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
@@ -33,44 +50,62 @@ namespace Physara::Editor::Detail
     struct WorkspaceFrame
     {
         ViewportLayout viewport;
-        ScaleGesture scale;
+        FieldGestures gestures;
+        std::optional<Scene::EntityHandle> selection;
+        std::optional<CameraSource> camera;
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;
         std::optional<std::uint64_t> cancelDocument; ///< 本轮看到的文件操作编号, 会话接受时再次核对资格.
+        std::optional<FileIntent> file;
+        std::optional<ImportIntent> import;
+        std::optional<std::uint64_t> cancelImport;
+    };
+
+    /// @brief 本次布局及动作路由使用的只读借用. 会话在 UI 封存后才修改领域 owner.
+    struct WorkspaceState
+    {
+        const Scene::Scene *scene;
+        std::optional<Scene::EntityHandle> selection;
+        const Renderer::View *view;
+        EditState edits;
+        const Platform::WindowSettings *window;
+        const SceneDocumentStatus *document;
+        const SceneImportStatus &model;
+        const std::optional<Core::BoundedText> &editError;
+        const std::optional<Core::BoundedText> &fileError;
+        const std::optional<FrameDiagnostic> &frameDiagnostic;
+        bool allowActions;
+        bool frozen;
+        bool navigating;
     };
 
     /// @brief 管理主窗口停靠和展示状态. 主视口显隐及比例由领域快照提供.
+    /// @note Draw 只收集意图; ApplyShortcut 沿同一动作表和启用规则追加当轮意图.
     class Workspace final
     {
     public:
         /// @brief 在当前 ImGui 帧构建菜单, 控件及可见面板.
-        /// @param acceptedPreview 最近接受的显示色所关联的场景预览, 仅在本次布局中借用.
-        /// @param window 当前宿主设置的短期借用. 空值时省略窗口设置菜单.
-        /// @param frameDiagnostic 会话拥有的最近失败及恢复状态, 本轮只读, 与 Inspector 显隐独立.
-        /// @param allowActions 输入可用时才收集动作. 输入失效轮次仍可构建布局.
-        /// @param document 单文档进度快照, 本面板只展示和取消, 不读取文件或接管 Scene.
-        /// @param frozen 禁止持久化比例编辑, 窗口与布局动作仍按各自合同收集.
-        [[nodiscard]] WorkspaceFrame Draw(const std::optional<Scene::EntityHandle> &selection, const Viewport &viewport,
-                                            EditState edits, const Renderer::ViewSettings &view,
-                                            const Renderer::RenderedScene *acceptedPreview,
-                                            const Platform::WindowSettings *window,
-                                            const std::optional<Core::BoundedText> &editError,
-                                            const std::optional<FrameDiagnostic> &frameDiagnostic, bool allowActions,
-                                            const std::optional<SceneDocumentStatus> &document, bool frozen);
+        [[nodiscard]] WorkspaceFrame Draw(const WorkspaceState &state, const Viewport &viewport);
 
-        /// @brief 依到达顺序从当轮有资格的 Press 生成历史或布局动作.
-        /// @note 每条历史动作在会话重放时按届时的游标判断可用性.
-        void ApplyShortcuts(std::span<const Platform::InputEvent> events, const InputClaims &claims,
-                            WorkspaceFrame &frame);
+        /// @brief 从当轮有资格的 Press 生成动作. 会话依发布顺序调用并应用意图.
+        void ApplyShortcut(const Platform::InputEvent &event, const InputClaims &claims, const WorkspaceState &state,
+                           WorkspaceFrame &frame);
+        void EndRotationInput() noexcept { m_ScenePanels.EndRotationInput(); }
+        [[nodiscard]] bool HasFileDialog() const noexcept { return m_Documents.HasDialog(); }
 
     private:
         [[nodiscard]] bool Visible(ActionId action, EditState edits) const noexcept;
         void SetVisible(ActionId action, bool visible, WorkspaceFrame &frame);
+        [[nodiscard]] static bool CanActivate(ActionId action, const WorkspaceState &state) noexcept;
+        void Activate(ActionId action, const WorkspaceState &state, WorkspaceFrame &frame);
+        void DrawActions(const WorkspaceState &state, WorkspaceFrame &frame);
         void DrawWindowMenu(const Platform::WindowSettings *window, WorkspaceFrame &frame, bool allowActions);
 
-        std::array<bool, 2> m_Visible{true, true}; ///< Hierarchy 与 Inspector 的展示状态.
+        std::array<bool, 3> m_Visible{true, true, true}; ///< Hierarchy, Inspector 和 View 面板的展示状态.
+        ScenePanels m_ScenePanels;
+        DocumentPanel m_Documents;
         /// @brief 控件激活期间保留 UTF-8 草稿. 退出编辑后重新从宿主快照取值.
         std::array<char, Platform::MaxWindowTitleBytes + 1> m_TitleDraft{};
         bool m_TitleEditing = false;

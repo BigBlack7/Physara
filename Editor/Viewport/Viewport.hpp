@@ -19,6 +19,18 @@ namespace Physara::Editor::Detail
     enum class UiFallback : std::uint8_t;
     inline constexpr const char *PreviewNames[] = {"Base Color", "World Normal", "Material Channels", "Emissive"};
 
+    /// @brief 逻辑窗口中的画布及可见裁剪, 可跨帧比较而不借用 ImGui 数据.
+    struct ViewportRegion
+    {
+        std::array<float, 4> canvas; ///< 左、上、右、下.
+        std::array<float, 4> clip; ///< 画布与绘制裁剪的交集.
+        bool operator==(const ViewportRegion &) const = default;
+
+        /// @brief 在封存裁剪内把逻辑位置映射到有效图像 UV. 颜色版本与输入归属须由调用者先核对.
+        [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(const Renderer::ViewImageLayout &layout,
+            double x, double y) const noexcept;
+    };
+
     /// @brief 本轮视口图像的逻辑矩形及 token. 记录索引以便定位合并后的封存命令.
     /// @note 列表和字体来自本轮 ImGui. 图像命令与 token 在准备期一起验证.
     struct ViewportImage
@@ -37,17 +49,18 @@ namespace Physara::Editor::Detail
         /// @note output 只在调用期间借用, 模式标签来自该候选而非之后的 View 请求.
         void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
                         const Renderer::ViewOutput *output) const;
-        /// @brief 使用同轮封存的图像裁剪和物理像素布局解释逻辑窗口位置.
-        /// @pre layout 对应该 Image 的整张画布. 输入捕获与窗口遮挡归路由层, 此处仅作坐标映射.
-        [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(const ImDrawData &data,
-            const Renderer::ViewImageLayout &layout, double x, double y) const noexcept;
+        /// @brief 从同轮实际图像命令取得非空逻辑画布与裁剪, 不依赖颜色资源是否已经发布.
+        [[nodiscard]] std::optional<ViewportRegion> Region(const ImDrawData &data) const noexcept;
     };
 
-    /// @brief 单次面板布局. 面板 hover 用于界面归属, 有效图像命中在 View 准备后解析.
+    /// @brief 单次面板布局. 窗口身份用于界面归属, 有效图像命中还需匹配正常已接受输出.
     struct ViewportLayout
     {
-        bool panelHovered = false;
+        ImGuiID window = 0; ///< 当前视口所在的 ImGui 窗口, 供顺序按钮事件判定遮挡.
         ViewportImage image;
+
+        /// @brief 在当前 UI 的窗口层级内判断实际按钮位置的顶层输入归属.
+        [[nodiscard]] bool OwnsPointer(Platform::LogicalPoint position) const noexcept;
     };
 
     /// @brief 从逻辑内容宽高换算离屏像素. 各轴使用同批 framebuffer 比例, 乘比例后再取整.
@@ -67,7 +80,7 @@ namespace Physara::Editor::Detail
         }
         [[nodiscard]] Renderer::ViewId Id() const noexcept { return m_View; }
 
-        /// @brief 为可见面板测量逻辑图像区域, 记录面板 hover 和图像命令.
+        /// @brief 为可见面板测量逻辑图像区域, 记录窗口身份和图像命令.
         /// @pre Workspace 已开始当前可见的 ImGui 面板.
         [[nodiscard]] ViewportLayout Draw() const;
 

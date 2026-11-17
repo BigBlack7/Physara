@@ -41,7 +41,8 @@ namespace Physara::Platform::Detail
         /// @brief 仅一次建立初始窗口与光标状态, 非法值锁存终止故障.
         void Initialize(const WindowState &window, LogicalPoint position, CursorMode mode) noexcept;
         /// @brief 校验并按次序累积事实, 更新状态成功后才写入当前 bank.
-        void Record(const InputEvent &event) noexcept;
+        /// @note 接收拥有型副本, 为按钮补齐当前逻辑位置, 为位置补齐同模式基线的位移, 不修改调用方输入.
+        void Record(InputEvent event) noexcept;
         /// @brief 发布值快照并切换 bank, 清区间边沿和增量, 保留 held.
         /// @return 已锁存故障或无法继续分配序号时为空, 不交付成功的部分批次.
         [[nodiscard]] std::optional<HostFrameInput> Publish() noexcept;
@@ -65,8 +66,8 @@ namespace Physara::Platform::Detail
         // 各重载只校验并更新对应 CPU 状态, 不发布事件或调用 GLFW; Record 统一维护到达顺序.
         void Apply(KeyEvent event) noexcept;
         void Apply(CharEvent event) noexcept;
-        void Apply(MouseButtonEvent event) noexcept;
-        void Apply(CursorPositionEvent event) noexcept;
+        void Apply(MouseButtonEvent &event) noexcept;
+        void Apply(CursorPositionEvent &event) noexcept;
         void Apply(CursorEnterEvent event) noexcept;
         void Apply(ScrollEvent event) noexcept;
         void Apply(ClientSizeEvent event) noexcept;

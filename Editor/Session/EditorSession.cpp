@@ -1,10 +1,13 @@
 #include "EditorSession.hpp"
 
 #include <algorithm>
+#include <cassert>
+#include <charconv>
 #include <exception>
 #include <utility>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <DeviceHost.hpp>
 #include <Renderer/Prepare/ViewPreparation.hpp>
@@ -14,6 +17,8 @@
 #include "ImGui/UiRenderer.hpp"
 #include "Panels/Workspace.hpp"
 #include "SceneDocuments.hpp"
+#include "SceneImport.hpp"
+#include "Viewport/ViewportNavigation.hpp"
 
 /// @file
 /// @brief 将宿主发布推进为一次 Editor 轮次. 先处理输入失效边沿, 再封存布局和 DrawData.
@@ -25,21 +30,43 @@ namespace Physara::Editor
     /// @brief 聚合本会话的布局, 编辑与纹理身份, 以及一轮内有效的 UI 借用.
     struct EditorSession::State
     {
+        /// @brief 正常图已采样并确认的坐标依据. 两种视口颜色都带当时的 Scene 和相机版本.
+        struct AcceptedImage
+        {
+            Renderer::ViewId view;
+            Scene::SceneId scene;
+            std::uint64_t contentRevision;
+            std::uint64_t sceneCameraRevision;
+            std::uint64_t viewCameraRevision;
+            std::uint64_t requestRevision;
+            std::uint64_t metricsRevision;
+            Renderer::PreviewMode preview;
+            Detail::ViewportRegion region;
+            Renderer::ViewImageLayout layout;
+        };
+
         // 平台适配最后析构, renderer 先结束借用并解除纹理关联, 再销毁 UI context.
         Detail::GlfwPlatform platform;
         std::unique_ptr<Detail::UiRenderer> renderer;
         Detail::Workspace workspace;
         Detail::Viewport viewport;
+        Detail::ViewportNavigation navigation;
         // 编辑状态在平台适配接入成功后建立, 结束会话时释放事务与历史.
         std::optional<Detail::EditHistory> edits;
         std::optional<Core::BoundedText> editError;
+        std::optional<Core::BoundedText> fileError;
         std::optional<FrameDiagnostic> frameDiagnostic;
         // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
+        std::optional<Detail::ViewportRegion> viewportRegion;
         std::optional<Renderer::ViewportRequest> viewportRequest;
-        std::optional<Renderer::ViewImageLayout> preparedViewport;
+        std::optional<Renderer::ViewImageLayout> preparedViewport; ///< 候选专用, 仅供本轮 UI 准备校验.
+        std::optional<AcceptedImage> acceptedImage;
+        std::optional<Renderer::ViewImageLayout> imageInput; ///< 本轮匹配后的命中映射, 不代表图候选已被接受.
+        std::uint64_t metricsRevision{};
         std::optional<Scene::EntityHandle> selection;
         std::unique_ptr<Detail::SceneDocuments> documents;
+        Detail::SceneImport modelImport;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
         Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
         // 上一轮是否可接收交互, 与本批次的窗口事实合用.
@@ -60,6 +87,27 @@ namespace Physara::Editor
             {
                 selection.reset();
             }
+        }
+
+        /// @brief 只有当前画布、文档及请求仍匹配时才借用已接受图像的矩形.
+        [[nodiscard]] std::optional<Renderer::ViewImageLayout> MatchImage(const Scene::Scene *scene,
+                                                                         const Renderer::View *view) const noexcept
+        {
+            if (!acceptedImage || !scene || !view || viewportRegion != acceptedImage->region ||
+                metricsRevision != acceptedImage->metricsRevision || !edits->Snapshot().viewportVisible)
+            {
+                return std::nullopt;
+            }
+            const auto &image = *acceptedImage;
+            const auto revisions = scene->Versions();
+            const auto settings = view->Settings();
+            if (view->Id() != image.view || scene->Id() != image.scene || revisions.renderContent != image.contentRevision ||
+                revisions.camera != image.sceneCameraRevision || view->CameraRevision() != image.viewCameraRevision ||
+                settings.requestRevision != image.requestRevision || settings.preview != image.preview)
+            {
+                return std::nullopt;
+            }
+            return image.layout;
         }
     };
 
@@ -220,7 +268,7 @@ namespace Physara::Editor
         {
             auto &documents = *state.documents;
             const Detail::EditAction action = undo ? Detail::HistoryAction::Undo : Detail::HistoryAction::Redo;
-            auto error = state.edits->Apply(state.edits->Id(), &view, {}, std::span(&action, 1),
+            auto error = state.edits->Apply(state.edits->Id(), &view, std::span(&action, 1),
                                             &documents.Active(), documents.Frozen());
             state.RetireSelection();
             return error;
@@ -240,8 +288,23 @@ namespace Physara::Editor
             return Core::BoundedText("No scene document is attached");
         }
         auto result = state.documents->Begin(request, view, *state.edits);
+        if (!result && (request.action == SceneFileAction::New || request.action == SceneFileAction::Open))
+        {
+            state.modelImport.Retire();
+        }
         state.RetireSelection();
         return result;
+    }
+
+    std::optional<Core::BoundedText> EditorSession::SaveBeforeReplacing(SceneFileRequest replacement,
+        const std::filesystem::path &saveAs, Renderer::View &view)
+    {
+        auto &state = *m_State;
+        if (!state.documents)
+        {
+            return Core::BoundedText("No scene document is attached");
+        }
+        return state.documents->SaveBeforeReplacing(std::move(replacement), saveAs, view, *state.edits);
     }
 
     std::optional<Core::BoundedText> EditorSession::CancelSceneFile(std::uint64_t operation) noexcept
@@ -250,6 +313,31 @@ namespace Physara::Editor
             std::optional(Core::BoundedText("No scene document is attached"));
     }
 
+    std::optional<Core::BoundedText> EditorSession::RequestModelImport(Asset::AssetManager &assets,
+        Scene::SceneId scene, const std::filesystem::path &path, std::optional<std::uint32_t> sourceScene)
+    {
+        auto &state = *m_State;
+        if (!state.documents || state.documents->Active().Id() != scene || state.documents->Frozen())
+        {
+            return Core::BoundedText("Model import requires the active, editable document");
+        }
+        return state.modelImport.Begin(assets, scene, path, {sourceScene});
+    }
+
+    const SceneImportStatus &EditorSession::ImportStatus() const noexcept { return m_State->modelImport.Status(); }
+
+    bool EditorSession::CancelModelImport(std::uint64_t operation) noexcept
+    {
+        auto &model = m_State->modelImport;
+        if (!model.Status().Pending() || model.Status().operation != operation)
+        {
+            return false;
+        }
+        model.Retire();
+        return true;
+    }
+
+    // 文件结果可能替换整个 Scene. 先处理该边界, 再让导入按新活动身份决定提交或退役.
     void EditorSession::AdvanceSceneDocument(Asset::AssetManager &assets, Renderer::View &view)
     {
         auto &state = *m_State;
@@ -257,130 +345,330 @@ namespace Physara::Editor
         {
             state.documents->Advance(assets, view, *state.edits);
             state.RetireSelection();
+            if (state.documents->Frozen())
+            {
+                state.modelImport.Retire();
+            }
+            else if (state.documents->MainView() == view.Id())
+            {
+                state.modelImport.Advance(assets, state.documents->Active(), view, *state.edits);
+            }
         }
     }
 
     void EditorSession::ShutdownSceneDocument() noexcept
     {
+        m_State->modelImport.Retire();
+        m_State->navigation.Reset();
         if (m_State->documents)
         {
             m_State->documents->Shutdown();
         }
     }
 
-    // 结束前一轮 UI 借用, 在当前窗口输入边界生成布局, 编辑和宿主值请求.
+    // UTF-8 草稿在提交边界转成路径. 路径范围和物理落点继续由文件与资产入口校验.
+    static std::filesystem::path DraftPath(const std::string &text)
+    {
+        return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(text.data()), text.size()));
+    }
+
+    // 文件和实例意图各走自己的接受入口, 取消使用 UI 观察到的操作编号.
+    static std::optional<Core::BoundedText> ApplyFileIntents(EditorSession &editor,
+        const Detail::WorkspaceFrame &workspace, Renderer::View &view, Asset::AssetManager *assets)
+    {
+        if (workspace.cancelDocument)
+        {
+            return editor.CancelSceneFile(*workspace.cancelDocument);
+        }
+        if (workspace.cancelImport && !editor.CancelModelImport(*workspace.cancelImport))
+        {
+            return Core::BoundedText("Model import is no longer active");
+        }
+        if (const auto &intent = workspace.file)
+        {
+            SceneFileRequest request{intent->action, intent->version.scene, DraftPath(intent->path), {}};
+            if (intent->decision == Detail::ReplaceDecision::Save)
+            {
+                return editor.SaveBeforeReplacing(std::move(request), DraftPath(intent->savePath), view);
+            }
+            if (intent->decision == Detail::ReplaceDecision::Discard)
+            {
+                request.discard = intent->version;
+            }
+            return editor.RequestSceneFile(request, view);
+        }
+        if (const auto &intent = workspace.import)
+        {
+            if (!assets)
+            {
+                return Core::BoundedText("Model import requires the project asset service");
+            }
+            std::optional<std::uint32_t> scene;
+            if (!intent->sourceScene.empty())
+            {
+                const auto *end = intent->sourceScene.data() + intent->sourceScene.size();
+                std::uint32_t value{};
+                const auto parsed = std::from_chars(intent->sourceScene.data(), end, value);
+                if (parsed.ec != std::errc{} || parsed.ptr != end)
+                {
+                    return Core::BoundedText("Source scene must be a nonnegative integer index");
+                }
+                scene = value;
+            }
+            return editor.RequestModelImport(*assets, intent->scene, DraftPath(intent->path), scene);
+        }
+        return std::nullopt;
+    }
+
+    // Escape 由当前手势消费. 失去资格时用相同取消路径恢复首值.
+    static bool IsEscape(const Platform::InputEvent &event) noexcept
+    {
+        const auto *key = std::get_if<Platform::KeyEvent>(&event);
+        return key && key->key == Platform::Key::Escape && key->action == Platform::KeyAction::Press;
+    }
+
+    // 同批已经释放的 Press 在宿主收到捕获请求前便已结束.
+    static bool StillHeld(const Platform::InputSnapshot &input, Platform::MouseButton button,
+                         std::span<const Platform::InputEvent> after) noexcept
+    {
+        const auto state = input.MouseState(button);
+        return state.down && (!state.released || std::ranges::none_of(after, [button](const auto &event)
+        {
+            const auto *edge = std::get_if<Platform::MouseButtonEvent>(&event);
+            return edge && edge->button == button && edge->action == Platform::KeyAction::Release;
+        }));
+    }
+
+    // 先封存布局, 再按本轮输入和领域状态产生事务及像素请求.
     EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input, Renderer::View *view,
-                                        const Platform::WindowSettings *window)
+        const Platform::WindowSettings *window, Asset::AssetManager *assets)
     {
         auto &state = *m_State;
         if (state.renderer)
         {
-            // ImGui 可在下一次 NewFrame 覆写状态或释放旧 atlas 元数据.
             state.renderer->CancelPending();
         }
         state.drawData = nullptr;
         state.viewportLayout = {};
+        state.viewportRegion.reset();
         state.viewportRequest.reset();
         state.preparedViewport.reset();
+        state.imageInput.reset();
+        state.metricsRevision = input.window.metricsRevision;
         auto &history = *state.edits;
+        auto *scene = state.documents ? &state.documents->Active() : nullptr;
         const bool frozen = state.documents && state.documents->Frozen();
-        const auto edits = history.Snapshot(frozen);
         if (view && view->Id() != state.viewport.Id())
         {
             state.editError.emplace("Editor frame received a View outside its session");
             view = nullptr;
         }
+        const auto events = state.platform.EventsSinceAttach(input);
         const bool renderable = input.window.Renderable();
         const bool inputAvailable = renderable && input.window.focused;
-        // 使用宿主发布的窗口末值. 业务按键和失效边沿均从本会话接入后的事件中解释.
-        const auto events = state.platform.EventsSinceAttach(input);
-        // 即使发布末值已恢复, 批次中的失焦, 最小化或零像素边沿仍会使本批失效.
-        // 前一批已停用时, 恢复批次仍先清理队列, 后续批次才重新派发动作.
+        // 恢复批次及含中间失效边沿的批次只清理交互, 下一批才允许新动作.
         const bool discard = !inputAvailable || !state.inputAvailable ||
                              std::ranges::any_of(events, Detail::InterruptsInput);
+        const bool escapePressed = !discard && std::ranges::any_of(events, IsEscape);
+        const bool wasNavigating = state.navigation.Active();
         EditorFrame frame;
         Detail::WorkspaceFrame workspace;
+        auto document = view ? SceneStatus(*view) : std::nullopt;
+        Detail::WorkspaceState snapshot{scene, state.selection, view, history.Snapshot(frozen), window,
+            document ? &*document : nullptr, state.modelImport.Status(), state.editError, state.fileError,
+            state.frameDiagnostic, !discard, frozen, wasNavigating};
+        Detail::InputClaims claims{.cursorMode = input.state.cursorMode};
         if (discard)
         {
             state.platform.DiscardInput(input.window.focused);
-            // 宿主会处理失焦时的捕获释放. 此处只在发布仍显示相对模式时请求归还.
-            if (input.state.cursorMode == Platform::CursorMode::Relative)
-            {
-                frame.hostRequest = Platform::SetCursorMode{Platform::CursorMode::Normal};
-            }
         }
         if (renderable)
         {
-            // 失效轮次仍可生成 CPU 帧, 动作派发另受 discard 控制.
             state.platform.BeginFrame(input.window, state.suspended);
             constexpr auto allPopups = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
-            const bool keyboardOwnedBeforeLayout = ImGui::IsPopupOpen(nullptr, allPopups) || ImGui::IsAnyItemActive();
-            const auto settings = view ? view->Settings() : Renderer::ViewSettings{};
-            const auto *acceptedPreview = view ? view->AcceptedScenePreview() : nullptr;
-            const auto document = view ? SceneStatus(*view) : std::nullopt;
-            workspace = state.workspace.Draw(state.selection, state.viewport, edits, settings, acceptedPreview,
-                                             window, state.editError,
-                                             state.frameDiagnostic, !discard, document, frozen);
-            if (!discard)
-            {
-                // 布局可释放弹出层或活动项. 已被占用的本批键盘输入不能随后触发工作区动作.
-                const bool activeItem = ImGui::IsAnyItemActive();
-                const Detail::InputClaims claims{
-                    .blockingPopup = ImGui::IsPopupOpen(nullptr, allPopups),
-                    .uiKeyboard = keyboardOwnedBeforeLayout || activeItem,
-                    .uiPointer = activeItem ||
-                                 (!workspace.viewport.panelHovered &&
-                                  ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)),
-                    .cursorMode = input.state.cursorMode,
-                    .viewportHit = workspace.viewport.panelHovered};
-                state.workspace.ApplyShortcuts(events, claims, workspace);
-            }
-            // 先封存逻辑布局, 再应用事务. 准备期只消费应用后的比例及同批窗口度量.
+            const bool popupBefore = ImGui::IsPopupOpen(nullptr, allPopups);
+            // 保留布局前的占用, 防止文本或弹窗在本帧释放后, 同批按键又触发领域快捷键.
+            const bool keyboardBefore = popupBefore || ImGui::IsAnyItemActive() || ImGui::GetIO().WantTextInput;
+            workspace = state.workspace.Draw(snapshot, state.viewport);
+            claims.blockingPopup = popupBefore || ImGui::IsPopupOpen(nullptr, allPopups);
+            const bool active = ImGui::IsAnyItemActive();
+            claims.uiKeyboard = keyboardBefore || active || ImGui::GetIO().WantTextInput;
+            claims.uiPointer = active || ImGui::GetCurrentContext()->MovingWindow != nullptr;
             ImGui::Render();
             state.drawData = ImGui::GetDrawData();
             state.extentPixels = input.window.framebufferSizePixels;
             state.viewportLayout = workspace.viewport;
             frame.hasDrawData = state.drawData != nullptr;
+            if (state.drawData)
+            {
+                state.viewportRegion = workspace.viewport.image.Region(*state.drawData);
+            }
         }
-        // 暂停时也消费事务取消, 由活动 View 尝试还原拖拽起点.
-        workspace.scale.cancelled |= discard;
-        std::optional<Core::BoundedText> editError;
+
         try
         {
-            if (workspace.cancelDocument)
+            if (wasNavigating)
             {
-                editError = CancelSceneFile(*workspace.cancelDocument);
+                // 捕获中的手势可等待自己的相机回执, 但失焦, 隐藏和更高优先级 UI 会取消原预览.
+                const bool hiding = std::ranges::any_of(workspace.edits, [](const auto &action)
+                {
+                    const auto *visibility = std::get_if<Detail::SetViewportVisibility>(&action);
+                    return visibility && !visibility->visible;
+                });
+                const bool eligible = !discard && !frozen && !hiding && !claims.blockingPopup &&
+                                      !claims.uiKeyboard && !claims.uiPointer && !claims.gizmoActive;
+                workspace.gestures.current = state.navigation.Step(scene, view, state.viewportRegion, input, events,
+                    eligible, ImGui::GetIO().DeltaTime);
             }
-            if (!editError)
+            else if (discard || frozen || claims.blockingPopup || escapePressed)
             {
-                editError = history.Apply(history.Id(), view, workspace.scale, workspace.edits,
-                                          state.documents ? &state.documents->Active() : nullptr, frozen);
+                if (history.HasGesture())
+                {
+                    ImGui::ClearActiveID();
+                    state.workspace.EndRotationInput();
+                }
+                workspace.gestures = {};
+            }
+
+            // 完成旧项后才开启新项. 失效时输入为空, 沿原字段协议恢复已接受的预览.
+            const auto &gestures = workspace.gestures;
+            if (history.HasGesture() || gestures.completed || gestures.current.began)
+            {
+                auto result = history.ApplyGestures(scene, view, gestures);
+                if (result || gestures.current.preview || (gestures.completed && gestures.completed->preview))
+                {
+                    state.editError = std::move(result);
+                }
+            }
+            const auto apply = [&](std::span<const Detail::EditAction> actions)
+            {
+                if (!actions.empty())
+                {
+                    state.editError = history.Apply(history.Id(), view, actions, scene, frozen);
+                    state.RetireSelection();
+                    document = view ? SceneStatus(*view) : std::nullopt;
+                    snapshot.document = document ? &*document : nullptr;
+                    snapshot.selection = state.selection;
+                    snapshot.edits = history.Snapshot(frozen);
+                }
+            };
+            // 领域修改先落到当前 owner, 选择再按存活 handle 接受; 后续文件操作可能替换整个文档.
+            apply(workspace.edits);
+            if (workspace.selection)
+            {
+                static_cast<void>(Select(workspace.selection));
+                snapshot.selection = state.selection;
+            }
+            if (view && scene && workspace.camera)
+            {
+                auto requests = view->DocumentRequests();
+                requests.cameraEntityId = std::move(workspace.camera->entity);
+                state.editError = EditMainView(scene->Id(), *view, std::move(requests));
+            }
+            if (view && workspace.preview)
+            {
+                view->RequestPreview(*workspace.preview);
+            }
+
+            if (!discard && !wasNavigating)
+            {
+                for (std::size_t i = 0; i < events.size(); ++i)
+                {
+                    // 先到的文件动作获得模态或提交机会, 本批不再打开另一个文件动作或相机捕获.
+                    if (workspace.file || workspace.import || state.workspace.HasFileDialog())
+                    {
+                        break;
+                    }
+                    if (std::holds_alternative<Platform::KeyEvent>(events[i]))
+                    {
+                        const auto count = workspace.edits.size();
+                        state.workspace.ApplyShortcut(events[i], claims, snapshot, workspace);
+                        apply(std::span<const Detail::EditAction>(workspace.edits).subspan(count));
+                        continue;
+                    }
+                    const auto *press = std::get_if<Platform::MouseButtonEvent>(&events[i]);
+                    if (!press || press->action != Platform::KeyAction::Press || !scene || !view || frozen ||
+                        escapePressed ||
+                        history.HasGesture() || view->DocumentRequests().cameraEntityId || claims.uiKeyboard ||
+                        input.state.cursorMode != Platform::CursorMode::Normal)
+                    {
+                        continue;
+                    }
+                    // 新捕获必须同时命中当前正常图像与顶层窗口, 不能只看事件批次末的指针位置.
+                    const auto layout = state.MatchImage(scene, view);
+                    const auto cursor = press->positionLogical;
+                    if (!layout || !state.viewportRegion->ImageUv(*layout, cursor.x, cursor.y))
+                    {
+                        continue;
+                    }
+                    claims.viewportHit = state.viewportLayout.OwnsPointer(cursor);
+                    if (Detail::ResolveInputOwner(claims, events[i]) != Detail::InputOwner::Viewport ||
+                        !StillHeld(input.state, press->button, events.subspan(i + 1)))
+                    {
+                        continue;
+                    }
+                    const auto start = state.navigation.Start(*scene, *view, state.selection,
+                        *state.viewportRegion, input.window, *press);
+                    if (start.began)
+                    {
+                        if (auto error = history.ApplyGesture(scene, view, start))
+                        {
+                            state.navigation.Reset();
+                            state.editError = std::move(error);
+                        }
+                        else
+                        {
+                                    auto &gui = *ImGui::GetCurrentContext();
+                                    // ImGui 在封存末尾可能把图片上的左键当作窗口背景拖动.
+                                    // 本轮布局时没有活动控件, 此次按下已由 Orbit 接收.
+                                    if (press->button == Platform::MouseButton::Primary && gui.ActiveIdWindow &&
+                                        gui.ActiveId == gui.ActiveIdWindow->MoveId)
+                                    {
+                                        ImGui::StopMouseMovingWindow();
+                                        ImGui::ClearActiveID();
+                                    }
+                            frame.hostRequest = Platform::SetCursorMode{Platform::CursorMode::Relative};
+                        }
+                        break;
+                    }
+                }
+            }
+            // New 可同步替换 Scene. 此后不再使用本轮开头借出的 scene, 最终映射重新读取活动文档.
+            if (view && (workspace.file || workspace.import || workspace.cancelDocument || workspace.cancelImport))
+            {
+                try
+                {
+                    state.fileError = ApplyFileIntents(*this, workspace, *view, assets);
+                }
+                catch (const std::filesystem::filesystem_error &error)
+                {
+                    state.fileError.emplace(error.what());
+                }
             }
         }
         catch (const std::exception &error)
         {
-            editError.emplace(error.what());
+            state.editError.emplace(error.what());
         }
-        state.RetireSelection();
-        if (view && workspace.preview)
+
+        if (!state.navigation.Active() && input.state.cursorMode == Platform::CursorMode::Relative)
         {
-            // 预览不是文档事务, 仅决定本轮随后的 Forward 准备; 像素生效仍等待 Runtime 接受回执.
-            view->RequestPreview(*workspace.preview);
+            frame.hostRequest = Platform::SetCursorMode{Platform::CursorMode::Normal};
         }
-        if (editError || workspace.scale.preview || !workspace.edits.empty() || workspace.cancelDocument)
-        {
-            state.editError = std::move(editError);
-        }
-        // 用匹配 View 的最新比例和请求代配合封存布局生成像素范围.
-        // 隐藏在封存后已生效, 重开要等下一份可见布局才有新的图像矩形.
+        // 使用当轮最终比例及显隐生成像素请求, 与是否正在捕获相机输入分开处理.
         if (view && history.Snapshot().viewportVisible)
         {
             state.viewportRequest = state.viewport.Request(state.viewportLayout, input.window, view->Settings());
             frame.viewport = state.viewportRequest;
         }
+        if (!state.viewportRegion || !frame.viewport)
+        {
+            state.acceptedImage.reset();
+        }
+        state.imageInput = state.MatchImage(ActiveScene(), view);
         frame.titleRequest = std::move(workspace.title);
         frame.vsyncRequest = workspace.vsync;
-        // 普通模式的恢复批次可在本轮结束时建立基线. 相对模式保持门控, 等宿主确认归还.
+        // 普通模式的恢复批次重建指针基线. 相对模式等 Runtime 完成实际归还.
         if (discard && inputAvailable && !frame.hostRequest)
         {
             state.platform.ResumeInput();
@@ -399,19 +687,34 @@ namespace Physara::Editor
             prepared->view == request->view && prepared->requestRevision == request->requestRevision &&
             prepared->layout.outputExtent == request->extent)
         {
-            // 只保存与本轮逻辑布局对应的像素映射, 相机和 SceneFrame 仍留在渲染准备结果中.
             state.preparedViewport = prepared->layout;
         }
+    }
+
+    // 调用方已核实正常图实际采样, 提交及 View 发布. 此处只复制身份/布局, 不保留帧槽借用.
+    void EditorSession::SetAcceptedViewport(const Renderer::PreparedView *accepted, const Renderer::View &view) noexcept
+    {
+        auto &state = *m_State;
+        if (!accepted || !state.viewportRegion)
+        {
+            state.acceptedImage.reset();
+            state.imageInput.reset();
+            return;
+        }
+        assert(state.preparedViewport && state.viewportRequest && accepted->camera &&
+               state.viewportRequest->view == accepted->view && state.viewportRequest->requestRevision ==
+                   accepted->requestRevision && state.preparedViewport == accepted->layout);
+        state.acceptedImage = State::AcceptedImage{accepted->view, accepted->scene.scene,
+            accepted->scene.contentRevision, accepted->camera->sceneCameraRevision, accepted->cameraRevision,
+            accepted->requestRevision, state.metricsRevision, view.Preview(), *state.viewportRegion, accepted->layout};
+        state.imageInput = accepted->layout;
     }
 
     std::optional<std::array<double, 2>> EditorSession::ViewportImageUv(double x, double y) const noexcept
     {
         const auto &state = *m_State;
-        if (!state.drawData || !state.preparedViewport)
-        {
-            return std::nullopt;
-        }
-        return state.viewportLayout.image.ImageUv(*state.drawData, *state.preparedViewport, x, y);
+        return state.viewportRegion && state.imageInput ? state.viewportRegion->ImageUv(*state.imageInput, x, y) :
+            std::nullopt;
     }
 
     // 正常模式核对当前布局候选, 安全模式核对已接受快照的来源, 两者共用本轮封存的 UI.
@@ -435,7 +738,7 @@ namespace Physara::Editor
         if (!diagnostic || mode != UiFrameMode::Normal)
         {
             // 占位与只读旧颜色都没有本轮图像输入资格.
-            state.preparedViewport.reset();
+            state.imageInput.reset();
         }
         if (mode == UiFrameMode::SafeUi)
         {
@@ -454,7 +757,7 @@ namespace Physara::Editor
              outputs.RequestRevision() != state.viewportRequest->requestRevision)))
         {
             // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
-            state.preparedViewport.reset();
+            state.imageInput.reset();
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
         }
         return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);

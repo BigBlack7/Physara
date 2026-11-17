@@ -1,7 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 编辑器单文档的操作和状态值. 主线程使用, 可由后续编辑器动作直接消费.
+/// @brief 编辑器单文档的文件操作, 模型实例意图和状态值. 主线程使用, 由工作区只读展示.
+/// 文件保存版本与模型请求资格各自管理, CPU 就绪不代表 GPU 已输出相应图像.
 
 #include <filesystem>
 #include <optional>
@@ -57,5 +58,30 @@ namespace Physara::Editor
         std::uint64_t operation{};
         bool modified{};
         std::optional<Core::BoundedText> lastFailure;
+    };
+
+    /// @brief 单次实例意图的阶段. CpuReady 可以等待活动手势结束, Instantiated 仅确认 Scene 事务成功.
+    enum class SceneImportPhase : std::uint8_t
+    {
+        Idle,
+        Loading,
+        CpuReady,
+        Instantiated,
+        Failed,
+        Cancelled
+    };
+
+    /// @brief 最近一次编辑器导入. operation 只标识本会话的实例意图, 与共享资产请求代独立.
+    struct SceneImportStatus
+    {
+        SceneImportPhase phase = SceneImportPhase::Idle;
+        std::uint64_t operation{};
+        Core::BoundedText path;
+        Core::BoundedText detail;
+
+        [[nodiscard]] bool Pending() const noexcept
+        {
+            return phase == SceneImportPhase::Loading || phase == SceneImportPhase::CpuReady;
+        }
     };
 }

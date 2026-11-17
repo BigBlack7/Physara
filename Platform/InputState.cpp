@@ -8,10 +8,12 @@
 
 namespace Physara::Platform::Detail
 {
+    // 原生坐标进入累积器前先拒绝非有限分量, 后续差值和累计值仍可能独立溢出.
     static bool IsFinite(Physara::Platform::LogicalPoint value) noexcept
     {
         return std::isfinite(value.x) && std::isfinite(value.y);
     }
+    // 内容缩放是正的原生度量, 与用于视口像素换算的 framebuffer/client 比值分开保存.
     static bool ValidScale(Physara::Platform::ContentScale value) noexcept
     {
         return std::isfinite(value.x) && std::isfinite(value.y) && value.x > 0.0f && value.y > 0.0f;
@@ -62,7 +64,7 @@ namespace Physara::Platform::Detail
         ResetForFailure();
     }
 
-    void InputState::Record(const InputEvent &event) noexcept
+    void InputState::Record(InputEvent event) noexcept
     {
         if (m_Fault)
         {
@@ -79,7 +81,7 @@ namespace Physara::Platform::Detail
             Fail(InputFaultReason::Overflow);
             return;
         }
-        std::visit([this](const auto &value) noexcept { Apply(value); }, event);
+        std::visit([this](auto &value) noexcept { Apply(value); }, event);
         if (!m_Fault)
         {
             m_Banks[m_PendingBank][m_PendingCount++] = event;
@@ -189,16 +191,18 @@ namespace Physara::Platform::Detail
             Fail(InputFaultReason::InvalidData);
         }
     }
-    void InputState::Apply(MouseButtonEvent event) noexcept
+    void InputState::Apply(MouseButtonEvent &event) noexcept
     {
         if (!IsKnown(event.button) || event.action > KeyAction::Release || static_cast<unsigned>(event.modifiers) > 63)
         {
             Fail(InputFaultReason::InvalidData);
             return;
         }
+        // 事件先后顺序决定按下位置; 后续位置事件可以继续更新批末快照, 不改变已封存的边沿位置.
         UpdateButton(m_Snapshot.mouseButtons[static_cast<std::size_t>(event.button)], event.action);
+        event.positionLogical = m_Snapshot.cursorPositionLogical;
     }
-    void InputState::Apply(CursorPositionEvent event) noexcept
+    void InputState::Apply(CursorPositionEvent &event) noexcept
     {
         // baseline 在初始化、焦点边界和光标模式切换后失效; 第一份位置只重建基准, 不产生相机跳变.
         if (!IsFinite(event.position))
@@ -206,11 +210,15 @@ namespace Physara::Platform::Detail
             Fail(InputFaultReason::InvalidData);
             return;
         }
+        event.deltaLogical = {};
+        event.mode = m_Snapshot.cursorMode;
         if (m_Window.focused && m_MotionBaseline)
         {
+            event.deltaLogical = {event.position.x - m_Snapshot.cursorPositionLogical.x,
+                                  event.position.y - m_Snapshot.cursorPositionLogical.y};
             LogicalPoint delta{
-                m_Snapshot.cursorDeltaLogical.x + (event.position.x - m_Snapshot.cursorPositionLogical.x),
-                m_Snapshot.cursorDeltaLogical.y + (event.position.y - m_Snapshot.cursorPositionLogical.y)};
+                m_Snapshot.cursorDeltaLogical.x + event.deltaLogical.x,
+                m_Snapshot.cursorDeltaLogical.y + event.deltaLogical.y};
             if (!IsFinite(delta))
             {
                 Fail(InputFaultReason::InvalidData);

@@ -268,16 +268,21 @@ namespace Physara::Platform
         char32_t codepoint = 0;
     };
 
+    /// @brief 按钮边沿与当时位置的配对事实, 不使用整批末位置替代按下位置.
     struct MouseButtonEvent
     {
         MouseButton button = MouseButton::Primary;
         KeyAction action = KeyAction::Release;
         Modifier modifiers = Modifier::None;
+        LogicalPoint positionLogical; ///< 顺序处理到按钮边沿时的逻辑位置.
     };
 
+    /// @brief 顺序位置事件. InputState 补齐实际模式和基线内位移, 使消费者能在 Release 处截断运动.
     struct CursorPositionEvent
     {
         LogicalPoint position;
+        LogicalPoint deltaLogical; ///< 同一焦点和光标模式基线内的本次位移.
+        CursorMode mode = CursorMode::Normal; ///< 此位置事件被宿主累积时实际观察到的模式.
     };
 
     struct CursorEnterEvent

@@ -32,7 +32,7 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 ## 静态场景文档
 
-正式程序启动时装配空 Scene 和默认主 View. Scene 消费固定的 `ModelVersion`, 提供类型化领域事务、稳定 ID 查找、世界变换和只读记录. EditorSession 在编辑边界通过 `EditScene`、`EditMainView` 和 `ReplayEdit` 应用或重放意图. 通过 `RequestSceneFile` 请求新建、打开、保存或另存, 用 `SceneStatus` 读取未保存版本、路径和操作进度. Runtime 在每个继续运行的 CPU 轮次于资产完成发布后推进文件结果. 工作区的 Scene status 提供进度和取消, 文件菜单和属性面板随 D06-T06 接入. [Scene 入口](../Engine/Scene/Scene.hpp) · [会话入口](../Editor/Session/EditorSession.hpp)
+正式程序启动时装配空 Scene 和默认主 View. Scene 消费固定的 `ModelVersion`, 提供类型化领域事务、稳定 ID 查找、世界变换和只读记录. EditorSession 在编辑边界通过 `EditScene`、`EditMainView` 和 `ReplayEdit` 应用或重放意图. 通过 `RequestSceneFile` 请求新建、打开、保存或另存, 用 `SceneStatus` 读取未保存版本、路径和操作进度. Runtime 在每个继续运行的 CPU 轮次依次发布资产结果、推进文件工作并提交仍有效的模型实例. [Scene 入口](../Engine/Scene/Scene.hpp) · [会话入口](../Editor/Session/EditorSession.hpp)
 
 首版文档为 `Assets/Scenes` 中的 UTF-8 `*.scene.json`, `version` 为整数 1. 保存稳定实体、层级、local TRS、静态网格标志、灯、相机、实例源和已修改的核心材质与纹理槽. 主 View 保存导航位姿、可选相机实体 ID 及请求渲染比例. 透视相机的 `far: null` 表达无限远. 首次保存用 Save As 选定所在目录已存在的项目相对路径. 模型与外置 PNG/JPEG 覆盖分别定位到 `Assets/Models` 和 `Assets/Textures`, 打开或保存时按固定模型的实际依赖核对源版本. 单文件上限为 16 MiB, JSON 值数量上限为 200 万, 输入解析深度上限为 32. [持久化合同](Architecture.md#asset-persistence)
 
@@ -93,7 +93,10 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 
 槽全忙时继续处理输入和有限事件等待. 最小化或 framebuffer 为零时清理交互并暂停新帧. 关闭请求和达到计数上限的 poll 在生成下一份 UI 数据前进入退出, 最后一次 GPU 使用按设备的完成与关闭协议收拢. [阶段计划](Developments/D03-D05-FramePipeline.md#d04-t04)
 
-- 在 `Inspector` 的 `Main View` 中拖动 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 若 `Viewport` 在同一停靠组的后台标签中, 切回该标签后可准备新的诊断图. 需要同时看比例和图像时可将两个面板停靠在不同区域. `Pending` 和失败状态会显示原因.
+- 将 glTF/GLB 及其依赖放在实际 exe 同级的 `Assets/Models`, 并建立用于保存的 `Assets/Scenes` 目录. 选择 `File > Import Model`, 输入如 `Assets/Models/Example/Example.gltf` 的项目相对路径. 可选字段指定文件内的 scene 下标. `Scene status` 显示导入进度、已实例化状态、支持说明及取消入口. 视口的 Pending 和有效画面另外确认 GPU 工作.
+- 在 `Hierarchy` 选中一行, 在 `Inspector` 拖动 `Local Transform` 的平移、旋转或缩放, 或 Ctrl+单击数值后键入. 旋转为 XYZ 度, 缩放保留符号. `Edit > Delete` 或 Delete 删除所选子树, `Ctrl+Z` 和 `Ctrl+Y` 可撤销与重做.
+- `File` 提供 `New Scene`、`Open Scene`、`Save Scene` 和 `Save Scene As`, 快捷键分别为 Ctrl+N、Ctrl+O、Ctrl+S 和 Ctrl+Shift+S. 打开或另存时输入如 `Assets/Scenes/Example.scene.json` 的项目相对路径. 新文档第一次保存会询问目标. 有未保存修改时可保存后继续、放弃或取消, `Scene status` 显示当前路径、文件进度和失败原因.
+- 在 `View Settings` 选择导航或场景相机, 调整 `Preview` 与 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 在有效导航图像内按住右键用鼠标和 WASD/QE 飞行, Alt+左键环绕, 中键平移. 按 Esc 可取消尚未结束的手势. 如需同时看图与参数, 将 `Viewport` 和 `View Settings` 停靠在不同区域.
 - 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
 - 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
 

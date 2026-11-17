@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 
+#include <imgui_internal.h>
+
 #include "ImGui/UiTextures.hpp"
 
 /// @file
@@ -59,18 +61,41 @@ namespace Physara::Editor::Detail
         return nullptr;
     }
 
-    std::optional<std::array<double, 2>> ViewportImage::ImageUv(const ImDrawData &data,
-        const Renderer::ViewImageLayout &layout, double x, double y) const noexcept
+    std::optional<ViewportRegion> ViewportImage::Region(const ImDrawData &data) const noexcept
     {
         const auto *draw = FindDraw(data);
-        if (!draw || !(x >= draw->ClipRect.x && x < draw->ClipRect.z &&
-                       y >= draw->ClipRect.y && y < draw->ClipRect.w))
+        if (!draw)
         {
             return std::nullopt;
         }
-        // 整张显示画布映射到本轮逻辑 Image. 第二步只在有效像素矩形内产生图像 UV.
-        return layout.ImageUv((x - origin.x) * layout.outputExtent.width / size.x,
-                              (y - origin.y) * layout.outputExtent.height / size.y);
+        const auto right = origin.x + size.x;
+        const auto bottom = origin.y + size.y;
+        const ViewportRegion region{{origin.x, origin.y, right, bottom},
+            {std::max(origin.x, draw->ClipRect.x), std::max(origin.y, draw->ClipRect.y),
+             std::min(right, draw->ClipRect.z), std::min(bottom, draw->ClipRect.w)}};
+        return region.clip[0] < region.clip[2] && region.clip[1] < region.clip[3] ?
+            std::optional(region) : std::nullopt;
+    }
+
+    // 逻辑画布只换算一次, View 的有效像素区域继续负责留边和半开边界.
+    std::optional<std::array<double, 2>> ViewportRegion::ImageUv(const Renderer::ViewImageLayout &layout,
+        double x, double y) const noexcept
+    {
+        if (!(x >= clip[0] && x < clip[2] && y >= clip[1] && y < clip[3]))
+        {
+            return std::nullopt;
+        }
+        return layout.ImageUv((x - canvas[0]) * layout.outputExtent.width / (canvas[2] - canvas[0]),
+                              (y - canvas[1]) * layout.outputExtent.height / (canvas[3] - canvas[1]));
+    }
+
+    // 按事件发生位置查询当轮窗口遮挡. 不复用批末 HoveredWindow, 也不因正在拖窗口强行命中视口.
+    bool ViewportLayout::OwnsPointer(Platform::LogicalPoint position) const noexcept
+    {
+        ImGuiWindow *hovered = nullptr;
+        ImGui::FindHoveredWindowEx(ImVec2(static_cast<float>(position.x), static_cast<float>(position.y)),
+                                  true, &hovered, nullptr);
+        return hovered && hovered->ID == window;
     }
 
     // 在视口图像和原绘制裁剪的交集内生成状态标签, 供合成器紧接图像使用.
@@ -147,11 +172,7 @@ namespace Physara::Editor::Detail
     {
         const auto min = ImGui::GetCursorScreenPos();
         const auto size = ImGui::GetContentRegionAvail();
-        const ImVec2 max{min.x + size.x, min.y + size.y};
         ViewportLayout result;
-        // hover 仅提供面板级输入归属, 尚不代表命中相机有效图像. 留边须在准备后用 ImageUv 排除.
-        result.panelHovered = size.x > 0 && size.y > 0 && ImGui::IsWindowHovered() &&
-            ImGui::IsMouseHoveringRect(min, max);
         if (!m_View.IsValid() || size.x <= 0 || size.y <= 0)
         {
             return result;
@@ -165,6 +186,7 @@ namespace Physara::Editor::Detail
         {
             result.image = {list, static_cast<unsigned>(firstIndex), token, min, size,
                             ImGui::GetFont(), ImGui::GetFontSize()};
+            result.window = ImGui::GetCurrentWindowRead()->ID;
             // 封存前准备状态文字及源槽数字需要的 ASCII 字形, 避免 GPU 准备时修改 atlas 请求.
             auto *baked = ImGui::GetFontBaked();
             for (ImWchar character = 32; character <= 126; ++character)

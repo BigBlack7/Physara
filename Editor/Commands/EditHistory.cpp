@@ -1,7 +1,7 @@
 #include "EditHistory.hpp"
 
 /// @file
-/// @brief 在 CPU 帧边界应用布局, 比例手势, Scene/View 事务及其历史重放.
+/// @brief 在 CPU 帧边界应用布局, TRS/比例/导航手势, Scene/View 事务及其历史重放.
 /// 活动手势保存首值和最近接受值. Scene 记录按稳定 ID 重放, 相机回退与实体事务一起提交.
 
 #include <algorithm>
@@ -20,6 +20,7 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // Open 只冻结文档条目; 显隐仍可重放. 任何活动字段手势都占用整条历史的重放边界.
     EditState EditHistory::Snapshot(bool frozen) const noexcept
     {
         const auto mayReplay = [this, frozen](std::size_t index)
@@ -40,11 +41,14 @@ namespace Physara::Editor::Detail
         m_Active.reset();
     }
 
-    std::optional<Core::BoundedText> EditHistory::CancelGesture(Renderer::View &view) noexcept
+    std::optional<Core::BoundedText> EditHistory::CancelGesture(Scene::Scene *scene, Renderer::View *view)
     {
-        ScaleGesture cancelled{};
-        cancelled.cancelled = true;
-        return ApplyGesture(&view, cancelled);
+        auto cancelled = std::exchange(m_Active, std::nullopt);
+        if (!cancelled || cancelled->before == cancelled->after)
+        {
+            return std::nullopt;
+        }
+        return WriteField(scene, view, *cancelled, cancelled->before, false);
     }
 
     // 预览, 恢复和重放都借用同一个比例入口, 由 View 确认目标和取值.
@@ -75,56 +79,142 @@ namespace Physara::Editor::Detail
         m_Count = m_Applied;
     }
 
-    // 手势按取消, 激活, 预览, 完成的顺序处理. 记录采用实际被 View 接受的值.
-    std::optional<Core::BoundedText> EditHistory::ApplyGesture(Renderer::View *view,
-                                                              const ScaleGesture &gesture) noexcept
+    // 从权威数据收集首值, 将本地字段的 live 身份和稳定重放身份一起记录.
+    std::optional<EditHistory::FieldChange> EditHistory::BeginGesture(Scene::Scene *scene, Renderer::View *view,
+                                                                      const FieldTarget &target)
     {
-        if (m_Active && (gesture.cancelled || (!gesture.active && !gesture.finished)))
+        if (const auto *id = std::get_if<Renderer::ViewId>(&target))
         {
-            // 先结束交互再尝试恢复首值, 迟到的预览或释放不会提交刚结束的事务.
-            const auto cancelled = *std::exchange(m_Active, std::nullopt);
-            return ApplyScale(view, cancelled.view, cancelled.before);
+            if (view && view->Id() == *id)
+            {
+                const auto before = view->Settings().requestedScale;
+                return FieldChange{target, {}, before, before};
+            }
         }
-        if (gesture.cancelled)
+        else if (const auto *local = std::get_if<LocalFieldTarget>(&target))
         {
+            if (const auto entity = scene ? scene->Get(local->entity) : std::nullopt)
+            {
+                const auto &transform = entity->record.properties.local;
+                FieldValue before = local->field == TransformField::Rotation ? FieldValue{transform.rotation} :
+                    FieldValue{local->field == TransformField::Scale ? transform.scale : transform.translation};
+                return FieldChange{target, entity->record.id, before, before};
+            }
+        }
+        else if (const auto *navigation = std::get_if<NavigationTarget>(&target))
+        {
+            if (scene && scene->Id() == navigation->scene && view && view->Id() == navigation->view &&
+                !view->DocumentRequests().cameraEntityId)
+            {
+                const auto &before = view->DocumentRequests().cameraPose;
+                return FieldChange{target, {}, before, before};
+            }
+        }
+        return std::nullopt;
+    }
+
+    // 每个字段以当前权威值为基底. 预览和取消只接受原实体代, 历史重放可解析新一代的同一稳定实体.
+    std::optional<Core::BoundedText> EditHistory::WriteField(Scene::Scene *scene, Renderer::View *view,
+        const FieldChange &field, const FieldValue &value, bool replay)
+    {
+        if (const auto *id = std::get_if<Renderer::ViewId>(&field.target))
+        {
+            return ApplyScale(view, *id, std::get<float>(value));
+        }
+        if (const auto *local = std::get_if<LocalFieldTarget>(&field.target))
+        {
+            const auto handle = scene && scene->Id() == local->entity.scene ?
+                (replay ? scene->Find(field.stableEntity) : std::optional(local->entity)) : std::nullopt;
+            const auto entity = handle ? scene->Get(*handle) : std::nullopt;
+            if (!entity)
+            {
+                return Core::BoundedText("Transform edit belongs to an expired entity");
+            }
+            auto properties = entity->record.properties;
+            if (local->field == TransformField::Rotation)
+            {
+                properties.local.rotation = std::get<std::array<double, 4>>(value);
+            }
+            else
+            {
+                auto &axis = local->field == TransformField::Scale ? properties.local.scale :
+                    properties.local.translation;
+                axis = std::get<std::array<double, 3>>(value);
+            }
+            const auto result = scene->Apply(Scene::EditProperties{*handle, std::move(properties)});
+            if (const auto *error = std::get_if<Core::BoundedText>(&result))
+            {
+                return *error;
+            }
             return std::nullopt;
+        }
+        const auto &navigation = std::get<NavigationTarget>(field.target);
+        if (!scene || scene->Id() != navigation.scene || !view || view->Id() != navigation.view ||
+            view->DocumentRequests().cameraEntityId)
+        {
+            return Core::BoundedText("Navigation edit requires the active navigation camera");
+        }
+        auto requests = view->DocumentRequests();
+        requests.cameraPose = std::get<Scene::Pose>(value);
+        auto update = view->PrepareDocumentUpdate(navigation.view, std::move(requests));
+        if (const auto *error = std::get_if<Core::BoundedText>(&update))
+        {
+            return *error;
+        }
+        view->PublishDocumentUpdate(std::get<Renderer::ViewDocumentUpdate>(std::move(update)));
+        return std::nullopt;
+    }
+
+    // 手势按旧项退役, 激活, 预览, 完成的顺序处理. 拒绝末值时仍可收束此前已接受的预览.
+    std::optional<Core::BoundedText> EditHistory::ApplyGesture(Scene::Scene *scene, Renderer::View *view,
+                                                              const FieldGesture &gesture)
+    {
+        if (m_Active && (gesture.began || m_Active->target != gesture.target))
+        {
+            if (auto error = CancelGesture(scene, view))
+            {
+                return error;
+            }
         }
         if (gesture.began)
         {
-            if (m_Active || !view || view->Id() != gesture.view)
+            m_Active = BeginGesture(scene, view, gesture.target);
+            if (!m_Active)
             {
-                return Core::BoundedText("Render scale gesture requires the active View and an idle field");
+                return Core::BoundedText("Edit gesture has no live target");
             }
-            // 捕获进入拖拽时的权威请求, 连续预览只更新末值.
-            const auto before = view->Settings().requestedScale;
-            m_Active = ScaleChange{gesture.view, before, before};
         }
         if (!m_Active)
         {
             return std::nullopt;
         }
-        if (gesture.view != m_Active->view)
+        std::optional<Core::BoundedText> rejected;
+        if (gesture.preview && *gesture.preview != m_Active->after)
         {
-            return Core::BoundedText("Render scale preview belongs to another View");
-        }
-        if (gesture.preview)
-        {
-            if (auto error = ApplyScale(view, m_Active->view, *gesture.preview))
+            rejected = WriteField(scene, view, *m_Active, *gesture.preview, false);
+            if (!rejected)
             {
-                return error;
+                m_Active->after = *gesture.preview;
             }
-            m_Active->after = *gesture.preview;
         }
         if (gesture.finished)
         {
-            const auto completed = *std::exchange(m_Active, std::nullopt);
-            // 往返到首值时没有需要重放的变化, 保留已有 Redo 分支.
+            auto completed = std::move(*std::exchange(m_Active, std::nullopt));
             if (completed.before != completed.after)
             {
-                Commit(completed);
+                Commit(std::move(completed));
             }
         }
-        return std::nullopt;
+        return rejected;
+    }
+
+    // 两项可指向同一领域字段的不同轴. 先提交旧项, 让新项从实际结果捕获首值.
+    std::optional<Core::BoundedText> EditHistory::ApplyGestures(Scene::Scene *scene, Renderer::View *view,
+                                                               const FieldGestures &gestures)
+    {
+        const auto completed = gestures.completed ? ApplyGesture(scene, view, *gestures.completed) : std::nullopt;
+        const auto current = ApplyGesture(scene, view, gestures.current);
+        return completed ? completed : current;
     }
 
     // 先应用栈顶记录对应的字段值, 接受后才推进历史游标.
@@ -138,9 +228,9 @@ namespace Physara::Editor::Detail
             return std::nullopt;
         }
         const auto &entry = m_Entries[undo ? m_Applied - 1 : m_Applied];
-        if (const auto *scale = std::get_if<ScaleChange>(&entry))
+        if (const auto *field = std::get_if<FieldChange>(&entry))
         {
-            if (auto error = ApplyScale(view, scale->view, undo ? scale->before : scale->after))
+            if (auto error = WriteField(scene, view, *field, undo ? field->before : field->after, true))
             {
                 return error;
             }
@@ -199,20 +289,12 @@ namespace Physara::Editor::Detail
     }
 
     std::optional<Core::BoundedText> EditHistory::Apply(EditSessionId session, Renderer::View *view,
-                                                       const ScaleGesture &gesture,
                                                        std::span<const EditAction> actions,
                                                        Scene::Scene *scene, bool frozen)
     {
         if (!m_Id.IsValid() || session != m_Id)
         {
             return Core::BoundedText("Editor edit belongs to an expired session");
-        }
-        if (!frozen)
-        {
-            if (auto error = ApplyGesture(view, gesture))
-            {
-                return error;
-            }
         }
         // 每项按届时的 owner 状态应用. 返回失败时, 前面已接受的字段和历史仍有效.
         for (const auto &action : actions)
@@ -242,7 +324,18 @@ namespace Physara::Editor::Detail
                 }
                 if (before != scale->scale)
                 {
-                    Commit(ScaleChange{scale->view, before, scale->scale});
+                    Commit(FieldChange{scale->view, {}, before, scale->scale});
+                }
+            }
+            else if (const auto *erase = std::get_if<Scene::EraseSubtree>(&action))
+            {
+                if (frozen || !scene || !view)
+                {
+                    return Core::BoundedText("Delete requires the active, editable document");
+                }
+                if (auto error = ApplyScene(*scene, *view, *erase))
+                {
+                    return error;
                 }
             }
             else if (auto error = Replay(view, scene, std::get<HistoryAction>(action), frozen))
@@ -253,6 +346,7 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
+    // 先计划 Scene 记录与可能失效的相机引用, 再准备 View 回退, 最后提交两个 owner 并写历史.
     std::optional<Core::BoundedText> EditHistory::ApplyScene(Scene::Scene &scene, Renderer::View &view,
                                                             const Scene::Command &command)
     {
@@ -306,6 +400,7 @@ namespace Physara::Editor::Detail
         return std::nullopt;
     }
 
+    // 相机稳定 ID 必须属于当前 Scene. 保存完整请求前后值, 重放时核对未被其它入口改写.
     std::optional<Core::BoundedText> EditHistory::ApplyView(const Scene::Scene &scene, Renderer::View &view,
                                                            Renderer::ViewDocumentRequests value)
     {

@@ -33,10 +33,14 @@ namespace Physara::Editor::Detail
         [[nodiscard]] SceneDocumentStatus Status(const Renderer::View &view) const;
 
         /// @brief 在编辑边界接受文件意图或返回原因. New 当场提交, 其余由 Advance 推进.
-        /// @note New/Open 先取消活动比例预览, 再核对 discard 是否仍匹配当前持久化版本.
+        /// @note New/Open 先取消活动字段预览, 再核对 discard 是否仍匹配当前持久化版本.
         /// Save 捕获自持快照后允许继续编辑, 当前路径和保存基线只随成功结果更新.
         [[nodiscard]] std::optional<Core::BoundedText> Begin(const SceneFileRequest &request, Renderer::View &view,
                                                            EditHistory &history);
+        /// @brief 将替换意图附到本次保存. 只在同一操作成功且当前版本仍等于保存版本时继续.
+        /// @note 保存阶段仍可编辑. 失败, 取消或保存期间版本改变时丢弃继续意图, 保留活动文档.
+        [[nodiscard]] std::optional<Core::BoundedText> SaveBeforeReplacing(SceneFileRequest replacement,
+            const std::filesystem::path &saveAs, Renderer::View &view, EditHistory &history);
         /// @brief 取消指定操作的发布资格. 已进入文件替换时拒绝取消, 等待实际结果.
         /// @note 等资产阶段立即结束, 文件 worker 仍占槽时进入 Cancelling; 不取消共享资产作业.
         [[nodiscard]] std::optional<Core::BoundedText> Cancel(std::uint64_t operation) noexcept;
