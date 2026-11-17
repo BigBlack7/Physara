@@ -117,11 +117,13 @@
 
 **职责位置：** Shaders/Material、BRDF、Common、Renderer/Materials。**前置：** 本阶段入口满足。**架构依据：** [8.5](../Architecture.md#materials)、[8.1](../Architecture.md#shader-runtime)、[4.4](../Architecture.md#physical-inputs)。
 
-- [ ] 形成 MaterialInputs→SurfaceGeometry→PixelParams，按 Filament 路线实现 GGX、height-correlated Smith、Schlick、漫反射及配套能量项。
-- [ ] 实现法线/切线与双面语义、粗糙度过滤和边界处理；核心模型只存在一份，depth/color 复用 alpha 与几何合同。
-- [ ] 建立白炉、粗糙度/金属度极限、方向反照率和 CPU 数值参考；标明模型近似，不凭视觉调整任意补偿常数。
+- [x] 形成 MaterialInputs→SurfaceGeometry→PixelParams，按 Filament 路线实现 GGX、height-correlated Smith、Schlick、漫反射及配套能量项。
+- [x] 实现法线/切线与双面语义、粗糙度过滤和边界处理；核心模型只存在一份，depth/color 复用 alpha 与几何合同。
+- [x] 建立白炉、粗糙度/金属度极限、方向反照率和 CPU 数值参考；标明模型近似，不凭视觉调整任意补偿常数。
 
 **完成条件：** 核心材质在共享库中可验证，连续参数不生成指数级 Shader 变体。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-17-add-core-surface-brdf/tasks.md#final-verification)
 
 <a id="d07-t02"></a>
 ### D07-T02 · 实现物理相机与预曝光输入
