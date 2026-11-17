@@ -12,6 +12,7 @@
 
 /// @file
 /// @brief 使用 PreparedView 构造可直接录制的静态 Draw. 本阶段仅分配对象并拥有待写字节.
+/// per-view 行使用 StaticForward schema 生成的布局, 同一相机快照同时提供矩阵与曝光.
 
 namespace Physara::Renderer::Detail
 {
@@ -339,7 +340,7 @@ namespace Physara::Renderer::Detail
         text.Append(reason);
     }
 
-    /// @brief 帧槽的 per-view 行在安全复用后更新. 比例、模式或相机变化只改这份常量数据.
+    /// @brief 帧槽的 per-view 行在安全复用后更新. 同一快照提供投影和曝光, 模式随本轮请求.
     static void PrepareViewRow(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
                                PreviewMode mode)
     {
@@ -350,6 +351,7 @@ namespace Physara::Renderer::Detail
             Reject(ViewSettingReason::InvalidProjection, "Forward clip transform exceeds the GPU float range");
         }
         value.mode = static_cast<std::uint32_t>(mode);
+        value.preExposure = view.camera->exposure.preExposure;
         if (!frame.view)
         {
             frame.view = CreateConstantRow(device, sizeof(value), 0);
@@ -357,7 +359,9 @@ namespace Physara::Renderer::Detail
         device.Use(*frame.view);
         const auto same = [&]
         {
-            if (!frame.viewValues || frame.viewValues->mode != value.mode)
+            // 按实际字段比较, 不比较 std140 padding; 纯曝光变化也必须重新上传当前槽的行.
+            if (!frame.viewValues || frame.viewValues->mode != value.mode ||
+                frame.viewValues->preExposure != value.preExposure)
             {
                 return false;
             }
@@ -372,6 +376,7 @@ namespace Physara::Renderer::Detail
         };
         if (!frame.view->accepted || !same())
         {
+            // 先撤销已上传资格. 图未接受或上传准备失败时保留 false, 本槽安全复用后仍会重试该行.
             frame.view->accepted = false;
             frame.viewValues = value;
             frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)));

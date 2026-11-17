@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief 主视口的单次 Fly/Orbit/Pan 相对捕获. 输出拥有型位姿意图, 由历史管理实际写入.
+/// Pan 使用开始捕获时的有效导航镜头, 对曝光和物理参数本身不产生编辑.
 
 #include <span>
 
@@ -18,7 +19,7 @@ namespace Physara::Editor::Detail
         [[nodiscard]] bool Active() const noexcept { return m_Capture.has_value(); }
         /// @brief 用已通过图像命中和输入归属的 Press 启动手势, 首帧只申请宿主捕获.
         /// @pre 当前没有捕获, view 使用导航相机, region 是有效逻辑图像范围且按下尚未释放.
-        /// @return 非导航按钮返回空手势, 有效按钮固定文档/View/布局和本次世界锚点.
+        /// @return 非导航按钮返回空手势, 有效按钮固定文档/View/布局, 导航视场和本次世界锚点.
         [[nodiscard]] FieldGesture Start(const Scene::Scene &scene, const Renderer::View &view,
             const std::optional<Scene::EntityHandle> &selection, const ViewportRegion &region,
             const Platform::WindowState &window, const Platform::MouseButtonEvent &press) noexcept;
@@ -45,6 +46,7 @@ namespace Physara::Editor::Detail
             std::uint64_t metricsRevision;
             std::uint64_t extentRevision;
             std::array<double, 3> pivot; ///< 按下时的固定世界锚点, 单位为米.
+            double tanHalfYfov; ///< 捕获时导航相机半垂直视场的正切, 用于把 Pan 像素位移换成米.
         };
 
         /// @brief 从最近接受的导航位姿计算本批候选, 鼠标用逻辑单位, Fly 键步长最多取 0.1 秒.

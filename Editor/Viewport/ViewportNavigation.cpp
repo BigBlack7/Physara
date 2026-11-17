@@ -74,8 +74,10 @@ namespace Physara::Editor::Detail
             return {};
         }
         const NavigationTarget target{scene.Id(), view.Id()};
+        // 读取当前导航镜头而非固定缺省 FOV, 整个 Pan 手势沿用该比例以保持像素位移尺度一致.
         m_Capture = Capture{target, press.button, mode, region, window.metricsRevision, view.Settings().requestRevision,
-                            Pivot(scene, selection, view.DocumentRequests().cameraPose)};
+                            Pivot(scene, selection, view.DocumentRequests().cameraPose),
+                            std::tan(view.NavigationCameraProjection().yfov / 2.0)};
         return {target, {}, true, false};
     }
 
@@ -174,12 +176,11 @@ namespace Physara::Editor::Detail
         }
         if (moved && capture.mode == Mode::Pan)
         {
-            // 导航投影填满画布. 用逻辑高度和观察深度求每逻辑单位的世界位移, 不再乘 DPI 或比例.
+            // 导航投影填满画布. 用捕获的视场, 逻辑高度和观察深度求世界位移, 不再乘 DPI 或渲染比例.
             const auto &canvas = capture.region.canvas;
             const double depth = glm::dot(pivot - eye, rotation * Forward);
             const double distance = depth > Renderer::NavigationProjection.znear ? depth : DefaultOrbitDistance;
-            const auto scale = 2.0 * distance * std::tan(Renderer::NavigationProjection.yfov / 2) /
-                               (canvas[3] - canvas[1]);
+            const auto scale = 2.0 * distance * capture.tanHalfYfov / (canvas[3] - canvas[1]);
             eye += scale * ((rotation * Right) * -motion.x + (rotation * Up) * motion.y);
         }
         if (capture.mode == Mode::Fly && !released)

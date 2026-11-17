@@ -36,6 +36,8 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 首版文档为 `Assets/Scenes` 中的 UTF-8 `*.scene.json`, `version` 为整数 1. 保存稳定实体、层级、local TRS、静态网格标志、灯、相机、实例源和已修改的核心材质与纹理槽. 主 View 保存导航位姿、可选相机实体 ID 及请求渲染比例. 透视相机的 `far: null` 表达无限远. 首次保存用 Save As 选定所在目录已存在的项目相对路径. 模型与外置 PNG/JPEG 覆盖分别定位到 `Assets/Models` 和 `Assets/Textures`, 打开或保存时按固定模型的实际依赖核对源版本. 单文件上限为 16 MiB, JSON 值数量上限为 200 万, 输入解析深度上限为 32. [持久化合同](Architecture.md#asset-persistence)
 
+主 View 的物理请求保存在 v1 `mainView.requested.physicalCamera`. 保存使用秒、米和曝光档数。读取缺少整个对象的旧 v1 文件时采用 f/16、1/125 秒、ISO 100、0 EV 补偿、24 mm 传感器、60° 导航视场对应的焦距以及 10 m 对焦距离。 [物理相机合同](Architecture.md#camera)
+
 ## Shader 构建
 
 PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认产品构建在 `Shaders/<Debug|Release>/` 下生成 `EditorUi.pshader`、`StaticForward.pshader`、`StaticDepth.pshader` 和 `ForwardDisplay.pshader`. Runtime 共享各包的唯一生成目标, 按配置和实际 exe 目录解析. `EditorUi` 包不匹配或缺失时启动返回 1. Forward 包在首次准备真实场景时读取, 包或 Pipeline 不可用时视口说明原因, 其余 UI 可继续运行. [声明说明](../Engine/Shader/Interface/README.md)
@@ -97,6 +99,7 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 - 在 `Hierarchy` 选中一行, 在 `Inspector` 拖动 `Local Transform` 的平移、旋转或缩放, 或 Ctrl+单击数值后键入. 旋转为 XYZ 度, 缩放保留符号. `Edit > Delete` 或 Delete 删除所选子树, `Ctrl+Z` 和 `Ctrl+Y` 可撤销与重做.
 - `File` 提供 `New Scene`、`Open Scene`、`Save Scene` 和 `Save Scene As`, 快捷键分别为 Ctrl+N、Ctrl+O、Ctrl+S 和 Ctrl+Shift+S. 打开或另存时输入如 `Assets/Scenes/Example.scene.json` 的项目相对路径. 新文档第一次保存会询问目标. 有未保存修改时可保存后继续、放弃或取消, `Scene status` 显示当前路径、文件进度和失败原因.
 - 在 `View Settings` 选择导航或场景相机, 调整 `Preview` 与 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 在有效导航图像内按住右键用鼠标和 WASD/QE 飞行, Alt+左键环绕, 中键平移. 按 Esc 可取消尚未结束的手势. 如需同时看图与参数, 将 `Viewport` 和 `View Settings` 停靠在不同区域.
+- 在 `View Settings` 输入光圈、快门、ISO、曝光补偿、传感器高度、导航焦距或对焦距离后按 Enter 提交，可用 Undo/Redo 重放。传感器和焦距用毫米，对焦距离用米，快门用秒。场景透视相机使用源 `yfov` 并显示由传感器高度反推的焦距。面板分别显示当前 EV100、请求预曝光和最后成功场景帧的预曝光。当前版预曝光作为帧输入供后续照明使用，材质预览按其诊断模式显示。
 - 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
 - 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
 

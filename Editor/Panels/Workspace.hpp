@@ -45,14 +45,25 @@ namespace Physara::Editor::Detail
         std::optional<Scene::EntityId> entity; ///< 空引用选择导航相机.
     };
 
+    /// @brief 一个物理相机字段的离散提交. 值已经换成 View 请求使用的领域单位.
+    /// field 由面板选取非空成员指针, Session 只合并这一字段, 其余值在应用时读取当前 View.
+    struct PhysicalCameraEdit
+    {
+        using Field = double Renderer::PhysicalCameraRequest::*;
+        Field field;
+        double value;
+    };
+
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
     /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
+    /// 相机字段意图只在本批当前文档的编辑边界消费, 先于可替换 Scene 的文件操作.
     struct WorkspaceFrame
     {
         ViewportLayout viewport;
         FieldGestures gestures;
         std::optional<Scene::EntityHandle> selection;
         std::optional<CameraSource> camera;
+        std::optional<PhysicalCameraEdit> physicalCamera;
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;

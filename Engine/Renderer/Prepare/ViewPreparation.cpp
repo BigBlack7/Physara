@@ -273,10 +273,10 @@ namespace Physara::Renderer
                                                          direction.z / length}};
     }
 
-    /// @brief 捕获刚体相机和两份投影. 仅接受正反矩阵都可表示的结果.
+    /// @brief 捕获刚体相机, 两份投影及 View 已求值的镜头/曝光. 仅接受正反矩阵都可表示的结果.
     static std::optional<CameraSnapshot> BuildCamera(const Scene::CameraState &input,
         const ProjectionParameters &parameters, const SceneFrame &frame, std::uint64_t cameraRevision,
-        const CameraSampling &profile, const SamplingOffsets &sampling) noexcept
+        const CameraSampling &profile, const SamplingOffsets &sampling, const View &owner) noexcept
     {
         const auto &q = input.pose.rotation;
         auto world = glm::mat4_cast(glm::normalize(glm::dquat(q[3], q[0], q[1], q[2])));
@@ -297,10 +297,12 @@ namespace Physara::Renderer
         {
             return std::nullopt;
         }
+        // 曝光不参与几何矩阵或裁剪. 场景投影保留源 yfov, 有效显示焦距另由 View 反推.
         return CameraSnapshot{input.entity.scene.IsValid() ? std::optional(input.entity) : std::nullopt, cameraRevision,
             MatrixValue(world), MatrixValue(view), MatrixValue(stable.clipFromView), MatrixValue(stable.viewFromClip),
             MatrixValue(render.clipFromView), MatrixValue(render.viewFromClip), profile.jitterPixels,
-            parameters.aspect, parameters.nearPlane, farPlane, parameters.farPlane, parameters.orthographic};
+            parameters.aspect, parameters.nearPlane, farPlane, parameters.farPlane, parameters.orthographic,
+            owner.ResolveLens(input.entity.scene.IsValid() ? &input.projection : nullptr), owner.Exposure()};
     }
 
     PreparedView ViewWork::Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene,
@@ -310,15 +312,16 @@ namespace Physara::Renderer
         m_Primitives.clear();
         m_Lights.clear();
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
-                            .cameraRevision = view.CameraRevision(), .reason = view.CheckViewport(request)};
+                            .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
+                            .reason = view.CheckViewport(request)};
         if (result.reason != ViewSettingReason::None)
         {
             return result;
         }
         const auto &document = view.DocumentRequests();
-        // 实体相机读取 Scene 已传播的世界刚体和资产投影; 导航相机读取 View 位姿和共享缺省投影.
+        // 实体相机读取 Scene 已传播的世界刚体和资产投影, 导航相机读取 View 的位姿和镜头.
         const auto camera = document.cameraEntityId ? scene.FindCamera(*document.cameraEntityId) :
-            std::optional(Scene::CameraState{{}, document.cameraPose, NavigationProjection});
+            std::optional(Scene::CameraState{{}, document.cameraPose, view.NavigationCameraProjection()});
         if (!camera)
         {
             result.reason = ViewSettingReason::CameraUnavailable;
@@ -352,7 +355,7 @@ namespace Physara::Renderer
             return result;
         }
         const auto &frame = std::get<SceneFrame>(extracted);
-        const auto snapshot = BuildCamera(*camera, parameters, frame, scene.Versions().camera, sampling, *offsets);
+        const auto snapshot = BuildCamera(*camera, parameters, frame, scene.Versions().camera, sampling, *offsets, view);
         if (!snapshot)
         {
             result.reason = ViewSettingReason::InvalidProjection;

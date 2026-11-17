@@ -1,7 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 准备相机、有效预览结果和输入映射共享的矩阵与视线合同.
+/// @brief 准备相机, 有效预览结果和输入映射共享的矩阵, 光学与曝光值合同.
+/// 快照按值封存同轮输入, 不借用可变 View; 是否已经成功渲染由外层输出记录表达.
 
 #include <array>
 #include <cstdint>
@@ -16,6 +17,25 @@ namespace Physara::Renderer
     {
         std::array<double, 3> origin;
         std::array<double, 3> direction;
+    };
+
+    /// @brief 本轮使用的光学参数, 长度为米. yfov 为空表示正交相机.
+    /// 焦距为空表示正交或场景透视的等效焦距无法表示, 场景投影仍按其自身参数求值.
+    struct CameraLens
+    {
+        double fNumber;
+        double sensorHeightMeters;
+        double focusDistanceMeters;
+        std::optional<double> yfov; ///< 透视垂直视场, 弧度.
+        std::optional<double> focalLengthMeters;
+    };
+
+    /// @brief 未补偿名义 EV100 及应用补偿后的线性预曝光. 倍率按 GPU 使用的 FP32 值保存.
+    /// View 求值保证倍率为正有限正规数, 帧准备及 Shader 打包不再从光圈/快门重复计算.
+    struct CameraExposure
+    {
+        double ev100;
+        float preExposure;
     };
 
     /// @brief 本帧相机的独立值. 右手系, 列主序, 主视图 NDC 深度为 [0,1] Reverse-Z.
@@ -37,6 +57,8 @@ namespace Physara::Renderer
         double cullingFar;
         std::optional<double> renderFar; ///< 缺省表示渲染使用无限远透视.
         bool orthographic;
+        CameraLens lens;
+        CameraExposure exposure;
 
         /// @brief 从有效图像的左上 UV 得到稳定视线, 两轴范围均为 [0,1). 越界或无法表示时返回空.
         /// 透视射线起于眼点, 正交射线起于对应近面位置; 两者都不含本帧 jitter.

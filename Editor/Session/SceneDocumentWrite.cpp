@@ -2,9 +2,11 @@
 
 /// @file
 /// @brief 独立快照的场景 v1 编码. 模型数据和图像像素以受控引用表示.
+/// 主 View 只写捕获时的请求, 不写派生镜头, 曝光或最后渲染值; 安全文件替换由调用方负责.
 
 #include <cassert>
 #include <type_traits>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -238,6 +240,7 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // 输入是保存边界已捕获的合法快照. 编码失败或取消时只丢弃局部文本, 不接触目标文件.
     std::string EncodeSceneDocument(std::span<const Scene::EntityRecord> entities,
                                     const Renderer::ViewDocumentRequests &view, std::stop_token stop)
     {
@@ -265,9 +268,18 @@ namespace Physara::Editor::Detail
             append(entity.dump());
             first = false;
         }
+        // 物理配置来自捕获的请求, 保持秒, 米及档数等领域单位, 即使对应场景颜色尚未获确认也要保存.
+        const auto &camera = view.physicalCamera;
+        Json physicalCamera{{"fNumber", camera.fNumber},
+                            {"shutterSeconds", camera.shutterSeconds},
+                            {"iso", camera.iso},
+                            {"exposureCompensationEv", camera.exposureCompensationEv},
+                            {"sensorHeightMeters", camera.sensorHeightMeters},
+                            {"navigationFocalLengthMeters", camera.navigationFocalLengthMeters},
+                            {"focusDistanceMeters", camera.focusDistanceMeters}};
         Json mainView{{"cameraPose", WritePose(view.cameraPose)},
                       {"cameraEntityId", view.cameraEntityId ? Json(*view.cameraEntityId) : Json(nullptr)},
-                      {"requested", {{"renderScale", view.renderScale}}}};
+                      {"requested", {{"renderScale", view.renderScale}, {"physicalCamera", std::move(physicalCamera)}}}};
         CountValues(mainView, remaining);
         append("\n],\"mainView\":");
         append(mainView.dump());

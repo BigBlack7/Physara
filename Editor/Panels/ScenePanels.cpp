@@ -2,10 +2,12 @@
 
 /// @file
 /// @brief 将 Scene 的身份、父链接和展示名投影到可裁剪行, 直接读取选中实体的本地字段.
-/// 欧拉角只用于活动控件, 领域入口消费 xyzw 四元数.
+/// View 面板从同一 owner 读取物理请求和渲染记录, 单位换算后只提交字段意图.
+/// 欧拉角只用于活动控件, 领域入口消费 xyzw 四元数; 所有写入均留给 Session 的编辑边界.
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <unordered_map>
 #include <utility>
 
@@ -106,6 +108,7 @@ namespace Physara::Editor::Detail
         ImGui::PushID(static_cast<int>(id.generation >> 32));
     }
 
+    // 与 PushEntityId 成对结束完整实体身份作用域, 简单子控件共用该前缀.
     static void PopEntityId()
     {
         for (int i = 0; i < 5; ++i)
@@ -299,6 +302,98 @@ namespace Physara::Editor::Detail
         PopEntityId();
     }
 
+    /// @brief 以面板单位呈现已接受的值, 确认时只交付本字段的领域值.
+    /// 输入草稿由 ImGui 保有, Enter 才产生提交; 值域及派生失败由 View 事务统一报告.
+    static void DrawPhysicalField(const char *label, const Renderer::PhysicalCameraRequest &camera,
+                                  PhysicalCameraEdit::Field field, double displayScale, WorkspaceFrame &frame)
+    {
+        auto displayed = (camera.*field) * displayScale;
+        if (!std::isfinite(displayed))
+        {
+            // 米制请求可能可表示而毫米显示溢出. 零只作输入框占位, 不替换 View 的已接受值.
+            ImGui::TextWrapped("%s: current value exceeds the display range", label);
+            displayed = 0.0;
+        }
+        // 可往返的精度和显示单位下的同值判断, 避免只按 Enter 时重写领域长度.
+        const auto initial = displayed;
+        if (ImGui::InputDouble(label, &displayed, 0.0, 0.0, "%.17g", ImGuiInputTextFlags_EnterReturnsTrue) &&
+            displayed != initial)
+        {
+            frame.physicalCamera = PhysicalCameraEdit{field, displayed / displayScale};
+        }
+    }
+
+    /// @brief 渲染 View 的物理请求及对应的当前、已接受场景曝光. 几何来源由当前相机选择决定.
+    static void DrawPhysicalCamera(const Scene::Scene *scene, const Scene::Camera *projection,
+                                   const Renderer::View &view, bool allowEdits, WorkspaceFrame &frame)
+    {
+        const auto &requests = view.DocumentRequests();
+        const auto &physical = requests.physicalCamera;
+        const bool navigation = !requests.cameraEntityId;
+        constexpr double MillimetersPerMeter = 1000.0;
+        using Request = Renderer::PhysicalCameraRequest;
+
+        // 场景替换后使用新的控件 ID, 旧文档尚未提交的输入不能写入新文档.
+        const auto generation = scene ? scene->Id().generation : 0;
+        ImGui::PushID(static_cast<int>(generation));
+        ImGui::PushID(static_cast<int>(generation >> 32));
+        ImGui::BeginDisabled(!allowEdits || !scene);
+        DrawPhysicalField("Aperture (f-number)", physical, &Request::fNumber, 1.0, frame);
+        DrawPhysicalField("Shutter (s)", physical, &Request::shutterSeconds, 1.0, frame);
+        DrawPhysicalField("ISO", physical, &Request::iso, 1.0, frame);
+        DrawPhysicalField("Exposure compensation (EV)", physical, &Request::exposureCompensationEv, 1.0, frame);
+        DrawPhysicalField("Sensor height (mm)", physical, &Request::sensorHeightMeters, MillimetersPerMeter, frame);
+        if (navigation)
+        {
+            DrawPhysicalField("Navigation focal length (mm)", physical, &Request::navigationFocalLengthMeters,
+                              MillimetersPerMeter, frame);
+        }
+        DrawPhysicalField("Focus distance (m)", physical, &Request::focusDistanceMeters, 1.0, frame);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        ImGui::PopID();
+
+        if (navigation || projection)
+        {
+            const auto lens = view.ResolveLens(projection);
+            if (lens.yfov)
+            {
+                ImGui::Text("Vertical FOV %.6g deg", *lens.yfov * (180.0 / std::numbers::pi));
+                if (!navigation)
+                {
+                    const double focalMm = lens.focalLengthMeters.value_or(0.0) * MillimetersPerMeter;
+                    if (focalMm > 0.0 && std::isfinite(focalMm))
+                    {
+                        ImGui::Text("Effective focal length %.9g mm", focalMm);
+                    }
+                    else
+                    {
+                        ImGui::TextUnformatted("Effective focal length unavailable");
+                    }
+                }
+            }
+            else
+            {
+                ImGui::TextUnformatted("Orthographic projection");
+            }
+        }
+
+        const auto exposure = view.Exposure();
+        // 当前值可以先于新场景帧生效. 最后渲染记录保留原场景归属, 不能把测试图当成曝光确认.
+        ImGui::Text("Requested EV100 %.6g", exposure.ev100);
+        ImGui::Text("Requested pre-exposure %.9g", static_cast<double>(exposure.preExposure));
+        if (const auto &last = view.LastRenderedScene())
+        {
+            const auto *label = scene && last->scene == scene->Id() ? "Last rendered pre-exposure" :
+                "Previous scene pre-exposure";
+            ImGui::Text("%s %.9g", label, static_cast<double>(last->camera.exposure.preExposure));
+        }
+        else
+        {
+            ImGui::TextUnformatted("Last rendered pre-exposure: pending");
+        }
+    }
+
     // 下拉框打开时才遍历相机实体. 标签可重名, 控件身份用 handle, 提交引用用持久化稳定 ID.
     void ScenePanels::DrawCamera(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits,
                                   WorkspaceFrame &frame)
@@ -335,5 +430,8 @@ namespace Physara::Editor::Detail
             ImGui::EndCombo();
         }
         ImGui::EndDisabled();
+        const auto *projection = entity && entity->record.properties.camera ? &*entity->record.properties.camera :
+            nullptr;
+        DrawPhysicalCamera(scene, projection, view, allowEdits, frame);
     }
 }

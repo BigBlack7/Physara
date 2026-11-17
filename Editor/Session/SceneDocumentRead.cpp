@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief 将受限 UTF-8 JSON 解码为 v1 文档值, 资产引用暂不绑定.
+/// 文件层检查字段形状和数值表示, View 校验物理值及派生曝光; 失败不发布部分候选.
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,7 @@ namespace Physara::Editor::Detail
 {
     using Json = nlohmann::json;
 
+    // 先限定 Scenes 下的资源路径与文档后缀, 实际文件落点仍由受控 I/O 检查.
     std::variant<Core::ResourcePath, Core::ResourceFailure> ParseScenePath(const std::filesystem::path &path)
     {
         constexpr std::array<std::wstring_view, 1> Allowed{L"Scenes"};
@@ -490,6 +492,20 @@ namespace Physara::Editor::Detail
         return record;
     }
 
+    /// @brief 读取明确存在的物理对象. 七项参数完整且使用领域单位, 值域由 View 统一检查.
+    static Renderer::PhysicalCameraRequest ReadPhysicalCamera(const Field &field)
+    {
+        field.Object({"fNumber", "shutterSeconds", "iso", "exposureCompensationEv", "sensorHeightMeters",
+                      "navigationFocalLengthMeters", "focusDistanceMeters"});
+        return {.fNumber = field.Required("fNumber").Number<double>(),
+                .shutterSeconds = field.Required("shutterSeconds").Number<double>(),
+                .iso = field.Required("iso").Number<double>(),
+                .exposureCompensationEv = field.Required("exposureCompensationEv").Number<double>(),
+                .sensorHeightMeters = field.Required("sensorHeightMeters").Number<double>(),
+                .navigationFocalLengthMeters = field.Required("navigationFocalLengthMeters").Number<double>(),
+                .focusDistanceMeters = field.Required("focusDistanceMeters").Number<double>()};
+    }
+
     /// @brief 恢复主 View 的持久请求并复用值域校验, 实体相机的存在性稍后统一检查.
     static Renderer::ViewDocumentRequests ReadView(const Field &field)
     {
@@ -497,12 +513,18 @@ namespace Physara::Editor::Detail
         const auto pose = field.Required("cameraPose");
         pose.Object({"translation", "rotation"});
         const auto requested = field.Required("requested");
-        requested.Object({"renderScale"});
+        requested.Object({"renderScale", "physicalCamera"});
         const auto camera = field.Required("cameraEntityId");
-        Renderer::ViewDocumentRequests view{ReadPose(pose), {}, requested.Required("renderScale").Number<float>()};
+        Renderer::ViewDocumentRequests view{.cameraPose = ReadPose(pose),
+                                            .renderScale = requested.Required("renderScale").Number<float>()};
         if (!camera.IsNull())
         {
             view.cameraEntityId = camera.Text();
+        }
+        if (const auto physical = requested.Optional("physicalCamera"))
+        {
+            // 仅整个对象缺席时沿用 View 缺省; 显式 null, 缺字段和未知字段都交给严格读取拒绝.
+            view.physicalCamera = ReadPhysicalCamera(*physical);
         }
         if (auto error = Renderer::View::ValidateDocumentRequests(view))
         {
@@ -580,6 +602,7 @@ namespace Physara::Editor::Detail
         }
     }
 
+    // 有界解析, 类型解码和引用检查全部成功后才返回拥有型候选, 不在此访问活动 Scene/View.
     ParsedSceneDocument DecodeSceneDocument(std::span<const std::byte> bytes, std::stop_token stop)
     {
         if (bytes.empty() || bytes.size() > DocumentByteLimit)

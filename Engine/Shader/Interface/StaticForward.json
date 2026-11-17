@@ -7,7 +7,8 @@
       "layout": "std140",
       "fields": [
         { "name": "clipFromWorld", "type": "float4x4" },
-        { "name": "mode", "type": "uint32" }
+        { "name": "mode", "type": "uint32" },
+        { "name": "preExposure", "type": "float32" }
       ]
     },
     {

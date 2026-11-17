@@ -1,9 +1,12 @@
 #include "View.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <utility>
 
 #include <Core/FrameArena.hpp>
@@ -12,13 +15,80 @@
 
 /// @file
 /// @brief 准备视口候选和测试图, 仅用被实际采样的接受回执发布显示色与场景记录.
-/// 持久请求单独预检并发布, 纯相机变化不推进用于诊断尺寸的比例请求代.
+/// 持久请求先校验并求值镜头/曝光, 再一起发布; 准备和确认输出是之后的独立边界.
+/// 文档, 几何相机和比例各有请求代, 不能用布局或矩阵未变来认定曝光候选仍有效.
 
 namespace Physara::Renderer
 {
     static constexpr std::size_t PixelBytes = 4;
     // 进程只有一个活动宿主. View 在该宿主 owner 线程分配身份, 后续创建不会复用旧代.
     static std::uint64_t LastViewIdentity = 0;
+
+    /// @brief 校验文档中的比例、位姿和引用形状. 具体相机引用仍由组合方对 Scene 检查.
+    static std::optional<Core::BoundedText> ValidateDocumentFields(const ViewDocumentRequests &requests) noexcept
+    {
+        if (!(requests.renderScale >= MinRenderScale && requests.renderScale <= MaxRenderScale))
+        {
+            return Core::BoundedText("Invalid mainView.requested.renderScale");
+        }
+        if (!Scene::IsValidPose(requests.cameraPose))
+        {
+            return Core::BoundedText("Invalid mainView.cameraPose");
+        }
+        if (requests.cameraEntityId && requests.cameraEntityId->empty())
+        {
+            return Core::BoundedText("Empty mainView.cameraEntityId");
+        }
+        return std::nullopt;
+    }
+
+    /// @brief 校验物理字段, 派生垂直视场和可用于 GPU 的预曝光.
+    static std::variant<PhysicalCameraEvaluation, Core::BoundedText>
+    EvaluatePhysicalCamera(const PhysicalCameraRequest &camera) noexcept
+    {
+        using Field = std::pair<std::string_view, double>;
+        const std::array positive{
+            Field{"fNumber", camera.fNumber},
+            Field{"shutterSeconds", camera.shutterSeconds},
+            Field{"iso", camera.iso},
+            Field{"sensorHeightMeters", camera.sensorHeightMeters},
+            Field{"navigationFocalLengthMeters", camera.navigationFocalLengthMeters},
+            Field{"focusDistanceMeters", camera.focusDistanceMeters}};
+        for (const auto &[field, value] : positive)
+        {
+            if (!(std::isfinite(value) && value > 0.0))
+            {
+                Core::BoundedText error("mainView.requested.physicalCamera.");
+                error.Append(field);
+                error.Append(" requires a finite positive value");
+                return error;
+            }
+        }
+        if (!std::isfinite(camera.exposureCompensationEv))
+        {
+            return Core::BoundedText("mainView.requested.physicalCamera.exposureCompensationEv requires a finite value");
+        }
+
+        // 先缩放两项长度, 保留 atan2 的比值, 避免中间的两倍焦距溢出.
+        const double lensScale = std::max(camera.sensorHeightMeters, camera.navigationFocalLengthMeters);
+        const double yfov = 2.0 * std::atan2(camera.sensorHeightMeters / lensScale,
+                                            2.0 * (camera.navigationFocalLengthMeters / lensScale));
+        if (!(yfov > 0.0 && yfov < std::numbers::pi))
+        {
+            return Core::BoundedText("mainView.requested.physicalCamera navigation lens yields an invalid vertical FOV");
+        }
+
+        // EV100 保持未补偿的名义值. 倍率在对数域应用补偿及 1.2 标定, 避免先计算 N^2/t 溢出.
+        // 转成 GPU float 前拒绝非正规正值及溢出, 下游直接复制这一份 FP32 倍率.
+        const double ev100 = 2.0 * std::log2(camera.fNumber) - std::log2(camera.shutterSeconds) +
+                             std::log2(100.0) - std::log2(camera.iso);
+        const double preExposure = std::exp2(camera.exposureCompensationEv - ev100 - std::log2(1.2));
+        if (!(preExposure >= std::numeric_limits<float>::min() && preExposure <= std::numeric_limits<float>::max()))
+        {
+            return Core::BoundedText("mainView.requested.physicalCamera preExposure exceeds the normal FP32 range");
+        }
+        return PhysicalCameraEvaluation{yfov, {ev100, static_cast<float>(preExposure)}};
+    }
 
     // 用预算的除法上界校验尺寸, 再计算紧密 RGBA8 字节数.
     std::size_t DiagnosticPixelBytes(ViewExtent extent) noexcept
@@ -51,6 +121,43 @@ namespace Physara::Renderer
             return std::nullopt;
         }
         return View({0, LastViewIdentity}, maxTextureSize);
+    }
+
+    // 固定缺省满足求值前提, 新建 View 与读取旧 v1 文档使用同一组参数.
+    View::View(ViewId id, std::uint32_t maxTextureSize) noexcept
+        : m_Id(id), m_MaxTextureSize(maxTextureSize),
+          m_Physical(std::get<PhysicalCameraEvaluation>(EvaluatePhysicalCamera(m_Document.physicalCamera)))
+    {
+    }
+
+    Asset::ModelPerspective View::NavigationCameraProjection() const noexcept
+    {
+        auto projection = NavigationProjection;
+        projection.yfov = m_Physical.navigationYfov;
+        return projection;
+    }
+
+    CameraLens View::ResolveLens(const Scene::Camera *sceneProjection) const noexcept
+    {
+        const auto &request = m_Document.physicalCamera;
+        CameraLens lens{request.fNumber, request.sensorHeightMeters, request.focusDistanceMeters, {}, {}};
+        if (!sceneProjection)
+        {
+            lens.yfov = m_Physical.navigationYfov;
+            lens.focalLengthMeters = request.navigationFocalLengthMeters;
+        }
+        else if (const auto *perspective = std::get_if<Asset::ModelPerspective>(sceneProjection))
+        {
+            lens.yfov = perspective->yfov;
+            // 源投影继续作为权威. 等效焦距只在可表示为正有限长度时交付.
+            const double focalLength = request.sensorHeightMeters * (0.5 / std::tan(perspective->yfov * 0.5));
+            if (std::isfinite(focalLength) && focalLength > 0.0)
+            {
+                lens.focalLengthMeters = focalLength;
+            }
+        }
+        // 正交没有透视视场或等效焦距, 光圈, 传感器和对焦请求仍属于这个 View.
+        return lens;
     }
 
     ViewSettings View::Settings() const noexcept
@@ -94,24 +201,23 @@ namespace Physara::Renderer
     }
 
     ViewDocumentUpdate::ViewDocumentUpdate(ViewId view, std::uint64_t revision,
-                                           ViewDocumentRequests value) noexcept
-        : m_View(view), m_Revision(revision), m_Value(std::move(value))
+                                           ViewDocumentRequests value, PhysicalCameraEvaluation physical,
+                                           bool cameraChanged) noexcept
+        : m_View(view), m_Revision(revision), m_Value(std::move(value)), m_Physical(physical),
+          m_CameraChanged(cameraChanged)
     {
     }
 
     std::optional<Core::BoundedText> View::ValidateDocumentRequests(const ViewDocumentRequests &requests) noexcept
     {
-        if (!(requests.renderScale >= MinRenderScale && requests.renderScale <= MaxRenderScale))
+        if (auto failure = ValidateDocumentFields(requests))
         {
-            return Core::BoundedText("Invalid mainView.requested.renderScale");
+            return failure;
         }
-        if (!Scene::IsValidPose(requests.cameraPose))
+        const auto result = EvaluatePhysicalCamera(requests.physicalCamera);
+        if (const auto *failure = std::get_if<Core::BoundedText>(&result))
         {
-            return Core::BoundedText("Invalid mainView.cameraPose");
-        }
-        if (requests.cameraEntityId && requests.cameraEntityId->empty())
-        {
-            return Core::BoundedText("Empty mainView.cameraEntityId");
+            return *failure;
         }
         return std::nullopt;
     }
@@ -123,32 +229,48 @@ namespace Physara::Renderer
         {
             return Core::BoundedText("Document update targets an expired View");
         }
-        if (auto failure = ValidateDocumentRequests(requests))
+        if (auto failure = ValidateDocumentFields(requests))
         {
             return *failure;
         }
+        auto physical = m_Physical;
+        if (requests.physicalCamera != m_Document.physicalCamera)
+        {
+            const auto result = EvaluatePhysicalCamera(requests.physicalCamera);
+            if (const auto *failure = std::get_if<Core::BoundedText>(&result))
+            {
+                return *failure;
+            }
+            physical = std::get<PhysicalCameraEvaluation>(result);
+        }
         constexpr auto Max = std::numeric_limits<std::uint64_t>::max();
+        // 文档代区分全部物理请求. 只有导航的有效 FOV 变化才额外改变几何相机代.
         const bool cameraChanged = requests.cameraPose != m_Document.cameraPose ||
-            requests.cameraEntityId != m_Document.cameraEntityId;
+            requests.cameraEntityId != m_Document.cameraEntityId ||
+            (!requests.cameraEntityId && physical.navigationYfov != m_Physical.navigationYfov);
         if ((requests != m_Document && m_DocumentRevision == Max) ||
             (requests.renderScale != m_Document.renderScale && m_RequestRevision == Max) ||
             (cameraChanged && m_CameraRevision == Max))
         {
             return Core::BoundedText("View document revision exhausted");
         }
-        return ViewDocumentUpdate(m_Id, m_DocumentRevision, std::move(requests));
+        return ViewDocumentUpdate(m_Id, m_DocumentRevision, std::move(requests), physical, cameraChanged);
     }
 
     void View::PublishDocumentUpdate(ViewDocumentUpdate &&update) noexcept
     {
+        // 同一 owner 线程在预检后发布已拥有的值, 这里不再做可失败的物理求值或分配.
         assert(update.m_View == m_Id && update.m_Revision == m_DocumentRevision);
         if (m_Document != update.m_Value)
         {
             ++m_DocumentRevision;
-            if (m_Document.cameraPose != update.m_Value.cameraPose ||
-                m_Document.cameraEntityId != update.m_Value.cameraEntityId)
+            if (update.m_CameraChanged)
             {
                 ++m_CameraRevision;
+            }
+            if (m_Document.physicalCamera != update.m_Value.physicalCamera)
+            {
+                m_Reason = ViewSettingReason::SubmissionPending;
             }
             if (m_Document.cameraEntityId != update.m_Value.cameraEntityId)
             {
@@ -159,6 +281,7 @@ namespace Physara::Renderer
                 ApplyRenderScale(update.m_Value.renderScale);
             }
             m_Document = std::move(update.m_Value);
+            m_Physical = update.m_Physical;
         }
     }
 
@@ -275,9 +398,10 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
+        // 记录来自准备快照的曝光与请求代, 不能在确认阶段改取届时的当前请求.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, m_Preview,
-                          std::move(degradation)}};
+                          std::move(degradation), prepared.documentRevision}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -357,7 +481,8 @@ namespace Physara::Renderer
         // 拒绝安全图旧快照和已被后继编辑取代的候选, 即使尺寸或比例碰巧相同也不重新确认.
         if (outputs.m_Retained || !acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
-            (outputs.m_Output->scene && outputs.m_Output->scene->mode != m_Preview))
+            (outputs.m_Output->scene && (outputs.m_Output->scene->mode != m_Preview ||
+                                         outputs.m_Output->scene->documentRevision != m_DocumentRevision)))
         {
             return false;
         }

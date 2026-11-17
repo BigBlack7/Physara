@@ -23,6 +23,7 @@
 /// @file
 /// @brief 将宿主发布推进为一次 Editor 轮次. 先处理输入失效边沿, 再封存布局和 DrawData.
 /// 编辑历史在封存后应用字段意图, 视口像素请求采用同批度量与此时的 View 请求.
+/// 物理参数与相机引用共用主 View 事务, 由该入口核对文档冻结, 目标身份和历史资格.
 /// 文档协调器另由 CPU 输入边界推进, 与本轮 UI 准备及 GPU 合成的成功与否分离.
 
 namespace Physara::Editor
@@ -563,6 +564,15 @@ namespace Physara::Editor
             {
                 auto requests = view->DocumentRequests();
                 requests.cameraEntityId = std::move(workspace.camera->entity);
+                state.editError = EditMainView(scene->Id(), *view, std::move(requests));
+            }
+            if (view && scene && workspace.physicalCamera)
+            {
+                // 只把提交的字段合入当前请求, 保留本批先前相机或历史动作的结果.
+                // 数值已在面板换成领域单位, EditMainView 仍核对冻结状态并经 View 预检后记录撤销项.
+                auto requests = view->DocumentRequests();
+                const auto &edit = *workspace.physicalCamera;
+                requests.physicalCamera.*edit.field = edit.value;
                 state.editError = EditMainView(scene->Id(), *view, std::move(requests));
             }
             if (view && workspace.preview)

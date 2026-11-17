@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief 层级面板缓存只读树投影, Inspector 只保留活动旋转草稿.
-/// 选择、字段手势及相机引用在会话编辑边界提交.
+/// 选择, 字段手势, 相机引用和物理参数在会话编辑边界提交, 面板不保存第二份 View 配置.
 
 #include <array>
 #include <optional>
@@ -27,7 +27,8 @@ namespace Physara::Editor::Detail
         /// 非有限数和传播失败由 Scene 拒绝, 后续展示重新读取已接受值.
         void DrawInspector(const Scene::Scene *scene, const std::optional<Scene::EntityHandle> &selection,
                            bool allowEdits, WorkspaceFrame &frame);
-        /// @brief 只从当前 Scene 枚举相机来源, 选择时提交稳定 ID.
+        /// @brief 枚举相机来源, 读取 View 镜头及曝光. 选择提交稳定 ID, 物理控件提交领域字段值.
+        /// 长度输入将 mm 转为 m; Enter 的净变化才形成离散意图, allowEdits 为 false 时只读.
         void DrawCamera(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits, WorkspaceFrame &frame);
         void EndRotationInput() noexcept { m_Rotation.reset(); }
 

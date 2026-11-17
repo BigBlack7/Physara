@@ -1,9 +1,9 @@
 #pragma once
 
 /// @file
-/// @brief 持有主 View 的持久化相机/比例请求, 会话预览模式及最后接受的显示颜色.
+/// @brief 持有主 View 的持久化位姿/物理相机/比例请求, 会话预览模式及最后接受的显示颜色.
 /// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
-/// Prepare 解析相机及图像范围, View 只在匹配颜色被接受时确认有效布局.
+/// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
 #include <array>
 #include <cstddef>
@@ -35,9 +35,28 @@ namespace Physara::Renderer
     /// @brief 无单位渲染比例的闭区间. 初始请求使用上界.
     inline constexpr float MinRenderScale = 0.5f;
     inline constexpr float MaxRenderScale = 1.0f;
-    /// @brief 所有导航 View 共用的透视: 垂直 FOV 为 pi/3 弧度, 近面为 0.10 m, 远面无限.
-    /// 宽高比来自有效画布, Prepare 与 Editor Pan 共用本值, 不改变实体相机的 glTF 投影.
+    /// @brief 导航透视缺省: 垂直 FOV 为 pi/3 弧度, 近面为 0.10 m, 远面无限.
+    /// 有效视场由 View 镜头给出, 宽高比来自有效画布.
     inline constexpr Asset::ModelPerspective NavigationProjection{std::numbers::pi / 3, 0.10, {}, {}};
+
+    /// @brief View 拥有的物理相机请求, 供新 View 和省略该对象的 v1 场景共用缺省.
+    /// 除补偿为有限档数外, 各字段须有限且为正; View 另检查导航 FOV 和派生 FP32 倍率.
+    /// 三项长度均为米. 对焦距离目前只保存输入, 尚不据此计算景深或限制薄透镜关系.
+    struct PhysicalCameraRequest
+    {
+        static constexpr double DefaultSensorHeightMeters = 0.024;
+
+        double fNumber = 16.0; ///< 无单位的光圈 f 数, 不按孔径直径解释.
+        double shutterSeconds = 1.0 / 125.0;
+        double iso = 100.0;
+        double exposureCompensationEv = 0.0; ///< 正一档令倍率加倍.
+        double sensorHeightMeters = DefaultSensorHeightMeters;
+        // 24 mm 传感器在 60 度垂直视场下的焦距, 与缺省导航透视一致.
+        double navigationFocalLengthMeters = DefaultSensorHeightMeters * std::numbers::sqrt3 / 2.0;
+        double focusDistanceMeters = 10.0;
+
+        bool operator==(const PhysicalCameraRequest &) const = default;
+    };
 
     /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
     struct ViewDocumentRequests
@@ -45,8 +64,17 @@ namespace Physara::Renderer
         Scene::Pose cameraPose;
         std::optional<Scene::EntityId> cameraEntityId;
         float renderScale = MaxRenderScale;
+        PhysicalCameraRequest physicalCamera;
 
         bool operator==(const ViewDocumentRequests &) const = default;
+    };
+
+    /// @brief 从同一合法请求求出的导航视场和预曝光, 跟随该请求发布.
+    /// 这是当前请求的派生值, 不表示 GPU 已渲染该曝光; 渲染记录由 RenderedScene 提供.
+    struct PhysicalCameraEvaluation
+    {
+        double navigationYfov;
+        CameraExposure exposure;
     };
 
     /// @brief 已校验的 View 文档更新. 只可由创建它的 View 在同一请求代发布.
@@ -58,11 +86,14 @@ namespace Physara::Renderer
 
     private:
         friend class View;
-        ViewDocumentUpdate(ViewId view, std::uint64_t revision, ViewDocumentRequests value) noexcept;
+        ViewDocumentUpdate(ViewId view, std::uint64_t revision, ViewDocumentRequests value,
+                           PhysicalCameraEvaluation physical, bool cameraChanged) noexcept;
 
         ViewId m_View;
         std::uint64_t m_Revision;
         ViewDocumentRequests m_Value;
+        PhysicalCameraEvaluation m_Physical;
+        bool m_CameraChanged;
     };
 
     /// @brief 离屏目标的物理像素宽高. Editor 从本帧布局请求生成有效范围.
@@ -174,6 +205,7 @@ namespace Physara::Renderer
         CameraSnapshot camera;
         PreviewMode mode;
         std::optional<Core::BoundedText> degradation;
+        std::uint64_t documentRevision; ///< 准备时的 View 文档代, 不等于 Scene 内容代或时域历史 key.
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -246,8 +278,18 @@ namespace Physara::Renderer
         [[nodiscard]] ViewSettings Settings() const noexcept;
         /// @brief 当前持久请求的借用, 不得跨请求更新保留其内部字符串引用.
         [[nodiscard]] const ViewDocumentRequests &DocumentRequests() const noexcept { return m_Document; }
+        /// @brief 任一持久请求净变化都推进此代, 用于保存及拒绝陈旧场景候选.
         [[nodiscard]] std::uint64_t DocumentRevision() const noexcept { return m_DocumentRevision; }
+        /// @brief 位姿, 相机引用或有效导航 FOV 的变化代. 纯曝光变化不使几何输入映射过期.
         [[nodiscard]] std::uint64_t CameraRevision() const noexcept { return m_CameraRevision; }
+        /// @brief 读取当前合法请求的曝光, 可早于该请求的首次场景提交.
+        [[nodiscard]] CameraExposure Exposure() const noexcept { return m_Physical.exposure; }
+        /// @brief 按当前合法镜头构造导航投影, 沿用导航的裁剪和 aspect 合同.
+        [[nodiscard]] Asset::ModelPerspective NavigationCameraProjection() const noexcept;
+        /// @brief 解析当前请求的显示镜头. 空指针选择导航, 实体投影来自当前 Scene.
+        /// @pre 非空投影已经过 Scene 校验, 仅在调用期间借用. 本入口不改写源投影.
+        /// @return 正交没有 yfov 和焦距; 场景透视的等效焦距无法表示时仅该字段为空.
+        [[nodiscard]] CameraLens ResolveLens(const Scene::Camera *sceneProjection) const noexcept;
         [[nodiscard]] PreviewMode Preview() const noexcept { return m_Preview; }
         /// @brief 借用最近一次已接受的真实场景记录, 测试图和安全 UI 不推进此值; 后续 Publish 可替换它.
         /// @note 记录可能属于上一文档. 使用前须核对 Scene 身份及相关版本; 当前显示说明用 AcceptedScenePreview.
@@ -257,11 +299,13 @@ namespace Physara::Renderer
         /// @pre mode 为四种已声明模式之一. 修改只进入待确认状态, 不重命名已接受像素.
         void RequestPreview(PreviewMode mode) noexcept;
 
-        /// @brief 只校验值域. 具体相机实体归 Scene, 由组合调用者校验.
+        /// @brief 无副作用地校验字段及派生 FOV/曝光, 失败返回可定位原因.
+        /// 具体相机实体归 Scene, 由组合调用者校验; 成功不代表布局或 GPU 输出已就绪.
         [[nodiscard]] static std::optional<Core::BoundedText>
             ValidateDocumentRequests(const ViewDocumentRequests &requests) noexcept;
         /// @brief 预检全部请求和版号, 允许调用者与 Scene 事务一起发布.
-        /// @note 返回值拥有候选请求, 准备本身不改写 owner; 有效输出仍由图形提交确认.
+        /// @note 返回值拥有候选请求及已求值曝光, 失败保留原请求和渲染记录.
+        /// 准备本身不改写 owner; 有效输出仍由图形提交确认.
         [[nodiscard]] std::variant<ViewDocumentUpdate, Core::BoundedText>
             PrepareDocumentUpdate(ViewId view, ViewDocumentRequests requests) const noexcept;
         /// @pre 来自此 View, 且准备后本 View 的持久请求未变更. 不影响已采纳的显示资源.
@@ -302,13 +346,12 @@ namespace Physara::Renderer
         /// @brief 接受本轮匹配的颜色, 发布比例、布局与实际场景记录. 复用测试图也可确认新比例.
         /// @pre outputs 属于本轮准备, 且被已接受的完整合成实际采样.
         /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
-        /// @note View、比例请求代或 View 相机请求代过期时保持原状态. 旧代由原 RHI 包保活.
+        /// @note 比例、相机或场景候选携带的持久请求代过期时保留原状态. 旧代由原 RHI 包保活.
         /// @return true 表示输出和有效设置已发布, false 表示候选无资格且原状态保留.
         [[nodiscard]] bool Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
 
     private:
-        View(ViewId id, std::uint32_t maxTextureSize) noexcept
-            : m_Id(id), m_MaxTextureSize(maxTextureSize) {}
+        View(ViewId id, std::uint32_t maxTextureSize) noexcept;
         void ApplyRenderScale(float scale) noexcept;
 
         ViewId m_Id;
@@ -316,6 +359,7 @@ namespace Physara::Renderer
         std::uint64_t m_LastGeneration = 0;
         std::uint64_t m_RequestRevision = 0;
         ViewDocumentRequests m_Document;
+        PhysicalCameraEvaluation m_Physical;
         std::uint64_t m_DocumentRevision = 0;
         std::uint64_t m_CameraRevision = 0;
         float m_EffectiveScale = MaxRenderScale;

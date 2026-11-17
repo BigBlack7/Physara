@@ -130,11 +130,13 @@
 
 **职责位置：** Engine/Scene Camera、View、Renderer/Prepare、Editor/Panels。**前置：** [D07-T01](#d07-t01)。**架构依据：** [4.3](../Architecture.md#camera)、[4.4](../Architecture.md#physical-inputs)、[9.1](../Architecture.md#temporal-contract)。
 
-- [ ] 实现 ISO、快门、光圈、EV compensation、传感器、焦距/视场及对焦距离的单位和计算，保留 glTF yfov 权威语义。
-- [ ] 按既定标定生成 preExposure，写入统一 View ABI，并把当前值和最后成功渲染值分开保存。
-- [ ] 接入物理参数命令与界面，测试 EV 档位、长度换算和零/非法输入；快门不被宣称为已有运动模糊。
+- [x] 实现 ISO、快门、光圈、EV compensation、传感器、焦距/视场及对焦距离的单位和计算，保留 glTF yfov 权威语义。
+- [x] 按既定标定生成 preExposure，写入统一 View ABI，并把当前值和最后成功渲染值分开保存。
+- [x] 接入物理参数命令与界面，测试 EV 档位、长度换算和零/非法输入；快门不被宣称为已有运动模糊。
 
-**完成条件：** 曝光倍率可计算与复现，同一参数在灯光、自发光、背景和后处理使用相同曝光域。
+**完成条件：** 标定曝光倍率可计算与复现，并作为统一 View 帧输入。最后成功渲染结果记录实际使用值。灯光、自发光、环境背景及显示按 D07-T03–T05 接入同一曝光域。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-17-add-physical-camera-exposure/tasks.md#final-verification)
 
 <a id="d07-t03"></a>
 ### D07-T03 · 实现统一物理灯列表与 Forward 直接光
