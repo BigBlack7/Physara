@@ -34,7 +34,8 @@ namespace Physara::Renderer
         Core::BoundedText description;
     };
 
-    /// @brief 本图的工作颜色、深度及显示颜色. 三者均为本图精确版本, 工作色为线性预览域.
+    /// @brief 本图的工作颜色, 深度及显示颜色. 受光结果在工作附件中保留当帧预曝光的线性 HDR 值.
+    /// 显示色已执行视口映射, 三个图版本均只在本图有效.
     struct ForwardOutput
     {
         TextureId workingColor;
@@ -64,7 +65,7 @@ namespace Physara::Renderer
         ForwardFrame(const ForwardFrame &) = delete;
         ForwardFrame &operator=(const ForwardFrame &) = delete;
 
-        /// @brief 同槽安全取得时结束上次准备和引用, 保留可复用的 CPU 存储.
+        /// @brief 同槽安全取得时释放上轮 Draw 和活动绑定, 保留可重用的 View 行及该槽的普通灯缓冲.
         void Reset() noexcept;
         /// @brief 借用本轮被跳过项的有界摘要, 下次 Reset/Prepare 后失效; 空值表示无局部降级.
         [[nodiscard]] const std::optional<Core::BoundedText> &Degradation() const noexcept;

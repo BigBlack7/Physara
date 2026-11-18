@@ -27,7 +27,8 @@ add_subdirectory(Scene)
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
-# 场景和深度共用同一生成接口与顶点入口, 显示转换有独立的图输入接口.
+# 颜色包与深度包共用 StaticForward 接口和顶点入口. 灯表属于颜色片元阶段的活动绑定.
+# 显示转换单独生成接口并读取工作颜色.
 add_subdirectory(Shader)
 physara_add_shader_interface(StaticForward Shader/Interface/StaticForward.json)
 physara_add_shader_interface(ForwardDisplay Shader/Interface/ForwardDisplay.json)
@@ -37,7 +38,7 @@ physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forwa
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
 # 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
-# 相机和裁剪的 GLM 运算仅供实现.
+# 相机和裁剪的 GLM 运算, 以及灯行编码所用的生成头都只由实现消费.
 # Editor 与 Runtime 经此依赖消费公共图接口; Renderer 本身不反向依赖窗口或 UI.
 add_library(PhysaraRenderer STATIC
     Renderer/View.hpp Renderer/View.cpp
@@ -45,6 +46,7 @@ add_library(PhysaraRenderer STATIC
     Renderer/Prepare/SceneFrame.hpp Renderer/Prepare/SceneFrame.cpp
     Renderer/Prepare/CameraSnapshot.hpp
     Renderer/Prepare/ViewPreparation.hpp Renderer/Prepare/ViewPreparation.cpp
+    Renderer/Lighting/PunctualLights.hpp Renderer/Lighting/PunctualLights.cpp
     Renderer/Materials/StaticGpu.hpp Renderer/Materials/StaticGpu.cpp Renderer/Materials/StaticTextures.cpp
     Renderer/Draw/StaticDraw.cpp
     Renderer/Paths/Forward.hpp Renderer/Paths/Forward.cpp

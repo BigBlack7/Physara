@@ -3,12 +3,14 @@
 /// @file
 /// @brief 在宿主 current context 加载 GL 入口并查询实际环境, 将观察值与创建偏好分开保存.
 
+#include <algorithm>
 #include <array>
 
 #include <glad/gl.h>
 
 namespace Physara::Platform::Detail
 {
+    /// @brief GLAD 加载回调, 按 GLFW 当前 context 解析名称. 回调无需持有窗口或函数表.
     static GLADapiproc ResolveGlEntry(void *user, const char *name)
     {
         static_cast<void>(user);
@@ -71,7 +73,8 @@ namespace Physara::Platform::Detail
         GLint drawFramebuffer = 0;
         GLint encoding = 0;
         GLboolean doubleBuffered = GL_FALSE;
-        std::array<GLint, 6> limits{};
+        std::array<GLint, 7> limits{};
+        GLint64 storageBlockBytes = 0;
     };
 
     // 核对实际 Core profile, 双缓冲默认目标和正数限制后, 才发布公开环境字段.
@@ -90,13 +93,11 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage,
                              "Unexpected default framebuffer, context flags or color encoding");
         }
-        for (const auto value : observed.limits)
+        if (observed.storageBlockBytes <= 0 ||
+            std::ranges::any_of(observed.limits, [](GLint limit) { return limit <= 0; }))
         {
-            if (value <= 0)
-            {
-                return MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage,
-                                 "Required startup limit is not a positive representable value");
-            }
+            return MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage,
+                             "Required startup limit is not a positive representable value");
         }
         auto &info = state.info;
         info.glMajor = static_cast<std::uint32_t>(observed.major);
@@ -112,6 +113,8 @@ namespace Physara::Platform::Detail
         info.maxStorageBufferBindings = static_cast<std::uint32_t>(observed.limits[3]);
         info.maxCombinedTextureUnits = static_cast<std::uint32_t>(observed.limits[4]);
         info.uniformBufferOffsetAlignmentBytes = static_cast<std::uint32_t>(observed.limits[5]);
+        info.storageBufferOffsetAlignmentBytes = static_cast<std::uint32_t>(observed.limits[6]);
+        info.maxStorageBufferBlockBytes = static_cast<std::uint64_t>(observed.storageBlockBytes);
         return std::nullopt;
     }
 }
@@ -129,7 +132,8 @@ namespace Physara::Platform::Detail
             return error;
         }
         if (version == 0 || !GLAD_GL_VERSION_4_6 || glGetString == nullptr || glGetIntegerv == nullptr ||
-            glGetBooleanv == nullptr || glGetError == nullptr || glGetFramebufferAttachmentParameteriv == nullptr)
+            glGetInteger64v == nullptr || glGetBooleanv == nullptr || glGetError == nullptr ||
+            glGetFramebufferAttachmentParameteriv == nullptr)
         {
             return MakeError(&state, HostErrorReason::EntryLoading, state.stage,
                              "GLAD failed to load the required OpenGL 4.6 Core query entries");
@@ -157,16 +161,19 @@ namespace Physara::Platform::Detail
         glGetBooleanv(GL_DOUBLEBUFFER, &observed.doubleBuffered);
         glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_BACK_LEFT,
                                               GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &observed.encoding);
-        constexpr std::array<GLenum, 6> LimitNames = {GL_MAX_TEXTURE_SIZE,
+        constexpr std::array<GLenum, 7> LimitNames = {GL_MAX_TEXTURE_SIZE,
                                                       GL_MAX_RENDERBUFFER_SIZE,
                                                       GL_MAX_UNIFORM_BUFFER_BINDINGS,
                                                       GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS,
                                                       GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS,
-                                                      GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT};
+                                                      GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+                                                      GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT};
         for (std::size_t index = 0; index < LimitNames.size(); ++index)
         {
             glGetIntegerv(LimitNames[index], &observed.limits[index]);
         }
+        // 块大小按 64 位字节数查询. 与绑定起点对齐分别交付, 由图核对每个实际读取区间.
+        glGetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &observed.storageBlockBytes);
         const bool stringsValid = ReadGlString(GL_VENDOR, state.info.vendor) &&
                                   ReadGlString(GL_RENDERER, state.info.renderer) &&
                                   ReadGlString(GL_VERSION, state.info.version) &&

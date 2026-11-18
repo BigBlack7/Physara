@@ -31,10 +31,12 @@ namespace Physara::Renderer
     {
         if (m_Data)
         {
-            // 仅同槽安全复用时解除 Draw 强引用. per-view 行保留并按下一次编码结果决定是否重写.
+            // 此槽已可复用. 解除本轮着色引用, 保留槽内的 View 行和普通灯缓冲供下次准备判定.
             m_Data->draws.clear();
             m_Data->materialRows.clear();
             m_Data->uploads.Clear();
+            m_Data->activeLights.reset();
+            m_Data->lightLayout = nullptr;
             m_Data->displayPipeline = nullptr;
             m_Data->displayLayout = nullptr;
             m_Data->degradation.reset();
@@ -97,11 +99,16 @@ namespace Physara::Renderer
         }
         auto &data = *frame.m_Data;
         assert(data.draws.empty() && data.materialRows.empty() && data.uploads.writes == 0);
+        // 普通灯缓冲和 View 行都随各自帧槽跨帧保留. 更换 Renderer 时以预算 owner 识别旧缓存.
         if (data.view && data.view->capacity != m_Resources->capacity)
         {
             // 帧槽更换准备 owner 后, 原 UBO 集合的布局不再是当前 Pipeline 的布局.
             data.view.reset();
             data.viewValues.reset();
+        }
+        if (data.lightTable && data.lightTable->capacity != m_Resources->capacity)
+        {
+            data.lightTable.reset();
         }
         data.layout = view.layout;
         data.needs = needs;
@@ -200,11 +207,14 @@ namespace Physara::Renderer
         std::uint32_t indexCount;
     };
 
-    /// @brief 一个几何 Pass 的固定图像矩形, View 集合与 Draw 顺序, 无活动 Scene 访问权.
+    /// @brief 一个几何 Pass 的图像矩形, View 集合与 Draw 顺序.
+    /// lights 存在时携带本图授权的版本和范围, lightLayout 借用本槽保有的颜色布局.
     struct SceneRaster
     {
         RHI::ViewportState viewport;
         RHI::BindingSet *view = nullptr;
+        std::optional<BufferAccess> lights;
+        RHI::BindingLayout *lightLayout = nullptr;
         std::vector<GraphDraw> draws;
     };
 
@@ -236,6 +246,11 @@ namespace Physara::Renderer
         };
         static_cast<void>(buffer(frame.view->buffer, GraphUsage::ConstantBuffer));
         raster.view = frame.view->binding.Get();
+        if (!depthOnly)
+        {
+            raster.lights = buffer(frame.activeLights->buffer, GraphUsage::ShaderRead);
+            raster.lightLayout = frame.lightLayout.Get();
+        }
         raster.draws.reserve(frame.draws.size());
         for (const auto &draw : frame.draws)
         {
@@ -261,6 +276,12 @@ namespace Physara::Renderer
     static GraphFailure DrawScene(PassResources &resources, const SceneRaster &raster,
                                   RHI::CommandList &commands) noexcept
     {
+        auto *lights = raster.lights ? resources.BindingSet(0) : nullptr;
+        if (raster.lights && !lights)
+        {
+            // BindingSet 已将失败记入本 Pass. 停止录制, 由执行器返回该原因.
+            return std::nullopt;
+        }
         for (const auto &draw : raster.draws)
         {
             auto *vertices = resources.Resolve(draw.vertices.resource, draw.vertices.usage, draw.vertices.range);
@@ -274,6 +295,10 @@ namespace Physara::Renderer
                 .AddBindingSet(raster.view).AddBindingSet(draw.object).AddBindingSet(draw.material)
                 .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices))
                 .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT));
+            if (lights)
+            {
+                state.AddBindingSet(lights);
+            }
             commands.SetGraphicsState(state);
             commands.DrawIndexed(RHI::DrawArguments().SetVertexCount(draw.indexCount).SetInstanceCount(1));
         }
@@ -323,7 +348,21 @@ namespace Physara::Renderer
                         {.load = LoadOp::Clear, .clearValue = RHI::Color(0.018f, 0.018f, 0.018f, 1.f)});
                 }
                 return depth.IsValid() && (!color || color->IsValid());
-            }, DrawScene)));
+            }, DrawScene, +[](PassPreparation &preparation, const SceneRaster &data) -> GraphFailure
+            {
+                if (data.lights)
+                {
+                    // 沿 setup 声明的版本和整块范围创建集合. 0 是本 Pass 的首个准备结果,
+                    // DrawScene 把它接在 View, Object, Material 三组之后, 对应 Shader 的 set 3.
+                    const auto &access = *data.lights;
+                    const auto slot = data.lightLayout->GetDesc()->bindings.front().slot;
+                    if (auto binding = preparation.ReadBuffer(slot, access.resource, access.usage, access.range))
+                    {
+                        static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(&*binding, 1)));
+                    }
+                }
+                return std::nullopt;
+            })));
     }
 
     /// @brief 只有请求真实早期深度的下游才新增几何 Pass.

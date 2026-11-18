@@ -164,16 +164,18 @@ namespace Physara::Renderer
         SceneResidencyLimit,
         SceneAttachmentLimit,
         SceneUnsupported,
-        SceneUploadLimit
+        SceneUploadLimit,
+        SceneLightTableRejected ///< 可见灯集合超容量或行字段无法编码. 具体原因由 ForwardFailure 携带.
     };
 
-    /// @brief 会话内 Forward 预览. 数值与 StaticPreview.glsl 的模式合同一致.
+    /// @brief 会话内 Forward 模式. 顺序同时用于编辑器菜单和 ForwardView.mode 的 Shader ABI.
     enum class PreviewMode : std::uint32_t
     {
         BaseColor,
         WorldNormal,
         MaterialChannels,
-        Emissive
+        Emissive,
+        DirectLighting ///< 受光表面使用正式 Forward 直接光和当帧预曝光.
     };
 
     /// @brief 同一 View 的请求和确认快照, 可独立用于面板显示.
@@ -296,7 +298,7 @@ namespace Physara::Renderer
         [[nodiscard]] const std::optional<RenderedScene> &LastRenderedScene() const noexcept { return m_RenderedScene; }
 
         /// @brief 在完成 UI 布局后选择本轮预览模式. 该请求不参与场景 JSON.
-        /// @pre mode 为四种已声明模式之一. 修改只进入待确认状态, 不重命名已接受像素.
+        /// @pre mode 为已声明的枚举值. 修改只进入待确认状态, 上一接受画面的模式随其颜色代保留.
         void RequestPreview(PreviewMode mode) noexcept;
 
         /// @brief 无副作用地校验字段及派生 FOV/曝光, 失败返回可定位原因.

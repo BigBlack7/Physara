@@ -456,8 +456,8 @@ namespace Physara::Editor::Detail
         return detail;
     }
 
-    // 从 View 的唯一原因转换占位标签, 不要求失败 View 提供纹理.
-    // UI 只解释等待或硬拒绝, 不再把合成模式推导成等待状态回写 View.
+    // 从本次 View 准备结果选择占位. 灯表编码失败沿独立原因到达视口叠字, 设置面板读取同一 View 状态.
+    // 转换只用于 UI 合成, 已接受的颜色代及模式由 View 持有.
     static UiFallback MissingViewportOutput(const Renderer::PreparedViewOutput &outputs) noexcept
     {
         switch (outputs.UnavailableReason())
@@ -477,6 +477,7 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::SceneAttachmentLimit: return UiFallback::SceneAttachmentLimit;
         case Renderer::ViewSettingReason::SceneUnsupported: return UiFallback::SceneUnsupported;
         case Renderer::ViewSettingReason::SceneUploadLimit: return UiFallback::SceneUploadLimit;
+        case Renderer::ViewSettingReason::SceneLightTableRejected: return UiFallback::SceneLightTableRejected;
         default: return UiFallback::MissingOutput;
         }
     }

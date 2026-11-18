@@ -6,6 +6,7 @@
 #include <array>
 #include <map>
 #include <tuple>
+#include <utility>
 
 #include <Shader/RhiProgram.hpp>
 #include <StaticForward/Data.hpp>
@@ -33,6 +34,9 @@ namespace Physara::Renderer::Detail
     /// @brief 外置标志, 固定资产版本, 源 image 下标, 颜色域及完整 mip 策略, sampler 另行共享.
     using TextureKey = std::tuple<bool, AssetVersionKey, std::uint32_t, Asset::ImageDomain, bool>;
     using ObjectKey = std::array<std::uint64_t, 4>; ///< Scene 与对象各自的槽和分配代.
+    /// @brief 以对象身份和传给 Shader 的 FP32 世界基点定位对象行. 命中后核对原始世界矩阵,
+    /// 只有同基点且仿射系数仍匹配的图元才复用这一行及其编码余量.
+    using ObjectRowKey = std::pair<ObjectKey, std::array<float, 3>>;
     /// @brief 模型版本, 源材质, 覆盖对象及源 Primitive 槽. 无覆盖时后两项为零, 行按源材质共享.
     using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t>;
     using SamplerKey = std::array<std::uint32_t, 4>; ///< min、mag、wrapS、wrapT, 已填充缺省值.
@@ -89,6 +93,19 @@ namespace Physara::Renderer::Detail
         using Allocation::Allocation;
         RHI::BufferHandle buffer;
         RHI::BindingSetHandle binding;
+    };
+
+    /// @brief 一块定长灯缓冲及其 CPU 复用依据. indices 保存裁剪所得原序, 缓冲中的行按灯类型分段.
+    /// 两个计数随同槽 View 常量交付. 接受前只可依赖本图的上传版本, 同槽 GPU 完成后才可重写.
+    struct LightTable final : Allocation
+    {
+        using Allocation::Allocation;
+        RHI::BufferHandle buffer;
+        Scene::SceneId scene;
+        std::uint64_t contentRevision = 0;
+        std::vector<std::uint32_t> indices;
+        std::uint32_t directionalCount = 0;
+        std::uint32_t localCount = 0;
     };
 
     /// @brief 缓存完整世界变换以判定对象行是否仍匹配, 不以全场景版本触发无关重传.
@@ -158,8 +175,8 @@ namespace Physara::Renderer::Detail
         std::uint32_t source; ///< 本 SceneFrame 的 Primitive 下标, 用作最终稳定排序键.
     };
 
-    /// @brief 同槽本轮的只读 Draw, 绑定和上传. view/viewValues 跨安全复用保留.
-    /// Reset 解除 Draw, 材质, 上传及显示引用, layout/needs 在下次准备时替换.
+    /// @brief 同槽本轮的只读 Draw, 绑定和上传. view/viewValues 和普通灯表跨安全复用保留.
+    /// Reset 解除本次 Draw, 材质, 活动灯表和显示引用, layout/needs 在下次准备时替换.
     /// @note 图回调借用这里保有的 RHI 对象; graph 析构后才可释放载荷, 同槽完成后才可重置 Draw.
     struct ForwardFrameData
     {
@@ -167,6 +184,9 @@ namespace Physara::Renderer::Detail
         ViewResourceNeeds needs;
         std::shared_ptr<ConstantRow> view;
         std::optional<StaticAbi::ForwardView> viewValues;
+        std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
+        std::shared_ptr<LightTable> activeLights; ///< 当前颜色 Pass 实际借用的普通表或设备空表.
+        RHI::BindingLayoutHandle lightLayout;
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
         UploadBatch uploads;
@@ -187,6 +207,7 @@ namespace Physara::Renderer::Detail
         Shader::RhiProgram color;
         Shader::RhiProgram depth;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
+        RHI::BindingLayoutHandle lightLayout;
         RHI::BindingLayoutHandle displayLayout;
         RHI::GraphicsPipelineHandle displayPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
@@ -217,10 +238,11 @@ namespace Physara::Renderer::Detail
         std::size_t preparedEntries = 0;
         std::map<GeometryKey, std::shared_ptr<GeometryRef>> geometry;
         std::map<TextureKey, std::shared_ptr<ResidentTexture>> textures;
-        std::map<ObjectKey, ObjectRow> objects;
+        std::map<ObjectRowKey, ObjectRow> objects;
         std::map<MaterialKey, std::shared_ptr<MaterialRow>> materials;
         std::map<SamplerKey, RHI::SamplerHandle> samplers;
         std::shared_ptr<ResidentTexture> white;
+        std::shared_ptr<LightTable> emptyLights; ///< 初始化后只读, 供诊断、零灯及全 Unlit 工作集使用.
     };
 
     /// @brief 中止本次准备并携带有界原因, 由 ForwardRenderer::Prepare 转换为可见结果.
@@ -235,6 +257,11 @@ namespace Physara::Renderer::Detail
     /// @brief 创建并记账 view/object UBO 及对应集合, 字节由调用者追加到上传包.
     [[nodiscard]] std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
                                                                   std::size_t set);
+    /// @brief 为有 Draw 的颜色 Pass 选择普通灯表或共享零表, 将匹配的表留在 frame.activeLights.
+    /// @param usesLighting 当前 Draw 中至少有一个材质按 Direct Lighting 受光. 为假或可见灯为空时使用零表.
+    /// @pre frame 所在帧槽已可安全重写. 编码或额度失败沿 Forward 准备入口返回, 整个候选停止.
+    void PrepareLightTable(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+                           bool usesLighting);
     /// @brief 复用匹配且有效的纹理代, 或创建新存储并把所有层级字节交给本轮上传.
     /// @pre image 来自固定的已发布 CPU 记录, key 包含对应版本, 颜色解释和 mip 策略.
     [[nodiscard]] std::shared_ptr<ResidentTexture> PrepareTexture(ForwardDevice &device, UploadBatch &uploads,

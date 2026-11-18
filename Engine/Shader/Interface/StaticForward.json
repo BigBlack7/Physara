@@ -8,7 +8,26 @@
       "fields": [
         { "name": "clipFromWorld", "type": "float4x4" },
         { "name": "mode", "type": "uint32" },
-        { "name": "preExposure", "type": "float32" }
+        { "name": "preExposure", "type": "float32" },
+        { "name": "viewer", "type": "float3" },
+        { "name": "orthographic", "type": "uint32" },
+        { "name": "directionalCount", "type": "uint32" },
+        { "name": "localCount", "type": "uint32" },
+        { "name": "viewerLow", "type": "float3" }
+      ]
+    },
+    {
+      "name": "ForwardLight",
+      "layout": "std430",
+      "fields": [
+        { "name": "color", "type": "float3" },
+        { "name": "intensity", "type": "float32" },
+        { "name": "positionHigh", "type": "float3" },
+        { "name": "range", "type": "float32" },
+        { "name": "direction", "type": "float3" },
+        { "name": "innerChordSquared", "type": "float32" },
+        { "name": "positionLow", "type": "float3" },
+        { "name": "outerChordSquared", "type": "float32" }
       ]
     },
     {
@@ -17,7 +36,11 @@
       "fields": [
         { "name": "worldFromLocal", "type": "float4x4" },
         { "name": "normalFromLocal", "type": "float4x4" },
-        { "name": "orientation", "type": "float32" }
+        { "name": "orientation", "type": "float32" },
+        { "name": "lightingAnchor", "type": "float3" },
+        { "name": "lightingShiftHigh", "type": "float3" },
+        { "name": "lightingShiftLow", "type": "float3" },
+        { "name": "lightingLinearLow", "type": "float3x3" }
       ]
     },
     {
@@ -49,7 +72,8 @@
     { "name": "occlusionImage", "kind": "texture2d", "set": 2, "slot": 3, "stages": ["fragment"] },
     { "name": "occlusionSampler", "kind": "sampler", "set": 2, "slot": 3, "stages": ["fragment"] },
     { "name": "emissiveImage", "kind": "texture2d", "set": 2, "slot": 4, "stages": ["fragment"] },
-    { "name": "emissiveSampler", "kind": "sampler", "set": 2, "slot": 4, "stages": ["fragment"] }
+    { "name": "emissiveSampler", "kind": "sampler", "set": 2, "slot": 4, "stages": ["fragment"] },
+    { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },
@@ -63,11 +87,17 @@
     { "stage": "vertex", "direction": "out", "name": "vUv1", "location": 2, "type": "float2" },
     { "stage": "vertex", "direction": "out", "name": "vNormal", "location": 3, "type": "float3" },
     { "stage": "vertex", "direction": "out", "name": "vTangent", "location": 4, "type": "float4" },
+    { "stage": "vertex", "direction": "out", "name": "vLightingAnchor", "location": 5, "type": "float3", "interpolation": "flat" },
+    { "stage": "vertex", "direction": "out", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
+    { "stage": "vertex", "direction": "out", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vColor", "location": 0, "type": "float4" },
     { "stage": "fragment", "direction": "in", "name": "vUv0", "location": 1, "type": "float2" },
     { "stage": "fragment", "direction": "in", "name": "vUv1", "location": 2, "type": "float2" },
     { "stage": "fragment", "direction": "in", "name": "vNormal", "location": 3, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vTangent", "location": 4, "type": "float4" },
+    { "stage": "fragment", "direction": "in", "name": "vLightingAnchor", "location": 5, "type": "float3", "interpolation": "flat" },
+    { "stage": "fragment", "direction": "in", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
+    { "stage": "fragment", "direction": "in", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
     { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
   ]
 }

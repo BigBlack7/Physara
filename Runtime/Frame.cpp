@@ -59,7 +59,8 @@ namespace Physara::Runtime
         std::array<RHI::ResourceStates, 2> states{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
         GraphCompileOptions options;
 
-        // 基础 UI 和场景候选使用各自的格式集合, 不把未启用路径或 RHI 未实现的能力交给编译器.
+        // 基础 UI 只用自身的格式和缓冲类型. 场景候选另交付宿主实测的 SSBO 块上限与偏移对齐,
+        // 供编译器校验 ShadeOpaque 声明的灯表范围. 实际上传仍由后续准入按存活写入独立核算.
         // options 的借用依赖本对象地址稳定, 因此在 TryFrame 的同一局部作用域内构造并消费.
         explicit EditorGraphProfile(Platform::DeviceHost &host, bool scene)
         {
@@ -83,7 +84,9 @@ namespace Physara::Runtime
             options = {.textures = std::span(textures).first(count),
                 .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
                             .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
-                            .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes},
+                            .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
+                            .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
+                            .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0},
                 .textureBoundaryStates = states, .bufferBoundaryStates = states, .maxColorAttachments = 1,
                 .transientByteBudget = (scene ? ForwardAttachmentBudget : DiagnosticUploadBudget) + 32 * 1024 * 1024 + 4};
         }
@@ -329,7 +332,7 @@ namespace Physara::Runtime
             view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.viewport)));
         if (published && declared.scene)
         {
-            // 先确认同一候选确实成为 View 输出, 再允许其静态上传复用. 前缀和安全图均不进入此处.
+            // View 已接受本次正常合成采样的颜色, 才确认对应槽的灯表和其余上传可供后继读取.
             slot.forward.Confirm(*declared.scene, plan);
         }
         const auto result = host.Present(presentation.token, hostError);

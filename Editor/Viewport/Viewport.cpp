@@ -36,6 +36,7 @@ namespace Physara::Editor::Detail
         case UiFallback::SceneAttachmentLimit: return "Forward attachment limit exceeded";
         case UiFallback::SceneUnsupported: return "No supported visible surface";
         case UiFallback::SceneUploadLimit: return "Forward upload limit exceeded";
+        case UiFallback::SceneLightTableRejected: return "Visible light table rejected";
         case UiFallback::RetainedOutput: return "Frame failed - showing last accepted output";
         case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";

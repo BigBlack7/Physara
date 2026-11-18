@@ -1,10 +1,14 @@
 #include "../Materials/StaticGpu.hpp"
+#include "../Lighting/PunctualLights.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
+#include <string_view>
+#include <variant>
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -12,7 +16,7 @@
 
 /// @file
 /// @brief 使用 PreparedView 构造可直接录制的静态 Draw. 本阶段仅分配对象并拥有待写字节.
-/// per-view 行使用 StaticForward schema 生成的布局, 同一相机快照同时提供矩阵与曝光.
+/// 收齐可绘材质后选择灯表, 并将有效计数与同轮相机的矩阵, 观察量和曝光写入 per-view 行.
 
 namespace Physara::Renderer::Detail
 {
@@ -22,7 +26,7 @@ namespace Physara::Renderer::Detail
         return {id.index, id.generation, revision.value};
     }
 
-    /// @brief 对象行以 Scene 和实体的完整分配代隔离, 文档替换或 ECS 槽复用不会命中旧行.
+    /// @brief Scene 和实体的完整分配代隔离资源, 防止文档替换或 ECS 槽复用后命中旧行.
     static ObjectKey ObjectIdentity(Scene::SceneId scene, Scene::EntityHandle entity) noexcept
     {
         return {scene.index, scene.generation, entity.index, entity.generation};
@@ -47,26 +51,71 @@ namespace Physara::Renderer::Detail
         return true;
     }
 
-    /// @brief 用真正送入 GPU 的线性变换计算法线矩阵. 等比缩放逆转置不会改变单位方向.
-    static std::optional<StaticAbi::ForwardObject> EncodeObject(const SceneObject &object) noexcept
+    /// @brief 编码对象与法线矩阵, 以及在图元世界基点附近求光照所需的仿射系数.
+    /// @param bounds 有效三角形在模型空间的包围盒, 用于选择世界基点.
+    /// @return 完整 CPU 对象行或首个失败原因. 调用者可用源图元身份记录被跳过的表面.
+    static std::variant<StaticAbi::ForwardObject, std::string_view>
+    EncodeObject(const SceneObject &object, const Asset::ModelBounds &bounds) noexcept
     {
+        constexpr std::string_view invalidFrame = "instance transform cannot form a GPU surface frame";
         StaticAbi::ForwardObject row{};
-        if (object.orientation == 0 || !StoreMatrix(row.worldFromLocal, glm::make_mat4(object.worldFromLocal.data())))
+        const auto worldFromLocal = glm::make_mat4(object.worldFromLocal.data());
+        if (object.orientation == 0 || !StoreMatrix(row.worldFromLocal, worldFromLocal))
         {
-            return std::nullopt;
+            return invalidFrame;
         }
+        // 选取靠近几何的世界基点并窄化一次. 它只作为光照坐标的原点, 裁剪矩阵沿用现有路径.
+        std::array<float, 3> anchor{};
+        for (std::size_t axis = 0; axis < anchor.size(); ++axis)
+        {
+            anchor[axis] = std::midpoint(bounds.minimum[axis], bounds.maximum[axis]);
+        }
+        const auto worldAnchor = worldFromLocal * glm::dvec4(anchor[0], anchor[1], anchor[2], 1.0);
+        const std::array position{worldAnchor.x, worldAnchor.y, worldAnchor.z};
+        if (!StoreGpuVector(row.lightingAnchor, position))
+        {
+            return "lighting anchor exceeds the GPU position range";
+        }
+
+        // A 取对象行里已经舍入的世界基点. 顶点计算 M * p + (T - A), 片元从灯位或眼点减去同一个 A.
+        std::array<double, 3> shift{};
+        for (std::uint32_t axis = 0; axis < shift.size(); ++axis)
+        {
+            shift[axis] = worldFromLocal[3][axis] - row.lightingAnchor[axis];
+        }
+        if (!StoreGpuVector(row.lightingShiftHigh, shift))
+        {
+            return "lighting translation relative to the anchor exceeds the GPU position range";
+        }
+        for (std::uint32_t axis = 0; axis < shift.size(); ++axis)
+        {
+            const auto translation = worldFromLocal[3][axis];
+            const auto base = row.lightingAnchor[axis];
+            // 低位合并 double 计算 T - A 时的舍入余量, 以及将结果窄化为 FP32 时的余量.
+            const auto roundedBase = translation - shift[axis];
+            const auto error = (translation - (shift[axis] + roundedBase)) + (roundedBase - base);
+            row.lightingShiftLow[axis] =
+                static_cast<float>((shift[axis] - row.lightingShiftHigh[axis]) + error);
+        }
+
+        // 法线沿用 GPU 矩阵. 光照另存线性系数窄化的余量以恢复仿射顶点位置.
         glm::dmat3 linear(1.0);
         for (std::uint32_t c = 0; c < 3; ++c)
         {
             const auto &column = row.worldFromLocal[c].value;
             linear[c] = glm::dvec3(column[0], column[1], column[2]);
+            for (std::uint32_t r = 0; r < 3; ++r)
+            {
+                row.lightingLinearLow[c].value[r] = static_cast<float>(worldFromLocal[c][r] - linear[c][r]);
+            }
         }
         const auto determinant = glm::determinant(linear);
         if (determinant == 0 || (determinant < 0) != (object.orientation < 0))
         {
-            return std::nullopt;
+            return invalidFrame;
         }
         const auto normal = glm::transpose(glm::inverse(linear));
+        // 等比缩放法线矩阵保留单位方向.
         double scale = 0.0;
         for (std::uint32_t c = 0; c < 3; ++c)
         {
@@ -77,15 +126,15 @@ namespace Physara::Renderer::Detail
         }
         if (!(scale > 0) || !StoreMatrix(row.normalFromLocal, glm::dmat4(normal / scale)))
         {
-            return std::nullopt;
+            return invalidFrame;
         }
         row.orientation = static_cast<float>(object.orientation);
         return row;
     }
 
-    /// @brief 只改相机时重用既有对象行. 变换变化在新行写入, 原行保留给在途槽.
+    /// @brief 对象变换及编码后的世界基点一致时跨图元和帧复用, 变换变化后原行由在途槽保有.
     static std::shared_ptr<ConstantRow> PrepareObject(ForwardDevice &device, UploadBatch &uploads,
-        const ObjectKey &key, const SceneObject &source, const StaticAbi::ForwardObject &value)
+        const ObjectRowKey &key, const SceneObject &source, const StaticAbi::ForwardObject &value)
     {
         if (const auto found = device.objects.find(key);
             found != device.objects.end() && device.Current(*found->second.resident) &&
@@ -340,9 +389,9 @@ namespace Physara::Renderer::Detail
         text.Append(reason);
     }
 
-    /// @brief 帧槽的 per-view 行在安全复用后更新. 同一快照提供投影和曝光, 模式随本轮请求.
+    /// @brief 编码当前相机, 请求模式及活动灯表的两段计数. 只在槽安全且字段已改变或上传未接受时排入写入.
     static void PrepareViewRow(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-                               PreviewMode mode)
+                               PreviewMode mode, bool usesLighting)
     {
         StaticAbi::ForwardView value{};
         if (!StoreMatrix(value.clipFromWorld, glm::make_mat4(view.camera->renderClipFromView.data()) *
@@ -352,6 +401,23 @@ namespace Physara::Renderer::Detail
         }
         value.mode = static_cast<std::uint32_t>(mode);
         value.preExposure = view.camera->exposure.preExposure;
+        value.directionalCount = frame.activeLights->directionalCount;
+        value.localCount = frame.activeLights->localCount;
+        if (usesLighting)
+        {
+            const std::span basis(view.camera->worldFromView);
+            value.orthographic = view.camera->orthographic ? 1u : 0u;
+            // 透视使用眼点, 正交使用相机世界 +Z, 即朝向观察者的固定单位向量.
+            const auto viewer = view.camera->orthographic ? basis.subspan<8, 3>() : basis.subspan<12, 3>();
+            if (!StoreGpuVector(value.viewer, viewer))
+            {
+                Reject(ViewSettingReason::InvalidProjection, "Forward viewer exceeds the GPU float range");
+            }
+            if (!view.camera->orthographic)
+            {
+                value.viewerLow = GpuPositionLow(viewer, value.viewer);
+            }
+        }
         if (!frame.view)
         {
             frame.view = CreateConstantRow(device, sizeof(value), 0);
@@ -359,9 +425,13 @@ namespace Physara::Renderer::Detail
         device.Use(*frame.view);
         const auto same = [&]
         {
-            // 按实际字段比较, 不比较 std140 padding; 纯曝光变化也必须重新上传当前槽的行.
+            // 曝光, 灯计数或观察向量均可独立改变. 比较只读取实际字段.
             if (!frame.viewValues || frame.viewValues->mode != value.mode ||
-                frame.viewValues->preExposure != value.preExposure)
+                frame.viewValues->preExposure != value.preExposure || frame.viewValues->viewer != value.viewer ||
+                frame.viewValues->viewerLow != value.viewerLow ||
+                frame.viewValues->orthographic != value.orthographic ||
+                frame.viewValues->directionalCount != value.directionalCount ||
+                frame.viewValues->localCount != value.localCount)
             {
                 return false;
             }
@@ -398,12 +468,15 @@ namespace Physara::Renderer::Detail
             DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
             return;
         }
-        const auto objectValue = EncodeObject(object);
-        if (!objectValue)
+        // 可见工作集已按世界包围盒筛选. 此处从源图元取得局部盒, 由 EncodeObject 施加实例变换.
+        assert(source.bounds);
+        const auto encodedObject = EncodeObject(object, *source.bounds);
+        if (const auto *error = std::get_if<std::string_view>(&encodedObject))
         {
-            DescribeSkipped(frame, model, ref, "instance transform cannot form a GPU surface frame");
+            DescribeSkipped(frame, model, ref, *error);
             return;
         }
+        const auto &objectValue = std::get<StaticAbi::ForwardObject>(encodedObject);
         std::uint8_t attributes = 0;
         for (const auto &slot : material.textures)
         {
@@ -432,7 +505,8 @@ namespace Physara::Renderer::Detail
             return;
         }
         const auto entity = ObjectIdentity(view.scene.scene, object.entity);
-        auto instance = PrepareObject(device, frame.uploads, entity, object, *objectValue);
+        auto instance = PrepareObject(device, frame.uploads, {entity, objectValue.lightingAnchor}, object,
+                                      objectValue);
         auto row = PrepareMaterial(device, frame.uploads, {version, ref.material, ref.materialOverride ? entity :
             ObjectKey{}, ref.materialOverride ? ref.sourceSlot : 0}, material);
         const auto [slot, newRow] = rows.try_emplace(row.get(), frame.materialRows.size());
@@ -463,7 +537,7 @@ namespace Physara::Renderer::Detail
 
     void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
     {
-        // 先封存所有可绘项及静态上传, 再追加 per-view 常量; 后续图执行不再解析活动 Scene.
+        // 先封存可绘项及静态上传. 被跳过的 Primitive 不参与本帧灯表需求判断.
         std::map<MaterialRow *, std::size_t> rows;
         for (const auto index : view.primitives)
         {
@@ -477,7 +551,11 @@ namespace Physara::Renderer::Detail
             }
             return;
         }
-        PrepareViewRow(device, frame, view, mode);
+        // 颜色程序的灯绑定对所有 Draw 都存在. 只有实际受光的工作集才编码场景灯, 其余绑定零表.
+        const bool usesLighting = mode == PreviewMode::DirectLighting &&
+            std::ranges::any_of(frame.materialRows, [](const auto &row) { return row->values.unlit == 0; });
+        PrepareLightTable(device, frame, view, usesLighting);
+        PrepareViewRow(device, frame, view, mode, usesLighting);
         // 两种深度组合使用同一顺序, 相等深度下保留相同的绘制优先级.
         std::ranges::sort(frame.draws, [](const DrawRecord &a, const DrawRecord &b)
         {

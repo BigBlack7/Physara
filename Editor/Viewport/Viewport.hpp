@@ -17,7 +17,9 @@
 namespace Physara::Editor::Detail
 {
     enum class UiFallback : std::uint8_t;
-    inline constexpr const char *PreviewNames[] = {"Base Color", "World Normal", "Material Channels", "Emissive"};
+    /// @brief 按 Renderer::PreviewMode 顺序排列. 选择框用请求模式索引, 图像标签用实际颜色代的模式索引.
+    inline constexpr const char *PreviewNames[] = {
+        "Base Color", "World Normal", "Material Channels", "Emissive", "Direct Lighting"};
 
     /// @brief 逻辑窗口中的画布及可见裁剪, 可跨帧比较而不借用 ImGui 数据.
     struct ViewportRegion

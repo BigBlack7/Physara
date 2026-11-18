@@ -171,9 +171,10 @@ namespace Physara::Renderer
         return snapshot;
     }
 
+    // 模式是会话请求. 保留旧颜色和场景记录, 直到 Publish 收到与新模式匹配的候选.
     void View::RequestPreview(PreviewMode mode) noexcept
     {
-        assert(mode <= PreviewMode::Emissive);
+        assert(mode <= PreviewMode::DirectLighting);
         if (m_Preview != mode)
         {
             m_Preview = mode;

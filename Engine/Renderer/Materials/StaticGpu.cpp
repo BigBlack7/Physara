@@ -7,7 +7,7 @@
 #include <StaticForward/Bindings.hpp>
 
 /// @file
-/// @brief 设备级 Shader、Pipeline、绑定布局和静态驻留预算. 这里创建对象, 写入留给图.
+/// @brief 管理设备级程序, 绑定布局, Pipeline 及驻留额度. 资源创建与图内上传分开进行.
 
 namespace Physara::Renderer::Detail
 {
@@ -86,6 +86,12 @@ namespace Physara::Renderer::Detail
                 Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward scene binding layout");
             }
         }
+        // 生成接口的前三组供几何共用. 最后一组是片元着色的 PerPass 灯表, 深度程序没有活动读取.
+        lightLayout = device.CreateBindingLayout(sceneLayout.back());
+        if (!lightLayout)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward light table binding layout");
+        }
         namespace DisplayAbi = Shader::Generated::ForwardDisplay;
         const auto program = LoadProgram(device, paths.display, DisplayAbi::AbiHash, "ForwardDisplay package");
         displayLayout = device.CreateBindingLayout(DisplayAbi::MakeBindingLayouts().front());
@@ -159,6 +165,10 @@ namespace Physara::Renderer::Detail
         for (const auto &binding : layouts)
         {
             desc.AddBindingLayout(binding.Get());
+        }
+        if (phase != SurfacePhase::Depth)
+        {
+            desc.AddBindingLayout(lightLayout.Get());
         }
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()

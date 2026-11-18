@@ -99,7 +99,8 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 - 在 `Hierarchy` 选中一行, 在 `Inspector` 拖动 `Local Transform` 的平移、旋转或缩放, 或 Ctrl+单击数值后键入. 旋转为 XYZ 度, 缩放保留符号. `Edit > Delete` 或 Delete 删除所选子树, `Ctrl+Z` 和 `Ctrl+Y` 可撤销与重做.
 - `File` 提供 `New Scene`、`Open Scene`、`Save Scene` 和 `Save Scene As`, 快捷键分别为 Ctrl+N、Ctrl+O、Ctrl+S 和 Ctrl+Shift+S. 打开或另存时输入如 `Assets/Scenes/Example.scene.json` 的项目相对路径. 新文档第一次保存会询问目标. 有未保存修改时可保存后继续、放弃或取消, `Scene status` 显示当前路径、文件进度和失败原因.
 - 在 `View Settings` 选择导航或场景相机, 调整 `Preview` 与 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 在有效导航图像内按住右键用鼠标和 WASD/QE 飞行, Alt+左键环绕, 中键平移. 按 Esc 可取消尚未结束的手势. 如需同时看图与参数, 将 `Viewport` 和 `View Settings` 停靠在不同区域.
-- 在 `View Settings` 输入光圈、快门、ISO、曝光补偿、传感器高度、导航焦距或对焦距离后按 Enter 提交，可用 Undo/Redo 重放。传感器和焦距用毫米，对焦距离用米，快门用秒。场景透视相机使用源 `yfov` 并显示由传感器高度反推的焦距。面板分别显示当前 EV100、请求预曝光和最后成功场景帧的预曝光。当前版预曝光作为帧输入供后续照明使用，材质预览按其诊断模式显示。
+- 在 `View Settings` 输入光圈、快门、ISO、曝光补偿、传感器高度、导航焦距或对焦距离后按 Enter 提交，可用 Undo/Redo 重放。传感器和焦距用毫米，对焦距离用米，快门用秒。场景透视相机使用源 `yfov` 并显示由传感器高度反推的焦距。面板分别显示当前 EV100、请求预曝光和最后成功场景帧的预曝光。
+- `Preview > Direct Lighting` 用场景中的方向灯、点光、聚光及材质自发光显示受光表面。直接光和自发光使用当帧预曝光，当前视口在线性工作色上限幅显示。Unlit 用标准基色。初始模式为 `Base Color`。在 View Settings 可对照请求模式与 `Last accepted preview`。灯表拒绝时，设置面板和视口显示灯表原因，Frame status 保留更具体的诊断。 [D07 直接光](Developments/D06-D07-SceneAndForward.md#d07-t03)
 - 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
 - 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
 

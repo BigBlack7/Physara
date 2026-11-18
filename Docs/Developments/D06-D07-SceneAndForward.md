@@ -143,11 +143,13 @@
 
 **职责位置：** Renderer/Lighting、Prepare、Shaders/Lighting。**前置：** [D07-T01](#d07-t01)、[D07-T02](#d07-t02)。**架构依据：** [5.4](../Architecture.md#light-preparation)、[4.4](../Architecture.md#physical-inputs)、[8.6](../Architecture.md#lighting)、[8.7](../Architecture.md#opaque-shading)。
 
-- [ ] 接入 KHR_lights_punctual 的方向/点/聚光灯、颜色、lux/candela、衰减、spot 角和 range；未指定 range 保持无穷语义。
-- [ ] 准备完整可见灯集合与统一 EvaluateLighting，Forward 先遍历完整候选列表，阴影输入在 D09 接入同一合同。
-- [ ] 验证 inverse-square、聚光边界、光源单位、曝光相应关系、多灯叠加与零灯场景。
+- [x] 接入 KHR_lights_punctual 的方向/点/聚光灯、颜色、lux/candela、衰减、spot 角和 range；未指定 range 保持无穷语义。
+- [x] 准备完整可见灯集合与统一 EvaluateLighting，Forward 先遍历完整候选列表，阴影输入在 D09 接入同一合同。
+- [x] 验证 inverse-square、聚光边界、光源单位、曝光相应关系、多灯叠加与零灯场景。
 
 **完成条件：** 直接光结果有数值依据，后续 Forward+/Deferred 只更换候选选择和表面获取。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-18-add-forward-direct-lighting/tasks.md#final-verification)
 
 <a id="d07-t04"></a>
 ### D07-T04 · 完成环境准备、DFG 与 IBL

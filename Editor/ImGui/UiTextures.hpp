@@ -38,13 +38,13 @@ namespace Physara::Editor::Detail
     };
 
     /// @brief 视口解析状态及共享占位原因. RetainedOutput 只加标签, 仍采样已接受的旧图像.
-    /// 相机/场景准备失败沿同一占位通路呈现, 不改变其它 UI 纹理的解析资格.
+    /// 相机, 可绘表面及可见灯表各有独立的占位原因. LightTable 拒绝的字段详情保存在帧诊断中.
     enum class UiFallback : std::uint8_t
     {
         None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget,
         CameraUnavailable, InvalidProjection, InvalidImageRect, InvalidSampling, ScenePreparationFailed,
         ScenePipelineUnavailable, SceneResidencyPending, SceneResidencyLimit, SceneAttachmentLimit,
-        SceneUnsupported, SceneUploadLimit, RetainedOutput, FrameFailed
+        SceneUnsupported, SceneUploadLimit, RetainedOutput, FrameFailed, SceneLightTableRejected
     };
 
     /// @brief 成功准备的外部驻留引用. 持有原对象及导入事实, 注销只阻止后续准备的新解析.

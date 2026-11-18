@@ -1,10 +1,54 @@
 // Depth/Color 共用位置表达式与 invariant 约束, 保持前置深度的 Equal 比较所需一致性.
-// 矩阵来自当前相机和完整实例仿射, UV 保持 glTF 行序; 片元阶段完成法线归一化和切线正交化.
+// 光照分别插值相对于世界基点的高位和余量. 世界基点在同一 Draw 内平坦传递.
+// UV 保持 glTF 行序, 片元阶段完成法线归一化和切线正交化.
+#include <Source/Common/SumRemainder.glsl>
+
 invariant gl_Position;
+
+// Dekker 乘积余量. product 是同一对因子已单独舍入的 FP32 乘积.
+// 将两个有效数各拆为至多 12 位的高低部分, 用子乘积恢复余量. 位掩码保留符号和指数.
+vec3 ProductRemainder(vec3 a, float b, vec3 product)
+{
+    const uint highMask = 0xfffff000u;
+    vec3 aHigh = uintBitsToFloat(floatBitsToUint(a) & uvec3(highMask));
+    float bHigh = uintBitsToFloat(floatBitsToUint(b) & highMask);
+    precise vec3 aLow = a - aHigh;
+    precise float bLow = b - bHigh;
+    precise vec3 error = aLow * bLow - (((product - aHigh * bHigh) - aLow * bHigh) - aHigh * bLow);
+    return error;
+}
+
+// 先求 M * position + (T - anchor) 的高位. 合入乘积、累加和 CPU 编码的余量后再拆为两部分.
+// 世界基点只从仿射平移扣除. 相对偏移与片元处加回的基点在算术上共用同一个 FP32 值.
+void FetchLightingOffset(out vec3 offset, out vec3 low)
+{
+    mat3 linear = mat3(perObject.worldFromLocal);
+    precise vec3 x = linear[0] * aPosition.x;
+    precise vec3 y = linear[1] * aPosition.y;
+    precise vec3 z = linear[2] * aPosition.z;
+    precise vec3 xy = x + y;
+    precise vec3 xyz = xy + z;
+    vec3 shift = perObject.lightingShiftHigh;
+    precise vec3 shifted = xyz + shift;
+    precise vec3 products = ProductRemainder(linear[0], aPosition.x, x) +
+                            ProductRemainder(linear[1], aPosition.y, y) +
+                            ProductRemainder(linear[2], aPosition.z, z);
+    precise vec3 sums = SumRemainder(x, y, xy) + SumRemainder(xy, z, xyz) +
+                        SumRemainder(xyz, shift, shifted);
+    // products 和 sums 来自本次顶点运算. inputs 补回 CPU 编码矩阵系数和平移差时留下的低位.
+    precise vec3 inputs = perObject.lightingLinearLow * aPosition + perObject.lightingShiftLow;
+    precise vec3 remainder = (products + sums) + inputs;
+    precise vec3 high = shifted + remainder;
+    offset = high;
+    low = SumRemainder(shifted, remainder, high);
+}
 
 void FetchStaticVertex()
 {
-    gl_Position = perView.clipFromWorld * (perObject.worldFromLocal * vec4(aPosition, 1.0));
+    vec4 worldPosition = perObject.worldFromLocal * vec4(aPosition, 1.0);
+    gl_Position = perView.clipFromWorld * worldPosition;
+    vLightingAnchor = perObject.lightingAnchor;
+    FetchLightingOffset(vLightingOffsetHigh, vLightingOffsetLow);
     vColor = aColor;
     vUv0 = aUv0;
     vUv1 = aUv1;

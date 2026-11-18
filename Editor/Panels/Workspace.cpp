@@ -85,6 +85,7 @@ namespace Physara::Editor::Detail
         case SceneAttachmentLimit: return "Failed - Forward attachment limit";
         case SceneUnsupported: return "Failed - unsupported visible surfaces";
         case SceneUploadLimit: return "Failed - Forward upload limit";
+        case SceneLightTableRejected: return "Failed - visible light table rejected";
         }
         return "";
     }
@@ -464,6 +465,7 @@ namespace Physara::Editor::Detail
                             ImGui::TextWrapped("Right mouse + WASD/QE: Fly. Alt + left mouse: Orbit. Middle mouse: Pan.");
                         }
                         const auto settings = state.view->Settings();
+                        // 选择框说明当前请求的着色方式. 本次实际合成的模式由视口按颜色代读取.
                         int preview = static_cast<int>(settings.preview);
                         ImGui::BeginDisabled(!state.allowActions);
                         const bool changed = ImGui::Combo("Preview", &preview, PreviewNames, IM_ARRAYSIZE(PreviewNames));
@@ -471,6 +473,20 @@ namespace Physara::Editor::Detail
                         if (changed)
                         {
                             frame.preview = static_cast<Renderer::PreviewMode>(preview);
+                        }
+                        if (acceptedPreview)
+                        {
+                            // 来源是最近接受的显示颜色代. 本轮请求被拒绝或只提交 UI 时, 仍显示该代的模式.
+                            ImGui::Text("Last accepted preview - %s",
+                                        PreviewNames[static_cast<std::size_t>(acceptedPreview->mode)]);
+                        }
+                        else
+                        {
+                            ImGui::TextUnformatted("Last accepted preview - awaiting scene output");
+                        }
+                        if (preview == static_cast<int>(Renderer::PreviewMode::DirectLighting))
+                        {
+                            ImGui::TextWrapped("Punctual lights and emission. The viewport uses a linear clamp display.");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
                         drawEditError();
