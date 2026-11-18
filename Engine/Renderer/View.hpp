@@ -165,7 +165,9 @@ namespace Physara::Renderer
         SceneAttachmentLimit,
         SceneUnsupported,
         SceneUploadLimit,
-        SceneLightTableRejected ///< 可见灯集合超容量或行字段无法编码. 具体原因由 ForwardFailure 携带.
+        SceneLightTableRejected, ///< 可见灯集合超容量或行字段无法编码.
+        EnvironmentPending,
+        EnvironmentRejected
     };
 
     /// @brief 会话内 Forward 模式. 顺序同时用于编辑器菜单和 ForwardView.mode 的 Shader ABI.
@@ -175,7 +177,8 @@ namespace Physara::Renderer
         WorldNormal,
         MaterialChannels,
         Emissive,
-        DirectLighting ///< 受光表面使用正式 Forward 直接光和当帧预曝光.
+        DirectLighting, ///< 直接光诊断, 使用当帧预曝光.
+        PhysicalLighting
     };
 
     /// @brief 同一 View 的请求和确认快照, 可独立用于面板显示.
@@ -199,6 +202,9 @@ namespace Physara::Renderer
         DisplayColor
     };
 
+    /// @brief 正常帧实际消费的源与角色. settings 交付查询参数及活跃角色, 可独立于活动 Scene 保留.
+    using RenderedEnvironment = Scene::SceneEnvironment;
+
     /// @brief 一代场景预览的身份, 相机与模式. 候选携带准备值, View 接受后才成为已渲染记录.
     struct RenderedScene
     {
@@ -208,6 +214,7 @@ namespace Physara::Renderer
         PreviewMode mode;
         std::optional<Core::BoundedText> degradation;
         std::uint64_t documentRevision; ///< 准备时的 View 文档代, 不等于 Scene 内容代或时域历史 key.
+        std::optional<RenderedEnvironment> environment; ///< 本颜色代实际使用的源和角色, 无环境消费时为空.
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -236,7 +243,7 @@ namespace Physara::Renderer
         [[nodiscard]] std::uint64_t RequestRevision() const noexcept { return m_RequestRevision; }
         /// @brief 本次测试图需要的紧密像素字节数. 场景上传另由 ForwardFrame 持有, 不计入此值.
         [[nodiscard]] std::size_t UploadBytes() const noexcept { return m_UploadBytes; }
-        /// @brief 本轮缺少匹配颜色的等待或拒绝原因, 供 UI 选择占位.
+        /// @brief 当前候选的等待或拒绝原因, 可随占位或只读旧图一起显示.
         [[nodiscard]] ViewSettingReason UnavailableReason() const noexcept { return m_UnavailableReason; }
 
         /// @brief 在已预留的本槽空间中生成测试图像素. 复用已有代或无测试图上传时直接成功.
@@ -313,9 +320,11 @@ namespace Physara::Renderer
         /// @pre 来自此 View, 且准备后本 View 的持久请求未变更. 不影响已采纳的显示资源.
         void PublishDocumentUpdate(ViewDocumentUpdate &&update) noexcept;
         /// @brief 取得最后接受颜色的拥有型只读快照, 缺失时仍明确表示安全 UI 输入.
-        /// @note 不产生新代或上传, 不改变请求及有效设置. 旧图身份不进入快照.
+        /// @note 不产生新代或上传, 不改变请求及有效设置. 旧图的 GraphId 不进入快照.
+        /// reason 描述当前候选的等待或拒绝, 同旧输出的身份独立交付.
         /// 快照可跨后续 View 换代持有; 测试图和 Forward 预览均不原地覆写已接受颜色.
-        [[nodiscard]] PreparedViewOutput LastAcceptedOutput() const noexcept;
+        [[nodiscard]] PreparedViewOutput LastAcceptedOutput(
+            ViewSettingReason reason = ViewSettingReason::None) const noexcept;
 
         /// @brief 借用最近接受的显示色所关联的场景预览, 供会话同步布局.
         /// @return 若尚无显示色或最近接受的是测试图, 返回空.
@@ -340,8 +349,10 @@ namespace Physara::Renderer
             PrepareDiagnostic(const PreparedView &prepared, std::size_t remainingUploadBytes);
         /// @brief 通过已准备的场景和相机建立本轮显示色候选, 由 Forward 图生产实际内容.
         /// @pre prepared 为当前已校验的 View, 场景 Draw 已准备. degradation 只描述被报告的局部不支持项.
+        /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
-            PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation);
+            PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
+                           std::optional<RenderedEnvironment> environment = std::nullopt);
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;

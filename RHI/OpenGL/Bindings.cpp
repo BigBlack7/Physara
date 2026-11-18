@@ -5,9 +5,12 @@
 /// 创建过程保留 context 的活动绑定. Pipeline 另外解释 slot 到原生单元的映射.
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 #include <set>
 #include <stdexcept>
+
+#include "../Utils.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -124,31 +127,60 @@ namespace Physara::RHI::OpenGL
         return {offset, size};
     }
 
-    // 一次创建尝试的二维视图计划, texture 借用由未发布 BindingSet 已取得的强引用保活.
+    // 一次创建尝试的视图计划, texture 借用由未发布 BindingSet 已取得的强引用保活.
     struct SamplingView
     {
         OpenGLTexture *texture = nullptr;
+        TextureDimension dimension = TextureDimension::Unknown;
         GLenum format = 0;
         TextureSubresourceSet range;
         std::array<GLint, 4> swizzle{};
     };
 
-    /// @brief 验证真正的二维单层采样视图, format 重解释沿用 storage 的 typeless/view-class 合同.
-    static SamplingView InspectTexture(OpenGLDevice &device, const BindingSetItem &item)
+    /// @brief 仅在拒绝时格式化可用槽身份及实际输入. 非 descriptor 布局的 set 由后续 Pipeline 分配.
+    [[noreturn]] static void RejectSamplingView(const char *reason, const BindingLayoutDesc &layout,
+        std::uint32_t slot, TextureDimension dimension, const TextureSubresourceSet &range, const TextureDesc &desc)
+    {
+        char set[32]{};
+        if (layout.registerSpaceIsDescriptorSet)
+        {
+            std::snprintf(set, sizeof(set), "set=%u ", layout.registerSpace);
+        }
+        char text[384]{};
+        std::snprintf(text, sizeof(text),
+            "%s (%sslot=%u requested=%s storage=%s, baseMip=%u mipCount=%u, baseLayer=%u layerCount=%u, "
+            "storageMips=%u storageLayers=%u)%s",
+            reason, set, slot, Utils::TextureDimensionToString(dimension),
+            Utils::TextureDimensionToString(desc.dimension), range.baseMipLevel, range.numMipLevels,
+            range.baseArraySlice, range.numArraySlices, desc.mipLevels, desc.arraySize,
+            dimension == TextureDimension::TextureCube ? ", cube requires baseLayer=0 layerCount=6" : "");
+        throw std::runtime_error(text);
+    }
+
+    /// @brief 从同一存储选择二维单层或完整六面的 cube 视图, 保留真实 mip 和 layer 范围.
+    static SamplingView InspectTexture(OpenGLDevice &device, const BindingSetItem &item, const BindingLayoutDesc &layout)
     {
         auto *texture = dynamic_cast<OpenGLTexture *>(item.resourceHandle);
         RequirePreparation(texture && texture->Owner() == &device, "InvalidResource: foreign texture binding");
         const auto &desc = texture->GetDesc();
-        RequirePreparation(
-            desc.isShaderResource && desc.sampleCount == 1 &&
-                (desc.dimension == TextureDimension::Texture2D || desc.dimension == TextureDimension::Texture2DArray ||
-                 desc.dimension == TextureDimension::TextureCube ||
-                 desc.dimension == TextureDimension::TextureCubeArray) &&
-                (item.dimension == TextureDimension::Unknown || item.dimension == TextureDimension::Texture2D),
-            "Unsupported: binding requires a two-dimensional sampled view");
+        const auto dimension = item.dimension == TextureDimension::Unknown ? TextureDimension::Texture2D :
+                                                                           item.dimension;
+        const bool cube = dimension == TextureDimension::TextureCube;
+        const bool layerStorage = desc.dimension == TextureDimension::Texture2D ||
+                                  desc.dimension == TextureDimension::Texture2DArray ||
+                                  desc.dimension == TextureDimension::TextureCube ||
+                                  desc.dimension == TextureDimension::TextureCubeArray;
         auto range = item.subresources;
-        RequirePreparation(range.baseMipLevel < desc.mipLevels && range.baseArraySlice < desc.arraySize,
-                           "InvalidArgument: sampling view base range");
+        if (!desc.isShaderResource || desc.sampleCount != 1 || !layerStorage ||
+            (cube ? desc.dimension != TextureDimension::TextureCube : dimension != TextureDimension::Texture2D))
+        {
+            RejectSamplingView("Unsupported: incompatible sampled view dimension", layout, item.slot, dimension,
+                               range, desc);
+        }
+        if (range.baseMipLevel >= desc.mipLevels || range.baseArraySlice >= desc.arraySize)
+        {
+            RejectSamplingView("InvalidArgument: sampling view base range", layout, item.slot, dimension, range, desc);
+        }
         if (range.numMipLevels == TextureSubresourceSet::AllMipLevels)
         {
             range.numMipLevels = desc.mipLevels - range.baseMipLevel;
@@ -157,16 +189,18 @@ namespace Physara::RHI::OpenGL
         {
             range.numArraySlices = desc.arraySize - range.baseArraySlice;
         }
-        RequirePreparation(range.numMipLevels > 0 && range.numMipLevels <= desc.mipLevels - range.baseMipLevel &&
-                               range.numArraySlices == 1,
-                           "InvalidArgument: sampling view mip/layer range");
+        if (range.numMipLevels == 0 || range.numMipLevels > desc.mipLevels - range.baseMipLevel ||
+            (cube ? range.baseArraySlice != 0 || range.numArraySlices != 6 : range.numArraySlices != 1))
+        {
+            RejectSamplingView("InvalidArgument: sampling view mip/layer range", layout, item.slot, dimension,
+                               range, desc);
+        }
         const auto format = item.format == Format::UNKNOWN ? desc.format : item.format;
         RequirePreparation(format > Format::UNKNOWN && format < Format::COUNT, "InvalidArgument: sampling view format");
         const auto &info = GetFormatInfo(format);
         const auto &storage = device.GetFormatCaps(desc.format, desc.dimension);
-        const auto &view = device.GetFormatCaps(format, TextureDimension::Texture2D);
-        // 使用设备公开的二维 ShaderSample 能力. 对应 internal format 已由能力表建立.
-        // 深度视图使用同格式, packed 视图沿用 GL 默认的深度分量. 其余格式的 typeless 重解释须同 view class.
+        const auto &view = device.GetFormatCaps(format, dimension);
+        // 按视图的真实目标核对 ShaderSample. cube 基线只接受颜色, 二维 packed 仍按深度分量解释.
         RequirePreparation((view.support & FormatSupport::ShaderSample) != 0 &&
                                (info.kind != FormatKind::DepthStencil || format == desc.format) &&
                                (format == desc.format ||
@@ -175,7 +209,7 @@ namespace Physara::RHI::OpenGL
         const auto mapping = ResolveComponentMapping(item.overrideComponentMapping, desc.defaultComponentMapping);
         constexpr std::array<GLint, 6> Swizzles{GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA, GL_ZERO, GL_ONE};
         const std::array<ComponentSwizzle, 4> components{mapping.r, mapping.g, mapping.b, mapping.a};
-        SamplingView result{texture, view.internalFormat, range, {}};
+        SamplingView result{texture, dimension, view.internalFormat, range, {}};
         for (std::size_t index = 0; index < components.size(); ++index)
         {
             RequirePreparation(std::size_t(components[index]) < Swizzles.size(), "InvalidArgument: component mapping");
@@ -218,8 +252,9 @@ namespace Physara::RHI::OpenGL
                 record.resource = item.resourceHandle;
                 if (item.type == ResourceType::Texture_SRV)
                 {
-                    views[index] = InspectTexture(*this, item);
+                    views[index] = InspectTexture(*this, item, *nativeLayout->GetDesc());
                     // 保存 storage 空间中的实际范围, view 的 mip/layer 重编号不能用于用途或 feedback 判断.
+                    record.dimension = views[index].dimension;
                     record.subresources = views[index].range;
                 }
                 else if (item.type == ResourceType::Sampler)
@@ -254,8 +289,9 @@ namespace Physara::RHI::OpenGL
                 glGenTextures(1, &name);
                 RequirePreparation(name != 0, "NativeFailure: zero sampling view name");
                 // 每个 view 有独立 mip/layer 与 swizzle 状态, 不改 storage 的参数或当前 texture unit.
-                glTextureView(name, GL_TEXTURE_2D, view.texture->Name(), view.format, view.range.baseMipLevel,
-                              view.range.numMipLevels, view.range.baseArraySlice, 1);
+                glTextureView(name, TextureTarget(view.dimension), view.texture->Name(), view.format,
+                              view.range.baseMipLevel, view.range.numMipLevels, view.range.baseArraySlice,
+                              view.range.numArraySlices);
                 glTextureParameteriv(name, GL_TEXTURE_SWIZZLE_RGBA, view.swizzle.data());
                 if (!CheckNative("CreateBindingSet.View", name))
                 {

@@ -12,6 +12,7 @@
 #include <StaticForward/Data.hpp>
 
 #include "../Paths/Forward.hpp"
+#include "../Lighting/EnvironmentCache.hpp"
 
 namespace Physara::Renderer::Detail
 {
@@ -141,12 +142,22 @@ namespace Physara::Renderer::Detail
         std::vector<std::vector<std::byte>> levels;
     };
 
+    /// @brief 每项持有一种紧密 CPU 载荷. dfg 按单层上传, environment 由目标 mip 数决定所需的六面.
+    /// revision 标记同一目标的全部写入, 完整图接受后方可在后继帧直接读取.
+    struct EnvironmentUpload
+    {
+        std::shared_ptr<ResidentTexture> revision;
+        std::shared_ptr<const BakedEnvironment> environment;
+        std::shared_ptr<const DfgTable> dfg;
+    };
+
     /// @brief 帧拥有的写入内容. 每个普通缓冲从 0 写精确范围, 纹理按完整 mip 层写入.
     /// @note 仅在准备阶段追加, Declare 后保持不变至图执行结束. 预算失败中止整份候选.
     struct UploadBatch
     {
         std::vector<BufferUpload> buffers;
         std::vector<TextureUpload> textures;
+        std::vector<EnvironmentUpload> environmentTextures;
         std::size_t bytes = 0;
         std::size_t writes = 0;
 
@@ -161,6 +172,10 @@ namespace Physara::Renderer::Detail
 
     /// @brief 三种光栅组合: 合并写深度/颜色, 只写前置深度, 相等深度测试的只读深度着色.
     enum class SurfacePhase : std::uint8_t { Combined, Depth, ReadOnlyDepth };
+    /// @brief 按实际资源形状选择颜色变体, 与每轮连续创作参数独立.
+    enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl };
+    inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
+    inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
 
     /// @brief 索引及资源范围来自固定几何代; material 是本槽的有效 GPU 材质行索引.
     struct DrawRecord
@@ -173,6 +188,24 @@ namespace Physara::Renderer::Detail
         std::uint32_t pipelineKey;
         double viewDepth;
         std::uint32_t source; ///< 本 SceneFrame 的 Primitive 下标, 用作最终稳定排序键.
+        std::uint8_t attributes;
+        bool mirrored;
+        bool doubleSided;
+    };
+
+    /// @brief 本轮着色与天空所需的实际驻留产品, 保有期覆盖帧槽在途工作.
+    struct EnvironmentFrame
+    {
+        LightingProgram program = LightingProgram::Legacy;
+        std::shared_ptr<ResidentTexture> dfg;
+        std::shared_ptr<ResidentTexture> reflection;
+        std::shared_ptr<ResidentTexture> sky;
+        std::shared_ptr<ConstantRow> lightingConstants;
+        std::shared_ptr<ConstantRow> skyConstants;
+        RHI::SamplerHandle sampler;
+        RHI::BindingLayoutHandle skyLayout;
+        RHI::GraphicsPipelineHandle skyPipeline;
+        std::optional<RenderedEnvironment> applied;
     };
 
     /// @brief 同槽本轮的只读 Draw, 绑定和上传. view/viewValues 和普通灯表跨安全复用保留.
@@ -187,6 +220,7 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights; ///< 当前颜色 Pass 实际借用的普通表或设备空表.
         RHI::BindingLayoutHandle lightLayout;
+        EnvironmentFrame environment;
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
         UploadBatch uploads;
@@ -202,16 +236,25 @@ namespace Physara::Renderer::Detail
         ForwardPrograms(RHI::Device &device, const ForwardPackagePaths &paths);
         /// @brief 按属性, 镜像, 双面和阶段惰性创建并缓存 Pipeline, 失败抛 ForwardFailure.
         [[nodiscard]] RHI::GraphicsPipelineHandle GeometryPipeline(RHI::Device &device, std::uint8_t layout,
-            bool mirrored, bool doubleSided, SurfacePhase phase);
+            bool mirrored, bool doubleSided, SurfacePhase phase, LightingProgram kind);
+        /// @brief 按颜色角色准备程序和 set 3 布局. 物理变体的片元活动资源须与该角色完全匹配.
+        /// @note 包或布局被拒绝时抛出 ForwardFailure, 只有完整就绪的角色才可命中缓存.
+        void PrepareLighting(RHI::Device &device, LightingProgram kind);
+        /// @brief 首次实际需要天空时准备独立颜色混合管线.
+        void PrepareSky(RHI::Device &device);
 
-        Shader::RhiProgram color;
+        std::array<Shader::RhiProgram, 3> colors;
         Shader::RhiProgram depth;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
-        RHI::BindingLayoutHandle lightLayout;
+        std::array<RHI::BindingLayoutHandle, 3> lightLayouts;
+        std::array<std::filesystem::path, 2> physicalPaths;
+        std::filesystem::path skyPath;
+        RHI::BindingLayoutHandle skyLayout;
+        RHI::GraphicsPipelineHandle skyPipeline;
         RHI::BindingLayoutHandle displayLayout;
         RHI::GraphicsPipelineHandle displayPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, 8 * 4 * 3> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, 8 * 4 * 3 * 3> pipelines;
     };
 
     /// @brief 缓存映射只拥有可复用代或本次准备候选. 单线程推进 stamp, 前一帧槽保有退役代.
@@ -243,6 +286,10 @@ namespace Physara::Renderer::Detail
         std::map<SamplerKey, RHI::SamplerHandle> samplers;
         std::shared_ptr<ResidentTexture> white;
         std::shared_ptr<LightTable> emptyLights; ///< 初始化后只读, 供诊断、零灯及全 Unlit 工作集使用.
+        EnvironmentCache environmentCache;
+        std::map<std::pair<EnvironmentKey, bool>, std::shared_ptr<ResidentTexture>> environmentTextures;
+        std::shared_ptr<ResidentTexture> dfgTexture;
+        RHI::SamplerHandle environmentSampler;
     };
 
     /// @brief 中止本次准备并携带有界原因, 由 ForwardRenderer::Prepare 转换为可见结果.
@@ -258,10 +305,13 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
                                                                   std::size_t set);
     /// @brief 为有 Draw 的颜色 Pass 选择普通灯表或共享零表, 将匹配的表留在 frame.activeLights.
-    /// @param usesLighting 当前 Draw 中至少有一个材质按 Direct Lighting 受光. 为假或可见灯为空时使用零表.
+    /// @param usesLighting 当前有 Draw 在直接光或物理模式受光. 为假或可见灯为空时使用零表.
     /// @pre frame 所在帧槽已可安全重写. 编码或额度失败沿 Forward 准备入口返回, 整个候选停止.
     void PrepareLightTable(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
                            bool usesLighting);
+    /// @brief 冻结当前有效角色与曝光. 产品未准备时中止当前正常候选, 由 View 保留旧接受输出.
+    void PrepareEnvironment(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+                            PreviewMode mode, bool litDraws);
     /// @brief 复用匹配且有效的纹理代, 或创建新存储并把所有层级字节交给本轮上传.
     /// @pre image 来自固定的已发布 CPU 记录, key 包含对应版本, 颜色解释和 mip 策略.
     [[nodiscard]] std::shared_ptr<ResidentTexture> PrepareTexture(ForwardDevice &device, UploadBatch &uploads,

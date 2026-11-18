@@ -175,7 +175,6 @@ namespace Physara::Renderer::Detail
     void PrepareLightTable(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
                            bool usesLighting)
     {
-        frame.lightLayout = device.programs.lightLayout;
         if (!usesLighting || view.lights.empty())
         {
             frame.activeLights = EmptyLightTable(device, frame.uploads);

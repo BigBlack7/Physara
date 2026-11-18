@@ -17,7 +17,7 @@ namespace Physara::Renderer
     }
 
     std::optional<RHI::BindingSetItem> PassPreparation::SampledTexture(
-        std::uint32_t slot, TextureId id, std::optional<TextureRange> range)
+        std::uint32_t slot, TextureId id, std::optional<TextureRange> range, RHI::TextureDimension dimension)
     {
         TextureRange resolved;
         auto *texture = m_Resources.ResolveTexture(id, GraphUsage::Sampled, range, &resolved);
@@ -34,7 +34,7 @@ namespace Physara::Renderer
             return std::nullopt;
         }
         const auto item = RHI::BindingSetItem::Texture_SRV(slot, texture, texture->GetDesc().format,
-                                                           Detail::RhiSubresources(resolved));
+                                                           Detail::RhiSubresources(resolved), dimension);
         m_Authorized.push_back(item);
         return item;
     }

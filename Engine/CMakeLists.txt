@@ -20,20 +20,24 @@ target_compile_features(PhysaraCore PUBLIC cxx_std_20)
 set_target_properties(PhysaraCore PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraCore PRIVATE /W4 /WX /utf-8 /permissive-)
 
-# Asset 使用 Core 的受控 I/O 和作业, 只在解码实现中消费 stb.
+# Asset 在 Core 的受控快照上执行图像, EXR 和模型导入. 解码依赖由资产目标私有链接.
 add_subdirectory(Asset)
 add_subdirectory(Scene)
 
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
-# 颜色包与深度包共用 StaticForward 接口和顶点入口. 灯表属于颜色片元阶段的活动绑定.
-# 显示转换单独生成接口并读取工作颜色.
+# 三个颜色变体和深度包共用 StaticForward 接口与顶点入口. 颜色变体按 DFG 和环境采样需求分别生成.
+# 天空与显示转换各有独立接口, 前者混入工作色, 后者读取最终工作色.
 add_subdirectory(Shader)
 physara_add_shader_interface(StaticForward Shader/Interface/StaticForward.json)
 physara_add_shader_interface(ForwardDisplay Shader/Interface/ForwardDisplay.json)
+physara_add_shader_interface(ForwardSky Shader/Interface/ForwardSky.json)
 physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders)
 physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders)
+physara_add_shader_program(StaticForwardPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPhysical.json ../Shaders)
+physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forward/StaticForwardIbl.json ../Shaders)
+physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders)
 physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders)
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
@@ -47,6 +51,9 @@ add_library(PhysaraRenderer STATIC
     Renderer/Prepare/CameraSnapshot.hpp
     Renderer/Prepare/ViewPreparation.hpp Renderer/Prepare/ViewPreparation.cpp
     Renderer/Lighting/PunctualLights.hpp Renderer/Lighting/PunctualLights.cpp
+    Renderer/Lighting/EnvironmentBake.hpp Renderer/Lighting/EnvironmentBake.cpp
+    Renderer/Lighting/EnvironmentCache.hpp Renderer/Lighting/EnvironmentCache.cpp
+    Renderer/Lighting/EnvironmentGpu.cpp
     Renderer/Materials/StaticGpu.hpp Renderer/Materials/StaticGpu.cpp Renderer/Materials/StaticTextures.cpp
     Renderer/Draw/StaticDraw.cpp
     Renderer/Paths/Forward.hpp Renderer/Paths/Forward.cpp
@@ -54,13 +61,14 @@ add_library(PhysaraRenderer STATIC
 target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph
     PRIVATE PhysaraShader glm)
 target_include_directories(PhysaraRenderer PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
-add_dependencies(PhysaraRenderer PhysaraShaderInterfaceStaticForward PhysaraShaderInterfaceForwardDisplay)
+add_dependencies(PhysaraRenderer PhysaraShaderInterfaceStaticForward PhysaraShaderInterfaceForwardDisplay
+    PhysaraShaderInterfaceForwardSky)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
-foreach(program StaticForward StaticDepth ForwardDisplay)
+foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky)
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

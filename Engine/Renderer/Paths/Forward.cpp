@@ -8,7 +8,7 @@
 #include "../Materials/StaticGpu.hpp"
 
 /// @file
-/// @brief 把已拥有的上传和静态 Draw 组装为同一 View 的表面、颜色和显示子图.
+/// @brief 将同一 View 的上传, 不透明几何, 可选天空和显示转换组装为有版本依赖的子图.
 /// 图内回调只访问已声明版本; 预制场景集合由 RHI 按实际活动绑定再次核对访问权限.
 
 namespace Physara::Renderer
@@ -27,6 +27,12 @@ namespace Physara::Renderer
         return std::ranges::any_of(m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); });
     }
 
+    bool ForwardOutput::HasCompleteUploads(const CompiledGraphPlan &plan) const noexcept
+    {
+        return displayColor.identity.generation == plan.graphGeneration &&
+               std::ranges::all_of(m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); });
+    }
+
     void ForwardFrame::Reset() noexcept
     {
         if (m_Data)
@@ -37,6 +43,7 @@ namespace Physara::Renderer
             m_Data->uploads.Clear();
             m_Data->activeLights.reset();
             m_Data->lightLayout = nullptr;
+            m_Data->environment = {};
             m_Data->displayPipeline = nullptr;
             m_Data->displayLayout = nullptr;
             m_Data->degradation.reset();
@@ -49,11 +56,17 @@ namespace Physara::Renderer
         return m_Data->degradation;
     }
 
+    const std::optional<RenderedEnvironment> &ForwardFrame::Environment() const noexcept
+    {
+        assert(m_Data);
+        return m_Data->environment.applied;
+    }
+
     std::size_t ForwardFrame::GraphStorageBytes() const noexcept
     {
         assert(m_Data);
         // 图 arena 只保存上传回调和几个 Pass 描述. Draw 和字节另由帧槽持有.
-        return 2048 + m_Data->uploads.writes * 256;
+        return 4096 + m_Data->uploads.writes * 256;
     }
 
     void ForwardFrame::ReleasePayload() noexcept
@@ -187,6 +200,32 @@ namespace Physara::Renderer
             }
             resources.textures.emplace(texture.Get(), version);
         }
+        for (const auto &upload : batch.environmentTextures)
+        {
+            const auto &texture = upload.revision->texture;
+            const auto &desc = texture->GetDesc();
+            auto version = TakeGraph(graph.ImportTexture(texture, {TextureBoundary, TextureBoundary, false}));
+            if (upload.dfg)
+            {
+                version = TakeGraph(AddTextureUpload(graph, version, std::as_bytes(std::span(upload.dfg->pixels)),
+                    std::size_t(desc.width) * sizeof(upload.dfg->pixels.front()), uploads)).texture;
+            }
+            else
+            {
+                // 每个实际面和 mip 是完整写入. 下一层读依赖同一存储的最后生产版本.
+                for (std::uint32_t mip = 0; mip < desc.mipLevels; ++mip)
+                {
+                    const auto &level = mip == 0 ? *upload.environment->base :
+                                                  *upload.environment->prefiltered[mip - 1];
+                    for (std::uint32_t face = 0; face < desc.arraySize; ++face)
+                    {
+                        version = TakeGraph(AddTextureUpload(graph, version, std::as_bytes(level.Face(face)),
+                            std::size_t(level.edge) * sizeof(Detail::EnvironmentTexel), uploads, mip, face)).texture;
+                    }
+                }
+            }
+            resources.textures.emplace(texture.Get(), version);
+        }
         for (const auto &upload : batch.buffers)
         {
             const auto initial = TakeGraph(graph.ImportBuffer(upload.buffer, {BufferBoundary, BufferBoundary, false}));
@@ -215,6 +254,10 @@ namespace Physara::Renderer
         RHI::BindingSet *view = nullptr;
         std::optional<BufferAccess> lights;
         RHI::BindingLayout *lightLayout = nullptr;
+        std::optional<BufferAccess> environment;
+        std::optional<TextureAccess> dfg;
+        std::optional<TextureAccess> reflection;
+        RHI::Sampler *environmentSampler = nullptr;
         std::vector<GraphDraw> draws;
     };
 
@@ -225,15 +268,22 @@ namespace Physara::Renderer
         std::map<std::uint32_t, TextureAccess> textures;
     };
 
+    /// @brief 从有效图像矩形建立光栅视口及同边界的裁剪.
+    static RHI::ViewportState RasterViewport(const ViewImageRect &rect)
+    {
+        RHI::ViewportState state;
+        state.AddViewportAndScissorRect(RHI::Viewport(static_cast<float>(rect.x),
+            static_cast<float>(rect.x + rect.extent.width), static_cast<float>(rect.y),
+            static_cast<float>(rect.y + rect.extent.height), 0.f, 1.f));
+        return state;
+    }
+
     /// @brief 将预解析的绑定关联到本图授权. 同一 Pass 的重复资源只声明一次, Depth 只取基色槽.
     static SceneRaster RasterInputs(RenderGraph &graph, SceneGraphResources &versions,
                                     const Detail::ForwardFrameData &frame, bool depthOnly, RasterReads &reads)
     {
         SceneRaster raster;
-        const auto &rect = frame.layout.rect;
-        const RHI::Viewport viewport(static_cast<float>(rect.x), static_cast<float>(rect.x + rect.extent.width),
-            static_cast<float>(rect.y), static_cast<float>(rect.y + rect.extent.height), 0.f, 1.f);
-        raster.viewport.AddViewportAndScissorRect(viewport);
+        raster.viewport = RasterViewport(frame.layout.rect);
         if (frame.draws.empty())
         {
             return raster;
@@ -250,6 +300,26 @@ namespace Physara::Renderer
         {
             raster.lights = buffer(frame.activeLights->buffer, GraphUsage::ShaderRead);
             raster.lightLayout = frame.lightLayout.Get();
+            const auto &environment = frame.environment;
+            const auto sample = [&](const RHI::TextureHandle &texture)
+            {
+                const auto version = versions.ReadTexture(graph, texture);
+                const auto &desc = texture->GetDesc();
+                const TextureAccess access{version, {.mipCount = desc.mipLevels, .layerCount = desc.arraySize},
+                                           GraphUsage::Sampled};
+                reads.textures.try_emplace(version.identity.index, access);
+                return access;
+            };
+            if (environment.dfg)
+            {
+                raster.dfg = sample(environment.dfg->texture);
+                raster.environmentSampler = environment.sampler.Get();
+            }
+            if (environment.reflection)
+            {
+                raster.reflection = sample(environment.reflection->texture);
+                raster.environment = buffer(environment.lightingConstants->buffer, GraphUsage::ConstantBuffer);
+            }
         }
         raster.draws.reserve(frame.draws.size());
         for (const auto &draw : frame.draws)
@@ -345,22 +415,50 @@ namespace Physara::Renderer
                 if (color)
                 {
                     *color = builder.Write(*color, GraphUsage::ColorAttachment,
-                        {.load = LoadOp::Clear, .clearValue = RHI::Color(0.018f, 0.018f, 0.018f, 1.f)});
+                         {.load = LoadOp::Clear, .clearValue = RHI::Color(0.018f, 0.018f, 0.018f, 0.f)});
                 }
                 return depth.IsValid() && (!color || color->IsValid());
             }, DrawScene, +[](PassPreparation &preparation, const SceneRaster &data) -> GraphFailure
             {
-                if (data.lights)
+                if (!data.lights)
                 {
-                    // 沿 setup 声明的版本和整块范围创建集合. 0 是本 Pass 的首个准备结果,
-                    // DrawScene 把它接在 View, Object, Material 三组之后, 对应 Shader 的 set 3.
-                    const auto &access = *data.lights;
-                    const auto slot = data.lightLayout->GetDesc()->bindings.front().slot;
-                    if (auto binding = preparation.ReadBuffer(slot, access.resource, access.usage, access.range))
-                    {
-                        static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(&*binding, 1)));
-                    }
+                    return std::nullopt;
                 }
+                // 沿生成集合枚举实际使用的字段, 读取必须来自 setup 给出的同一图权限.
+                std::array<RHI::BindingSetItem, 5> items;
+                std::size_t count = 0;
+                for (const auto &slot : data.lightLayout->GetDesc()->bindings)
+                {
+                    std::optional<RHI::BindingSetItem> binding;
+                    if (slot.type == RHI::ResourceType::StructuredBuffer_SRV)
+                    {
+                        const auto &access = *data.lights;
+                        binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
+                    }
+                    else if (slot.type == RHI::ResourceType::ConstantBuffer)
+                    {
+                        const auto &access = *data.environment;
+                        binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
+                    }
+                    else if (slot.type == RHI::ResourceType::Sampler)
+                    {
+                        binding = RHI::BindingSetItem::Sampler(slot.slot, data.environmentSampler);
+                    }
+                    else
+                    {
+                        const bool cube = slot.slot == Detail::ReflectionSlot;
+                        assert(cube || slot.slot == Detail::DfgSlot);
+                        const auto &access = cube ? *data.reflection : *data.dfg;
+                        binding = preparation.SampledTexture(slot.slot, access.resource, access.range,
+                            cube ? RHI::TextureDimension::TextureCube : RHI::TextureDimension::Texture2D);
+                    }
+                    if (!binding)
+                    {
+                        return std::nullopt;
+                    }
+                    items[count++] = *binding;
+                }
+                static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(items).first(count)));
                 return std::nullopt;
             })));
     }
@@ -380,6 +478,59 @@ namespace Physara::Renderer
                             TextureId &depth, TextureId &color)
     {
         AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth);
+    }
+
+    /// @brief 天空读取本图的一个完整基础 cube, 加载不透明工作色后只填其未覆盖 RGB.
+    struct SkyPass
+    {
+        TextureId sky;
+        BufferAccess view;
+        RHI::Sampler *sampler;
+        RHI::GraphicsPipeline *pipeline;
+        RHI::BindingLayout *layout;
+        RHI::ViewportState viewport;
+    };
+
+    /// @brief 在有效矩形内加载上一版工作色, 以目的 alpha 混入天空. 保留已有的深度版本.
+    static void AddSky(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
+                       TextureId &color)
+    {
+        const auto &environment = frame.environment;
+        if (!environment.sky)
+        {
+            return;
+        }
+        const auto &view = environment.skyConstants->buffer;
+        const auto cube = resources.ReadTexture(graph, environment.sky->texture);
+        const BufferAccess constants{resources.ReadBuffer(graph, view), {0, view->GetDesc().byteSize},
+                                     GraphUsage::ConstantBuffer};
+        static_cast<void>(TakeGraph(graph.AddPass<SkyPass>("Forward Sky",
+            [&](PassBuilder &builder, SkyPass &data)
+            {
+                data = {cube, constants, environment.sampler.Get(), environment.skyPipeline.Get(),
+                        environment.skyLayout.Get(), RasterViewport(frame.layout.rect)};
+                color = builder.Write(color, GraphUsage::ColorAttachment, {.load = LoadOp::Load});
+                return color.IsValid() && builder.Read(cube, GraphUsage::Sampled) &&
+                       builder.Read(constants.resource, constants.usage, constants.range);
+            }, +[](PassResources &resources, const SkyPass &data, RHI::CommandList &commands) noexcept -> GraphFailure
+            {
+                RHI::GraphicsState state;
+                state.SetPipeline(data.pipeline).SetFramebuffer(resources.Framebuffer())
+                    .SetViewport(data.viewport).AddBindingSet(resources.BindingSet(0));
+                commands.SetGraphicsState(state);
+                commands.Draw(RHI::DrawArguments().SetVertexCount(3).SetInstanceCount(1));
+                return std::nullopt;
+            }, +[](PassPreparation &preparation, const SkyPass &data) -> GraphFailure
+            {
+                const auto view = preparation.ReadBuffer(0, data.view.resource, data.view.usage, data.view.range);
+                const auto sky = preparation.SampledTexture(0, data.sky, std::nullopt, RHI::TextureDimension::TextureCube);
+                if (view && sky)
+                {
+                    const std::array items{*view, *sky, RHI::BindingSetItem::Sampler(0, data.sampler)};
+                    static_cast<void>(preparation.CreateBindingSet(*data.layout, items));
+                }
+                return std::nullopt;
+            })));
     }
 
     /// @brief 显示转换只读同图工作颜色, 布局和 Pipeline 借用本槽持有的固定对象.
@@ -440,6 +591,7 @@ namespace Physara::Renderer
             .initialState = RHI::ResourceStates::ShaderResource, .keepInitialState = true}));
         PrepareSurface(graph, versions, frame, output.depth);
         ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
+        AddSky(graph, versions, frame, output.workingColor);
         output.displayColor = AddDisplay(graph, frame, output.workingColor, display);
         output.m_Uploads.reserve(frame.uploads.writes);
         for (const auto &entry : std::span(uploads).subspan(firstWrite))
@@ -456,13 +608,16 @@ namespace Physara::Renderer
     void ForwardFrame::Confirm(const ForwardOutput &output, const CompiledGraphPlan &plan) noexcept
     {
         assert(m_Data && output.m_Uploads.size() == m_Data->uploads.writes);
-        if (output.displayColor.identity.generation != plan.graphGeneration ||
-            !std::ranges::all_of(output.m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); }))
+        if (!output.HasCompleteUploads(plan))
         {
             return;
         }
-        // 每个新增区段都属于本次 Draw 的必需资源. 含多层的纹理只以完整被接受的上传包提交.
+        // 按整批确认驻留. 环境纹理的所有面和 mip 共用一个 accepted 位, 前缀提交保活但没有确认资格.
         for (const auto &upload : m_Data->uploads.textures)
+        {
+            upload.revision->accepted = true;
+        }
+        for (const auto &upload : m_Data->uploads.environmentTextures)
         {
             upload.revision->accepted = true;
         }

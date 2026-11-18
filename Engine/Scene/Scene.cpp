@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cmath>
 #include <limits>
 #include <unordered_set>
 #include <utility>
@@ -102,8 +103,18 @@ namespace Physara::Scene
 
     Scene::~Scene() = default;
 
-    Scene::Creation Scene::Create(std::span<const EntityRecord> records, std::stop_token stop)
+    Scene::Creation Scene::Create(std::span<const EntityRecord> records, std::stop_token stop,
+                                  std::optional<SceneEnvironment> environment)
     {
+        if (environment)
+        {
+            const auto &settings = environment->settings;
+            if (!environment->source || !IsValidPose(Pose{{}, settings.rotation}) ||
+                !std::isfinite(settings.intensity) || settings.intensity < 0 || !(settings.lighting || settings.sky))
+            {
+                return Core::BoundedText("Invalid scene environment or missing CPU source");
+            }
+        }
         const auto id = AllocateSceneId();
         if (!id.IsValid())
         {
@@ -114,11 +125,13 @@ namespace Physara::Scene
         {
             return *error;
         }
+        candidate->m_State->environment = std::move(environment);
         return candidate;
     }
 
     SceneId Scene::Id() const noexcept { return m_State->id; }
     Revisions Scene::Versions() const noexcept { return m_State->revisions; }
+    const std::optional<SceneEnvironment> &Scene::Environment() const noexcept { return m_State->environment; }
 
     std::optional<EntityHandle> Scene::Find(std::string_view id) const noexcept
     {

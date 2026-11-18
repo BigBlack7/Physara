@@ -14,6 +14,8 @@
 #include <new>
 #include <utility>
 
+#include <OpenGL.hpp>
+
 #include "DeviceHostInternal.hpp"
 #include "GlfwAccess.hpp"
 
@@ -494,6 +496,11 @@ namespace Physara::Platform
             return nullptr;
         }
         return m_State->validatedDevice.Get();
+    }
+
+    RHI::FormatSupport DeviceHost::QueryCubeFormatSupport(RHI::Format format, std::uint32_t &maxEdge) const noexcept
+    {
+        return RHI::OpenGL::QueryCubeFormatSupport(GetDevice() ? m_State->rawDevice.Get() : nullptr, format, maxEdge);
     }
 
     bool RhiErrorScope::IsClear() const noexcept

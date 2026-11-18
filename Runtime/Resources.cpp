@@ -27,8 +27,11 @@ namespace Physara::Runtime
         // Assets 相对 exe 目录, Shader 包相对同一目录按生成布局定位.
         const auto directory = executable.parent_path();
         return ResourceLocations{directory, (directory / EditorUiPackageRelative).lexically_normal(),
-                                 (directory / StaticForwardPackageRelative).lexically_normal(),
+                                {(directory / StaticForwardPackageRelative).lexically_normal(),
                                  (directory / StaticDepthPackageRelative).lexically_normal(),
-                                 (directory / ForwardDisplayPackageRelative).lexically_normal()};
+                                 (directory / ForwardDisplayPackageRelative).lexically_normal(),
+                                 (directory / StaticForwardPhysicalPackageRelative).lexically_normal(),
+                                 (directory / StaticForwardIblPackageRelative).lexically_normal(),
+                                 (directory / ForwardSkyPackageRelative).lexically_normal()}};
     }
 }

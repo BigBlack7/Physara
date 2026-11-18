@@ -138,6 +138,23 @@ namespace Physara::Scene
         bool operator==(const Revisions &) const = default;
     };
 
+    /// @brief 场景环境的创作值. rotation 是环境空间至世界空间的单位 xyzw 四元数.
+    /// intensity 为有限非负倍率. lighting 和 sky 至少有一项开启, 分别请求间接光和背景.
+    struct EnvironmentSettings
+    {
+        std::array<double, 4> rotation{0, 0, 0, 1};
+        double intensity = 1; ///< 无量纲倍率, 场景曝光与源标定另由实际消费者取得.
+        bool lighting = false;
+        bool sky = false;
+    };
+
+    /// @brief Scene 固定当前环境的源版本, 用途与创作值随文档整体发布.
+    struct SceneEnvironment
+    {
+        Asset::EnvironmentVersion source;
+        EnvironmentSettings settings;
+    };
+
     /// @brief 同步的只读借用, 有效至下一次场景编辑或替换.
     struct EntityView
     {
@@ -229,14 +246,17 @@ namespace Physara::Scene
 
         /// @brief 校验并构造独立候选, 恢复记录的层级与 ID. 默认建立空 Scene.
         /// @return 成功值拥有新 Scene 身份; 拒绝或合作取消返回原因, 不交付部分候选.
-        /// @note records 只在调用中借用; 记录中的模型和图像必须来自已发布的 CPU 版本.
-        [[nodiscard]] static Creation Create(std::span<const EntityRecord> records = {}, std::stop_token stop = {});
+        /// @note records 只在调用中借用. 模型, 图像和可选环境均使用已发布的 CPU 版本.
+        [[nodiscard]] static Creation Create(std::span<const EntityRecord> records = {}, std::stop_token stop = {},
+                                             std::optional<SceneEnvironment> environment = std::nullopt);
         ~Scene();
         Scene(const Scene &) = delete;
         Scene &operator=(const Scene &) = delete;
 
         [[nodiscard]] SceneId Id() const noexcept;
         [[nodiscard]] Revisions Versions() const noexcept;
+        /// @brief 借用活动 Scene 固定的环境. 复制该值可使场景替换后的读者继续持有源.
+        [[nodiscard]] const std::optional<SceneEnvironment> &Environment() const noexcept;
         [[nodiscard]] std::optional<EntityHandle> Find(std::string_view id) const noexcept;
         [[nodiscard]] std::optional<EntityView> Get(EntityHandle entity) const noexcept;
         /// @brief 从本 Scene 解析相机资产实例或自建相机. 缺少实体或组件时返回空.

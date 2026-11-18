@@ -19,7 +19,7 @@ namespace Physara::Editor::Detail
     enum class UiFallback : std::uint8_t;
     /// @brief 按 Renderer::PreviewMode 顺序排列. 选择框用请求模式索引, 图像标签用实际颜色代的模式索引.
     inline constexpr const char *PreviewNames[] = {
-        "Base Color", "World Normal", "Material Channels", "Emissive", "Direct Lighting"};
+        "Base Color", "World Normal", "Material Channels", "Emissive", "Direct Lighting", "Physical Lighting"};
 
     /// @brief 逻辑窗口中的画布及可见裁剪, 可跨帧比较而不借用 ImGui 数据.
     struct ViewportRegion
@@ -49,8 +49,9 @@ namespace Physara::Editor::Detail
         [[nodiscard]] const ImDrawCmd *FindDraw(const ImDrawData &data) const noexcept;
         /// @brief 用封存字体绘制输出来源, 实际预览模式或失败原因, 裁剪在本图像命令内.
         /// @note output 只在调用期间借用, 模式标签来自该候选而非之后的 View 请求.
+        /// retained 表示本命令确实采样旧代, 可以与等待或拒绝的原因同时显示.
         void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
-                        const Renderer::ViewOutput *output) const;
+                        const Renderer::ViewOutput *output, bool retained) const;
         /// @brief 从同轮实际图像命令取得非空逻辑画布与裁剪, 不依赖颜色资源是否已经发布.
         [[nodiscard]] std::optional<ViewportRegion> Region(const ImDrawData &data) const noexcept;
     };

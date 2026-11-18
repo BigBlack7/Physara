@@ -62,6 +62,11 @@ namespace Physara::Editor::Detail
             }
             m_ImageIndices.push_back(found->second);
         }
+        if (m_Document.environment)
+        {
+            m_EnvironmentIndex = m_Dependencies.size();
+            m_Dependencies.push_back(SceneDependency{.path = m_Document.environment->path, .environment = true});
+        }
     }
 
     /// @brief 保留请求票据和真正的 CpuReady 值. Failed 中的旧 published 不可用于打开.
@@ -98,7 +103,7 @@ namespace Physara::Editor::Detail
             if (!need.request)
             {
                 const auto submitted = need.scene ? assets.RequestModel(need.path, {*need.scene}) :
-                    assets.RequestImage(need.path);
+                    (need.environment ? assets.RequestEnvironment(need.path) : assets.RequestImage(need.path));
                 if (const auto *failure = std::get_if<Asset::AssetFailure>(&submitted))
                 {
                     if (failure->reason == Asset::AssetError::QueueFull)
@@ -110,7 +115,9 @@ namespace Physara::Editor::Detail
                 need.request = std::get<Asset::AssetRequest>(submitted);
             }
             const auto id = need.request->asset;
-            ready &= need.scene ? AcceptStatus(need, assets.StatusModel(id)) : AcceptStatus(need, assets.Status(id));
+            ready &= need.scene ? AcceptStatus(need, assets.StatusModel(id)) :
+                (need.environment ? AcceptStatus(need, assets.StatusEnvironment(id)) :
+                                    AcceptStatus(need, assets.Status(id)));
         }
         return ready;
     }
@@ -126,7 +133,8 @@ namespace Physara::Editor::Detail
             if (!need.verified)
             {
                 auto match = model ? Asset::VerifySource(root, **model, stop) :
-                    Asset::VerifySource(root, *std::get<Asset::ImageVersion>(need.resolved), stop);
+                    (need.environment ? Asset::VerifySource(root, *std::get<Asset::EnvironmentVersion>(need.resolved), stop)
+                                      : Asset::VerifySource(root, *std::get<Asset::ImageVersion>(need.resolved), stop));
                 if (match.result == Asset::SourceMatch::Unavailable)
                 {
                     RejectAsset(need.path, match.detail.View());
@@ -134,7 +142,7 @@ namespace Physara::Editor::Detail
                 if (match.result == Asset::SourceMatch::Changed)
                 {
                     // 旧 CPU 版本恰好就是文件要求的版本时, 磁盘变化意味着文档冲突, 不能自动换绑.
-                    // 只有缓存与文件要求本就不同, 或无固定版本的外置图像, 才需要重取当前源.
+                    // 外置覆盖图和场景环境仅保存路径, 因此缓存过期时都重取当前磁盘源.
                     if (model && expected)
                     {
                         Core::BoundedText conflict("Model sourceVersion conflict: ");
@@ -162,10 +170,9 @@ namespace Physara::Editor::Detail
             auto &need = m_Dependencies[i];
             assert(need.request);
             const auto request = *need.request;
-            const bool stillCurrent = need.scene ?
-                assets.StatusModel(request.asset).request == request.request :
-                assets.Status(request.asset).request == request.request;
-            if (stillCurrent)
+            const auto current = need.scene ? assets.StatusModel(request.asset).request :
+                (need.environment ? assets.StatusEnvironment(request.asset).request : assets.Status(request.asset).request);
+            if (current == request.request)
             {
                 if (auto failure = assets.InvalidateSource(request.asset))
                 {
@@ -198,7 +205,15 @@ namespace Physara::Editor::Detail
             primitive->textures[file.slot]->image =
                 std::get<Asset::ImageVersion>(m_Dependencies[m_ImageIndices[i]].resolved);
         }
-        auto result = Scene::Scene::Create(m_Document.entities, stop);
+        std::optional<Scene::SceneEnvironment> environment;
+        if (m_EnvironmentIndex)
+        {
+            // 源版本来自本次 Open 的核对结果, 旋转和用途来自同一候选文档.
+            environment = Scene::SceneEnvironment{
+                std::get<Asset::EnvironmentVersion>(m_Dependencies[*m_EnvironmentIndex].resolved),
+                m_Document.environment->settings};
+        }
+        auto result = Scene::Scene::Create(m_Document.entities, stop, std::move(environment));
         if (const auto *failure = std::get_if<Core::BoundedText>(&result))
         {
             throw *failure;

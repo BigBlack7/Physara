@@ -260,6 +260,9 @@ namespace Physara::Platform
         /// @brief 仅在 owner/Ready 状态借出 Validation Device, 其他情况返回空指针.
         /// @note 不增加引用, 借用止于成功 Shutdown; 构造 owning handle 取得的额外引用须先释放.
         [[nodiscard]] RHI::Device *GetDevice() const noexcept;
+        /// @brief 在 owner/Ready 状态读取 cube 目标的实测采样能力和面宽上限.
+        /// @return 无有效设备时返回 None 并清零 maxEdge. 可用时面宽为设备上限, 格式用途单独判断.
+        [[nodiscard]] RHI::FormatSupport QueryCubeFormatSupport(RHI::Format format, std::uint32_t &maxEdge) const noexcept;
         /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;

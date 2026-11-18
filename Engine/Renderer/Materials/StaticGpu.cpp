@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <ForwardDisplay/Bindings.hpp>
+#include <ForwardSky/Bindings.hpp>
 #include <StaticForward/Bindings.hpp>
 
 /// @file
@@ -55,14 +56,16 @@ namespace Physara::Renderer::Detail
     {
         buffers.clear();
         textures.clear();
+        environmentTextures.clear();
         bytes = writes = 0;
     }
 
     /// @brief 包读取失败保留包角色及首个编译/反射诊断, 不交付半套 Shader.
     static Shader::RhiProgram LoadProgram(RHI::Device &device, const std::filesystem::path &file,
-                                          std::string_view abi, std::string_view role)
+                                          std::string_view abi, std::string_view role,
+                                          std::optional<Shader::ExpectedActiveResources> expectedActive = {})
     {
-        auto program = Shader::LoadRhiProgram(device, file, abi);
+        auto program = Shader::LoadRhiProgram(device, file, abi, expectedActive);
         if (const auto *error = std::get_if<Shader::Failure>(&program))
         {
             Core::BoundedText text(role);
@@ -73,9 +76,22 @@ namespace Physara::Renderer::Detail
         return std::get<Shader::RhiProgram>(std::move(program));
     }
 
+    /// @brief 共用 StaticForward ABI 的三种颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
+    static Shader::ExpectedActiveResources LightingResources(LightingProgram kind) noexcept
+    {
+        static constexpr std::array<std::string_view, 1> Legacy{"lightRows"};
+        static constexpr std::array<std::string_view, 3> Physical{"lightRows", "dfgImage", "environmentSampler"};
+        static constexpr std::array<std::string_view, 5> Ibl{
+            "lightRows", "dfgImage", "environmentSampler", "environment", "reflectionImage"};
+        const std::array<std::span<const std::string_view>, 3> names{Legacy, Physical, Ibl};
+        return {Shader::Stage::Fragment, 3, names[std::size_t(kind)]};
+    }
+
     ForwardPrograms::ForwardPrograms(RHI::Device &device, const ForwardPackagePaths &paths)
-        : color(LoadProgram(device, paths.color, StaticAbi::AbiHash, "StaticForward package")),
-          depth(LoadProgram(device, paths.depth, StaticAbi::AbiHash, "StaticDepth package"))
+        : colors{LoadProgram(device, paths.color, StaticAbi::AbiHash, "StaticForward package",
+                             LightingResources(LightingProgram::Legacy))},
+          depth(LoadProgram(device, paths.depth, StaticAbi::AbiHash, "StaticDepth package")),
+          physicalPaths{paths.physical, paths.ibl}, skyPath(paths.sky)
     {
         const auto sceneLayout = StaticAbi::MakeBindingLayouts();
         for (std::size_t i = 0; i < layouts.size(); ++i)
@@ -86,12 +102,7 @@ namespace Physara::Renderer::Detail
                 Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward scene binding layout");
             }
         }
-        // 生成接口的前三组供几何共用. 最后一组是片元着色的 PerPass 灯表, 深度程序没有活动读取.
-        lightLayout = device.CreateBindingLayout(sceneLayout.back());
-        if (!lightLayout)
-        {
-            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward light table binding layout");
-        }
+        PrepareLighting(device, LightingProgram::Legacy);
         namespace DisplayAbi = Shader::Generated::ForwardDisplay;
         const auto program = LoadProgram(device, paths.display, DisplayAbi::AbiHash, "ForwardDisplay package");
         displayLayout = device.CreateBindingLayout(DisplayAbi::MakeBindingLayouts().front());
@@ -109,6 +120,70 @@ namespace Physara::Renderer::Detail
         {
             Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot link Forward display pipeline");
         }
+    }
+
+    void ForwardPrograms::PrepareLighting(RHI::Device &device, LightingProgram kind)
+    {
+        const auto index = std::size_t(kind);
+        if (lightLayouts[index])
+        {
+            return;
+        }
+        // 同一 schema 给出 set 3 的所有槽. 按角色裁出预期槽, 加载时核对 ABI 和实际活动资源.
+        auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
+        auto &desc = layoutsForProgram.back();
+        std::erase_if(desc.bindings, [kind](const auto &item) {
+            if (kind == LightingProgram::Legacy)
+            {
+                return item.type != RHI::ResourceType::StructuredBuffer_SRV;
+            }
+            return kind == LightingProgram::Physical &&
+                (item.type == RHI::ResourceType::ConstantBuffer ||
+                 (item.type == RHI::ResourceType::Texture_SRV && item.slot == ReflectionSlot));
+        });
+        auto layout = device.CreateBindingLayout(desc);
+        if (!layout)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward lighting layout");
+        }
+        if (kind != LightingProgram::Legacy)
+        {
+            colors[index] = LoadProgram(device, physicalPaths[index - 1], StaticAbi::AbiHash,
+                kind == LightingProgram::Ibl ? "StaticForwardIbl package" : "StaticForwardPhysical package",
+                LightingResources(kind));
+        }
+        lightLayouts[index] = std::move(layout);
+    }
+
+    void ForwardPrograms::PrepareSky(RHI::Device &device)
+    {
+        if (skyPipeline)
+        {
+            return;
+        }
+        namespace SkyAbi = Shader::Generated::ForwardSky;
+        const auto program = LoadProgram(device, skyPath, SkyAbi::AbiHash, "ForwardSky package");
+        auto layout = device.CreateBindingLayout(SkyAbi::MakeBindingLayouts().front());
+        if (!layout)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward sky layout");
+        }
+        RHI::GraphicsPipelineDesc desc;
+        desc.SetVertexShader(program.vertex.Get()).SetFragmentShader(program.fragment.Get())
+            .AddBindingLayout(layout.Get());
+        desc.renderState.depthStencilState.DisableDepthTest().DisableDepthWrite().DisableStencil();
+        desc.renderState.rasterState.SetCullMode(RHI::RasterCullMode::None).EnableScissor();
+        // 工作色的目的 alpha 保存几何覆盖. 背景取天空, 已覆盖处取原工作色, RGB 写掩码保留覆盖位.
+        desc.renderState.blendState.targets[0].SetBlendEnable(true)
+            .SetSrcBlend(RHI::BlendFactor::InvDstAlpha).SetDestBlend(RHI::BlendFactor::DstAlpha)
+            .SetColorWriteMask(RHI::ColorMask::Red | RHI::ColorMask::Green | RHI::ColorMask::Blue);
+        auto pipeline = device.CreateGraphicsPipeline(desc, RHI::FramebufferInfo().AddColorFormat(WorkingFormat));
+        if (!pipeline)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot link Forward sky pipeline");
+        }
+        skyLayout = std::move(layout);
+        skyPipeline = std::move(pipeline);
     }
 
     VertexLayout StaticVertexLayout(std::uint8_t attributes) noexcept
@@ -132,14 +207,16 @@ namespace Physara::Renderer::Detail
     }
 
     RHI::GraphicsPipelineHandle ForwardPrograms::GeometryPipeline(RHI::Device &device, std::uint8_t layout,
-        bool mirrored, bool doubleSided, SurfacePhase phase)
+        bool mirrored, bool doubleSided, SurfacePhase phase, LightingProgram kind)
     {
-        auto &pipeline = pipelines[PipelineKey(layout, mirrored, doubleSided, phase)];
+        const auto mode = phase == SurfacePhase::Depth ? std::size_t(LightingProgram::Legacy) : std::size_t(kind);
+        constexpr std::size_t pipelinesPerMode = 8 * 4 * 3;
+        auto &pipeline = pipelines[mode * pipelinesPerMode + PipelineKey(layout, mirrored, doubleSided, phase)];
         if (pipeline)
         {
             return pipeline;
         }
-        const auto &shaders = phase == SurfacePhase::Depth ? depth : color;
+        const auto &shaders = phase == SurfacePhase::Depth ? depth : colors[mode];
         if (!inputLayouts[layout])
         {
             const auto storage = StaticVertexLayout(layout);
@@ -168,7 +245,7 @@ namespace Physara::Renderer::Detail
         }
         if (phase != SurfacePhase::Depth)
         {
-            desc.AddBindingLayout(lightLayout.Get());
+            desc.AddBindingLayout(lightLayouts[mode].Get());
         }
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
@@ -241,6 +318,7 @@ namespace Physara::Renderer::Detail
         std::erase_if(objects, [&](const auto &pair) { return idle(pair.second.resident); });
         std::erase_if(geometry, [&](const auto &pair) { return idle(pair.second); });
         std::erase_if(textures, [&](const auto &pair) { return idle(pair.second); });
+        std::erase_if(environmentTextures, [&](const auto &pair) { return idle(pair.second); });
     }
 
     void ForwardDevice::Reserve(std::size_t bytes)

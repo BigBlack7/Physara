@@ -242,7 +242,8 @@ namespace Physara::Editor::Detail
 
     // 输入是保存边界已捕获的合法快照. 编码失败或取消时只丢弃局部文本, 不接触目标文件.
     std::string EncodeSceneDocument(std::span<const Scene::EntityRecord> entities,
-                                    const Renderer::ViewDocumentRequests &view, std::stop_token stop)
+                                    const Renderer::ViewDocumentRequests &view, std::stop_token stop,
+                                    const std::optional<Scene::SceneEnvironment> &environment)
     {
         std::string output = "{\"version\":1,\"entities\":[";
         std::size_t remaining = DocumentNodeLimit - 3; // 顶层对象、version 及 entities 数组.
@@ -283,6 +284,15 @@ namespace Physara::Editor::Detail
         CountValues(mainView, remaining);
         append("\n],\"mainView\":");
         append(mainView.dump());
+        if (environment)
+        {
+            const auto &settings = environment->settings;
+            const Json value{{"path", PathText(environment->source->source)}, {"rotation", settings.rotation},
+                             {"intensity", settings.intensity}, {"lighting", settings.lighting}, {"sky", settings.sky}};
+            CountValues(value, remaining);
+            append(",\"environment\":");
+            append(value.dump());
+        }
         append("}\n");
         return output;
     }

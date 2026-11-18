@@ -161,7 +161,7 @@ namespace Physara::Asset
         Absolute
     };
 
-    /// @brief 由调用方声明环境输入编码和标定. 缺省亮度为相对值, 环境没有覆盖率 alpha.
+    /// @brief 描述环境输入的编码和标定方式. 解码的 EXR 以文件单位白是否存在确定标定方式.
     struct EnvironmentSource
     {
         EnvironmentEncoding encoding;
@@ -169,6 +169,34 @@ namespace Physara::Asset
         static constexpr ImageDomain Domain = ImageDomain::LinearRadiance;
         static constexpr AlphaMeaning Alpha = AlphaMeaning::Ignored;
     };
+
+    /// @brief 等距柱状环境, 顶部起行的线性 RGB32F, alpha 不参与辐亮度解释.
+    struct EnvironmentImage
+    {
+        std::uint32_t width;
+        std::uint32_t height;
+        std::shared_ptr<const float[]> storage;
+        EnvironmentSource source;
+        std::optional<float> whiteLuminance; ///< 文件声明的 cd/m² 单位白. 空值表示相对亮度.
+
+        [[nodiscard]] std::span<const float> Pixels() const noexcept
+        {
+            return {storage.get(), std::size_t(width) * height * 3};
+        }
+    };
+
+    /// @brief 不可变环境源版本, 源身份和标定来自同次受控读快照.
+    struct EnvironmentRecord
+    {
+        AssetId asset;
+        ContentRevision revision;
+        std::filesystem::path source;
+        Core::Sha256Digest sourceFingerprint;
+        EnvironmentImage image;
+        std::size_t sourceByteCount;
+    };
+
+    using EnvironmentVersion = std::shared_ptr<const EnvironmentRecord>;
 
     /// @brief 指向一次准入的目标和请求身份. 合并的调用者共享此值和取消效果.
     struct AssetRequest
@@ -208,6 +236,15 @@ namespace Physara::Asset
         std::optional<AssetFailure> failure;
     };
 
+    /// @brief 最新环境请求及最后成功的 CPU 版本. 失败或取消时已有版本仍可固定.
+    struct EnvironmentStatus
+    {
+        AssetState state = AssetState::Unloaded;
+        RequestId request;
+        EnvironmentVersion published;
+        std::optional<AssetFailure> failure;
+    };
+
     /// @brief 每个服务的工作及存储额度. 模型依赖同样受单文件上限约束, 内嵌图像同样使用像素额度.
     struct ImportLimits
     {
@@ -243,7 +280,7 @@ namespace Physara::Asset
         /// @brief 请求 Assets/Textures 或 Assets/Editor 下的图片. 同源同代合并进行中或已就绪的请求.
         /// @return 共享结果的请求身份, 或未准入的有界错误. 失败或取消后可显式再次请求.
         /// @note 队列拒绝不建立 Loading 状态. 外部文件修改须先 InvalidateSource, 不隐式轮询磁盘.
-        /// Assets/Environments 的像素请求明确返回 UnsupportedEncoding, 本包只提供环境元数据.
+        /// 环境由独立的 RequestEnvironment 解释为线性辐亮度.
         [[nodiscard]] Submission RequestImage(const std::filesystem::path &source);
 
         /// @brief 在同一队列中请求 Assets/Models 下的静态模型. 来源与 scene 选项共同标识请求.
@@ -251,6 +288,10 @@ namespace Physara::Asset
         /// @note 与图片共用 pendingJobs. 默认选择和显式 scene 是不同逻辑 key, 即使最终选择相同 scene.
         /// 外部依赖变化后也须对该 AssetId 调用 InvalidateSource 再请求, 不隐式轮询文件.
         [[nodiscard]] Submission RequestModel(const std::filesystem::path &source, ModelImportOptions options = {});
+
+        /// @brief 从 Assets/Environments 请求线性 EXR. 相同源代复用请求, 刷新须先调用 InvalidateSource.
+        /// @note StatusEnvironment 的 CpuReady 表示可固定 RGB 和标定. 视口另外按所需用途准备环境.
+        [[nodiscard]] Submission RequestEnvironment(const std::filesystem::path &source);
 
         /// @brief 显式推进已知源代, 撤销旧请求的发布资格. 调用者可另行请求新代.
         /// @return 空值表示失效已生效; 后继请求暂满不会恢复旧资格, 最后有效版本仍可取得.
@@ -266,6 +307,8 @@ namespace Physara::Asset
 
         /// @brief 查询模型状态. 未登记或其它种类身份返回 Unloaded.
         [[nodiscard]] ModelStatus StatusModel(AssetId asset) const noexcept;
+        /// @brief 查询环境请求及版本. 未登记或其它种类身份返回 Unloaded.
+        [[nodiscard]] EnvironmentStatus StatusEnvironment(AssetId asset) const noexcept;
 
         /// @brief 主线程在继续的 CPU 输入轮次调用. 仅处理已经交接的结果.
         /// @return 本次实际发布的新内容版本数, 不计失败、取消、过期与相同内容.

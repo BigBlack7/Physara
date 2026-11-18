@@ -1,7 +1,7 @@
 #include "AssetManager.hpp"
 
 /// @file
-/// @brief 调度图片与模型导入并裁决发布. worker 只按请求票据交还候选.
+/// @brief 调度普通图像, HDR 环境和模型导入. worker 交回源快照的候选, owner 核对票据后发布.
 
 #include <algorithm>
 #include <array>
@@ -18,6 +18,7 @@
 #include <Core/ResourceIO.hpp>
 
 #include "ImageDecode.hpp"
+#include "EnvironmentDecode.hpp"
 #include "GltfDocument.hpp"
 #include "GltfImport.hpp"
 
@@ -67,7 +68,8 @@ namespace Physara::Asset
     struct ImportCompletion
     {
         ImportTicket ticket;
-        std::variant<ImageCandidate, std::shared_ptr<ModelRecord>, SameContent, CancelledImport, AssetFailure> result;
+        std::variant<ImageCandidate, std::shared_ptr<ModelRecord>, std::shared_ptr<EnvironmentRecord>,
+                     SameContent, CancelledImport, AssetFailure> result;
     };
 
     using ImportJobs = Core::JobQueue<ImportJob, ImportCompletion>;
@@ -81,9 +83,11 @@ namespace Physara::Asset
         std::uint64_t sourceGeneration = 1;
         AssetState state = AssetState::Unloaded;
         RequestId request{};
-        std::variant<std::monostate, ImageVersion, ModelVersion> published{};
+        std::variant<std::monostate, ImageVersion, ModelVersion, EnvironmentVersion> published{};
         std::optional<AssetFailure> failure{};
         ImportJobs::Id activeJob{};
+
+        [[nodiscard]] bool IsEnvironment() const noexcept { return source.Directory() == L"Environments"; }
 
         /// @brief 取得任一已发布种类的内容代, 未发布时统一为零.
         [[nodiscard]] ContentRevision Revision() const noexcept
@@ -96,10 +100,14 @@ namespace Physara::Asset
             {
                 return (*version)->revision;
             }
+            if (const auto *environment = std::get_if<EnvironmentVersion>(&published))
+            {
+                return (*environment)->revision;
+            }
             return {};
         }
 
-        /// @brief 图片比较源字节, 模型比较包含所选 scene 和实际依赖的完整指纹.
+        /// @brief 普通图像和环境比较实际文件字节. 模型指纹还包括所选 scene 和外部依赖.
         [[nodiscard]] std::optional<Core::Sha256Digest> Fingerprint() const noexcept
         {
             if (const auto *image = std::get_if<ImageVersion>(&published))
@@ -109,6 +117,10 @@ namespace Physara::Asset
             if (const auto *version = std::get_if<ModelVersion>(&published))
             {
                 return (*version)->sourceVersion;
+            }
+            if (const auto *environment = std::get_if<EnvironmentVersion>(&published))
+            {
+                return (*environment)->sourceFingerprint;
             }
             return {};
         }
@@ -178,6 +190,22 @@ namespace Physara::Asset
             if (job.previousFingerprint == snapshot.fingerprint)
             {
                 return {job.ticket, SameContent{}};
+            }
+
+            if (job.source.Directory() == L"Environments")
+            {
+                auto decoded = DecodeEnvironment(snapshot.bytes, job.limits.imageBytes, job.pixels);
+                if (stop.stop_requested())
+                {
+                    return {job.ticket, CancelledImport{}};
+                }
+                if (const auto *error = std::get_if<AssetFailure>(&decoded))
+                {
+                    return {job.ticket, *error};
+                }
+                auto record = std::make_shared<EnvironmentRecord>(AssetId{}, ContentRevision{}, job.source.Relative(),
+                    snapshot.fingerprint, std::move(std::get<EnvironmentImage>(decoded)), snapshot.bytes.size());
+                return {job.ticket, std::move(record)};
             }
 
             auto decoded = DecodeImage(snapshot.bytes, job.limits.imageBytes, job.pixels);
@@ -393,6 +421,14 @@ namespace Physara::Asset
                     entry->state = AssetState::CpuReady;
                     return true;
                 }
+                if (auto *environment = std::get_if<std::shared_ptr<EnvironmentRecord>>(&completion.result))
+                {
+                    (*environment)->asset = entry->id;
+                    (*environment)->revision = revision;
+                    entry->published = EnvironmentVersion(std::move(*environment));
+                    entry->state = AssetState::CpuReady;
+                    return true;
+                }
                 auto &candidate = std::get<ImageCandidate>(completion.result);
                 try
                 {
@@ -418,7 +454,8 @@ namespace Physara::Asset
 
         /// @brief 共用停止/路径/准入边界, 种类只决定允许目录和 worker 解码入口.
         [[nodiscard]] AssetManager::Submission Request(const std::filesystem::path &source,
-                                                        std::optional<ModelImportOptions> model);
+                                                        std::optional<ModelImportOptions> model,
+                                                        bool environment = false);
     };
 
     AssetManager::AssetManager(std::unique_ptr<Impl> state) noexcept : m_State(std::move(state))
@@ -451,7 +488,7 @@ namespace Physara::Asset
     }
 
     AssetManager::Submission AssetManager::Impl::Request(const std::filesystem::path &source,
-                                                        std::optional<ModelImportOptions> model)
+                                                         std::optional<ModelImportOptions> model, bool environment)
     {
         if (stopping)
         {
@@ -461,17 +498,19 @@ namespace Physara::Asset
         {
             constexpr std::array<std::wstring_view, 3> Images{L"Textures", L"Editor", L"Environments"};
             constexpr std::array<std::wstring_view, 1> Models{L"Models"};
+            constexpr std::array<std::wstring_view, 1> Environments{L"Environments"};
             const auto directories = model ? std::span<const std::wstring_view>(Models) :
-                                             std::span<const std::wstring_view>(Images);
+                (environment ? std::span<const std::wstring_view>(Environments) :
+                               std::span<const std::wstring_view>(Images));
             auto path = Core::ResourcePath::Parse(source, directories);
             if (const auto *error = std::get_if<Core::ResourceFailure>(&path))
             {
                 return ResourceImportFailure(*error);
             }
             auto &resource = std::get<Core::ResourcePath>(path);
-            if (resource.Directory() == L"Environments")
+            if (!environment && resource.Directory() == L"Environments")
             {
-                return Fail(AssetError::UnsupportedEncoding, "Environment pixel decoding is not supported");
+                return Fail(AssetError::UnsupportedEncoding, "Environment images require an HDR environment request");
             }
             return Submit(std::move(resource), model);
         }
@@ -493,6 +532,11 @@ namespace Physara::Asset
     AssetManager::Submission AssetManager::RequestModel(const std::filesystem::path &source, ModelImportOptions options)
     {
         return m_State->Request(source, options);
+    }
+
+    AssetManager::Submission AssetManager::RequestEnvironment(const std::filesystem::path &source)
+    {
+        return m_State->Request(source, std::nullopt, true);
     }
 
     std::optional<AssetFailure> AssetManager::InvalidateSource(AssetId asset) noexcept
@@ -536,7 +580,7 @@ namespace Physara::Asset
     AssetStatus AssetManager::Status(AssetId asset) const noexcept
     {
         const auto *entry = m_State->Find(asset);
-        if (!entry || entry->model)
+        if (!entry || entry->model || entry->IsEnvironment())
         {
             return {};
         }
@@ -553,6 +597,17 @@ namespace Physara::Asset
         }
         const auto *version = std::get_if<ModelVersion>(&entry->published);
         return {entry->state, entry->request, version ? *version : ModelVersion{}, entry->failure};
+    }
+
+    EnvironmentStatus AssetManager::StatusEnvironment(AssetId asset) const noexcept
+    {
+        const auto *entry = m_State->Find(asset);
+        if (!entry || !entry->IsEnvironment())
+        {
+            return {};
+        }
+        const auto *version = std::get_if<EnvironmentVersion>(&entry->published);
+        return {entry->state, entry->request, version ? *version : EnvironmentVersion{}, entry->failure};
     }
 
     std::size_t AssetManager::PublishCompleted() noexcept

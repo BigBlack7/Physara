@@ -27,6 +27,7 @@ namespace Physara::Editor::Detail
     {
         std::vector<Scene::EntityRecord> entities;
         Renderer::ViewDocumentRequests view;
+        std::optional<Scene::SceneEnvironment> environment;
     };
 
     /// @brief 从主线程移交的已就绪资产集合, worker 独占验证期间的可变状态.
@@ -91,7 +92,7 @@ namespace Physara::Editor::Detail
                 }
             }
         }
-        const auto encoded = EncodeSceneDocument(save.entities, save.view, stop);
+        const auto encoded = EncodeSceneDocument(save.entities, save.view, stop, save.environment);
         const auto bytes = std::as_bytes(std::span(encoded.data(), encoded.size()));
         if (auto failure = Core::WriteResourceFile(job.root, job.path, bytes, *job.commit, stop))
         {
@@ -342,7 +343,8 @@ namespace Physara::Editor::Detail
             }
             else
             {
-                state.Submit(started, SaveDocument{state.scene->Snapshot(), view.DocumentRequests()});
+                state.Submit(started, SaveDocument{state.scene->Snapshot(), view.DocumentRequests(),
+                                                    state.scene->Environment()});
             }
             state.active.emplace(std::move(started));
             state.failure.reset();

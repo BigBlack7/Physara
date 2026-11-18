@@ -463,6 +463,17 @@ namespace Physara::RHI::OpenGL
         return m_Caps.formats[std::size_t(format)][std::size_t(dimension)];
     }
 
+    FormatSupport QueryCubeFormatSupport(Device *device, Format format, std::uint32_t &maxEdge) noexcept
+    {
+        const auto *native = dynamic_cast<const OpenGLDevice *>(device);
+        maxEdge = 0;
+        if (!native)
+        {
+            return FormatSupport::None;
+        }
+        maxEdge = static_cast<std::uint32_t>(native->GetCaps().maxCubeTextureSize);
+        return native->GetFormatCaps(format, TextureDimension::TextureCube).support;
+    }
 
     bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept
     {

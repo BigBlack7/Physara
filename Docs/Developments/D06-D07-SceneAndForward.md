@@ -156,11 +156,13 @@
 
 **职责位置：** Engine/Asset Environment、Renderer/Lighting、Shaders/BRDF/Lighting。**前置：** [D07-T01](#d07-t01)、[D07-T02](#d07-t02)、[D07-T03](#d07-t03)。**架构依据：** [3.3](../Architecture.md#asset-images)、[5.4](../Architecture.md#light-preparation)、[8.6](../Architecture.md#lighting)。
 
-- [ ] 实现 HDR 环境到 cubemap、GGX prefilter、SH9 与固定 Filament DFG 编码；按实施 spec 选择可验证的冷路径/图内绘制预计算。
-- [ ] 建立含源 hash、处理设置、算法/工具版本的 EnvironmentCache，旋转在查询空间处理，标明相对/绝对亮度校准。
-- [ ] 整合漫反射/镜面 IBL、AO 输入默认值和天空背景；环境 Pending 保留旧有效代，不能黑图假装就绪。
+- [x] 实现 HDR 环境到 cubemap、GGX prefilter、SH9 与固定 Filament DFG 编码；按实施 spec 选择可验证的冷路径/图内绘制预计算。
+- [x] 建立含源 hash、处理设置、算法/工具版本的 EnvironmentCache，旋转在查询空间处理，标明相对/绝对亮度校准。
+- [x] 整合漫反射/镜面 IBL、AO 输入默认值和天空背景；环境 Pending 保留旧有效代，不能黑图假装就绪。
 
 **完成条件：** 核心材质直接光与 IBL 使用同一模型，环境旋转/曝光不重复烘焙或重复乘强度。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-18-add-forward-environment-lighting/tasks.md#final-verification)
 
 <a id="d07-t05"></a>
 ### D07-T05 · 接入固定显示 profile 与基础 FXAA

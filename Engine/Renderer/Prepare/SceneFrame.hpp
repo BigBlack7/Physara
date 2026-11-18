@@ -64,6 +64,7 @@ namespace Physara::Renderer
         std::span<const Asset::ModelVersion> models;
         std::span<const Scene::EffectiveMaterial> materialOverrides;
         std::optional<Scene::Bounds> drawableBounds;
+        std::optional<Scene::SceneEnvironment> environment; ///< 按值复制查询参数并持有源版本, 与上方的槽内 span 寿命独立.
     };
 
     /// @brief 一个 FrameSlot 的拥有型提取存储, 独立于每次图尝试的 arena.
@@ -76,7 +77,7 @@ namespace Physara::Renderer
 
         /// @brief 复用匹配 Scene 和内容版本的记录, 否则同步提取后完整发布.
         /// @pre 槽已安全取得. 旧借用须在换 Scene 或内容版本前结束.
-        /// @return 成功值仅借用本槽, 失败交付有界原因且本槽无部分帧可读.
+        /// @return 成功时数组借用本槽, 环境随返回值固定. 失败时交付原因并清除部分提取结果.
         /// @note 失败清除本槽的旧缓存及资产引用, 保留数组容量; 其它槽不受影响.
         [[nodiscard]] std::variant<SceneFrame, Core::BoundedText> Prepare(const Scene::Scene &scene);
 

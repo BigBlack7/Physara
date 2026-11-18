@@ -67,7 +67,9 @@ namespace Physara::RHI::OpenGL
                     result.resources, [&](const auto &entry) { return entry.resource.key == resource.key; });
                 if (existing != result.resources.end())
                 {
+                    // 跨阶段相同的 t 槽只能指向一种视图维度, 之后由该逻辑键分配物理单元.
                     RequirePreparation(existing->resource.type == resource.type &&
+                                           existing->resource.dimension == resource.dimension &&
                                            existing->resource.extent == resource.extent &&
                                            existing->resource.layout == resource.layout,
                                        "InterfaceMismatch: cross-stage resource" + KeyText(resource.key));

@@ -68,6 +68,7 @@ namespace Physara::RHI::OpenGL
         // 只撤销已知性, 保留名称以便真正删除前仍能解除原生引用; 不查询或保存外部 GL 状态.
         m_Known = false;
         m_QueryReadKnown = false;
+        m_SeamlessCubeKnown = false;
         m_ProgramKnown = m_FramebufferKnown = m_InputKnown = m_IndexKnown = m_VertexArrayKnown = false;
         m_RenderKnown = m_ViewportKnown = m_ScissorKnown = m_SrgbKnown = false;
         for (auto &range : m_UniformRanges)
@@ -190,8 +191,14 @@ namespace Physara::RHI::OpenGL
         current = {name, offset, size, true};
     }
 
-    void ContextState::ApplyTexture(GLuint unit, GLuint texture, GLuint sampler) noexcept
+    void ContextState::ApplyTexture(GLuint unit, GLuint texture, GLuint sampler, TextureDimension dimension) noexcept
     {
+        // 只在实际 cube 采样时建立跨面过滤. 外部互操作后随其余缓存重新应用.
+        if (dimension == TextureDimension::TextureCube && !m_SeamlessCubeKnown)
+        {
+            glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+            m_SeamlessCubeKnown = true;
+        }
         auto &current = m_TextureUnits[unit];
         if (!current.known || current.texture != texture)
         {

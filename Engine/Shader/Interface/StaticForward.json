@@ -31,6 +31,18 @@
       ]
     },
     {
+      "name": "ForwardEnvironment",
+      "layout": "std140",
+      "fields": [
+        { "name": "environmentFromWorld", "type": "float3x3" },
+        { "name": "sh", "type": "float4", "array": 9 },
+        { "name": "radianceMantissa", "type": "float32" },
+        { "name": "radianceExponent", "type": "int32" },
+        { "name": "shExponent", "type": "int3" },
+        { "name": "maxMip", "type": "float32" }
+      ]
+    },
+    {
       "name": "ForwardObject",
       "layout": "std140",
       "fields": [
@@ -73,7 +85,11 @@
     { "name": "occlusionSampler", "kind": "sampler", "set": 2, "slot": 3, "stages": ["fragment"] },
     { "name": "emissiveImage", "kind": "texture2d", "set": 2, "slot": 4, "stages": ["fragment"] },
     { "name": "emissiveSampler", "kind": "sampler", "set": 2, "slot": 4, "stages": ["fragment"] },
-    { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 }
+    { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 },
+    { "name": "environment", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardEnvironment" },
+    { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },
+    { "name": "reflectionImage", "kind": "texturecube", "set": 3, "slot": 2, "stages": ["fragment"] },
+    { "name": "environmentSampler", "kind": "sampler", "set": 3, "slot": 0, "stages": ["fragment"] }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },

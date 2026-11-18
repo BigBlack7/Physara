@@ -39,6 +39,7 @@ namespace Physara::Scene
         SceneId id;
         std::string generatedPrefix;
         Revisions revisions;
+        std::optional<SceneEnvironment> environment;
         std::uint64_t lastGeneration{};
         std::uint64_t lastEntityId{};
         entt::registry registry;

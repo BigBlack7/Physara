@@ -55,7 +55,8 @@ namespace Physara::RHI::OpenGL
         /// @brief 绑定已验证的 UBO/SSBO 字节范围, unit 来自本 Pipeline 计划, 不持有对应 wrapper.
         void ApplyBufferRange(bool storage, GLuint unit, GLuint name, GLintptr offset, GLsizeiptr size) noexcept;
         /// @brief 独立比较同一物理单元的 texture 与 sampler, 任一端改变都更新实际组合.
-        void ApplyTexture(GLuint unit, GLuint texture, GLuint sampler) noexcept;
+        /// @param dimension 已解析 SRV 的目标. 首次使用 cube 或缓存失效后按需建立 context 级跨面过滤.
+        void ApplyTexture(GLuint unit, GLuint texture, GLuint sampler, TextureDimension dimension) noexcept;
         /// @brief 绑定唯一 core VAO 并设置完整属性启用/格式计划, 空布局也取得合法 VAO.
         void ApplyInput(const OpenGLInputLayout *layout) noexcept;
         /// @brief 更新已验证 slot 的 Buffer/字节 offset/stride/divisor; 须先 ApplyInput 取得 VAO.
@@ -136,6 +137,7 @@ namespace Physara::RHI::OpenGL
         bool m_ScissorKnown = false;
         bool m_SrgbKnown = false;
         bool m_Srgb = false;
+        bool m_SeamlessCubeKnown = false;
         RenderState m_RenderState;
         Color m_BlendColor;
         std::uint8_t m_StencilRef = 0;

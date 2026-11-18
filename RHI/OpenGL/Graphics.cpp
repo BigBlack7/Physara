@@ -172,7 +172,7 @@ namespace Physara::RHI::OpenGL
         {
             const auto &texture = find(pair.pair.texture);
             const auto sampler = pair.pair.dummy ? m_Device->m_DummySampler->name : find(pair.pair.sampler).name;
-            context.ApplyTexture(pair.unit, texture.name, sampler);
+            context.ApplyTexture(pair.unit, texture.name, sampler, texture.dimension);
         }
     }
 

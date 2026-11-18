@@ -37,7 +37,7 @@ namespace Physara::RHI::OpenGL
     };
 
     /// @brief 已解析的单项绑定, name 是 buffer/view/sampler, range 仅用于 buffer, slot 仍为逻辑身份.
-    /// @note recordStride 取自 Buffer 描述; 与具体 Shader extent/stride 的一致性仍需在组合消费时核对.
+    /// @note 缓冲记录粒度和 SRV 维度在集合创建时固定, 设置图形状态时再与活动 Shader 接口配对.
     struct NativeBinding
     {
         std::uint32_t slot = 0;
@@ -46,6 +46,7 @@ namespace Physara::RHI::OpenGL
         BufferRange range;
         std::uint32_t recordStride = 0;
         Resource *resource = nullptr;       ///< 借用集合强持有的实际 storage/sampler, 不以 view 名称推断资源身份.
+        TextureDimension dimension = TextureDimension::Unknown; ///< SRV 视图的维度, 可以与原存储不同.
         TextureSubresourceSet subresources; ///< SRV 已解析的 mip/layer 范围, 供实际用途和 feedback 检查.
     };
 

@@ -26,6 +26,7 @@ namespace Physara::RHI::OpenGL
     {
         ShaderBindingKey key;
         ResourceType type = ResourceType::None;
+        TextureDimension dimension = TextureDimension::Unknown; ///< 独立采样图像的实际维度.
         std::uint32_t id = 0;
         std::uint32_t extent = 0;
         std::uint32_t recordStride = 0;

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "ForwardSky",
+  "interface": "ForwardSky",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Sky.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/Sky.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

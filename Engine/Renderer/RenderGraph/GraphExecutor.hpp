@@ -28,9 +28,11 @@ namespace Physara::Renderer
 
         /// @brief 按单条采样声明解析版本和范围, 建立供本次创建集合使用的同格式条目.
         /// @note Packed depth/stencil 的同格式采样条目使用明确的 Depth 范围.
+        /// cube 消费者显式指定 TextureCube, 其范围须包含实际采样的完整六面.
         /// @return 身份, 范围, 权限或视图用途被拒绝时返回空并记录准备失败.
         [[nodiscard]] std::optional<RHI::BindingSetItem> SampledTexture(
-            std::uint32_t slot, TextureId id, std::optional<TextureRange> range = std::nullopt);
+            std::uint32_t slot, TextureId id, std::optional<TextureRange> range = std::nullopt,
+            RHI::TextureDimension dimension = RHI::TextureDimension::Unknown);
         /// @brief 按 ConstantBuffer 或 ShaderRead 声明生成常量或结构化读条目, 保留确切字节范围.
         /// @return 请求失败时返回空并记录准备失败.
         [[nodiscard]] std::optional<RHI::BindingSetItem> ReadBuffer(

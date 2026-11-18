@@ -8,15 +8,18 @@ get_target_property(editorUiPackage PhysaraEditor PHYSARA_UI_PACKAGE)
 get_target_property(editorUiPackageTarget PhysaraEditor PHYSARA_UI_PACKAGE_TARGET)
 add_dependencies(Physara ${editorUiPackageTarget})
 # 产品包与 Renderer 使用同一接口生成目标; 不为不同消费者复制场景包的生成规则.
-foreach(program StaticForward StaticDepth ForwardDisplay)
+set(forwardResourcePaths "")
+foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})
+    string(APPEND forwardResourcePaths
+        "    inline constexpr auto ${program}PackageRelative = \"$<PATH:RELATIVE_PATH,${${program}Package},$<TARGET_FILE_DIR:Physara>>\";\n")
 endforeach()
 # 每个构建配置生成自己的私有路径头. Resources.cpp 以 Win32 查询到的 exe 目录为基准拼接.
 # CPU 资产根直接使用该 exe 目录, 不把开发机的项目源目录写入产品.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>/RuntimeResources.hpp"
-    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n    inline constexpr auto StaticForwardPackageRelative = \"$<PATH:RELATIVE_PATH,${StaticForwardPackage},$<TARGET_FILE_DIR:Physara>>\";\n    inline constexpr auto StaticDepthPackageRelative = \"$<PATH:RELATIVE_PATH,${StaticDepthPackage},$<TARGET_FILE_DIR:Physara>>\";\n    inline constexpr auto ForwardDisplayPackageRelative = \"$<PATH:RELATIVE_PATH,${ForwardDisplayPackage},$<TARGET_FILE_DIR:Physara>>\";\n}\n")
+    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}}\n")
 target_include_directories(Physara PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>")
 target_link_libraries(Physara PRIVATE PhysaraPlatform PhysaraCore PhysaraAsset PhysaraScene PhysaraEditor PhysaraRenderer)
 target_compile_features(Physara PRIVATE cxx_std_20)

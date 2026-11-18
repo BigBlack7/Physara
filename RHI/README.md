@@ -16,7 +16,7 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
-| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、float 2D 视图及同格式深度采样视图, Draw 消费独立 Sampler. 采样格式沿用设备的 ShaderSample 能力, 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
+| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、浮点二维视图、同格式深度采样视图及完整六面的颜色 cube 视图. Draw 消费独立 Sampler 并核对活动 IR 和视图维度, cube 线性采样按真实目标能力准备并支持跨面过滤. 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
 | CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
 | 即时录制互操作 | ImmediateGraphics.hpp 的 GraphRecording 借用经 Validation 和后端确认的当前录制, 负责状态准备和提交. GraphManaged 的普通列表核对已授权的用途、字节区间和纹理分量; Automatic 由 RHI 入口推导. 两种模式共用 tracker 与后端发射 |

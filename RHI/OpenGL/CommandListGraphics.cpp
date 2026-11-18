@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
+#include "../Utils.hpp"
 #include "InputLayout.hpp"
 #include "Pipeline.hpp"
 
@@ -184,6 +186,16 @@ namespace Physara::RHI::OpenGL
             }
             if (entry.resource.type == ResourceType::Texture_SRV)
             {
+                // 比较活动 IR 图像和 SRV 自身的维度. 同一 cube 存储也可以提供单面的二维视图.
+                if (binding.dimension != entry.resource.dimension)
+                {
+                    char reason[192]{};
+                    std::snprintf(reason, sizeof(reason),
+                        "InterfaceMismatch: active sampled texture dimension at set=%u slot=%u expected=%s actual=%s",
+                        entry.resource.key.set, entry.slot, Utils::TextureDimensionToString(entry.resource.dimension),
+                        Utils::TextureDimensionToString(binding.dimension));
+                    return fail(reason);
+                }
                 const auto conflicts = [&](const FramebufferAttachment &attachment)
                 {
                     return !attachment.isReadOnly && SamplesAttachment(binding, attachment);

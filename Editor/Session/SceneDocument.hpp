@@ -36,13 +36,21 @@ namespace Physara::Editor::Detail
         std::filesystem::path path;
     };
 
-    /// @brief 已校验格式的记录. 文件引用表定位尚未绑定的 model / image 字段.
+    /// @brief 可省略的场景级环境请求. Open 解析的文件路径在候选建成时由 CPU 版本接管.
+    struct EnvironmentFileReference
+    {
+        std::filesystem::path path;
+        Scene::EnvironmentSettings settings;
+    };
+
+    /// @brief 已校验格式的 v1 记录. 实体引用指向模型或覆盖图, 场景环境单独固定其源.
     struct ParsedSceneDocument
     {
         std::vector<Scene::EntityRecord> entities;
         Renderer::ViewDocumentRequests view;
         std::vector<ModelFileReference> models;
         std::vector<ImageFileReference> images;
+        std::optional<EnvironmentFileReference> environment;
     };
 
     /// @brief 只接受项目相对目录和 .scene.json 后缀. Core 在 I/O 时确认物理位置.
@@ -52,7 +60,9 @@ namespace Physara::Editor::Detail
     /// @brief 冷路径验证文件预算、类型、ID 和层级. 失败抛出自持的有界错误, 分配错误可传播.
     [[nodiscard]] ParsedSceneDocument DecodeSceneDocument(std::span<const std::byte> bytes, std::stop_token stop);
     /// @brief 从 Scene/View 的自持值写出 v1. 超预算或无法编码时抛出自持的有界错误.
+    /// @param environment 随保存快照持有的环境. 存在时写入源路径和创作值, 重开时解析届时的源.
     [[nodiscard]] std::string EncodeSceneDocument(std::span<const Scene::EntityRecord> entities,
                                                    const Renderer::ViewDocumentRequests &view,
-                                                   std::stop_token stop);
+                                                   std::stop_token stop,
+                                                   const std::optional<Scene::SceneEnvironment> &environment = {});
 }

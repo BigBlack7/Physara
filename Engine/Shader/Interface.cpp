@@ -127,6 +127,7 @@ namespace Physara::Shader
         case ResourceKind::StructuredBuffer:
             return "StructuredBuffer_SRV";
         case ResourceKind::Texture2D:
+        case ResourceKind::TextureCube:
             return "Texture_SRV";
         case ResourceKind::Sampler:
             return "Sampler";
@@ -221,10 +222,12 @@ namespace Physara::Shader
             }
             const auto &resource = binding.resource;
             output << "layout(set = " << resource.set << ", binding = " << resource.binding;
-            if (resource.kind == ResourceKind::Texture2D || resource.kind == ResourceKind::Sampler)
+            if (resource.kind == ResourceKind::Texture2D || resource.kind == ResourceKind::TextureCube ||
+                resource.kind == ResourceKind::Sampler)
             {
-                output << ") uniform " << (resource.kind == ResourceKind::Texture2D ? "texture2D" : "sampler") << " "
-                       << resource.name << ";\n";
+                const auto *type = resource.kind == ResourceKind::Sampler ? "sampler" :
+                    resource.kind == ResourceKind::TextureCube ? "textureCube" : "texture2D";
+                output << ") uniform " << type << " " << resource.name << ";\n";
                 continue;
             }
             auto blockName = resource.name;

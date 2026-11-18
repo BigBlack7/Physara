@@ -22,7 +22,9 @@ Platform PRIVATE 链接 PhysaraRHIOpenGL, 在 Ready 前装配 raw Device 与 Val
 
 PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有的固定 stb 解码图片. 直接消费者使用 AssetManager::Create 提供绝对的本地项目资源目录, 然后在 owner 线程通过 RequestImage 请求 Assets/Textures 或 Assets/Editor 下的相对路径. CPU 输入轮次调用 PublishCompleted, 用 Status 取得请求状态、失败原因及最后有效版本. 显式刷新先使源失效再重新请求, 也可取消当前请求. 关闭时停止接单和发布并收拢作业. [资产入口](../Engine/Asset/AssetManager.hpp)
 
-首版接受每样本至多 8 位的标准 PNG 和 8 位 JPEG, 解码为顶部起行的 RGBA8. CgBI PNG 返回 UnsupportedEncoding. 用途描述区分 sRGB 颜色、线性数据与 alpha 语义. HDR/EXR 提供源类别与线性辐亮度标定描述, 环境像素导入归 D07. CpuReady 是可固定版本的 CPU 记录, GPU 驻留由后续 Renderer 消费. [图像语义](Architecture.md#asset-images)
+图片入口接受每样本至多 8 位的标准 PNG 和 8 位 JPEG, 解码为顶部起行的 RGBA8. CgBI PNG 返回 UnsupportedEncoding. 用途描述区分 sRGB 颜色、线性数据与 alpha 语义. CpuReady 是可固定的 CPU 版本, GPU 驻留由 Renderer 消费. [图像语义](Architecture.md#asset-images)
+
+`RequestEnvironment` 从 `Assets/Environments` 读取单 part、2:1、scanline RGB(A) OpenEXR, 支持 HALF/FLOAT 以及无压缩、ZIPS、ZIP、PIZ. 像素交付为顶部起行的线性 Rec.709 RGB, alpha 忽略. 缺省色度按 Rec.709/D65 解释, `whiteLuminance` 存在时记录文件声明的单位白亮度, 否则显示相对亮度. `StatusEnvironment` 区分当前请求与最后有效版本. [环境入口](../Engine/Asset/AssetManager.hpp)
 
 模型消费者链接 PhysaraAsset, 用 `RequestModel` 提交 `Assets/Models` 内的项目相对路径, 并可指定 glTF scene 下标. 在同一 owner 轮次调用 `PublishCompleted`, 再用 `StatusModel` 取得请求状态和 `ModelVersion`. 文件、外部依赖和内嵌图片统一通过该模型作业取得. 显式调用 `InvalidateSource` 再请求时重新核对依赖指纹, 旧记录可由调用方固定. [请求入口](../Engine/Asset/AssetManager.hpp) · [模型数据](../Engine/Asset/ModelAsset.hpp)
 
@@ -38,9 +40,11 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 主 View 的物理请求保存在 v1 `mainView.requested.physicalCamera`. 保存使用秒、米和曝光档数。读取缺少整个对象的旧 v1 文件时采用 f/16、1/125 秒、ISO 100、0 EV 补偿、24 mm 传感器、60° 导航视场对应的焦距以及 10 m 对焦距离。 [物理相机合同](Architecture.md#camera)
 
+v1 可省略顶层 `environment`. 对象使用 `path`、环境到世界的 xyzw 单位四元数 `rotation`、有限非负 `intensity` 和布尔用途 `lighting`、`sky`. 至少选择一个用途, 路径相对 exe 资源根并位于 `Assets/Environments`. Open 取得当前 CPU 版本后才整体恢复 Scene/View, Save 保留请求字段. [场景文档合同](Architecture.md#asset-persistence)
+
 ## Shader 构建
 
-PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认产品构建在 `Shaders/<Debug|Release>/` 下生成 `EditorUi.pshader`、`StaticForward.pshader`、`StaticDepth.pshader` 和 `ForwardDisplay.pshader`. Runtime 共享各包的唯一生成目标, 按配置和实际 exe 目录解析. `EditorUi` 包不匹配或缺失时启动返回 1. Forward 包在首次准备真实场景时读取, 包或 Pipeline 不可用时视口说明原因, 其余 UI 可继续运行. [声明说明](../Engine/Shader/Interface/README.md)
+PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值和 RHI 句柄合同, 编译库和 JSON 为私有实现, 字节摘要复用 Core 的 CNG 实现. PhysaraShaderBuild 是 Engine/Shader 内部薄构建驱动. 默认产品构建在 `Shaders/<Debug|Release>/` 下生成 `EditorUi`、`StaticForward`、`StaticDepth`、`ForwardDisplay`、`StaticForwardPhysical`、`StaticForwardIbl` 和 `ForwardSky` 的 `.pshader` 包. Runtime 共享各包的唯一生成目标, 按配置和实际 exe 目录解析. `EditorUi` 包不匹配或缺失时启动返回 1. Forward 和天空按实际视口需求读取对应包, 包或 Pipeline 不可用时视口说明原因, 其余 UI 可继续运行. [声明说明](../Engine/Shader/Interface/README.md)
 
 运行期消费使用 [RhiProgram.hpp](../Engine/Shader/RhiProgram.hpp) 的 `LoadRhiProgram(device, packagePath, expectedAbiHash)`, 通常从生成 Data.hpp 的 `AbiHash` 传入期望值. 成功结果拥有 VS/PS RHI 句柄和包身份, 包原始 CPU 存储可释放; 返回前任一阶段失败不交付部分集合. 此入口只链接通用 RHI, 不反向依赖 native backend; 所用 Device 的 owner/context 前提由实际消费者满足. 原生 GL 的绑定展平、GLSL 460 编译/link 在 `CreateGraphicsPipeline` 中发生, 随后通过公共集合/Framebuffer、SetGraphicsState 和直接 Draw/DrawIndexed 消费. 当前普通单样本执行范围见 [RHI](../RHI/README.md#opengl-原生消费边界), Dispatch、间接命令仍待后续工作包.
 
@@ -101,6 +105,7 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 - 在 `View Settings` 选择导航或场景相机, 调整 `Preview` 与 `Render scale` (0.50x 至 1.00x). `Requested` 显示请求比例, `Effective` 显示最后确认的比例与离屏像素尺寸. 在有效导航图像内按住右键用鼠标和 WASD/QE 飞行, Alt+左键环绕, 中键平移. 按 Esc 可取消尚未结束的手势. 如需同时看图与参数, 将 `Viewport` 和 `View Settings` 停靠在不同区域.
 - 在 `View Settings` 输入光圈、快门、ISO、曝光补偿、传感器高度、导航焦距或对焦距离后按 Enter 提交，可用 Undo/Redo 重放。传感器和焦距用毫米，对焦距离用米，快门用秒。场景透视相机使用源 `yfov` 并显示由传感器高度反推的焦距。面板分别显示当前 EV100、请求预曝光和最后成功场景帧的预曝光。
 - `Preview > Direct Lighting` 用场景中的方向灯、点光、聚光及材质自发光显示受光表面。直接光和自发光使用当帧预曝光，当前视口在线性工作色上限幅显示。Unlit 用标准基色。初始模式为 `Base Color`。在 View Settings 可对照请求模式与 `Last accepted preview`。灯表拒绝时，设置面板和视口显示灯表原因，Frame status 保留更具体的诊断。 [D07 直接光](Developments/D06-D07-SceneAndForward.md#d07-t03)
+- `Preview > Physical Lighting` 使用同一场景灯表和匹配 DFG, 按场景 `environment` 的用途加入间接光和天空. 源应位于 exe 资源树的 `Assets/Environments`, 通过 v1 场景打开. View Settings 显示请求及最后实际接受的环境、用途和标定. 初次准备在 CPU 冷路径进行, 等待或失败时可使用已接受的旧视口或带原因的占位. 该模式继续使用当前线性限幅视口出口. [D07 环境光](Developments/D06-D07-SceneAndForward.md#d07-t04)
 - 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
 - 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
 

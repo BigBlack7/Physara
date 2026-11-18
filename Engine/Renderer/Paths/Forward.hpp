@@ -13,12 +13,15 @@ namespace Physara::Renderer
     inline constexpr std::size_t ForwardAttachmentBudget = 128 * 1024 * 1024;
     inline constexpr std::size_t ForwardBufferLimit = 64 * 1024 * 1024;
 
-    /// @brief 当前配置的三个程序包路径, 由 Runtime 定位; 首次准备场景时才读取包.
+    /// @brief 当前配置的程序包路径, 由 Runtime 按实际 exe 定位. 物理变体按需加载.
     struct ForwardPackagePaths
     {
         std::filesystem::path color;
         std::filesystem::path depth;
         std::filesystem::path display;
+        std::filesystem::path physical;
+        std::filesystem::path ibl;
+        std::filesystem::path sky;
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
@@ -44,6 +47,8 @@ namespace Physara::Renderer
 
         /// @brief 是否有本候选的上传保留在同图计划中, 供准入失败时判定能否移除场景分支.
         [[nodiscard]] bool HasLiveUploads(const CompiledGraphPlan &plan) const noexcept;
+        /// @brief 核对显示版本的图代以及所有候选上传 Pass 的活性. 执行成功与提交票据由 Runtime 核对.
+        [[nodiscard]] bool HasCompleteUploads(const CompiledGraphPlan &plan) const noexcept;
 
     private:
         friend class ForwardFrame;
@@ -69,6 +74,8 @@ namespace Physara::Renderer
         void Reset() noexcept;
         /// @brief 借用本轮被跳过项的有界摘要, 下次 Reset/Prepare 后失效; 空值表示无局部降级.
         [[nodiscard]] const std::optional<Core::BoundedText> &Degradation() const noexcept;
+        /// @brief 本候选实际使用的环境角色, 与当前 PreparedView 一起交给 View.
+        [[nodiscard]] const std::optional<RenderedEnvironment> &Environment() const noexcept;
         /// @brief 图回调对象所需的 arena 预留量, 不含帧拥有的 Draw 容器, 像素或 GPU 存储.
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
 

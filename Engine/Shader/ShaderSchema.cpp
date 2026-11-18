@@ -82,6 +82,10 @@ namespace Physara::Shader
         {
             return ResourceKind::Texture2D;
         }
+        if (name == "texturecube")
+        {
+            return ResourceKind::TextureCube;
+        }
         if (name == "sampler")
         {
             return ResourceKind::Sampler;
@@ -99,6 +103,8 @@ namespace Physara::Shader
             return "structured-buffer";
         case ResourceKind::Texture2D:
             return "texture2d";
+        case ResourceKind::TextureCube:
+            return "texturecube";
         case ResourceKind::Sampler:
             return "sampler";
         }

@@ -17,11 +17,12 @@ namespace Physara::Renderer
         TextureRange range;
     };
 
-    // 每次只完整定义指定 mip, 其它层的内容由各自生产者回溯. 执行使用同一层号及行距.
+    // 每次完整定义指定 mip/layer, 其它子资源由各自生产者回溯. 执行沿用同一范围及行距.
     GraphResult<GraphTextureWrite> AddTextureUpload(RenderGraph &graph, TextureId target,
-        std::span<const std::byte> pixels, std::size_t rowPitch, std::vector<GraphUpload> &uploads, std::uint32_t mip)
+        std::span<const std::byte> pixels, std::size_t rowPitch, std::vector<GraphUpload> &uploads, std::uint32_t mip,
+        std::uint32_t layer)
     {
-        const TextureRange range{.firstMip = mip};
+        const TextureRange range{.firstMip = mip, .firstLayer = layer};
         TextureId written;
         auto pass = graph.AddPass<TextureUploadData>("Texture upload", [&](PassBuilder &builder, auto &data)
         {
@@ -33,7 +34,8 @@ namespace Physara::Renderer
         {
             if (auto *texture = resources.Resolve(data.texture, GraphUsage::CopyDestination, data.range))
             {
-                commands.WriteTexture(texture, 0, data.range.firstMip, data.pixels.data(), data.rowPitch);
+                commands.WriteTexture(texture, data.range.firstLayer, data.range.firstMip, data.pixels.data(),
+                                      data.rowPitch);
             }
             return std::nullopt;
         });

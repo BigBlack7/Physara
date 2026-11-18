@@ -174,7 +174,7 @@ namespace Physara::Renderer
     // 模式是会话请求. 保留旧颜色和场景记录, 直到 Publish 收到与新模式匹配的候选.
     void View::RequestPreview(PreviewMode mode) noexcept
     {
-        assert(mode <= PreviewMode::DirectLighting);
+        assert(mode <= PreviewMode::PhysicalLighting);
         if (m_Preview != mode)
         {
             m_Preview = mode;
@@ -295,12 +295,13 @@ namespace Physara::Renderer
     }
 
     // 只复制已接受资源的强引用, 不调用 Prepare, 因而不借用当前布局或生成新候选.
-    PreparedViewOutput View::LastAcceptedOutput() const noexcept
+    PreparedViewOutput View::LastAcceptedOutput(ViewSettingReason reason) const noexcept
     {
         PreparedViewOutput outputs;
         outputs.m_Output = m_Accepted;
         outputs.m_Retained = true;
         outputs.m_Scale = m_EffectiveScale;
+        outputs.m_UnavailableReason = reason;
         return outputs;
     }
 
@@ -387,7 +388,8 @@ namespace Physara::Renderer
     }
 
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
-        const PreparedView &prepared, std::optional<Core::BoundedText> degradation)
+        const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
+        std::optional<RenderedEnvironment> environment)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -402,7 +404,7 @@ namespace Physara::Renderer
         // 记录来自准备快照的曝光与请求代, 不能在确认阶段改取届时的当前请求.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, m_Preview,
-                          std::move(degradation), prepared.documentRevision}};
+                          std::move(degradation), prepared.documentRevision, std::move(environment)}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }

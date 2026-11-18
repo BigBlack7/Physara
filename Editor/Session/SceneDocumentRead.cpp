@@ -644,13 +644,35 @@ namespace Physara::Editor::Detail
         const auto json = Json::parse(first, first + bytes.size(), event);
         // JSON 结构通过后按 v1 类型解码, 再在资产请求之前检查跨实体引用与环.
         const Field root(json, "");
-        root.Object({"version", "entities", "mainView"});
+        root.Object({"version", "entities", "mainView", "environment"});
         const auto version = root.Required("version");
         if (version.Index() != 1)
         {
             version.Error("Unsupported scene document version");
         }
         ParsedSceneDocument doc;
+        if (const auto field = root.Optional("environment"))
+        {
+            field->Object({"path", "rotation", "intensity", "lighting", "sky"});
+            const auto rotation = field->Required("rotation").Vector<double, 4>();
+            if (!Scene::IsValidPose(Scene::Pose{{}, rotation}))
+            {
+                field->Required("rotation").Error("Expected a unit xyzw rotation");
+            }
+            const auto intensity = field->Required("intensity").Number<double>();
+            if (intensity < 0)
+            {
+                field->Required("intensity").Error("Expected nonnegative environment intensity");
+            }
+            const bool lighting = field->Required("lighting").Flag();
+            const bool sky = field->Required("sky").Flag();
+            if (!lighting && !sky)
+            {
+                field->Error("Enable at least one environment role");
+            }
+            doc.environment = EnvironmentFileReference{field->Required("path").Resource(L"Environments"),
+                                                       {rotation, intensity, lighting, sky}};
+        }
         const auto view = root.Required("mainView");
         doc.view = ReadView(view);
         const auto list = root.Required("entities");

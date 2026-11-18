@@ -2,8 +2,7 @@
 // 衰减采用项目的四次距离窗和 Khronos 余弦平方角衰减. 逐灯 BRDF 由核心库提供.
 #include <Source/BRDF/CoreBrdf.glsl>
 #include <Source/Common/SumRemainder.glsl>
-
-const float MaxWorkingLight = 65504.0;
+#include <Source/Lighting/WorkingLight.glsl>
 
 // 一个米制向量的高位与余量. 灯和眼点使用世界位置, 表面用同一表示保存相对基点的偏移.
 struct LightingPosition
@@ -40,19 +39,9 @@ vec3 LightingDelta(LightingPosition target, LightingSurface surface, float scale
     return delta;
 }
 
-// 将非负 RGB 的各通道与公共二进制指数合并. RGB 先各自拆分, 因而暗通道保留自己的指数.
-// 尾数至少为 0.5 的非零通道在指数 17 时已超出 RGBA16F 上限, 零通道始终为零.
-vec3 ScaleWorkingLight(vec3 value, int exponent)
-{
-    ivec3 normalization;
-    vec3 mantissa = frexp(value, normalization);
-    ivec3 bounded = clamp(normalization + exponent, ivec3(-126), ivec3(17));
-    return min(ldexp(mantissa, bounded), vec3(MaxWorkingLight));
-}
-
 // 距离按最大分量缩放, 避免 r^2 自身的溢出及除以零. D 为发射轴, L 由表面指向灯.
 vec3 EvaluateDirect(ForwardLight light, bool directional, PixelParams pixel, vec3 normal, vec3 viewDirection,
-                    LightingSurface surface, float exposureMantissa, int exposureExponent)
+                    LightingSurface surface, float exposureMantissa, int exposureExponent, vec3 specularCompensation)
 {
     if (light.intensity == 0.0)
     {
@@ -116,13 +105,14 @@ vec3 EvaluateDirect(ForwardLight light, bool directional, PixelParams pixel, vec
     float intensityMantissa = frexp(light.intensity, intensityExponent);
     float weight = (noL * attenuation) * (intensityMantissa * exposureMantissa) /
                    (distanceMantissa * distanceMantissa);
-    return ScaleWorkingLight((lobes.diffuse + lobes.specular) * light.color * weight,
+    return ScaleWorkingLight((lobes.diffuse + lobes.specular * specularCompensation) * light.color * weight,
                              intensityExponent + exposureExponent - 2 * distanceExponent);
 }
 
 // 以当帧预曝光自发光为起值. 两个有效段在同一数组中相邻, 计数和是首个无效行的下标.
 // 零灯时循环为空. 直接光和自发光各带一次曝光, 两者都不使用材质 AO.
-vec3 EvaluateLighting(PixelParams pixel, vec3 normal, vec3 viewDirection, LightingSurface surface, vec3 emission)
+vec3 EvaluateLighting(PixelParams pixel, vec3 normal, vec3 viewDirection, LightingSurface surface, vec3 emission,
+                      vec3 specularCompensation)
 {
     int exponent;
     float exposure = frexp(perView.preExposure, exponent);
@@ -132,7 +122,7 @@ vec3 EvaluateLighting(PixelParams pixel, vec3 normal, vec3 viewDirection, Lighti
     {
         result += EvaluateDirect(lightRows.records[index], index < perView.directionalCount, pixel, normal,
                                  viewDirection, surface,
-                                 exposure, exponent);
+                                 exposure, exponent, specularCompensation);
     }
     return min(result, vec3(MaxWorkingLight));
 }

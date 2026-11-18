@@ -64,6 +64,11 @@ namespace Physara::RHI::OpenGL
     /// @return 成功 owning handle, 参数/环境不支持或 bad_alloc 时为空.
     [[nodiscard]] DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError = nullptr);
 
+    /// @brief 读取原生 Device 初始化时观察到的单个 cube 目标能力与最大面宽.
+    /// @note 只借用有效原生 Device. 无对应能力时返回 None, 不查询 GL 或从二维格式能力推断.
+    [[nodiscard]] FormatSupport QueryCubeFormatSupport(Device *device, Format format,
+                                                        std::uint32_t &maxEdge) noexcept;
+
     /// @brief 新包上传的容量预检结果. Pending 表示当前持有的区段退休后可重试.
     enum class UploadAdmission : std::uint8_t
     {

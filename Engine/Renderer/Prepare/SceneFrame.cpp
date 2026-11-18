@@ -58,7 +58,7 @@ namespace Physara::Renderer
         if (m_Scene == sceneId && m_ContentRevision == content)
         {
             return SceneFrame{m_Scene, m_ContentRevision, m_Objects, m_Primitives, m_Lights, m_Models,
-                              m_MaterialOverrides, m_DrawableBounds};
+                              m_MaterialOverrides, m_DrawableBounds, scene.Environment()};
         }
         // 已回收的槽可以复用数组容量. 全部提取成功前保持缓存键无效.
         Clear();
@@ -140,6 +140,6 @@ namespace Physara::Renderer
         m_Scene = sceneId;
         m_ContentRevision = content;
         return SceneFrame{m_Scene, m_ContentRevision, m_Objects, m_Primitives, m_Lights, m_Models,
-                          m_MaterialOverrides, m_DrawableBounds};
+                          m_MaterialOverrides, m_DrawableBounds, scene.Environment()};
     }
 }

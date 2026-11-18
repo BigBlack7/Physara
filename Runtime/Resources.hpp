@@ -7,6 +7,7 @@
 #include <variant>
 
 #include <Core/Error.hpp>
+#include <Renderer/Paths/Forward.hpp>
 
 namespace Physara::Runtime
 {
@@ -15,10 +16,7 @@ namespace Physara::Runtime
     {
         std::filesystem::path projectRoot; ///< Assets/... 相对该目录.
         std::filesystem::path editorUiPackage; ///< 由 CMake 为当前配置生成的 UI 包位置, 不属于 Assets 输入.
-        /// @brief 同配置的场景颜色, 共用覆盖深度及预览显示包. 解析路径不代表包已加载或可用.
-        std::filesystem::path staticForwardPackage;
-        std::filesystem::path staticDepthPackage;
-        std::filesystem::path forwardDisplayPackage;
+        Renderer::ForwardPackagePaths forward; ///< 同配置的场景包. 路径定位不代表已经准备.
     };
 
     /// @brief 定位资源根并拼接当前配置的生成包路径. 此步骤不打开任何资产.

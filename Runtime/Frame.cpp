@@ -55,19 +55,19 @@ namespace Physara::Runtime
     /// @brief 本候选的能力存储, options 的 span 只借用到当前编译返回.
     struct EditorGraphProfile
     {
-        std::array<GraphTextureSupport, 4> textures;
+        std::array<GraphTextureSupport, 5> textures;
         std::array<RHI::ResourceStates, 2> states{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
         GraphCompileOptions options;
 
-        // 基础 UI 只用自身的格式和缓冲类型. 场景候选另交付宿主实测的 SSBO 块上限与偏移对齐,
-        // 供编译器校验 ShadeOpaque 声明的灯表范围. 实际上传仍由后续准入按存活写入独立核算.
+        // 基础 UI 使用二维格式. 场景图另取 SSBO 范围和 RGBA32F cube 的目标能力,
+        // 供编译器核对灯表及采样子资源. 后续上传准入只计算留在执行计划中的写入.
         // options 的借用依赖本对象地址稳定, 因此在 TryFrame 的同一局部作用域内构造并消费.
         explicit EditorGraphProfile(Platform::DeviceHost &host, bool scene)
         {
             const auto info = host.GetInfo();
             constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
                                          RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
-            const auto count = scene ? formats.size() : 2;
+            auto count = scene ? formats.size() : 2;
             for (std::size_t index = 0; index < count; ++index)
             {
                 textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
@@ -79,6 +79,18 @@ namespace Physara::Runtime
                 if (host.HasFatalGraphicsError())
                 {
                     return;
+                }
+            }
+            if (scene)
+            {
+                std::uint32_t maxEdge = 0;
+                constexpr auto format = RHI::Format::RGBA32_FLOAT;
+                const auto support = host.QueryCubeFormatSupport(format, maxEdge);
+                if ((support & RHI::FormatSupport::ShaderSample) != 0)
+                {
+                    textures[count++] = {.format = format, .dimension = RHI::TextureDimension::TextureCube,
+                        .sampleCount = 1, .maxWidth = maxEdge, .maxHeight = maxEdge, .maxDepth = 1, .maxLayers = 6,
+                        .formatSupport = support, .copySource = true, .copyDestination = true, .maxSampledLayers = 6};
                 }
             }
             options = {.textures = std::span(textures).first(count),
@@ -329,10 +341,11 @@ namespace Physara::Runtime
             static_cast<void>(confirmed);
         }
         const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
+            (!declared.scene || declared.scene->HasCompleteUploads(plan)) &&
             view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.viewport)));
         if (published && declared.scene)
         {
-            // View 已接受本次正常合成采样的颜色, 才确认对应槽的灯表和其余上传可供后继读取.
+            // View 接受颜色及随帧冻结的环境后, 再允许后继帧把这次完整上传的存储作为已初始化输入.
             slot.forward.Confirm(*declared.scene, plan);
         }
         const auto result = host.Present(presentation.token, hostError);
@@ -513,27 +526,43 @@ namespace Physara::Runtime
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
-        // 由场景全集判断是否已有真实表面, 不用裁剪后的可见项数决定是否退回测试图.
-        // 全部表面隐藏或移出视锥时仍由 Forward 清除颜色和深度, 避免把空可见集显示成空文档诊断.
-        const bool hasScene = prepared.camera && std::ranges::any_of(prepared.scene.primitives,
-            [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); });
+        // 天空有独立的颜色写入, 只有相机和天空也可进入 Forward. 有几何时依据场景全集判断,
+        // 使全部表面隐藏或移出视锥的场景仍由 Forward 清除颜色和深度.
+        const bool physical = view.Preview() == PreviewMode::PhysicalLighting;
+        const bool wantsSky = physical && prepared.scene.environment && prepared.scene.environment->settings.sky;
+        const bool hasScene = prepared.camera && (wantsSky || std::ranges::any_of(prepared.scene.primitives,
+            [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); }));
+        auto mode = Editor::UiFrameMode::Normal;
         if (hasScene)
         {
             const auto errors = host.BeginFrameGraphicsDiagnostics();
             auto failure = forward.Prepare(slot.forward, prepared, view.Preview());
-            if (!failure && !errors.IsClear())
+            if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending))
             {
                 failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
                                          Core::BoundedText("Forward resource preparation failed")};
             }
             if (failure)
             {
-                remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
+                // CPU 烘焙正常等待只更新 View 原因, 实际拒绝仍写入本次帧诊断.
+                if (failure->reason != ViewSettingReason::EnvironmentPending)
+                {
+                    remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
+                }
                 candidate = view.Unavailable(failure->reason);
+                if (physical)
+                {
+                    auto retained = view.LastAcceptedOutput(failure->reason);
+                    if (retained.Color())
+                    {
+                        candidate = std::move(retained);
+                        mode = Editor::UiFrameMode::SafeUi;
+                    }
+                }
             }
             else
             {
-                candidate = view.PreparePreview(prepared, slot.forward.Degradation());
+                candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment());
             }
             if (host.HasFatalGraphicsError())
             {
@@ -553,7 +582,6 @@ namespace Physara::Runtime
         // 本次取得已证明同槽上次工作完成. 后续失败分支只检查本轮是否真的提交过前缀.
         slot.lastSubmission = 0;
         slot.diagnosticUploadBytes = 0;
-        auto mode = Editor::UiFrameMode::Normal;
         for (;;)
         {
             // 首轮已由同槽 Ready 证明安全; 后继候选只会在无录制且旧尝试完全析构后到达.
@@ -579,6 +607,15 @@ namespace Physara::Runtime
             {
                 // 普通 UI 沿同一原因合成占位. 无可发布的颜色, 因此不会重复进入视口上传分支.
                 outputs = view.Unavailable(attempt.viewportReason);
+                if (physical && mode == Editor::UiFrameMode::Normal)
+                {
+                    auto retained = view.LastAcceptedOutput(attempt.viewportReason);
+                    if (retained.Color())
+                    {
+                        outputs = std::move(retained);
+                        mode = Editor::UiFrameMode::SafeUi;
+                    }
+                }
                 continue;
             }
             if (attempt.status == AttemptStatus::Succeeded)

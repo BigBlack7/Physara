@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "ForwardSky",
+  "blocks": [
+    {
+      "name": "ForwardSkyView",
+      "layout": "std140",
+      "fields": [
+        { "name": "environmentFromClip", "type": "float3x3" },
+        { "name": "radianceMantissa", "type": "float32" },
+        { "name": "radianceExponent", "type": "int32" }
+      ]
+    }
+  ],
+  "resources": [
+    { "name": "skyView", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["fragment"], "block": "ForwardSkyView" },
+    { "name": "skyImage", "kind": "texturecube", "set": 0, "slot": 0, "stages": ["fragment"] },
+    { "name": "skySampler", "kind": "sampler", "set": 0, "slot": 0, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "vertex", "direction": "out", "name": "vClip", "location": 0, "type": "float2" },
+    { "stage": "fragment", "direction": "in", "name": "vClip", "location": 0, "type": "float2" },
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

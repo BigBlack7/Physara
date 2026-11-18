@@ -67,4 +67,11 @@ namespace Physara::Asset
         constexpr std::array<std::wstring_view, 2> Allowed{L"Textures", L"Editor"};
         return VerifyFile(root, image.source, image.sourceFingerprint, image.sourceByteCount, Allowed, stop);
     }
+
+    SourceVerification VerifySource(const std::filesystem::path &root, const EnvironmentRecord &image,
+                                    std::stop_token stop)
+    {
+        constexpr std::array<std::wstring_view, 1> Allowed{L"Environments"};
+        return VerifyFile(root, image.source, image.sourceFingerprint, image.sourceByteCount, Allowed, stop);
+    }
 }

@@ -42,12 +42,14 @@ namespace Physara::Shader
         Fragment
     };
 
+    /// @brief 接口和包反射保留采样维度. 两种纹理共用 RHI 的 Texture_SRV 槽类别.
     enum class ResourceKind : std::uint8_t
     {
         ConstantBuffer,
         StructuredBuffer,
         Texture2D,
-        Sampler
+        Sampler,
+        TextureCube
     };
 
     /// @brief 字段的规范布局, offset/extent/stride 均为字节, type 使用版本 1 规范类型名.

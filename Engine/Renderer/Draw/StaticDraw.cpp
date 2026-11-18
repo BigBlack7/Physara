@@ -16,7 +16,7 @@
 
 /// @file
 /// @brief 使用 PreparedView 构造可直接录制的静态 Draw. 本阶段仅分配对象并拥有待写字节.
-/// 收齐可绘材质后选择灯表, 并将有效计数与同轮相机的矩阵, 观察量和曝光写入 per-view 行.
+/// 收齐可绘材质后选择环境角色和颜色管线, 灯表计数, 观察量及曝光取自同轮 View.
 
 namespace Physara::Renderer::Detail
 {
@@ -453,7 +453,7 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 准备当前可见 Primitive 的固定布局、索引、材质行和 Pipeline.
+    /// @brief 准备当前可见 Primitive 的几何和材质行. 记录光栅键, 颜色管线在全部可绘材质确定后选择.
     static void PrepareDraw(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
         std::uint32_t index, std::map<MaterialRow *, std::size_t> &rows)
     {
@@ -517,12 +517,6 @@ namespace Physara::Renderer::Detail
         const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         const bool mirror = object.orientation < 0;
         const bool doubleSided = material.values.doubleSided;
-        auto pipeline = device.programs.GeometryPipeline(device.device, attributes, mirror, doubleSided, phase);
-        RHI::GraphicsPipelineHandle depth;
-        if (frame.needs.earlyDepth)
-        {
-            depth = device.programs.GeometryPipeline(device.device, attributes, mirror, doubleSided, SurfacePhase::Depth);
-        }
         const auto &matrix = view.camera->viewFromWorld;
         const auto &bounds = *ref.bounds;
         auto z = matrix[14];
@@ -531,8 +525,8 @@ namespace Physara::Renderer::Detail
             z += matrix[4 * i + 2] * (bounds.minimum[i] * 0.5 + bounds.maximum[i] * 0.5);
         }
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
-            slot->second, std::move(pipeline), std::move(depth), PipelineKey(attributes, mirror, doubleSided, phase),
-            -z, index});
+            slot->second, {}, {}, PipelineKey(attributes, mirror, doubleSided, phase),
+            -z, index, attributes, mirror, doubleSided});
     }
 
     void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
@@ -543,17 +537,33 @@ namespace Physara::Renderer::Detail
         {
             PrepareDraw(device, frame, view, index, rows);
         }
+        if (frame.draws.empty() && frame.degradation)
+        {
+            throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
+        }
+        const bool litDraws = std::ranges::any_of(frame.materialRows,
+            [](const auto &row) { return row->values.unlit == 0; });
+        PrepareEnvironment(device, frame, view, mode, litDraws);
         if (frame.draws.empty())
         {
-            if (frame.degradation)
-            {
-                throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
-            }
             return;
         }
-        // 颜色程序的灯绑定对所有 Draw 都存在. 只有实际受光的工作集才编码场景灯, 其余绑定零表.
-        const bool usesLighting = mode == PreviewMode::DirectLighting &&
-            std::ranges::any_of(frame.materialRows, [](const auto &row) { return row->values.unlit == 0; });
+        // 知道实际可绘材质后才选择活动资源形状, 纯 Unlit 工作集不需要 DFG 或环境照明.
+        const auto kind = frame.environment.program;
+        device.programs.PrepareLighting(device.device, kind);
+        frame.lightLayout = device.programs.lightLayouts[std::size_t(kind)];
+        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        for (auto &draw : frame.draws)
+        {
+            draw.pipeline = device.programs.GeometryPipeline(device.device, draw.attributes, draw.mirrored,
+                                                             draw.doubleSided, phase, kind);
+            if (frame.needs.earlyDepth)
+            {
+                draw.depthPipeline = device.programs.GeometryPipeline(device.device, draw.attributes, draw.mirrored,
+                                                                      draw.doubleSided, SurfacePhase::Depth, kind);
+            }
+        }
+        const bool usesLighting = litDraws && (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
         PrepareLightTable(device, frame, view, usesLighting);
         PrepareViewRow(device, frame, view, mode, usesLighting);
         // 两种深度组合使用同一顺序, 相等深度下保留相同的绘制优先级.

@@ -456,8 +456,7 @@ namespace Physara::Editor::Detail
         return detail;
     }
 
-    // 从本次 View 准备结果选择占位. 灯表编码失败沿独立原因到达视口叠字, 设置面板读取同一 View 状态.
-    // 转换只用于 UI 合成, 已接受的颜色代及模式由 View 持有.
+    // 将新候选未就绪的原因映射为视口文字. 同一原因可用于无图占位或叠加在实际采样的旧图上.
     static UiFallback MissingViewportOutput(const Renderer::PreparedViewOutput &outputs) noexcept
     {
         switch (outputs.UnavailableReason())
@@ -478,6 +477,8 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::SceneUnsupported: return UiFallback::SceneUnsupported;
         case Renderer::ViewSettingReason::SceneUploadLimit: return UiFallback::SceneUploadLimit;
         case Renderer::ViewSettingReason::SceneLightTableRejected: return UiFallback::SceneLightTableRejected;
+        case Renderer::ViewSettingReason::EnvironmentPending: return UiFallback::EnvironmentPending;
+        case Renderer::ViewSettingReason::EnvironmentRejected: return UiFallback::EnvironmentRejected;
         default: return UiFallback::MissingOutput;
         }
     }
@@ -525,9 +526,10 @@ namespace Physara::Editor::Detail
                 return TexturePreparationError(*error, m_BaseFontReady);
             }
 
+            const bool hasUnavailableReason = outputs.UnavailableReason() != Renderer::ViewSettingReason::None;
             UiFrameBindings bindings{.output = outputs.Color(),
-                                     .missingView = mode == UiFrameMode::SafeUi ? UiFallback::FrameFailed :
-                                                                                 MissingViewportOutput(outputs),
+                                     .missingView = mode == UiFrameMode::SafeUi && !hasUnavailableReason ?
+                                         UiFallback::FrameFailed : MissingViewportOutput(outputs),
                                      .viewportDraw = viewport.FindDraw(drawData)};
             if (bindings.viewportDraw)
             {
@@ -559,7 +561,11 @@ namespace Physara::Editor::Detail
                     return true;
                 }
                 status.emplace(ImGui::GetDrawListSharedData());
-                viewport.DrawStatus(*status, *bindings.viewportDraw, bindings.viewportFallback, bindings.output);
+                // RetainedOutput 仍是实际采样资格. 标签单独消费该候选的等待或失败原因.
+                const bool retained = bindings.viewportFallback == UiFallback::RetainedOutput;
+                const auto reason = retained && hasUnavailableReason ? MissingViewportOutput(outputs) :
+                                                                       bindings.viewportFallback;
+                viewport.DrawStatus(*status, *bindings.viewportDraw, reason, bindings.output, retained);
                 if (status->VtxBuffer.empty())
                 {
                     return true;

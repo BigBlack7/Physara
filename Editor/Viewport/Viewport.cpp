@@ -37,7 +37,9 @@ namespace Physara::Editor::Detail
         case UiFallback::SceneUnsupported: return "No supported visible surface";
         case UiFallback::SceneUploadLimit: return "Forward upload limit exceeded";
         case UiFallback::SceneLightTableRejected: return "Visible light table rejected";
-        case UiFallback::RetainedOutput: return "Frame failed - showing last accepted output";
+        case UiFallback::EnvironmentPending: return "Preparing HDR environment or DFG";
+        case UiFallback::EnvironmentRejected: return "HDR environment unavailable";
+        case UiFallback::RetainedOutput: return "Frame failed";
         case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";
         }
@@ -101,7 +103,7 @@ namespace Physara::Editor::Detail
 
     // 在视口图像和原绘制裁剪的交集内生成状态标签, 供合成器紧接图像使用.
     void ViewportImage::DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
-                                   const Renderer::ViewOutput *output) const
+                                   const Renderer::ViewOutput *output, bool retained) const
     {
         const auto clip = draw.ClipRect;
         const ImVec2 min(std::max(origin.x, clip.x), std::max(origin.y, clip.y));
@@ -112,7 +114,12 @@ namespace Physara::Editor::Detail
         }
         constexpr float Inset = 4.0f;
         Core::BoundedText label(StatusText(reason));
-        if (reason == UiFallback::None && output)
+        if (retained)
+        {
+            // 等待或拒绝原因属于当前候选, 后缀说明图像仍来自旧代.
+            label.Append(" - showing last accepted output");
+        }
+        else if (reason == UiFallback::None && output)
         {
             if (output->scene)
             {

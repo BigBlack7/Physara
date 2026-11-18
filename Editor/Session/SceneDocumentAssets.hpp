@@ -7,17 +7,18 @@
 
 namespace Physara::Editor::Detail
 {
-    /// @brief 一个去重来源在本次 Open 中的准入和核对状态. scene 缺席表示外置图像.
+    /// @brief 一个去重来源在本次 Open 中的准入和核对状态.
     /// resolved 固定 CPU 版本; verified 只证明本次操作取得的读快照, 不承诺文件随后不会变化.
     struct SceneDependency
     {
         std::filesystem::path path;
         std::optional<std::uint32_t> scene;
         Core::Sha256Digest version{};
-        std::variant<std::monostate, Asset::ModelVersion, Asset::ImageVersion> resolved;
+        std::variant<std::monostate, Asset::ModelVersion, Asset::ImageVersion, Asset::EnvironmentVersion> resolved;
         std::optional<Asset::AssetRequest> request;
         bool verified{};
         bool refresh{}; ///< 本操作已使旧请求失效, 后继 CpuReady 含本次重新读取的证据.
+        bool environment{}; ///< 非模型依赖中的独立 HDR 角色.
     };
 
     /// @brief Open 的阶段载荷. 主线程请求资产, worker 校验并构建, 交接期间不并发访问本对象.
@@ -43,5 +44,6 @@ namespace Physara::Editor::Detail
         std::vector<SceneDependency> m_Dependencies;
         std::vector<std::size_t> m_ModelIndices;
         std::vector<std::size_t> m_ImageIndices;
+        std::optional<std::size_t> m_EnvironmentIndex;
     };
 }

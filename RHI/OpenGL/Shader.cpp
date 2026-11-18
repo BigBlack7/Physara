@@ -146,10 +146,13 @@ namespace Physara::RHI::OpenGL
         else if (kind == ResourceType::Texture_SRV)
         {
             const auto &image = compiler.get_type(item.type_id);
-            RequirePreparation(image.image.dim == spv::Dim2D && !image.image.arrayed && !image.image.ms &&
+            RequirePreparation((image.image.dim == spv::Dim2D || image.image.dim == spv::DimCube) &&
+                                   !image.image.arrayed && !image.image.ms &&
                                    !image.image.depth && image.image.sampled == 1 &&
                                    Scalar(compiler.get_type(image.image.type)) == GL_FLOAT,
-                               "Unsupported: only separate float texture2D is accepted");
+                               "Unsupported: expected a separate non-array float texture2D or textureCube");
+            result.dimension = image.image.dim == spv::DimCube ? TextureDimension::TextureCube :
+                                                                TextureDimension::Texture2D;
         }
         return result;
     }

@@ -206,11 +206,12 @@ namespace Physara::Shader
         for (const auto &image : all.separate_images)
         {
             const auto &type = compiler.get_type(image.type_id);
-            if (type.image.dim != spv::Dim2D || type.image.arrayed || type.image.ms || type.image.depth ||
+            if ((type.image.dim != spv::Dim2D && type.image.dim != spv::DimCube) || type.image.arrayed ||
+                type.image.ms || type.image.depth ||
                 type.image.sampled != 1 || compiler.get_type(type.image.type).basetype != spirv_cross::SPIRType::Float)
             {
                 throw BuildError(ErrorCode::UnsupportedProfile,
-                                 "Only separate float texture2D is in GraphicsBaselineV1.");
+                                 "GraphicsBaselineV1 requires a separate non-array float texture2D or textureCube.");
             }
         }
         compiler.update_active_builtins();
@@ -267,7 +268,9 @@ namespace Physara::Shader
                                                                    std::to_string(named->resource.binding)));
         const auto &expected = found->resource;
         RequireInterface(kind == expected.kind && (found->stageMask & (1u << static_cast<std::uint32_t>(stage))) != 0,
-                         "IR resource class/stage visibility mismatch: " + expected.name + ", actual stage=" +
+                         "IR resource class, dimension or stage mismatch: " + expected.name + ", expected kind=" +
+                             std::string(ResourceKindName(expected.kind)) + ", actual kind=" +
+                             std::string(ResourceKindName(kind)) + ", actual stage=" +
                              std::string(StageName(stage)) + ", expected mask=" + std::to_string(found->stageMask));
         RequireInterface(compiler.get_name(actual.id) == expected.name,
                          "IR resource name mismatch: expected=" + expected.name +
@@ -292,15 +295,7 @@ namespace Physara::Shader
             RequireInterface(result.recordStrideBytes == expected.recordStrideBytes, "IR record stride mismatch.");
             result.buffer = ReflectBuffer(compiler, records, expected.buffer);
         }
-        else if (kind == ResourceKind::Texture2D)
-        {
-            RequireInterface(variable.basetype == spirv_cross::SPIRType::Image && variable.image.dim == spv::Dim2D &&
-                                 !variable.image.arrayed && !variable.image.ms && !variable.image.depth &&
-                                 variable.image.sampled == 1 &&
-                                 compiler.get_type(variable.image.type).basetype == spirv_cross::SPIRType::Float,
-                             "IR texture requires one float texture2D.");
-        }
-        else
+        else if (kind == ResourceKind::Sampler)
         {
             RequireInterface(variable.basetype == spirv_cross::SPIRType::Sampler, "IR sampler type mismatch.");
         }
@@ -372,7 +367,13 @@ namespace Physara::Shader
         };
         append(active.uniform_buffers, ResourceKind::ConstantBuffer);
         append(active.storage_buffers, ResourceKind::StructuredBuffer);
-        append(active.separate_images, ResourceKind::Texture2D);
+        // Profile 已验证两种独立图像类型. 从实际 IR 区分维度, 不从请求的 schema 推断.
+        for (const auto &image : active.separate_images)
+        {
+            const auto kind = compiler.get_type(image.type_id).image.dim == spv::DimCube ?
+                ResourceKind::TextureCube : ResourceKind::Texture2D;
+            resources.push_back(ReflectResource(compiler, image, kind, schema, module.stage));
+        }
         append(active.separate_samplers, ResourceKind::Sampler);
         std::ranges::sort(resources,
                           [](const auto &left, const auto &right)

@@ -86,11 +86,43 @@ namespace Physara::Editor::Detail
         case SceneUnsupported: return "Failed - unsupported visible surfaces";
         case SceneUploadLimit: return "Failed - Forward upload limit";
         case SceneLightTableRejected: return "Failed - visible light table rejected";
+        case EnvironmentPending: return "Pending - preparing HDR environment or DFG";
+        case EnvironmentRejected: return "Failed - HDR environment unavailable";
         }
         return "";
     }
 
-    // 用权威比例快照初始化本轮控件, 从 ImGui 项状态提取比例意图.
+    /// @brief 用调用方选定的场景请求或已接受帧显示同一路径可对照的源代、查询参数和角色.
+    static void DrawEnvironmentSummary(const char *label, const Scene::SceneEnvironment &environment)
+    {
+        const auto source = environment.source->source.generic_u8string();
+        ImGui::TextWrapped("%s - %s", label, reinterpret_cast<const char *>(source.c_str()));
+        constexpr char Hex[] = "0123456789abcdef";
+        char fingerprint[13]{};
+        for (std::size_t index = 0; index < 6; ++index)
+        {
+            const auto value = environment.source->sourceFingerprint[index];
+            fingerprint[index * 2] = Hex[value >> 4];
+            fingerprint[index * 2 + 1] = Hex[value & 15];
+        }
+        ImGui::TextWrapped("Source revision %llu, SHA-256 %.12s",
+                           static_cast<unsigned long long>(environment.source->revision.value), fingerprint);
+        const auto &settings = environment.settings;
+        const auto &rotation = settings.rotation;
+        ImGui::TextWrapped("Rotation xyzw (%.9g, %.9g, %.9g, %.9g)",
+                           rotation[0], rotation[1], rotation[2], rotation[3]);
+        const auto *roles = settings.lighting ? (settings.sky ? "Lighting and sky" : "Lighting") : "Sky";
+        if (const auto white = environment.source->image.whiteLuminance)
+        {
+            ImGui::TextWrapped("%s, file white %.4g cd/m2, intensity %.4g", roles, double(*white), settings.intensity);
+        }
+        else
+        {
+            ImGui::TextWrapped("%s, relative radiance, intensity %.4g", roles, settings.intensity);
+        }
+    }
+
+    // 用 View 的请求比例初始化控件, 由 ImGui 的交互状态产生下一轮比例意图.
     static void DrawViewSettings(const Renderer::ViewSettings &view, bool allowEdits, WorkspaceFrame &frame)
     {
         constexpr char scaleLabel[] = "Render scale";
@@ -487,6 +519,25 @@ namespace Physara::Editor::Detail
                         if (preview == static_cast<int>(Renderer::PreviewMode::DirectLighting))
                         {
                             ImGui::TextWrapped("Punctual lights and emission. The viewport uses a linear clamp display.");
+                        }
+                        if (preview == static_cast<int>(Renderer::PreviewMode::PhysicalLighting))
+                        {
+                            if (state.scene && state.scene->Environment())
+                            {
+                                DrawEnvironmentSummary("Requested environment", *state.scene->Environment());
+                            }
+                            else
+                            {
+                                ImGui::TextUnformatted("Requested environment - none");
+                            }
+                        }
+                        if (acceptedPreview && acceptedPreview->environment)
+                        {
+                            DrawEnvironmentSummary("Last accepted environment", *acceptedPreview->environment);
+                        }
+                        else if (acceptedPreview && acceptedPreview->mode == Renderer::PreviewMode::PhysicalLighting)
+                        {
+                            ImGui::TextUnformatted("Last accepted environment - unused");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
                         drawEditError();

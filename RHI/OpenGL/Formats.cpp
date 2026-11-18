@@ -102,6 +102,8 @@ namespace Physara::RHI::OpenGL
         const GLint stencil = query(GL_STENCIL_RENDERABLE);
         const GLint vertex = query(GL_VERTEX_TEXTURE);
         const GLint fragment = query(GL_FRAGMENT_TEXTURE);
+        const bool sampledCube = dimension != TextureDimension::TextureCube ||
+                                 (!format.hasDepth && query(GL_FILTER) == GL_FULL_SUPPORT);
         const GLint viewClass = query(GL_VIEW_COMPATIBILITY_CLASS);
         if (!device.CheckNative("CreateDevice.FormatQueries"))
         {
@@ -133,10 +135,9 @@ namespace Physara::RHI::OpenGL
             dimension == TextureDimension::Texture2DMS || dimension == TextureDimension::Texture2DMSArray;
         if (vertex == GL_FULL_SUPPORT && fragment == GL_FULL_SUPPORT)
         {
-            // ShaderLoad 保留驱动读取能力, 供纹理存储校验使用.
-            // ShaderSample 额外要求格式可用于首发浮点采样视图, 供图编译和绑定工厂共用.
+            // ShaderLoad 仍描述目标的实际读取能力. ShaderSample 对单 cube 仅交付可线性过滤的颜色视图.
             result.support = result.support | FormatSupport::ShaderLoad;
-            if (!multisample && format.kind != FormatKind::Integer)
+            if (!multisample && sampledCube && format.kind != FormatKind::Integer)
             {
                 result.support = result.support | FormatSupport::ShaderSample;
             }
