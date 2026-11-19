@@ -14,7 +14,7 @@
 #include "Prepare/ViewPreparation.hpp"
 
 /// @file
-/// @brief 准备视口候选和测试图, 仅用被实际采样的接受回执发布显示色与场景记录.
+/// @brief 准备视口候选和测试图. 主路经 UI 采样, 离屏路经显式导出, 均以匹配的正常提交发布显示色.
 /// 持久请求先校验并求值镜头/曝光, 再一起发布; 准备和确认输出是之后的独立边界.
 /// 文档, 几何相机和比例各有请求代, 不能用布局或矩阵未变来认定曝光候选仍有效.
 
@@ -326,7 +326,7 @@ namespace Physara::Renderer
         }
     }
 
-    ViewSettingReason View::CheckViewport(const std::optional<ViewportRequest> &request) const noexcept
+    ViewSettingReason View::CheckViewport(const std::optional<ViewportRequest> &request, ViewportUse use) const noexcept
     {
         if (!request || request->view != m_Id || request->requestRevision != m_RequestRevision)
         {
@@ -338,7 +338,9 @@ namespace Physara::Renderer
         {
             return ViewSettingReason::InvalidExtent;
         }
-        if (extent.width > m_MaxTextureSize || extent.height > m_MaxTextureSize)
+        const auto output = request->outputExtent;
+        if (extent.width > m_MaxTextureSize || extent.height > m_MaxTextureSize ||
+            (use == ViewportUse::DisplayOutput && (output.width > m_MaxTextureSize || output.height > m_MaxTextureSize)))
         {
             return ViewSettingReason::TextureSizeLimit;
         }

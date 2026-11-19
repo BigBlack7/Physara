@@ -74,6 +74,7 @@ namespace Physara::Scene
             PrepareWorld();
             if (!Core::AdvanceGeneration(m_Revision.document) ||
                 (m_RenderChanged && !Core::AdvanceGeneration(m_Revision.renderContent)) ||
+                (m_StructureChanged && !Core::AdvanceGeneration(m_Revision.renderStructure)) ||
                 (m_CameraChanged && !Core::AdvanceGeneration(m_Revision.camera)) ||
                 (!m_World.empty() && !Core::AdvanceGeneration(m_Revision.transforms)))
             {
@@ -94,6 +95,18 @@ namespace Physara::Scene
                     entry.node->parent = entry.parent;
                     entry.node->instance = entry.instance;
                     entry.node->sourceNode = entry.source;
+                    if (entry.newObject)
+                    {
+                        entry.node->transformRevision = m_Revision.renderContent;
+                    }
+                    if (entry.lightChanged)
+                    {
+                        entry.node->lightRevision = m_Revision.renderContent;
+                    }
+                    if (entry.overrideRevisions)
+                    {
+                        entry.node->overrideRevisions = std::move(*entry.overrideRevisions);
+                    }
                 }
             }
             for (auto &[node, links] : m_Links)
@@ -104,6 +117,14 @@ namespace Physara::Scene
             for (auto &update : m_World)
             {
                 update.node->world = std::move(update.world);
+                if (update.transformChanged)
+                {
+                    update.node->transformRevision = m_Revision.renderContent;
+                }
+                if (update.lightChanged)
+                {
+                    update.node->lightRevision = m_Revision.renderContent;
+                }
             }
             m_State.entities.merge(m_NewEntries);
             for (const auto &[id, entry] : m_Entries)
@@ -120,6 +141,16 @@ namespace Physara::Scene
             {
                 m_State.environment = *m_Environment;
             }
+            if (m_StructureChanged)
+            {
+                // 新布局按完整记录发布. 各槽将从结构代识别这次更换, 旧源槽的明细到此失效.
+                m_State.renderChanges.clear();
+            }
+            else
+            {
+                // 复用事务准备阶段拥有的节点, 重复记录留在临时集合中销毁.
+                m_State.renderChanges.merge(m_RenderChanges);
+            }
             m_State.revisions = m_Revision;
             m_Created.clear();
         }
@@ -134,6 +165,9 @@ namespace Physara::Scene
             SceneNode *instance{};
             const Asset::ModelNode *source{};
             bool created{};
+            bool newObject{};
+            bool lightChanged{};
+            std::optional<std::vector<std::uint64_t>> overrideRevisions;
         };
 
         /// @brief 仅为受影响 owner 准备的新关系表, 发布前仍使用活动表解释旧状态.
@@ -148,6 +182,8 @@ namespace Physara::Scene
         {
             SceneNode *node;
             WorldState world;
+            bool transformChanged;
+            bool lightChanged;
         };
 
         /// @brief 候选构建在阶段和遍历边界合作取消, 由同一事务析构路径释放临时槽.
@@ -376,8 +412,56 @@ namespace Physara::Scene
             return props.castsShadow.has_value() || props.light.has_value();
         }
 
+        /// @brief 同一结构只稳定追踪实体和源槽, 布局换代时由消费方重建索引.
+        void MarkRender(const SceneNode &node, RenderRecord record, std::uint32_t sourceSlot = 0)
+        {
+            m_RenderChanged = true;
+            if (!m_StructureChanged)
+            {
+                m_RenderChanges.insert({node.handle, record, sourceSlot});
+            }
+        }
+
+        /// @brief 同步遍历按源槽排序的两组覆盖, 为新数组配对版本并登记新增, 替换或清除的槽.
+        /// 原值相同的槽沿用旧版本, 即使它在稀疏数组中的位置发生移动.
+        void ClassifyOverrides(Entry &entry)
+        {
+            const auto &before = entry.node->record.overrides;
+            const auto &after = entry.after->overrides;
+            if (before == after)
+            {
+                return;
+            }
+            auto &versions = entry.overrideRevisions.emplace();
+            versions.reserve(after.size());
+            std::size_t old = 0;
+            for (const auto &value : after)
+            {
+                while (old < before.size() && before[old].primitiveSlot < value.primitiveSlot)
+                {
+                    MarkRender(*entry.node, RenderRecord::Material, before[old++].primitiveSlot);
+                }
+                const bool sameSlot = old < before.size() && before[old].primitiveSlot == value.primitiveSlot;
+                if (sameSlot && before[old] == value)
+                {
+                    versions.push_back(entry.node->overrideRevisions[old]);
+                }
+                else
+                {
+                    // Prepare 结尾校验内容代能否推进, 溢出的候选不会发布.
+                    versions.push_back(m_Revision.renderContent + 1);
+                    MarkRender(*entry.node, RenderRecord::Material, value.primitiveSlot);
+                }
+                old += sameSlot;
+            }
+            while (old < before.size())
+            {
+                MarkRender(*entry.node, RenderRecord::Material, before[old++].primitiveSlot);
+            }
+        }
+
         /// @brief 将字段变化分配给文档, 内容和相机版本, 需要世界求值的实体登记为脏根.
-        void Classify(const Entry &entry)
+        void Classify(Entry &entry)
         {
             const auto *before = entry.created ? nullptr : &entry.node->record;
             const auto *after = entry.after ? &*entry.after : nullptr;
@@ -385,20 +469,36 @@ namespace Physara::Scene
             {
                 const auto &value = before ? before->properties : after->properties;
                 m_RenderChanged |= Renderable(value);
+                m_StructureChanged |= Renderable(value);
                 m_CameraChanged |= value.camera.has_value();
                 if (after)
                 {
+                    entry.newObject = value.castsShadow.has_value();
+                    entry.lightChanged = value.light.has_value();
+                    ClassifyOverrides(entry);
                     m_Dirty.insert(entry.node);
                 }
                 return;
             }
             const auto &a = before->properties;
             const auto &b = after->properties;
-            m_RenderChanged |= a.castsShadow != b.castsShadow || a.light != b.light ||
-                before->overrides != after->overrides || (a.visible != b.visible && Renderable(b));
+            const bool meshLayoutChanged = a.castsShadow.has_value() != b.castsShadow.has_value();
+            const bool lightLayoutChanged = a.light.has_value() != b.light.has_value();
+            m_StructureChanged |= meshLayoutChanged || lightLayoutChanged;
+            m_RenderChanged |= meshLayoutChanged || lightLayoutChanged;
+            entry.newObject = meshLayoutChanged && b.castsShadow.has_value();
+            entry.lightChanged = a.light != b.light;
+            if (b.castsShadow && (a.castsShadow != b.castsShadow || a.visible != b.visible))
+            {
+                MarkRender(*entry.node, RenderRecord::PrimitiveFlags);
+            }
+            if (b.light && (entry.lightChanged || a.visible != b.visible))
+            {
+                MarkRender(*entry.node, RenderRecord::Light);
+            }
+            ClassifyOverrides(entry);
             m_CameraChanged |= a.camera != b.camera;
-            if (entry.parent != entry.node->parent || a.local != b.local ||
-                a.castsShadow.has_value() != b.castsShadow.has_value())
+            if (entry.parent != entry.node->parent || a.local != b.local || meshLayoutChanged)
             {
                 m_Dirty.insert(entry.node);
             }
@@ -527,20 +627,30 @@ namespace Physara::Scene
         }
 
         /// @brief 几何看完整仿射变换, 相机和灯分别看自己使用的刚体分量.
-        void ClassifyWorld(const EntityProperties &props, const WorldState &before, const WorldState &after) noexcept
+        void ClassifyWorld(const EntityProperties &props, WorldUpdate &update)
         {
+            const auto &before = update.node->world;
+            const auto &after = update.world;
             // 零缩放可能掩盖矩阵中的旋转变化, 因此相机和灯不能只比较 worldFromLocal.
             const bool translated = before.pose.translation != after.pose.translation;
             const bool rotated = before.pose.rotation != after.pose.rotation;
             m_CameraChanged |= props.camera.has_value() && (translated || rotated);
-            m_RenderChanged |= props.castsShadow.has_value() &&
+            update.transformChanged = props.castsShadow.has_value() &&
                 (before.worldFromLocal != after.worldFromLocal || before.orientation != after.orientation);
+            if (update.transformChanged)
+            {
+                MarkRender(*update.node, RenderRecord::Transform);
+            }
             if (props.light)
             {
                 // 方向灯不消费位置, 点光不消费朝向; 定向灯绕自身光轴旋转也不改变发射方向.
                 const auto type = props.light->type;
-                m_RenderChanged |= (translated && type != Asset::ModelLightKind::Directional) ||
+                update.lightChanged = (translated && type != Asset::ModelLightKind::Directional) ||
                     (rotated && type != Asset::ModelLightKind::Point && before.Forward() != after.Forward());
+                if (update.lightChanged)
+                {
+                    MarkRender(*update.node, RenderRecord::Light);
+                }
             }
         }
 
@@ -581,9 +691,9 @@ namespace Physara::Scene
                 {
                     Reject(record.id, "local", "World transform or bounds exceeds representation");
                 }
-                ClassifyWorld(record.properties, node->world, *world);
                 const auto index = m_World.size();
-                m_World.push_back({node, std::move(*world)});
+                m_World.push_back({node, std::move(*world), false, false});
+                ClassifyWorld(record.properties, m_World.back());
                 const auto updated = m_Links.find(node);
                 const auto &children = updated == m_Links.end() ? node->children : updated->second.children;
                 for (auto *child : children)
@@ -599,11 +709,13 @@ namespace Physara::Scene
         Revisions m_Revision;
         std::uint64_t m_LastId;
         bool m_RenderChanged{};
+        bool m_StructureChanged{};
         bool m_CameraChanged{};
         const std::optional<SceneEnvironment> *m_Environment{}; ///< 借用提交输入, 仅在同次 Prepare/Publish 使用.
         std::map<EntityId, Entry, std::less<>> m_Entries;
         std::vector<entt::entity> m_Created;
         std::map<EntityId, SceneNode *, std::less<>> m_NewEntries;
+        std::set<RenderChange> m_RenderChanges;
         std::unordered_map<SceneNode *, Links> m_Links;
         std::unordered_set<SceneNode *> m_Dirty;
         std::unordered_map<const Asset::ModelRecord *, std::unordered_map<std::uint32_t, const Asset::ModelNode *>>

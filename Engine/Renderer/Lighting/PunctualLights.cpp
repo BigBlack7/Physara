@@ -1,7 +1,7 @@
 #include "PunctualLights.hpp"
 
 /// @file
-/// @brief 按生成布局编码完整可见灯表, 再为本次颜色 Pass 选择 GPU 缓冲.
+/// @brief 将世界灯编码为设备缓存行, 然后按该 View 的可见顺序组装方向灯段与局部灯段.
 /// 非空表在安全帧槽内更新, 空表由设备共享. 上传字节交给图, 接受状态由提交方确认.
 
 #include <algorithm>
@@ -108,8 +108,10 @@ namespace Physara::Renderer::Detail
         return {};
     }
 
-    std::variant<EncodedLightSet, Core::BoundedText> EncodeLightSet(
-        std::span<const LightRecord> lights, std::span<const std::uint32_t> indices)
+    /// @brief 按已有方向灯、局部灯的顺序组装定长表, 按调用者提供的行编码方式取值.
+    template <class ReadRow>
+    static std::variant<EncodedLightSet, Core::BoundedText> AssembleLightSet(
+        std::span<const LightRecord> lights, std::span<const std::uint32_t> indices, ReadRow readRow)
     {
         if (indices.size() > StaticAbi::LightRowsCapacity)
         {
@@ -129,7 +131,7 @@ namespace Physara::Renderer::Detail
         {
             const auto &record = lights[index];
             auto &row = table.rows[record.light.type == LightKind::Directional ? directional++ : local++];
-            if (const auto field = EncodeLight(row, record); !field.empty())
+            if (const auto field = readRow(row, index); !field.empty())
             {
                 Core::BoundedText error("Forward light entity slot ");
                 char entity[12];
@@ -141,6 +143,57 @@ namespace Physara::Renderer::Detail
             }
         }
         return table;
+    }
+
+    std::variant<EncodedLightSet, Core::BoundedText> EncodeLightSet(
+        std::span<const LightRecord> lights, std::span<const std::uint32_t> indices)
+    {
+        return AssembleLightSet(lights, indices, [&](StaticAbi::ForwardLight &row, std::uint32_t index)
+        {
+            return EncodeLight(row, lights[index]);
+        });
+    }
+
+    /// @brief 需要组表时整理世界灯行. 换 Scene 后清空缓存, 同一 Scene 换结构时按完整实体身份保留存活行.
+    static void RefreshWorldLightCache(ForwardDevice &device, const SceneFrame &scene)
+    {
+        if (device.encodedLightScene != scene.scene)
+        {
+            device.encodedLights.clear();
+            device.encodedLightScene = scene.scene;
+        }
+        else if (device.encodedLightStructure != scene.structureRevision)
+        {
+            decltype(device.encodedLights) live;
+            for (const auto &light : scene.lights)
+            {
+                live.insert(device.encodedLights.extract({light.entity.index, light.entity.generation}));
+            }
+            device.encodedLights.swap(live);
+        }
+        device.encodedLightStructure = scene.structureRevision;
+    }
+
+    /// @brief 同灯的同版编码可由两路共享. 数值拒绝只在当前 View 实际选中该灯时返回.
+    static std::variant<EncodedLightSet, Core::BoundedText> PrepareWorldLights(
+        ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
+    {
+        RefreshWorldLightCache(device, view.scene);
+        return AssembleLightSet(view.scene.lights, view.lights, [&](StaticAbi::ForwardLight &row, std::uint32_t index)
+        {
+            const auto &record = view.scene.lights[index];
+            auto [entry, inserted] = device.encodedLights.try_emplace(
+                std::pair{record.entity.index, record.entity.generation});
+            auto &encoded = entry->second;
+            if (inserted || encoded.revision != record.lightRevision)
+            {
+                ++frame.encodings.lights;
+                encoded = {.row = {}, .revision = record.lightRevision, .error = nullptr};
+                encoded.error = EncodeLight(encoded.row, record).data();
+            }
+            row = encoded.row;
+            return encoded.error ? std::string_view(encoded.error) : std::string_view{};
+        });
     }
 
     /// @brief 按生成块的字节数和行距分配 SSBO. 此时内容未定义, 分配失败时局部 owner 归还额度.
@@ -183,12 +236,15 @@ namespace Physara::Renderer::Detail
         }
 
         auto &table = frame.lightTable;
-        // Scene 身份区分文档, 内容代区分同索引的灯值, 有序索引区分相机裁剪结果.
-        // 位置高低分量来自场景世界坐标. 只改相机且可见索引一致时, 已确认的灯表仍可作为图的已初始化输入.
-        if (!table || !table->accepted || table->scene != view.scene.scene ||
-            table->contentRevision != view.scene.contentRevision || !std::ranges::equal(table->indices, view.lights))
+        const auto source = [&](std::uint32_t index)
         {
-            auto encoded = EncodeLightSet(view.scene.lights, view.lights);
+            const auto &record = view.scene.lights[index];
+            return LightSource{record.entity, record.lightRevision};
+        };
+        // 将本次紧凑索引映射回实体和数据代后逐项比较. 结构换代后同一下标可能属于另一盏灯.
+        if (!table || !std::ranges::equal(table->sources, view.lights, {}, std::identity{}, source))
+        {
+            auto encoded = PrepareWorldLights(device, frame, view);
             if (const auto *error = std::get_if<Core::BoundedText>(&encoded))
             {
                 throw ForwardFailure{ViewSettingReason::SceneLightTableRejected, *error};
@@ -197,15 +253,24 @@ namespace Physara::Renderer::Detail
             {
                 table = CreateLightTable(device);
             }
-            // 保留存储供安全重试. 对应图未接受时, 这份新编码不具备缓存资格.
+            // 来源序列准备失败时保留旧配对, 只有完整的新 CPU 表才可重新上传.
+            std::vector<LightSource> sources;
+            sources.reserve(view.lights.size());
+            for (const auto index : view.lights)
+            {
+                sources.push_back(source(index));
+            }
             table->accepted = false;
-            const auto &packed = std::get<EncodedLightSet>(encoded);
-            frame.uploads.Add(table, table->buffer, std::as_bytes(std::span(packed.rows)));
-            table->scene = view.scene.scene;
-            table->contentRevision = view.scene.contentRevision;
-            table->indices.assign(view.lights.begin(), view.lights.end());
+            auto &packed = std::get<EncodedLightSet>(encoded);
+            table->sources = std::move(sources);
+            table->packed = std::move(packed.rows);
             table->directionalCount = packed.directionalCount;
             table->localCount = packed.localCount;
+        }
+        if (!table->accepted)
+        {
+            // 表的 CPU 字节随槽保留. 上次写入若被裁剪或只有失败前缀, 此次仍需提供完整生产者.
+            frame.uploads.Add(table, table->buffer, std::as_bytes(std::span(table->packed)));
         }
         frame.activeLights = table;
         device.Use(*frame.activeLights);

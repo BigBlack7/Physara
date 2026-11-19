@@ -1,8 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 持有主 View 的位姿、物理相机、比例和 AA 请求, 会话预览模式及最后接受的显示颜色.
-/// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
+/// @brief 每个 View 持有自己的相机, 比例, AA, 预览模式和最近接受的显示色.
+/// 主视口按编辑器布局请求像素, 附加离屏 View 由调用方提供布局. Runtime 按各自的图出口确认颜色.
 /// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
 #include <array>
@@ -143,7 +143,7 @@ namespace Physara::Renderer
         bool operator==(const ViewLayouts &) const = default;
     };
 
-    /// @brief CPU UI 封存后按当前面板及比例换算的离屏像素请求.
+    /// @brief 指定一个 View 本轮的渲染及显示画布. 主视口由封存的面板布局换算, 附加消费者提供自己的范围.
     /// @note View 用请求代确认换算依据, 颜色纹理另有自己的资源代.
     struct ViewportRequest
     {
@@ -152,6 +152,9 @@ namespace Physara::Renderer
         ViewExtent outputExtent; ///< 实际面板像素向下取整, 供正常场景的显示输出使用.
         std::uint64_t requestRevision = 0; ///< 用于计算像素范围的比例请求代.
     };
+
+    /// @brief 编辑器可用渲染栅格显示诊断图, 显式离屏请求始终需要完整显示目标.
+    enum class ViewportUse : std::uint8_t { DisplayOutput, EditorViewport };
 
     /// @brief 最后一次被接受的视口比例和实际像素范围.
     struct EffectiveViewport
@@ -185,7 +188,11 @@ namespace Physara::Renderer
         SceneLightTableRejected, ///< 可见灯集合超容量或行字段无法编码.
         EnvironmentPending,
         EnvironmentRejected,
-        DisplayUnavailable
+        DisplayUnavailable,
+        InvalidViewRequest,
+        ViewCapacityLimit,
+        SceneOutputUnavailable,
+        ViewportSamplingPending ///< 有效请求等待主视口的可见采样, 上次接受的颜色及尺寸仍有效.
     };
 
     /// @brief 会话内 Forward 模式. 顺序同时用于编辑器菜单和 ForwardView.mode 的 Shader ABI.
@@ -382,8 +389,10 @@ namespace Physara::Renderer
         /// @brief 本轮没有提交候选颜色时记录真实等待原因, 已确认的当前请求保持有效.
         void Defer(ViewSettingReason reason) noexcept;
 
-        /// @brief 在场景准备前核对请求身份和渲染范围. 显示附件只在有场景输出时按实际设备能力检查.
-        [[nodiscard]] ViewSettingReason CheckViewport(const std::optional<ViewportRequest> &request) const noexcept;
+        /// @brief 在场景提取前核对请求、渲染栅格和显式离屏显示范围.
+        /// 编辑器视口只要求渲染栅格在纹理上限内, 以便空文档仍能准备诊断图.
+        [[nodiscard]] ViewSettingReason CheckViewport(const std::optional<ViewportRequest> &request,
+            ViewportUse use = ViewportUse::DisplayOutput) const noexcept;
         /// @brief 复用布局相同的已接受测试图, 或按当前有效矩形建立测试图候选.
         /// @pre prepared 来自本轮已封存的布局和已应用的 Scene/View 请求.
         /// @param remainingUploadBytes 本轮可用的诊断像素额度, 由 Runtime 按槽记账.
@@ -400,7 +409,7 @@ namespace Physara::Renderer
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
         /// @brief 接受本轮匹配的颜色, 发布比例、布局与实际场景记录. 复用测试图也可确认新比例.
-        /// @pre outputs 属于本轮准备, 且被已接受的完整合成实际采样.
+        /// @pre outputs 属于本轮准备, 其显示色在已接受的完整图中被 UI 采样或由该 View 显式导出.
         /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
         /// @note 比例、相机或场景候选携带的持久请求代过期时保留原状态. 旧代由原 RHI 包保活.
         /// @return true 表示输出和有效设置已发布, false 表示候选无资格且原状态保留.

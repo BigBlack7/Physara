@@ -8,12 +8,17 @@
 
 namespace Physara::Renderer
 {
+    /// @brief 写入用途供统计归类. View 常量随观察条件计算, 静态行和灯表按驻留数据记账.
+    /// Other 包含 UI 与诊断写入. 三类都参与同一次设备容量检查.
+    enum class GraphUploadSource : std::uint8_t { Other, ForwardStatic, ForwardView };
+
     /// @brief 一次实际 Write 的大小和所属 Pass, 用于按编译顺序核算共享上传池.
     struct GraphUpload
     {
         PassId pass;
         std::size_t bytes = 0;
         bool texture = false;
+        GraphUploadSource source{};
     };
 
     /// @brief 一次纹理写的版本和终结 Pass. 局部更新的终结 Pass 可以是后续复制.

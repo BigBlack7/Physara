@@ -52,10 +52,10 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 编码对象与法线矩阵, 以及在图元世界基点附近求光照所需的仿射系数.
-    /// @param bounds 有效三角形在模型空间的包围盒, 用于选择世界基点.
+    /// @param anchor 已由固定图元的局部范围选出的光照基点.
     /// @return 完整 CPU 对象行或首个失败原因. 调用者可用源图元身份记录被跳过的表面.
     static std::variant<StaticAbi::ForwardObject, std::string_view>
-    EncodeObject(const SceneObject &object, const Asset::ModelBounds &bounds) noexcept
+    EncodeObject(const SceneObject &object, const std::array<float, 3> &anchor) noexcept
     {
         constexpr std::string_view invalidFrame = "instance transform cannot form a GPU surface frame";
         StaticAbi::ForwardObject row{};
@@ -65,11 +65,6 @@ namespace Physara::Renderer::Detail
             return invalidFrame;
         }
         // 选取靠近几何的世界基点并窄化一次. 它只作为光照坐标的原点, 裁剪矩阵沿用现有路径.
-        std::array<float, 3> anchor{};
-        for (std::size_t axis = 0; axis < anchor.size(); ++axis)
-        {
-            anchor[axis] = std::midpoint(bounds.minimum[axis], bounds.maximum[axis]);
-        }
         const auto worldAnchor = worldFromLocal * glm::dvec4(anchor[0], anchor[1], anchor[2], 1.0);
         const std::array position{worldAnchor.x, worldAnchor.y, worldAnchor.z};
         if (!StoreGpuVector(row.lightingAnchor, position))
@@ -132,21 +127,26 @@ namespace Physara::Renderer::Detail
         return row;
     }
 
-    /// @brief 对象变换及编码后的世界基点一致时跨图元和帧复用, 变换变化后原行由在途槽保有.
-    static std::shared_ptr<ConstantRow> PrepareObject(ForwardDevice &device, UploadBatch &uploads,
-        const ObjectRowKey &key, const SceneObject &source, const StaticAbi::ForwardObject &value)
+    /// @brief 依次表示可复用的 GPU 行, 尚待分配的 CPU 编码, 或该图元的静态拒绝原因.
+    using ObjectPreparation = std::variant<std::shared_ptr<ConstantRow>, StaticAbi::ForwardObject, std::string_view>;
+
+    /// @brief 在转换矩阵前查已编码行. 冷行先留 CPU 值, 几何可绘后才创建缓冲.
+    static ObjectPreparation ResolveObject(const ForwardDevice &device, const ObjectRowKey &key,
+                                           const SceneObject &source, ForwardEncodingCounts &encodings)
     {
         if (const auto found = device.objects.find(key);
             found != device.objects.end() && device.Current(*found->second.resident) &&
-            source.worldFromLocal == found->second.worldFromLocal)
+            source.transformRevision == found->second.transformRevision)
         {
-            device.Use(*found->second.resident);
             return found->second.resident;
         }
-        auto row = CreateConstantRow(device, sizeof(value), 1);
-        uploads.Add(row, row->buffer, std::as_bytes(std::span(&value, 1)));
-        device.objects.insert_or_assign(key, ObjectRow{source.worldFromLocal, row});
-        return row;
+        ++encodings.objects;
+        const auto encoded = EncodeObject(source, key.second);
+        if (const auto *failure = std::get_if<std::string_view>(&encoded))
+        {
+            return *failure;
+        }
+        return std::get<StaticAbi::ForwardObject>(encoded);
     }
 
     /// @brief 比较实际 ABI 字段, 避免把 padding 或场景全局版本当成材质变化.
@@ -218,24 +218,45 @@ namespace Physara::Renderer::Detail
                               image.image);
     }
 
-    /// @brief 创建一次有效材质集合, 后继 Draw 直接使用已解析的行与纹理/采样器.
-    static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, UploadBatch &uploads,
-        const MaterialKey &key, const Scene::EffectiveMaterial &material)
+    /// @brief 取得能按当前覆盖代直接用于路由和绘制的已准备行.
+    static const MaterialEntry *FindMaterial(const ForwardDevice &device, const MaterialKey &key,
+                                             std::uint64_t revision) noexcept
     {
-        if (std::get<2>(key)[1] == 0)
+        const auto found = device.materials.find(key);
+        if (found != device.materials.end() && found->second.revision == revision &&
+            device.Current(*found->second.resident))
         {
-            // 共享源材质完全由固定模型代决定. 命中时可直接保留绑定依赖.
-            const auto found = device.materials.find(key);
-            if (found != device.materials.end() && device.Current(*found->second))
+            return &found->second;
+        }
+        return nullptr;
+    }
+
+    /// @brief 由有效纹理槽一次确定几何所需属性和双面状态.
+    static MaterialGeometry MaterialRequirements(const Scene::EffectiveMaterial &material) noexcept
+    {
+        MaterialGeometry result{.doubleSided = material.values.doubleSided};
+        for (const auto &slot : material.textures)
+        {
+            if (slot)
             {
-                for (const auto &texture : found->second->textures)
-                {
-                    device.Use(*texture);
-                }
-                device.Use(*found->second);
-                return found->second;
+                result.attributes |= slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
             }
         }
+        if (const auto &normal = material.textures[NormalSlot])
+        {
+            result.attributes |= VertexTangent;
+            result.normalUv = static_cast<std::int8_t>(normal->slot.texCoord);
+        }
+        return result;
+    }
+
+    /// @brief 新覆盖代才重新解析写入. 有效 GPU 字段及绑定相同时沿用原存储.
+    static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, ForwardFrameData &frame,
+        const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
+        const MaterialGeometry &geometry)
+    {
+        auto &uploads = frame.uploads;
+        ++frame.encodings.materials;
         const auto values = EncodeMaterial(material);
         // 覆盖行除 ABI 数值外还比较实际纹理代和 sampler, 同一路径的新像素也须建立新行.
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
@@ -249,13 +270,17 @@ namespace Physara::Renderer::Detail
                                  : WhiteTexture(device, uploads);
         }
         if (const auto found = device.materials.find(key);
-            found != device.materials.end() && device.Current(*found->second))
+            found != device.materials.end() && device.Current(*found->second.resident))
         {
-            auto &row = *found->second;
+            auto &entry = found->second;
+            auto &row = *entry.resident;
             if (SameMaterial(row.values, values) && row.textures == textures && row.samplers == samplers)
             {
+                // 这些字段只参与后续准备. 在途 Draw 已保存自己的路由和 Pipeline.
+                entry.revision = revision;
+                entry.geometry = geometry;
                 device.Use(row);
-                return found->second;
+                return entry.resident;
             }
         }
         device.Reserve(sizeof(values));
@@ -278,7 +303,7 @@ namespace Physara::Renderer::Detail
         }
         device.Use(*row);
         uploads.Add(row, row->buffer, std::as_bytes(std::span(&values, 1)));
-        device.materials.insert_or_assign(key, row);
+        device.materials.insert_or_assign(key, MaterialEntry{revision, geometry, row});
         return row;
     }
 
@@ -449,7 +474,7 @@ namespace Physara::Renderer::Detail
             // 先撤销已上传资格. 图未接受或上传准备失败时保留 false, 本槽安全复用后仍会重试该行.
             frame.view->accepted = false;
             frame.viewValues = value;
-            frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)));
+            frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)), true);
         }
     }
 
@@ -461,42 +486,61 @@ namespace Physara::Renderer::Detail
         const auto &model = *view.scene.models[ref.model];
         const auto &source = model.meshes[ref.mesh].primitives[ref.sourceSlot];
         const auto &object = view.scene.objects[ref.object];
-        auto material = ref.materialOverride ? view.scene.materialOverrides[*ref.materialOverride]
-                                             : Scene::ResolveMaterial(model, source, nullptr);
-        if (material.values.alphaMode == Asset::ModelAlpha::Blend)
+        const auto version = Version(model.asset, model.revision);
+        const auto entity = ObjectIdentity(view.scene.scene, object.entity);
+        const MaterialKey key{version, ref.material, ref.materialOverride ? entity : ObjectKey{},
+                              ref.materialOverride ? ref.sourceSlot : 0};
+        const auto *cached = FindMaterial(device, key, ref.materialRevision);
+        std::shared_ptr<MaterialRow> row;
+        std::optional<Scene::EffectiveMaterial> sourceMaterial;
+        const Scene::EffectiveMaterial *material = nullptr;
+        MaterialGeometry requirements;
+        if (cached)
         {
-            DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
-            return;
+            requirements = cached->geometry;
+            row = cached->resident;
         }
-        // 可见工作集已按世界包围盒筛选. 此处从源图元取得局部盒, 由 EncodeObject 施加实例变换.
+        else
+        {
+            if (ref.materialOverride)
+            {
+                material = &view.scene.materialOverrides[*ref.materialOverride];
+            }
+            else
+            {
+                material = &sourceMaterial.emplace(Scene::ResolveMaterial(model, source, nullptr));
+            }
+            if (material->values.alphaMode == Asset::ModelAlpha::Blend)
+            {
+                DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
+                return;
+            }
+            requirements = MaterialRequirements(*material);
+        }
+
+        // 固定源局部基点构成缓存键. 世界 FP32 基点及余量只在对象真实换代时编码.
         assert(source.bounds);
-        const auto encodedObject = EncodeObject(object, *source.bounds);
-        if (const auto *error = std::get_if<std::string_view>(&encodedObject))
+        std::array<float, 3> anchor{};
+        for (std::size_t axis = 0; axis < anchor.size(); ++axis)
+        {
+            anchor[axis] = std::midpoint(source.bounds->minimum[axis], source.bounds->maximum[axis]);
+        }
+        const ObjectRowKey objectKey{entity, anchor};
+        auto objectCandidate = ResolveObject(device, objectKey, object, frame.encodings);
+        if (const auto *error = std::get_if<std::string_view>(&objectCandidate))
         {
             DescribeSkipped(frame, model, ref, *error);
             return;
         }
-        const auto &objectValue = std::get<StaticAbi::ForwardObject>(encodedObject);
-        std::uint8_t attributes = 0;
-        for (const auto &slot : material.textures)
-        {
-            if (slot)
-            {
-                assert(slot->slot.texCoord < source.hasUv.size() && source.hasUv[slot->slot.texCoord]);
-                attributes |= slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
-            }
-        }
+        const auto attributes = requirements.attributes;
         std::int8_t tangentUv = -1;
         // 原切线只有在记录的 UV 与有效 normal 槽匹配时复用, 替换框架另建几何而不修改资产.
-        if (const auto &normal = material.textures[NormalSlot])
+        const auto &sourceNormal = model.materials[ref.material].slots[NormalSlot];
+        if (requirements.normalUv >= 0 &&
+            (!source.hasTangent || !sourceNormal || sourceNormal->texCoord != std::uint32_t(requirements.normalUv)))
         {
-            attributes |= VertexTangent;
-            if (!source.hasTangent || material.sourceTangentUv != normal->slot.texCoord)
-            {
-                tangentUv = static_cast<std::int8_t>(normal->slot.texCoord);
-            }
+            tangentUv = requirements.normalUv;
         }
-        const auto version = Version(model.asset, model.revision);
         auto geometry = PrepareGeometry(device, frame.uploads, {version, ref.mesh, ref.sourceSlot, attributes, tangentUv},
                                         source);
         if (const auto *error = std::get_if<Core::BoundedText>(&geometry))
@@ -504,11 +548,32 @@ namespace Physara::Renderer::Detail
             DescribeSkipped(frame, model, ref, error->View());
             return;
         }
-        const auto entity = ObjectIdentity(view.scene.scene, object.entity);
-        auto instance = PrepareObject(device, frame.uploads, {entity, objectValue.lightingAnchor}, object,
-                                      objectValue);
-        auto row = PrepareMaterial(device, frame.uploads, {version, ref.material, ref.materialOverride ? entity :
-            ObjectKey{}, ref.materialOverride ? ref.sourceSlot : 0}, material);
+        std::shared_ptr<ConstantRow> instance;
+        if (auto *resident = std::get_if<std::shared_ptr<ConstantRow>>(&objectCandidate))
+        {
+            instance = std::move(*resident);
+            device.Use(*instance);
+        }
+        else
+        {
+            const auto &encoded = std::get<StaticAbi::ForwardObject>(objectCandidate);
+            instance = CreateConstantRow(device, sizeof(encoded), 1);
+            frame.uploads.Add(instance, instance->buffer, std::as_bytes(std::span(&encoded, 1)));
+            device.objects.insert_or_assign(objectKey, ObjectRow{object.transformRevision, instance});
+        }
+        if (row)
+        {
+            // 快速命中跳过了逐槽准备. 本 View 的驻留账单仍须包含绑定集合引用的每个纹理代.
+            for (const auto &texture : row->textures)
+            {
+                device.Use(*texture);
+            }
+            device.Use(*row);
+        }
+        else
+        {
+            row = PrepareMaterial(device, frame, key, ref.materialRevision, *material, requirements);
+        }
         const auto [slot, newRow] = rows.try_emplace(row.get(), frame.materialRows.size());
         if (newRow)
         {
@@ -516,7 +581,7 @@ namespace Physara::Renderer::Detail
         }
         const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         const bool mirror = object.orientation < 0;
-        const bool doubleSided = material.values.doubleSided;
+        const bool doubleSided = requirements.doubleSided;
         const auto &matrix = view.camera->viewFromWorld;
         const auto &bounds = *ref.bounds;
         auto z = matrix[14];

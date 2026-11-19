@@ -235,6 +235,12 @@ namespace Physara::Editor
         return m_State->documents ? &m_State->documents->Active() : nullptr;
     }
 
+    void EditorSession::AcknowledgeSceneRenderChanges() noexcept
+    {
+        assert(m_State->documents);
+        m_State->documents->Active().AcknowledgeRenderChanges();
+    }
+
     std::optional<SceneDocumentStatus> EditorSession::SceneStatus(const Renderer::View &view) const
     {
         const auto &docs = m_State->documents;
@@ -865,6 +871,13 @@ namespace Physara::Editor
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
         }
         return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
+    }
+
+    bool EditorSession::HasViewportSample(Platform::WindowExtent extentPixels) const noexcept
+    {
+        const auto &state = *m_State;
+        return state.drawData && state.renderer && extentPixels == state.extentPixels &&
+            Detail::UiRenderer::HasViewSample(*state.drawData, extentPixels, state.viewportLayout.image.token);
     }
 
     bool EditorSession::BaseFontReady() const noexcept

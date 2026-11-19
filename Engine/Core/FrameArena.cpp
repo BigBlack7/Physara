@@ -11,7 +11,7 @@
 
 namespace Physara::Core
 {
-    // 在发布首段借用前换入新块. 容量上限约束 bit_ceil 的输入和舍入结果.
+    // 容量上限约束 bit_ceil 的输入和舍入结果. 首次取得存储也计一次增长, 只有成功换入后才更新统计.
     bool FrameArena::Reserve(std::size_t bytes) noexcept
     {
         if (bytes <= m_Capacity)
@@ -30,6 +30,7 @@ namespace Physara::Core
         }
         m_Storage = std::move(storage);
         m_Capacity = capacity;
+        ++m_GrowthCount;
         return true;
     }
 

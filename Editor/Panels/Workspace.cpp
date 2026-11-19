@@ -72,6 +72,7 @@ namespace Physara::Editor::Detail
         case LayoutPending: return "Pending - waiting for viewport layout";
         case SlotPending: return "Pending - waiting for a frame slot";
         case SubmissionPending: return "Pending - waiting for accepted output";
+        case ViewportSamplingPending: return "Pending - waiting for viewport sampling";
         case UploadPending: return "Pending - waiting for upload";
         case InvalidExtent: return "Failed - invalid viewport pixel extent";
         case TextureSizeLimit: return "Failed - device texture size limit";
@@ -91,6 +92,9 @@ namespace Physara::Editor::Detail
         case EnvironmentPending: return "Pending - preparing HDR environment or DFG";
         case EnvironmentRejected: return "Failed - HDR environment unavailable";
         case DisplayUnavailable: return "Failed - display processing unavailable";
+        case InvalidViewRequest: return "Failed - stale or duplicate view request";
+        case ViewCapacityLimit: return "Failed - offscreen view capacity";
+        case SceneOutputUnavailable: return "No scene output";
         }
         return "";
     }
@@ -125,7 +129,37 @@ namespace Physara::Editor::Detail
         }
     }
 
-    /// @brief 直接显示 Runtime 的实际帧事实. GPU 若较晚就绪, 单独标注它所属的场景及提交.
+    /// @brief 显示单次共享提取和各 View 的实际裁剪, 状态及开销来自同一正常提交.
+    static void DrawPreparationStatistics(const ScenePreparationStatistics &data)
+    {
+        constexpr const char *extraction[]{"Skipped", "Reused", "Updated", "Rebuilt"};
+        ImGui::Text("Slot %zu / structure %llu / extraction %s %.3f ms", data.slot,
+                    static_cast<unsigned long long>(data.structureRevision),
+                    extraction[static_cast<std::size_t>(data.extraction.mode)], data.extraction.seconds * 1000);
+        ImGui::Text("Scene records: objects %zu / primitives %zu / lights %zu",
+                    data.extraction.objects, data.extraction.primitives, data.extraction.lights);
+        ImGui::Text("Static encodes: objects %zu / materials %zu / lights %zu",
+                    data.encodings.objects, data.encodings.materials, data.encodings.lights);
+        for (const auto &view : data.views)
+        {
+            if (view.view.IsValid())
+            {
+                ImGui::Text("View #%llu %s / cull %.3f ms / primitives %zu of %zu / lights %zu of %zu",
+                            static_cast<unsigned long long>(view.view.generation),
+                            view.accepted ? "accepted" : "prepared", view.seconds * 1000,
+                            view.visiblePrimitives, view.primitiveCandidates, view.visibleLights, view.lightCandidates);
+            }
+        }
+        ImGui::Text("Forward uploads: static %zu / %zu B, view %zu / %zu B",
+                    data.staticUploads.writes, data.staticUploads.bytes, data.viewUploads.writes, data.viewUploads.bytes);
+        ImGui::Text("Payload arena: peak %zu of %zu B / %zu growths",
+                    data.payload.highWater, data.payload.capacity, data.payload.growths);
+        ImGui::Text("Graph arena: peak %zu of %zu B / %zu growths",
+                    data.graph.highWater, data.graph.capacity, data.graph.growths);
+    }
+
+    /// @brief 展示最近一次场景提交. 单路的绘制项由 source 标识, 两路的裁剪及接受情况从 preparation 读取.
+    /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
     {
         if (!state.statistics || !state.statistics->latestScene)
@@ -135,8 +169,8 @@ namespace Physara::Editor::Detail
         }
         const auto &frame = *state.statistics->latestScene;
         const auto &source = frame.source;
-        const bool current = state.scene && state.view && source.scene == state.scene->Id() &&
-            source.view == state.view->Id();
+        // 只接受附加出口的帧也属于当前文档. 场景标签取自 Scene 身份, View 和票据取自这次提交.
+        const bool current = state.scene && source.scene == state.scene->Id();
         ImGui::Text("%s scene #%llu / View #%llu / ticket %llu", current ? "Accepted" : "Previous",
                     static_cast<unsigned long long>(source.scene.generation),
                     static_cast<unsigned long long>(source.view.generation),
@@ -150,6 +184,7 @@ namespace Physara::Editor::Detail
         ImGui::Text("CPU (ms) UI %.3f / Scene & View %.3f", frame.cpu.ui * 1000, frame.cpu.scenePreparation * 1000);
         ImGui::Text("CPU (ms) graph compile %.3f / execute %.3f", frame.cpu.graphCompile * 1000,
                     frame.cpu.graphExecute * 1000);
+        DrawPreparationStatistics(frame.preparation);
         if (frame.presentWaitSeconds)
         {
             ImGui::Text("Present wait (ms) %.3f", *frame.presentWaitSeconds * 1000);

@@ -37,6 +37,12 @@ namespace Physara::Editor::Detail
         [[nodiscard]] static CreateResult Create(Platform::DeviceHost &host, const UiRendererDesc &desc);
         ~UiRenderer();
 
+        /// @brief 从封存的普通 draw 判断本轮主 View token 是否有非空像素裁剪.
+        /// @pre drawData 来自本次 ImGui::Render, token 为当前会话注册的主视口纹理身份.
+        /// @note 决定是否开始 Forward 驻留准备. UI 后续用同一像素裁剪规则解析实际采样版本并校验索引.
+        [[nodiscard]] static bool HasViewSample(const ImDrawData &drawData,
+                                                Platform::WindowExtent extent, ImTextureID token) noexcept;
+
         /// @brief 测量本轮字节后统一预留帧槽. 复制像素和几何, 并封存本轮 draw 的采样依赖.
         /// @note 构图后才按存活上传核算 GPU 容量, 本入口只校验 CPU/驻留预算及固定几何资源.
         /// @pre drawData 及纹理请求来自当前封存帧. arena 及其区段存活到确认或取消.

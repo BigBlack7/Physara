@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <variant>
 
 #include <Core/Diagnostics.hpp>
@@ -22,11 +23,12 @@ namespace Physara::Runtime
 
     /// @brief 同槽 Ready 后才可复用的 CPU 载荷, 图存储和最近提交记账.
     /// @note Platform 拥有 Event 和目标代. 本值只保存 Runtime 的存储与预算, 不自行判定 GPU 完成.
-    /// sceneFrame/mainView/forward 独立于两份 arena, 图重试不重新提取 Scene 或复用在途 Draw 存储.
+    /// Scene、各路 View 和 Forward 独立于两份 arena, 图重试继续使用冻结记录.
     struct FrameSlot
     {
-        Renderer::SceneFrameStorage sceneFrame; ///< 同槽 Ready 后按 Scene 和内容版本更新.
+        Renderer::SceneFrameStorage sceneFrame; ///< 在输入边界合并索引, 仅在同槽 Ready 后更新快照.
         Renderer::ViewWork mainView; ///< 本轮主 View 的独立索引区间.
+        Renderer::ViewWork offscreenView; ///< 只在本轮有附加请求时准备.
         Renderer::ForwardFrame forward; ///< 版本引用保留到该槽实际完成, 上传字节借用止于录制结束.
         Core::FrameArena arena;
         Core::FrameArena graphArena; ///< 图析构回退不影响 UI/上传载荷.
@@ -34,6 +36,21 @@ namespace Physara::Runtime
         std::uint64_t lastSubmission = 0; ///< 本次取得的接受票据, 0 表示本轮尚未提交; 非零不代表颜色有效.
         std::size_t diagnosticUploadBytes = 0; ///< 同槽 Ready 后归还诊断上传额度.
     };
+
+    /// @brief 调用方借出本轮的 View 及其像素请求, 以 ShaderRead 导出这路显示色.
+    /// @note RenderFrame 在返回前写回 reason 和 submission. 非零票据关联刚发布给该 View 的颜色.
+    /// 零票据时仍可用 LastAcceptedOutput 取得该 View 先前的颜色, 首次接受前该值为空.
+    struct OffscreenViewRequest
+    {
+        Renderer::View &view;
+        std::optional<Renderer::ViewportRequest> layout;
+        Renderer::ViewSettingReason reason = Renderer::ViewSettingReason::LayoutPending;
+        std::uint64_t submission{};
+    };
+
+    /// @brief 当前输入的事务已结算, 将增量同步合并到所有槽后确认消费.
+    /// @pre editor 已装配活动 Scene, slots 包含本 Runtime 的全部帧槽.
+    void CollectSceneChanges(Editor::EditorSession &editor, std::span<FrameSlot, FrameSlotCount> slots) noexcept;
 
     /// @brief Rendered/SafeUi 包括接受后因窗口变化跳过交换, 不表示 GPU 已完成.
     /// Cancelled 可持有失败前缀票据; UploadPending 已归还无录制取得.
@@ -55,6 +72,7 @@ namespace Physara::Runtime
     /// remainingDiagnosticBytes 已扣除其它槽的在途额度.
     /// @param editorSeconds 产生 editorFrame 的 Advance 实测秒数. 与本次 UI 准备时间共同归入 UI 阶段.
     /// @param statistics 此宿主的查询及统计 owner. 只在 View 接受本次场景输出后发布场景统计.
+    /// @param offscreenRequests 当前配置额外接受一路, 身份须与主 View 不同. 请求对象和 View 借用至返回.
     /// @return 正常或可恢复状态; 文本错误表示必须退出, 未证明完成的工作仍归 RHI/宿主收拢.
     /// @note 准备值和图的 CPU 借用在返回前结束, 已发 GPU 引用由原物理包保活.
     [[nodiscard]] std::variant<FrameStatus, Core::BoundedText> RenderFrame(
@@ -62,5 +80,5 @@ namespace Physara::Runtime
         Renderer::ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
-        FrameStatistics &statistics, double editorSeconds);
+        FrameStatistics &statistics, double editorSeconds, std::span<OffscreenViewRequest> offscreenRequests = {});
 }

@@ -61,6 +61,9 @@ namespace Physara::Editor
                                 const Renderer::View &view);
         /// @brief 返回活动 Scene 的只读借用, 成功 New/Open 或会话销毁后失效; 未接入时为空.
         [[nodiscard]] const Scene::Scene *ActiveScene() const noexcept;
+        /// @brief 结束本次活动文档的变更分发, 后续事务从当前内容代开始累积.
+        /// @pre Runtime 已将同一活动 Scene 的变更转给全部槽, 包括尚未取得的槽.
+        void AcknowledgeSceneRenderChanges() noexcept;
         /// @brief 复制当前文档状态, 主 View 失配或未接入文档时为空.
         [[nodiscard]] std::optional<SceneDocumentStatus> SceneStatus(const Renderer::View &view) const;
         [[nodiscard]] std::optional<Scene::EntityHandle> Selection() const noexcept;
@@ -145,6 +148,8 @@ namespace Physara::Editor
                                                      const Renderer::PreparedViewOutput &outputs = {},
                                                      UiFrameMode mode = UiFrameMode::Normal);
 
+        /// @brief 只读检查本轮封存的 Viewport token 是否仍有实际像素消费者.
+        [[nodiscard]] bool HasViewportSample(Platform::WindowExtent extentPixels) const noexcept;
         /// @brief 基础字体曾由完整有效 UI 提交接受, 用于区分启动必需项失败与普通帧取消.
         [[nodiscard]] bool BaseFontReady() const noexcept;
         /// @brief 保存本轮失败的拥有型快照. 无新失败时只更新已有记录的恢复状态.

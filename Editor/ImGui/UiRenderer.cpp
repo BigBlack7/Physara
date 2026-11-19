@@ -163,6 +163,36 @@ namespace Physara::Editor::Detail
         return draw.ElemCount != 0 && clip.Width() > 0 && clip.Height() > 0;
     }
 
+    bool UiRenderer::HasViewSample(const ImDrawData &drawData, Platform::WindowExtent extent,
+                                   ImTextureID token) noexcept
+    {
+        UiShader::UiProjection projection;
+        if (token == ImTextureID_Invalid || !drawData.Valid ||
+            extent.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            extent.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            !PrepareProjection(drawData, projection))
+        {
+            return false;
+        }
+        for (const auto *list : drawData.CmdLists)
+        {
+            // 同一视口 token 可被多个 Image 使用. 任一普通绘制有非空像素裁剪, 就应为该 View 保留准备机会.
+            for (const auto &draw : list->CmdBuffer)
+            {
+                const auto &ref = draw.TexRef;
+                if (!draw.UserCallback && !ref._TexData && ref._TexID == token)
+                {
+                    const auto clip = ClipRect(draw.ClipRect, drawData, extent);
+                    if (clip && HasVisibleIndices(draw, *clip))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     /// @brief 封存几何的元素计数, 供拥有型缓冲预留和字节预算检查.
     struct GeometrySize
     {

@@ -54,7 +54,8 @@ namespace Physara::Renderer::Detail
         return glm::mat3_cast(glm::conjugate(glm::normalize(glm::dquat(q[3], q[0], q[1], q[2]))));
     }
 
-    /// @brief 常量集合在图 prepare 依据实际声明生成. 槽负责保有各次已写入缓冲.
+    /// @brief 为本 View 的环境查询或天空准备常量. 其中的曝光随相机变化, 上传计入 View 写入.
+    /// 槽保有缓冲, 绑定集合在图准备阶段按实际读取建立.
     static std::shared_ptr<ConstantRow> WriteConstants(ForwardDevice &device, UploadBatch &uploads,
                                                        std::span<const std::byte> payload)
     {
@@ -62,7 +63,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<ConstantRow>(device.capacity, payload.size());
         row->buffer = AllocateBuffer(device.device, GraphUsage::ConstantBuffer, payload.size());
         device.Use(*row);
-        uploads.Add(row, row->buffer, payload);
+        uploads.Add(row, row->buffer, payload, true);
         return row;
     }
 
@@ -207,6 +208,10 @@ namespace Physara::Renderer::Detail
         const bool dfg = physical && litDraws;
         const bool ibl = dfg && source && source->settings.lighting;
         const bool sky = physical && source && source->settings.sky;
+        if (!dfg && !sky)
+        {
+            return;
+        }
         auto prepared = device.environmentCache.Prepare((ibl || sky) ? source->source : nullptr, ibl, dfg);
         if (const auto *failure = std::get_if<EnvironmentPreparationFailure>(&prepared))
         {

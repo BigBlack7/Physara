@@ -9,6 +9,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -164,6 +165,32 @@ namespace Physara::Scene
     Revisions Scene::Versions() const noexcept { return m_State->revisions; }
     const std::optional<SceneEnvironment> &Scene::Environment() const noexcept { return m_State->environment; }
 
+    bool RenderChange::operator<(const RenderChange &other) const noexcept
+    {
+        // 同一运行期实体的同类修改合并为一个键. 材质再按源槽区分, 删除后重用的实体槽由分配代隔开.
+        return std::tie(entity.scene.index, entity.scene.generation, entity.index, entity.generation, record,
+                        sourceSlot) <
+            std::tie(other.entity.scene.index, other.entity.scene.generation, other.entity.index,
+                     other.entity.generation, other.record, other.sourceSlot);
+    }
+
+    RenderChanges Scene::PendingRenderChanges() const noexcept
+    {
+        return {Id(), m_State->revisions.renderStructure, m_State->deliveredRenderContent,
+                m_State->revisions.renderContent, m_State->renderChanges};
+    }
+
+    void Scene::AcknowledgeRenderChanges() noexcept
+    {
+        m_State->renderChanges.clear();
+        m_State->deliveredRenderContent = m_State->revisions.renderContent;
+    }
+
+    EntityView SceneNode::Read() const noexcept
+    {
+        return {record, world, Model(), sourceNode, transformRevision, lightRevision, overrideRevisions};
+    }
+
     std::optional<EntityHandle> Scene::Find(std::string_view id) const noexcept
     {
         const auto *node = m_State->Find(id);
@@ -173,8 +200,7 @@ namespace Physara::Scene
     std::optional<EntityView> Scene::Get(EntityHandle entity) const noexcept
     {
         const auto *node = m_State->Find(entity);
-        return node ? std::optional(EntityView{node->record, node->world, node->Model(), node->sourceNode}) :
-            std::nullopt;
+        return node ? std::optional(node->Read()) : std::nullopt;
     }
 
     std::optional<CameraState> Scene::FindCamera(std::string_view id) const noexcept
@@ -192,7 +218,7 @@ namespace Physara::Scene
     {
         for (const auto &[id, node] : m_State->entities)
         {
-            visit(node->handle, EntityView{node->record, node->world, node->Model(), node->sourceNode});
+            visit(node->handle, node->Read());
         }
     }
 

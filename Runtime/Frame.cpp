@@ -30,6 +30,22 @@ namespace Physara::Runtime
 
     using namespace Renderer;
 
+    static constexpr std::size_t MainViewIndex = 0;
+    static constexpr std::size_t OffscreenViewIndex = 1;
+
+    void CollectSceneChanges(Editor::EditorSession &editor, std::span<FrameSlot, FrameSlotCount> slots) noexcept
+    {
+        const auto *scene = editor.ActiveScene();
+        assert(scene);
+        const auto changes = scene->PendingRenderChanges();
+        for (auto &slot : slots)
+        {
+            slot.sceneFrame.Observe(changes);
+        }
+        // 当前在途的槽也已保留自己的待消费索引, Scene 此时才可清除本次分发的明细.
+        editor.AcknowledgeSceneRenderChanges();
+    }
+
     Platform::DeviceHost::PresentationAcquire AcquireFrame(Platform::DeviceHost &host, std::size_t &next)
     {
         for (std::size_t offset = 0; offset < FrameSlotCount; ++offset)
@@ -71,8 +87,9 @@ namespace Physara::Runtime
         // 基础 UI 使用二维格式. 场景图另取 SSBO 范围和 RGBA32F cube 的目标能力,
         // 供编译器核对灯表及采样子资源. 后续上传准入只计算留在执行计划中的写入.
         // options 的借用依赖本对象地址稳定, 因此在 TryFrame 的同一局部作用域内构造并消费.
-        explicit EditorGraphProfile(Platform::DeviceHost &host, bool scene)
+        explicit EditorGraphProfile(Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic)
         {
+            const bool scene = sceneViews != 0;
             const auto info = host.GetInfo();
             constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
                                          RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
@@ -109,7 +126,8 @@ namespace Physara::Runtime
                             .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
                             .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0},
                 .textureBoundaryStates = states, .bufferBoundaryStates = states, .maxColorAttachments = 1,
-                .transientByteBudget = (scene ? ForwardAttachmentBudget : DiagnosticUploadBudget) + 32 * 1024 * 1024 + 4};
+                .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
+                    ((!scene || diagnostic) ? DiagnosticUploadBudget : 0)};
         }
     };
 
@@ -147,15 +165,32 @@ namespace Physara::Runtime
     {
         TextureId color;
         TextureId viewport;
-        std::optional<ForwardOutput> scene;
+        std::optional<ForwardGraph> scene;
         PassId diagnosticUpload;
         std::vector<GraphUpload> uploads = std::vector<GraphUpload>(0);
     };
 
-    // 正常和安全 UI 共用声明路径. 旧输出只 import, 安全模式不会生成诊断像素或附带消费者.
+    /// @brief 同槽附加请求自己的候选及准备事实. RenderFrame 保有到一次尝试结束.
+    struct OffscreenCandidate
+    {
+        OffscreenViewRequest *request{};
+        PreparedView prepared;
+        PreparedViewOutput outputs;
+        std::optional<Core::BoundedText> error;
+    };
+
+    /// @brief 仅主输出被实际采样时进入其 Forward 分支.
+    static bool UsesMainScene(const PreparedViewOutput &output, const Editor::PreparedUiFrame *ui,
+                              Editor::UiFrameMode mode) noexcept
+    {
+        return mode == Editor::UiFrameMode::Normal && output.Color() && output.Color()->scene &&
+            ui && ui->UsesViewOutput();
+    }
+
+    // 主视口按实际 UI 采样选择新生产者或导入旧颜色. 附加 View 通过独立的 ShaderRead 出口保持活性.
     static GraphResult<FrameDeclaration> DeclareFrame(RenderGraph &graph, const Platform::PresentTarget &target,
         PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared, Editor::UiFrameMode mode,
-        FrameSlot &slot, GraphExecutionDiagnostics diagnostics)
+        FrameSlot &slot, GraphExecutionDiagnostics diagnostics, bool offscreen)
     {
         FrameDeclaration declared;
         auto imported = graph.ImportTexture(target.texture, {target.entryState, target.finalState, false});
@@ -176,38 +211,50 @@ namespace Physara::Runtime
         {
             return *error;
         }
-        if (outputs.Color() && prepared && prepared->UsesViewOutput())
+        const bool main = UsesMainScene(outputs, prepared, mode);
+        if ((main || offscreen) && prepared)
         {
-            if (outputs.Color()->scene && mode == Editor::UiFrameMode::Normal)
+            // 共享写入准入要求 UI 和诊断纹理也先于场景缓冲.
+            if (auto error = prepared->DeclareTextureUploads(graph, declared.color, slot.bindings, declared.uploads))
             {
-                // 设备准入按实际纹理、缓冲顺序记账. UI 纹理须在场景缓冲写前声明.
-                if (auto error = prepared->DeclareTextureUploads(graph, declared.color, slot.bindings, declared.uploads))
-                {
-                    return *error;
-                }
-                auto forward = slot.forward.Declare(graph, declared.uploads);
-                if (const auto *error = std::get_if<GraphError>(&forward))
-                {
-                    return *error;
-                }
-                declared.scene = std::get<ForwardOutput>(std::move(forward));
-                declared.viewport = declared.scene->displayColor;
+                return *error;
             }
-            else
+        }
+        if (!main && outputs.Color() && prepared && prepared->UsesViewOutput())
+        {
+            if (!outputs.PrepareUpload(slot.arena))
             {
-                if (!outputs.PrepareUpload(slot.arena))
-                {
-                    return GraphError{GraphErrorCode::OutOfStorage, Core::BoundedText("Cannot prepare diagnostic pixels")};
-                }
-                auto viewport = outputs.Declare(graph, declared.uploads);
-                if (const auto *error = std::get_if<GraphError>(&viewport))
+                return GraphError{GraphErrorCode::OutOfStorage, Core::BoundedText("Cannot prepare diagnostic pixels")};
+            }
+            auto viewport = outputs.Declare(graph, declared.uploads);
+            if (const auto *error = std::get_if<GraphError>(&viewport))
+            {
+                return *error;
+            }
+            declared.viewport = std::get<TextureId>(viewport);
+            if (outputs.UploadBytes() != 0)
+            {
+                declared.diagnosticUpload = declared.uploads.back().pass;
+            }
+        }
+        if (main || offscreen)
+        {
+            auto forward = slot.forward.Declare(graph, declared.uploads, {main, offscreen});
+            if (const auto *error = std::get_if<GraphError>(&forward))
+            {
+                return *error;
+            }
+            declared.scene = std::get<ForwardGraph>(std::move(forward));
+            if (main)
+            {
+                declared.viewport = declared.scene->views[MainViewIndex]->displayColor;
+            }
+            if (offscreen)
+            {
+                const auto color = declared.scene->views[OffscreenViewIndex]->displayColor;
+                if (auto error = graph.Export(color, ExportUsage::ShaderRead))
                 {
                     return *error;
-                }
-                declared.viewport = std::get<TextureId>(viewport);
-                if (outputs.UploadBytes() != 0)
-                {
-                    declared.diagnosticUpload = declared.uploads.back().pass;
                 }
             }
         }
@@ -260,7 +307,40 @@ namespace Physara::Runtime
         FrameStatistics &statistics;
         Editor::FrameCpuSeconds cpu;
         ForwardResidencyCounts residency;
+        Editor::ScenePreparationStatistics preparation;
     };
+
+    /// @brief 只为完成裁剪的 View 记录候选和选中规模. 输出资格由接受回执单独记录.
+    static Editor::ViewCullingStatistics MeasureCulling(const PreparedView &view) noexcept
+    {
+        if (!view.camera)
+        {
+            return {};
+        }
+        return {view.view, view.cullingSeconds, view.scene.primitives.size(), view.primitives.size(),
+                view.scene.lights.size(), view.lights.size()};
+    }
+
+    /// @brief 按已完成的存活写入区分场景行与 View 数据, 并读取两份 arena 的累计峰值.
+    static void CompletePreparationStatistics(Editor::ScenePreparationStatistics &statistics, const FrameSlot &slot,
+        const FrameDeclaration &declared, const CompiledGraphPlan &plan, bool main, bool offscreen) noexcept
+    {
+        statistics.views[MainViewIndex].accepted = main;
+        statistics.views[OffscreenViewIndex].accepted = offscreen;
+        for (const auto &upload : declared.uploads)
+        {
+            if (upload.source == GraphUploadSource::Other || !IsLivePass(plan, upload.pass))
+            {
+                continue;
+            }
+            auto &counts = upload.source == GraphUploadSource::ForwardStatic ? statistics.staticUploads :
+                                                                              statistics.viewUploads;
+            ++counts.writes;
+            counts.bytes += upload.bytes;
+        }
+        statistics.payload = {slot.arena.Capacity(), slot.arena.HighWater(), slot.arena.GrowthCount()};
+        statistics.graph = {slot.graphArena.Capacity(), slot.graphArena.HighWater(), slot.graphArena.GrowthCount()};
+    }
 
     // Open 后所有失败留在原录制, 依次完成图执行, Close, 提交, 发布资格核对和取得消费.
     // Close/交接区间独立检查, 但不能清除原图的失败结论. 无可靠票据时保持原 owner 等待退出收拢.
@@ -269,7 +349,7 @@ namespace Physara::Runtime
         Core::Diagnostics &diagnostics, RenderGraph &graph, const CompiledGraphPlan &plan,
         const FrameDeclaration &declared, PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared,
         Editor::UiFrameMode mode, Platform::RhiErrorScope &errors, GraphExecutionDiagnostics graphErrors,
-        bool &opened, FrameMeasurements measurements)
+        bool &opened, FrameMeasurements measurements, OffscreenCandidate *offscreen)
     {
         std::optional<Core::BoundedText> failure;
         const auto stopped = [&](std::string_view stage, const Core::BoundedText &reason)
@@ -298,8 +378,7 @@ namespace Physara::Runtime
                           Core::BoundedText("Fatal before graph execution"));
         }
         // 以本图实际声明的 Forward 分支界定候选. 记录区间含场景和 UI, 到图执行结束即截止.
-        const bool measure = declared.scene && mode == Editor::UiFrameMode::Normal;
-        const auto displayLayout = measure ? outputs.Color()->layout : ViewImageLayout{};
+        const bool measure = declared.scene.has_value();
         const auto before = measure ? host.ReadGraphicsCounts() : RHI::GraphicsOperationCounts{};
         auto timer = measure && errors.IsClear() ? measurements.statistics.ReserveTimer() :
             FrameStatistics::TimerReservation{};
@@ -409,12 +488,22 @@ namespace Physara::Runtime
             static_cast<void>(confirmed);
         }
         const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
-            (!declared.scene || declared.scene->HasCompleteUploads(plan)) &&
             view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.viewport)));
-        if (published && declared.scene)
+        if (accepted && declared.scene)
         {
-            // View 接受颜色及随帧冻结的环境后, 再允许后继帧把这次完整上传的存储作为已初始化输入.
+            // 共享存储按本计划的写入确认. 每路显示色另外用自己的出口查找原生对象, 再核对所属 View 的请求.
             slot.forward.Confirm(*declared.scene, plan);
+            if (offscreen)
+            {
+                auto &request = *offscreen->request;
+                const auto color = declared.scene->views[OffscreenViewIndex]->displayColor;
+                if (request.view.Publish(std::move(offscreen->outputs),
+                        RHI::TextureHandle(FindTextureOutput(*execution, color))))
+                {
+                    request.reason = ViewSettingReason::None;
+                    request.submission = receipt.ticket;
+                }
+            }
         }
         const auto result = host.Present(presentation.token, hostError);
         if (hostError)
@@ -422,15 +511,23 @@ namespace Physara::Runtime
             return stopped("Frame.Present", Platform::DescribeHostError(*hostError));
         }
         std::optional<Editor::SceneFrameIdentity> measuredSource;
-        if (published && measure)
+        const bool measuredMain = published && measure && declared.scene->views[MainViewIndex].has_value();
+        const bool measuredOffscreen = offscreen && offscreen->request->submission != 0;
+        if (measuredMain || measuredOffscreen)
         {
-            // 场景及显示配置取自 View 刚确认的颜色代. 交换是否发生单独记录, 计时稍后按票据回填.
-            const auto &last = *view.LastRenderedScene();
-            measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, view.Id(), last.contentRevision,
-                last.documentRevision, last.mode, last.renderLayout, displayLayout, last.display};
-            measurements.statistics.Publish({*measuredSource, measurements.cpu, native, slot.forward.WorkCounts(),
+            // 单个统计来源优先保留主 View, 纯离屏正常帧使用实际接受的附加 View.
+            const auto &measured = measuredMain ? view : offscreen->request->view;
+            const auto retained = measured.LastAcceptedOutput();
+            const auto &last = *retained.Color()->scene;
+            measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, measured.Id(), last.contentRevision,
+                last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display};
+            const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
+            CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
+                                          measuredOffscreen);
+            measurements.statistics.Publish({*measuredSource, measurements.cpu, native, slot.forward.WorkCounts(index),
                 measurements.residency, plan.passes.size(), result.swapped,
-                result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state});
+                result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state,
+                measurements.preparation});
         }
         if (timer.query)
         {
@@ -462,7 +559,7 @@ namespace Physara::Runtime
     static AttemptResult TryFrame(Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
         const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
         Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode,
-        FrameMeasurements measurements)
+        FrameMeasurements measurements, OffscreenCandidate *offscreen)
     {
         bool opened = false;
         try
@@ -485,15 +582,16 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UiPrepare", Core::BoundedText("UI preparation failed"));
             }
             auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
-            const auto sceneBytes = mode == Editor::UiFrameMode::Normal && outputs.Color() && outputs.Color()->scene &&
-                prepared && prepared->UsesViewOutput() ? slot.forward.GraphStorageBytes() : 0;
+            const auto sceneBytes = UsesMainScene(outputs, prepared, mode) || offscreen ?
+                slot.forward.GraphStorageBytes() : 0;
             if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024 + sceneBytes))
             {
                 return Failed(host, preparationFailure, "Frame.Prepare",
                               Core::BoundedText("Cannot reserve graph storage"));
             }
             RenderGraph graph(slot.graphArena);
-            auto declaration = DeclareFrame(graph, presentation.target, outputs, prepared, mode, slot, graphErrors);
+            auto declaration = DeclareFrame(graph, presentation.target, outputs, prepared, mode, slot, graphErrors,
+                                            offscreen != nullptr);
             // 其它图消费者的准备也属于此边界, Fatal 不能被编译或安全图覆盖.
             if (const auto *error = std::get_if<GraphError>(&declaration))
             {
@@ -509,7 +607,9 @@ namespace Physara::Runtime
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Seal", error->description);
             }
             const auto &declared = std::get<FrameDeclaration>(declaration);
-            EditorGraphProfile profile(host, declared.scene.has_value());
+            const auto sceneCount = declared.scene ? std::ranges::count_if(declared.scene->views,
+                [](const auto &source) { return source.has_value(); }) : 0;
+            EditorGraphProfile profile(host, static_cast<std::size_t>(sceneCount), declared.diagnosticUpload.IsValid());
             if (!errors.IsClear())
             {
                 return Failed(host, preparationFailure, "Frame.Profile",
@@ -536,10 +636,13 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UploadAdmission",
                               Core::BoundedText("Upload admission failed"));
             }
-            if ((admission == Platform::UploadAdmission::Pending ||
-                 admission == Platform::UploadAdmission::ExceedsLimit) &&
-                mode == Editor::UiFrameMode::Normal && ((declared.scene && declared.scene->HasLiveUploads(plan)) ||
-                                                        IsLivePass(plan, declared.diagnosticUpload)))
+            const bool liveSceneUpload = declared.scene && std::ranges::any_of(declared.uploads,
+                [&](const auto &upload)
+                {
+                    return upload.source != GraphUploadSource::Other && IsLivePass(plan, upload.pass);
+                });
+            if ((admission == Platform::UploadAdmission::Pending || admission == Platform::UploadAdmission::ExceedsLimit) &&
+                (liveSceneUpload || IsLivePass(plan, declared.diagnosticUpload)))
             {
                 // 只在尚未开放列表时移除视口生产者, 重新为实际存活的 UI 写入准入.
                 if (admission == Platform::UploadAdmission::Pending)
@@ -560,7 +663,7 @@ namespace Physara::Runtime
                               Core::BoundedText("UI upload capacity rejected"));
             }
             return ExecuteFrame(host, editor, view, presentation, slot, commands, diagnostics, graph, plan, declared,
-                                outputs, prepared, mode, errors, graphErrors, opened, measurements);
+                                outputs, prepared, mode, errors, graphErrors, opened, measurements, offscreen);
         }
         catch (const std::bad_alloc &)
         {
@@ -575,6 +678,94 @@ namespace Physara::Runtime
         }
     }
 
+    /// @brief 有源几何的场景始终可输出已清除附件. 仅天空的物理 View 也有实际生产者.
+    static bool HasSceneOutput(const PreparedView &prepared) noexcept
+    {
+        const bool sky = prepared.preview == PreviewMode::PhysicalLighting && prepared.scene.environment &&
+            prepared.scene.environment->settings.sky;
+        return prepared.camera && (prepared.scene.hasGeometry || sky);
+    }
+
+    /// @brief 附加 View 在主 View 后分别校验和准备, 局部失败只对对应请求报告结果.
+    static OffscreenCandidate PrepareOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward,
+        FrameSlot &slot, SceneFramePreparation &scene, const View &main,
+        std::span<OffscreenViewRequest> requests)
+    {
+        OffscreenCandidate candidate;
+        if (requests.size() != 1)
+        {
+            for (auto &request : requests)
+            {
+                request.reason = ViewSettingReason::ViewCapacityLimit;
+            }
+            return candidate;
+        }
+        auto &request = requests.front();
+        auto &view = request.view;
+        if (view.Id() == main.Id() || (request.layout && (request.layout->view != view.Id() ||
+            request.layout->requestRevision != view.Settings().requestRevision)))
+        {
+            request.reason = ViewSettingReason::InvalidViewRequest;
+            return candidate;
+        }
+        candidate.request = &request;
+        if (request.layout)
+        {
+            const auto &layout = *request.layout;
+            const auto display = ResolveDisplaySettings(view.Preview(), view.DocumentRequests().antiAliasing);
+            // 同一相机的两个画布同尺寸时有效矩形相同. 重采样和固定附件额度可在提取前确定.
+            if (const auto failure = forward.CheckAttachments(layout.renderExtent, layout.outputExtent, display,
+                                                               layout.renderExtent != layout.outputExtent))
+            {
+                request.reason = failure->reason;
+                candidate.outputs = view.Unavailable(request.reason);
+                candidate.error = failure->description;
+                return candidate;
+            }
+        }
+        candidate.prepared = slot.offscreenView.Prepare(scene, view, request.layout);
+        if (!HasSceneOutput(candidate.prepared))
+        {
+            request.reason = candidate.prepared.reason != ViewSettingReason::None ?
+                candidate.prepared.reason : ViewSettingReason::SceneOutputUnavailable;
+            candidate.outputs = view.Unavailable(request.reason);
+            candidate.error = candidate.prepared.failure;
+            return candidate;
+        }
+
+        const auto errors = host.BeginFrameGraphicsDiagnostics();
+        const auto &prepared = candidate.prepared;
+        auto failure = forward.Prepare(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
+        if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending))
+        {
+            failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                                     Core::BoundedText("Offscreen resource preparation failed")};
+        }
+        if (failure)
+        {
+            request.reason = failure->reason;
+            candidate.outputs = view.Unavailable(request.reason);
+            if (request.reason != ViewSettingReason::EnvironmentPending)
+            {
+                candidate.error = Failed(host, AttemptStatus::Cancelled, "Frame.OffscreenPrepare",
+                                         failure->description).error;
+            }
+            return candidate;
+        }
+        auto output = view.PreparePreview(prepared, slot.forward.Degradation(OffscreenViewIndex),
+                                          slot.forward.Environment(OffscreenViewIndex));
+        if (const auto *error = std::get_if<Core::BoundedText>(&output))
+        {
+            request.reason = ViewSettingReason::ScenePreparationFailed;
+            candidate.outputs = view.Unavailable(request.reason);
+            candidate.error = *error;
+            return candidate;
+        }
+        candidate.outputs = std::get<PreparedViewOutput>(std::move(output));
+        request.reason = ViewSettingReason::SubmissionPending;
+        return candidate;
+    }
+
     // 一次取得最多尝试带视口的普通图, 去掉视口的普通图和安全 UI 图.
     // 移除场景分支后, 无旧图可用时由普通 UI 画占位, 可保留的旧图只在 SafeUi 合成; 两者都不再上传本轮场景.
     // 可恢复分支在此消费取得或沿已提交前缀返回; Stopped 将尚未收拢的 owner 留给主循环退出.
@@ -582,8 +773,14 @@ namespace Physara::Runtime
         Platform::DeviceHost &host, Editor::EditorSession &editor, View &view, ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
-        FrameStatistics &statistics, double editorSeconds)
+        FrameStatistics &statistics, double editorSeconds, std::span<OffscreenViewRequest> offscreenRequests)
     {
+        // 即使候选在准备前终止, 复用的请求也不能带回上一帧的接受票据.
+        for (auto &request : offscreenRequests)
+        {
+            request.submission = 0;
+            request.reason = ViewSettingReason::ScenePreparationFailed;
+        }
         std::optional<Core::BoundedText> primary;
         std::optional<Core::BoundedText> additional;
         // 普通失败记录一次, 后续失败只作为附加原因. 会话拥有副本, 不依赖本函数或图存活.
@@ -611,21 +808,21 @@ namespace Physara::Runtime
         slot.forward.Reset();
         const auto *scene = editor.ActiveScene();
         assert(scene);
-        const auto prepared = slot.mainView.Prepare(slot.sceneFrame, *scene, view, editorFrame.viewport);
+        const auto &environment = scene->Environment();
+        forward.BeginEnvironmentRequests(environment ? environment->source : nullptr);
+        SceneFramePreparation shared(slot.sceneFrame, *scene);
+        const auto prepared = slot.mainView.Prepare(shared, view, editorFrame.viewport, {}, ViewportUse::EditorViewport);
         editor.SetPreparedViewport(&prepared);
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
-        // 天空有独立的颜色写入, 只有相机和天空也可进入 Forward. 有几何时依据场景全集判断,
-        // 使全部表面隐藏或移出视锥的场景仍由 Forward 清除颜色和深度.
         const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
-        const bool wantsSky = physical && prepared.scene.environment && prepared.scene.environment->settings.sky;
-        const bool hasScene = prepared.camera && (wantsSky || std::ranges::any_of(prepared.scene.primitives,
-            [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); }));
+        const bool hasScene = HasSceneOutput(prepared);
         // 有场景的诊断预览也可选择缩放阶段. 显示准备或上传准入受阻时沿用同一旧图路径.
         const bool retainOnFailure = physical || (hasScene && prepared.layouts.render != prepared.layouts.display);
         auto mode = Editor::UiFrameMode::Normal;
-        if (hasScene)
+        // 主 View 的 CPU 索引已准备. 封存命令有可见采样时才为它登记驻留和上传, 出图资格由后面的图回执确认.
+        if (hasScene && editor.HasViewportSample(presentation.target.extentPixels))
         {
             const auto errors = host.BeginFrameGraphicsDiagnostics();
             auto failure = forward.Prepare(slot.forward, prepared, prepared.preview);
@@ -661,6 +858,11 @@ namespace Physara::Runtime
                 return stop();
             }
         }
+        else if (hasScene)
+        {
+            // 封存命令不采样时没有本轮颜色回执. 保留上次显示代, 仅更新当前请求的等待原因.
+            candidate = view.Unavailable(ViewSettingReason::ViewportSamplingPending);
+        }
         else
         {
             candidate = view.PrepareDiagnostic(prepared, remainingDiagnosticBytes);
@@ -671,8 +873,22 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
+        auto offscreen = PrepareOffscreen(host, forward, slot, shared, view, offscreenRequests);
+        forward.EndEnvironmentRequests();
+        remember(offscreen.error);
+        if (host.HasFatalGraphicsError())
+        {
+            return stop();
+        }
+        // 只有准备出本轮颜色候选的附加路才进入图. 响应对象即使被拒绝也保留原因供调用方读取.
+        auto *selectedOffscreen = offscreen.outputs.Color() ? &offscreen : nullptr;
+        const auto *extracted = shared.Result();
         const FrameMeasurements measurements{statistics, {editorSeconds, SecondsSince(sceneStart)},
-                                              forward.ResidencyCounts()};
+            forward.ResidencyCounts(),
+            {.slot = presentation.token.slotIndex, .structureRevision = extracted ? extracted->structureRevision : 0,
+             .extraction = extracted ? extracted->extraction : SceneExtractionStatistics{},
+             .encodings = slot.forward.EncodingCounts(), .views = {MeasureCulling(prepared),
+                                                                  MeasureCulling(offscreen.prepared)}}};
         // 本次取得已证明同槽上次工作完成. 后续失败分支只检查本轮是否真的提交过前缀.
         slot.lastSubmission = 0;
         slot.diagnosticUploadBytes = 0;
@@ -683,7 +899,16 @@ namespace Physara::Runtime
             slot.arena.Reset();
             slot.bindings.Reset();
             const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode,
-                                          measurements);
+                                          measurements, selectedOffscreen);
+            const bool attemptedOffscreen = selectedOffscreen != nullptr;
+            selectedOffscreen = nullptr;
+            if (attemptedOffscreen && offscreen.request->submission == 0 && attempt.status != AttemptStatus::Succeeded)
+            {
+                const auto reason = attempt.viewportReason != ViewSettingReason::None ? attempt.viewportReason :
+                    ViewSettingReason::ScenePreparationFailed;
+                offscreen.request->reason = reason;
+                static_cast<void>(offscreen.request->view.Unavailable(reason));
+            }
             // TryFrame 已结束图回调和 CPU 借用. 后继尝试只含 UI, Draw 强引用仍保留到同槽完成.
             slot.forward.ReleasePayload();
             remember(attempt.error);
@@ -692,7 +917,8 @@ namespace Physara::Runtime
             {
                 return stop();
             }
-            if (attempt.status == AttemptStatus::GraphRejected && mode != Editor::UiFrameMode::SafeUi)
+            if (attempt.status == AttemptStatus::GraphRejected &&
+                (mode != Editor::UiFrameMode::SafeUi || attemptedOffscreen))
             {
                 mode = Editor::UiFrameMode::SafeUi;
                 outputs = view.LastAcceptedOutput();
@@ -701,21 +927,25 @@ namespace Physara::Runtime
             if (attempt.status == AttemptStatus::RebuildWithoutViewport)
             {
                 // 先保留准入原因. 物理或需缩放的场景有旧图时交给安全 UI, 否则正常 UI 使用占位.
-                outputs = view.Unavailable(attempt.viewportReason);
-                if (retainOnFailure && mode == Editor::UiFrameMode::Normal)
+                if (mode == Editor::UiFrameMode::Normal)
                 {
-                    auto retained = view.LastAcceptedOutput(attempt.viewportReason);
-                    if (retained.Color())
+                    outputs = view.Unavailable(attempt.viewportReason);
+                    if (retainOnFailure)
                     {
-                        outputs = std::move(retained);
-                        mode = Editor::UiFrameMode::SafeUi;
+                        auto retained = view.LastAcceptedOutput(attempt.viewportReason);
+                        if (retained.Color())
+                        {
+                            outputs = std::move(retained);
+                            mode = Editor::UiFrameMode::SafeUi;
+                        }
                     }
                 }
                 continue;
             }
             if (attempt.status == AttemptStatus::Succeeded)
             {
-                const bool safe = mode == Editor::UiFrameMode::SafeUi;
+                const bool safe = mode == Editor::UiFrameMode::SafeUi &&
+                    (!offscreen.request || offscreen.request->submission == 0);
                 // 准备值可用不等于已显示. 只有正常合成实际采样且 View 已接受, 才交回导航命中依据.
                 editor.SetAcceptedViewport(attempt.viewportPublished ? &prepared : nullptr, view);
                 editor.ReportFrameOutcome(safe ? Editor::FrameRecovery::SafeUi : Editor::FrameRecovery::Normal,

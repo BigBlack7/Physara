@@ -217,6 +217,8 @@ namespace Physara::Runtime
                 PrintError(host.FirstGraphicsError().value_or(Core::BoundedText("Fatal UI preparation")));
                 return 1;
             }
+            // Advance 内的编辑也已提交. 槽忙或窗口暂停时仍分发这批变更, 让各槽在自己的 Ready 轮次追赶.
+            CollectSceneChanges(editor, slots);
             if (frame.hostRequest)
             {
                 const auto *cursor = std::get_if<Platform::SetCursorMode>(&*frame.hostRequest);

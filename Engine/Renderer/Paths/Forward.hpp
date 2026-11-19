@@ -3,7 +3,9 @@
 /// @file
 /// @brief 正式 Forward 准备和图声明入口. 设备缓存与完成驱动的帧槽准备分开保有资源.
 
+#include <array>
 #include <filesystem>
+#include <map>
 #include <memory>
 
 #include "../Prepare/ViewPreparation.hpp"
@@ -12,6 +14,8 @@ namespace Physara::Renderer
 {
     inline constexpr std::size_t ForwardAttachmentBudget = 128 * 1024 * 1024;
     inline constexpr std::size_t ForwardBufferLimit = 64 * 1024 * 1024;
+    /// @brief 本配置的工作集位置 0 供主视口, 位置 1 供显式离屏出口. View 身份随各自的请求传入.
+    inline constexpr std::size_t ForwardViewCount = 2;
 
     /// @brief 当前配置的程序包路径, 由 Runtime 按实际 exe 定位. 物理变体按需加载.
     struct ForwardPackagePaths
@@ -61,27 +65,39 @@ namespace Physara::Renderer
         TextureId depth;
         TextureId displayColor;
         ForwardWorkingSource source;
-
-        /// @brief 是否有本候选的上传保留在同图计划中, 供准入失败时判定能否移除场景分支.
-        [[nodiscard]] bool HasLiveUploads(const CompiledGraphPlan &plan) const noexcept;
-        /// @brief 核对显示版本的图代以及所有候选上传 Pass 的活性. 执行成功与提交票据由 Runtime 核对.
-        [[nodiscard]] bool HasCompleteUploads(const CompiledGraphPlan &plan) const noexcept;
-
-    private:
-        friend class ForwardFrame;
-        std::vector<PassId> m_Uploads;
     };
 
     namespace Detail
     {
-        struct ForwardFrameData;
+        struct Allocation;
+        struct ForwardFrameStorage;
         struct ForwardDevice;
     }
+
+    /// @brief 同图声明的各路输出及存储代的真实生产者. 借用 ForwardFrame 至当前候选结束.
+    struct ForwardGraph
+    {
+        std::array<std::optional<ForwardOutput>, ForwardViewCount> views;
+
+    private:
+        friend class ForwardFrame;
+        std::map<Detail::Allocation *, std::vector<PassId>> m_StorageWrites;
+        PassId m_LutWrite;
+        std::size_t m_LutView{};
+    };
 
     /// @brief 准备值的实际绘制项和提交给本 View 的灯表行.
     struct ForwardWorkCounts
     {
         std::size_t draws{};
+        std::size_t lights{};
+    };
+
+    /// @brief 真正执行的对象、材质和世界灯行编码, 包括未产出可绘项的准备工作.
+    struct ForwardEncodingCounts
+    {
+        std::size_t objects{};
+        std::size_t materials{};
         std::size_t lights{};
     };
 
@@ -106,30 +122,31 @@ namespace Physara::Renderer
         /// @brief 同槽安全取得时释放上轮 Draw 和活动绑定, 保留可重用的 View 行及该槽的普通灯缓冲.
         void Reset() noexcept;
         /// @brief 借用本轮被跳过项的有界摘要, 下次 Reset/Prepare 后失效; 空值表示无局部降级.
-        [[nodiscard]] const std::optional<Core::BoundedText> &Degradation() const noexcept;
+        [[nodiscard]] const std::optional<Core::BoundedText> &Degradation(std::size_t index = 0) const noexcept;
         /// @brief 本候选实际使用的环境角色, 与当前 PreparedView 一起交给 View.
-        [[nodiscard]] const std::optional<RenderedEnvironment> &Environment() const noexcept;
+        [[nodiscard]] const std::optional<RenderedEnvironment> &Environment(std::size_t index = 0) const noexcept;
         /// @brief 图回调对象所需的 arena 预留量, 不含帧拥有的 Draw 容器, 像素或 GPU 存储.
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
         /// @brief 返回本槽已准备的几何绘制项和活动灯表行数. 同一项供深度及颜色 Pass 消费时仍只计一次.
-        [[nodiscard]] ForwardWorkCounts WorkCounts() const noexcept;
+        [[nodiscard]] ForwardWorkCounts WorkCounts(std::size_t index = 0) const noexcept;
+        /// @brief 汇总自本槽 Reset 起两路实际执行的编码. 命中已编码的共享行时计数保持原值.
+        [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
 
-        /// @brief 声明实际上传及 Forward 输出, 在 UI 缓冲上传之前调用.
-        /// @pre 此槽已有成功的准备值, 且保持至图执行结束. 纯声明失败后放弃候选图.
-        /// UI 纹理上传须先声明, 以保持设备准入的纹理在前, 缓冲在后顺序.
-        /// @note 返回的显示色由实际消费者读取并导出, 未消费分支可裁剪; 声明不确认驻留内容.
-        [[nodiscard]] GraphResult<ForwardOutput> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const;
-        /// @brief 完整图实际执行并获得接受票据后, 确认本次上传可供后续录制使用.
-        /// @pre output 来自此准备值, plan 是接受的同图计划. 安全 UI 或前缀票据不得调用.
-        /// @note 本入口只核对图代和上传活性, 完整接受资格由 Runtime 保证; 此处不等待 GPU.
-        void Confirm(const ForwardOutput &output, const CompiledGraphPlan &plan) noexcept;
+        /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
+        /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
+        /// @note 返回值带各路独立的显示色版本. 调用方按 UI 采样或显式导出建立各自的消费者.
+        [[nodiscard]] GraphResult<ForwardGraph> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads,
+            const std::array<bool, ForwardViewCount> &selected = {true, false}) const;
+        /// @brief 完整正常图获接受后, 分别确认全部所需写入均存活的存储代.
+        /// @pre output 来自本次声明, plan 是接受的同图计划, 前缀提交不具备确认资格.
+        void Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
         /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;
 
     private:
         friend class ForwardRenderer;
-        std::unique_ptr<Detail::ForwardFrameData> m_Data;
+        std::unique_ptr<Detail::ForwardFrameStorage> m_Data;
     };
 
     /// @brief 设备 owner 线程准备驻留、绑定及原生 Pipeline, 仅消费帧内固定的资产版本.
@@ -143,11 +160,23 @@ namespace Physara::Renderer
         ForwardRenderer(const ForwardRenderer &) = delete;
         ForwardRenderer &operator=(const ForwardRenderer &) = delete;
 
+        /// @brief 以当前 Scene 的有效源开启需求收集, 各路 Prepare 合并自己的实际环境需求.
+        void BeginEnvironmentRequests(const Asset::EnvironmentVersion &source) noexcept;
+        /// @brief 所有可消费的 View 已准备, 撤销已失去消费者的环境作业.
+        void EndEnvironmentRequests() noexcept;
+
+        /// @brief 在创建资源前核对渲染和显示画布的单边上限及本 View 的固定附件预算.
+        /// @param display 本路预览模式和 AA 请求解析出的实际显示配置.
+        /// @param resample 显示阶段需要从渲染栅格重采样时为 true, 对应一个额外的线性中间目标.
+        /// @return 空值表示附件可容纳. 失败携带具体的 View 原因, 显式离屏请求可在共享场景提取前返回该原因.
+        [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
+            DisplaySettings display, bool resample) const noexcept;
+
         /// @brief 用已有的静态工作集准备当前模式. 空可见集允许背景输出.
-        /// @pre view 已准备, frame 已由安全取得的槽 Reset. 失败值可用于 View 占位及重试.
-        /// @note 成功后帧独立持有 Draw/上传, 不再借用 PreparedView; 部分缓存可在失败后留下未接受代.
+        /// @pre frame 已由安全槽 Reset, index 是本轮尚未准备的工作集位置. 各路在同一候选内连续准备.
+        /// @note 局部失败清理该路的 Draw, 已完整登记的生产仍由共同批次保有, 图将核对活性.
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
-            PreviewMode mode, ViewResourceNeeds needs = {});
+            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
         /// @brief 在设备 owner 线程读取四张缓存索引当时的条目数. 首次准备前各项为零.
         [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
 

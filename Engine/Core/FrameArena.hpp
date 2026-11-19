@@ -34,7 +34,7 @@ namespace Physara::Core
 
         /// @brief 结束一次失败准备新增的尾部借用, 保留前缀地址, 容量和高水位.
         /// @pre used 为当前槽使用期内的准备起点, 调用者已结束其后的全部借用.
-        /// @note 仅退回游标. 保留容量供后续准备复用, 高水位继续记录本次实际峰值.
+        /// @note 仅退回游标. 容量可供下一次准备复用, 高水位保留该 arena 自创建以来的峰值.
         void Rewind(std::size_t used) noexcept;
 
         /// @brief 结束本次使用, 保留已分配容量与历史最高使用量.
@@ -44,11 +44,14 @@ namespace Physara::Core
         [[nodiscard]] std::size_t Used() const noexcept { return m_Used; }
         [[nodiscard]] std::size_t Capacity() const noexcept { return m_Capacity; }
         [[nodiscard]] std::size_t HighWater() const noexcept { return m_HighWater; }
+        /// @brief 槽存续期间成功增加容量的次数, Reset 和 Rewind 不改变此值.
+        [[nodiscard]] std::size_t GrowthCount() const noexcept { return m_GrowthCount; }
 
     private:
         std::unique_ptr<std::byte[]> m_Storage;
         std::size_t m_Capacity = 0;
         std::size_t m_Used = 0;
         std::size_t m_HighWater = 0;
+        std::size_t m_GrowthCount = 0;
     };
 }

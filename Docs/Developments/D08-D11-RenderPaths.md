@@ -14,9 +14,11 @@
 
 **职责位置：** Renderer/Prepare、FrameSlot。**前置：** 本阶段入口满足。**架构依据：** [5.2](../Architecture.md#prepare)、[5.3](../Architecture.md#view-preparation)、[5.1](../Architecture.md#frame-state)。
 
-- [ ] 按 revision/合并脏集合更新各 FrameSlot 保留的对象、Primitive、灯提取数组，只在槽可复用时修改并只读发布；结构代变化重建索引与对应上传，相机/View uniform 独立更新，不因 arena reset 重新编码未变场景。
-- [ ] 明确 SceneFrame 共享与每 View 可见索引边界，为多个离屏 View 建立独立输出/设置及一次场景提取。
-- [ ] 记录提取/裁剪成本、arena 高水位和增长，测试多帧槽轮转、大对象数、空场景、多 View、稀疏编辑及结构增删；验证脏集合有界、空闲不重打包，旧槽不借用已复用 arena。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-19-prepare-incremental-scene-views/tasks.md#final-verification)
+
+- [x] 按 revision/合并脏集合更新各 FrameSlot 保留的对象、Primitive、灯提取数组，只在槽可复用时修改并只读发布；结构代变化重建索引与对应上传，相机/View uniform 独立更新，不因 arena reset 重新编码未变场景。
+- [x] 明确 SceneFrame 共享与每 View 可见索引边界，为多个离屏 View 建立独立输出/设置及一次场景提取。
+- [x] 记录提取/裁剪成本、arena 高水位和增长，测试多帧槽轮转、大对象数、空场景、多 View、稀疏编辑及结构增删；验证脏集合有界、空闲不重打包，旧槽不借用已复用 arena。
 
 **完成条件：** 增量性可由计数与版本证明，不以无效的“每帧都脏”缓存保持正确。
 

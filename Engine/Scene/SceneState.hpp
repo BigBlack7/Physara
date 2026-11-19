@@ -27,9 +27,14 @@ namespace Physara::Scene
         std::vector<SceneNode *> sourceNodes; ///< 实例根的反向来源索引, 覆盖已移出其层级的节点.
         const Asset::ModelNode *sourceNode{};
         WorldState world;
+        // 保存各自最近一次变更的内容代. 覆盖版本与 record.overrides 按同一源槽顺序发布.
+        std::uint64_t transformRevision{};
+        std::uint64_t lightRevision{};
+        std::vector<std::uint64_t> overrideRevisions;
 
         SceneNode(entt::entity native, EntityHandle handle, EntityId id);
         [[nodiscard]] const Asset::ModelVersion *Model() const noexcept;
+        [[nodiscard]] EntityView Read() const noexcept;
     };
 
     /// @brief Scene 的唯一可写存储. ID 索引和 ECS 组件在一次提交中更新, 世界数据由创作值派生.
@@ -42,6 +47,9 @@ namespace Physara::Scene
         std::optional<SceneEnvironment> environment;
         std::uint64_t lastGeneration{};
         std::uint64_t lastEntityId{};
+        // 明细只覆盖上次分发之后的事务. 结构换代清除旧键, 由各槽在安全复用时重建.
+        std::uint64_t deliveredRenderContent{};
+        std::set<RenderChange> renderChanges;
         entt::registry registry;
         std::map<EntityId, SceneNode *, std::less<>> entities;
 

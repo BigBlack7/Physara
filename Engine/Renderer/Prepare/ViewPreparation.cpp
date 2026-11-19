@@ -5,6 +5,7 @@
 /// 流程依次核对像素请求, 解析相机与矩形, 取得静态记录, 构造矩阵并筛选索引.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <new>
@@ -306,19 +307,42 @@ namespace Physara::Renderer
             owner.ResolveLens(input.entity.scene.IsValid() ? &input.projection : nullptr), owner.Exposure()};
     }
 
-    PreparedView ViewWork::Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene,
-                                   const View &view, const std::optional<ViewportRequest> &request,
-                                   const CameraSampling &sampling)
+    const std::variant<SceneFrame, Core::BoundedText> &SceneFramePreparation::Extract()
+    {
+        if (!m_Extracted)
+        {
+            m_Extracted.emplace(m_Storage.Prepare(m_Scene));
+        }
+        return *m_Extracted;
+    }
+
+    const SceneFrame *SceneFramePreparation::Result() const noexcept
+    {
+        return m_Extracted ? std::get_if<SceneFrame>(&*m_Extracted) : nullptr;
+    }
+
+    PreparedView ViewWork::Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene, const View &view,
+                                   const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
+                                   ViewportUse use)
+    {
+        SceneFramePreparation frame(sceneStorage, scene);
+        return Prepare(frame, view, request, sampling, use);
+    }
+
+    PreparedView ViewWork::Prepare(SceneFramePreparation &shared, const View &view,
+                                   const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
+                                   ViewportUse use)
     {
         m_Primitives.clear();
         m_Lights.clear();
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
-                            .preview = view.Preview(), .reason = view.CheckViewport(request)};
+                            .preview = view.Preview(), .reason = view.CheckViewport(request, use)};
         if (result.reason != ViewSettingReason::None)
         {
             return result;
         }
+        const auto &scene = shared.Source();
         const auto &document = view.DocumentRequests();
         // 实体相机读取 Scene 已传播的世界刚体和资产投影, 导航相机读取 View 的位姿和镜头.
         const auto camera = document.cameraEntityId ? scene.FindCamera(*document.cameraEntityId) :
@@ -351,7 +375,8 @@ namespace Physara::Renderer
             result.reason = ViewSettingReason::InvalidSampling;
             return result;
         }
-        const auto extracted = sceneStorage.Prepare(scene);
+        // 后续的无限远裁剪需要场景范围. 到达这里的各路共用提取结果, 裁剪索引分别写到各自的 ViewWork.
+        const auto &extracted = shared.Extract();
         if (const auto *error = std::get_if<Core::BoundedText>(&extracted))
         {
             result.reason = ViewSettingReason::ScenePreparationFailed;
@@ -368,6 +393,7 @@ namespace Physara::Renderer
 
         // 仅工作集随相机/采样 profile 重建, 静态记录在同一安全槽内复用.
         // 相交或数值上无法证明分离时保留候选, 这些索引不承担屏幕外阴影 caster 的筛选.
+        const auto cullingStart = std::chrono::steady_clock::now();
         const auto planes = Frustum(*snapshot, *offsets);
         const auto origin = glm::make_vec3(camera->pose.translation.data());
         try
@@ -408,6 +434,7 @@ namespace Physara::Renderer
         result.scene = frame;
         result.primitives = m_Primitives;
         result.lights = m_Lights;
+        result.cullingSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cullingStart).count();
         return result;
     }
 }

@@ -8,8 +8,8 @@
 #include "../Materials/StaticGpu.hpp"
 
 /// @file
-/// @brief 将同一 View 的上传, 不透明几何, 可选天空和显示转换组装为有版本依赖的子图.
-/// 图内回调只访问已声明版本; 预制场景集合由 RHI 按实际活动绑定再次核对访问权限.
+/// @brief 在同一图登记共享上传和各 View 的几何、天空与显示转换.
+/// 回调只访问已声明版本, 提交后按每个存储代的实际生产者确认上传.
 
 namespace Physara::Renderer
 {
@@ -21,60 +21,76 @@ namespace Physara::Renderer
     ForwardFrame::ForwardFrame() noexcept = default;
     ForwardFrame::~ForwardFrame() = default;
 
-    ForwardWorkCounts ForwardFrame::WorkCounts() const noexcept
+    ForwardWorkCounts ForwardFrame::WorkCounts(std::size_t index) const noexcept
     {
         if (!m_Data)
         {
             return {};
         }
-        const auto &lights = m_Data->activeLights;
-        return {m_Data->draws.size(), lights ? std::size_t(lights->directionalCount) + lights->localCount : 0};
+        const auto &view = m_Data->views[index];
+        const auto &lights = view.activeLights;
+        return {view.draws.size(), lights ? std::size_t(lights->directionalCount) + lights->localCount : 0};
     }
 
-    bool ForwardOutput::HasLiveUploads(const CompiledGraphPlan &plan) const noexcept
+    ForwardEncodingCounts ForwardFrame::EncodingCounts() const noexcept
     {
-        return std::ranges::any_of(m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); });
+        ForwardEncodingCounts counts;
+        if (m_Data)
+        {
+            for (const auto &view : m_Data->views)
+            {
+                counts.objects += view.encodings.objects;
+                counts.materials += view.encodings.materials;
+                counts.lights += view.encodings.lights;
+            }
+        }
+        return counts;
     }
 
-    bool ForwardOutput::HasCompleteUploads(const CompiledGraphPlan &plan) const noexcept
+    /// @brief 解除本轮着色引用, 槽内 View 行和普通灯缓冲留给下一次安全复用.
+    static void ResetView(Detail::ForwardFrameData &view) noexcept
     {
-        return displayColor.identity.generation == plan.graphGeneration &&
-               std::ranges::all_of(m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); });
+        view.draws.clear();
+        view.materialRows.clear();
+        view.activeLights.reset();
+        view.lightLayout = nullptr;
+        view.environment = {};
+        view.display = {};
+        view.degradation.reset();
     }
 
     void ForwardFrame::Reset() noexcept
     {
         if (m_Data)
         {
-            // 此槽已可复用. 解除本轮着色引用, 保留槽内的 View 行和普通灯缓冲供下次准备判定.
-            m_Data->draws.clear();
-            m_Data->materialRows.clear();
             m_Data->uploads.Clear();
-            m_Data->activeLights.reset();
-            m_Data->lightLayout = nullptr;
-            m_Data->environment = {};
-            m_Data->display = {};
-            m_Data->degradation.reset();
+            for (auto &view : m_Data->views)
+            {
+                ResetView(view);
+                view.encodings = {};
+            }
+            m_Data->begun = m_Data->lutReserved = false;
+            m_Data->hasPreparedView = false;
         }
     }
 
-    const std::optional<Core::BoundedText> &ForwardFrame::Degradation() const noexcept
+    const std::optional<Core::BoundedText> &ForwardFrame::Degradation(std::size_t index) const noexcept
     {
         assert(m_Data);
-        return m_Data->degradation;
+        return m_Data->views[index].degradation;
     }
 
-    const std::optional<RenderedEnvironment> &ForwardFrame::Environment() const noexcept
+    const std::optional<RenderedEnvironment> &ForwardFrame::Environment(std::size_t index) const noexcept
     {
         assert(m_Data);
-        return m_Data->environment.applied;
+        return m_Data->views[index].environment.applied;
     }
 
     std::size_t ForwardFrame::GraphStorageBytes() const noexcept
     {
         assert(m_Data);
         // 图 arena 只保存上传回调和几个 Pass 描述. Draw 和字节另由帧槽持有.
-        return 4096 + m_Data->uploads.writes * 256;
+        return 4096 * m_Data->views.size() + m_Data->uploads.writes * 256;
     }
 
     void ForwardFrame::ReleasePayload() noexcept
@@ -82,7 +98,10 @@ namespace Physara::Renderer
         if (m_Data)
         {
             m_Data->uploads.Clear();
-            m_Data->display.ReleasePayload();
+            for (auto &view : m_Data->views)
+            {
+                view.display.ReleasePayload();
+            }
         }
     }
 
@@ -95,6 +114,22 @@ namespace Physara::Renderer
 
     ForwardRenderer::~ForwardRenderer() = default;
 
+    void ForwardRenderer::BeginEnvironmentRequests(const Asset::EnvironmentVersion &source) noexcept
+    {
+        if (m_Resources)
+        {
+            m_Resources->environmentCache.BeginFrame(source);
+        }
+    }
+
+    void ForwardRenderer::EndEnvironmentRequests() noexcept
+    {
+        if (m_Resources)
+        {
+            m_Resources->environmentCache.EndFrame();
+        }
+    }
+
     ForwardResidencyCounts ForwardRenderer::ResidencyCounts() const noexcept
     {
         if (!m_Resources)
@@ -106,31 +141,60 @@ namespace Physara::Renderer
                 m_Resources->environmentTextures.size()};
     }
 
-    std::optional<ForwardFailure> ForwardRenderer::Prepare(ForwardFrame &frame, const PreparedView &view,
-                                                            PreviewMode mode, ViewResourceNeeds needs)
-    try
+    std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
+        DisplaySettings display, bool resample) const noexcept
     {
-        assert(view.camera && view.reason == ViewSettingReason::None);
-        const auto output = view.layouts.display.outputExtent;
-        const auto render = view.layouts.render.outputExtent;
-        const auto limit = std::min(m_MaxAttachmentSize, m_MaxTextureSize);
-        if (output.width > limit || output.height > limit || render.width > limit || render.height > limit)
+        if (render.width == 0 || render.height == 0 || output.width == 0 || output.height == 0)
         {
-            Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Forward extent exceeds the attachment limit");
+            return ForwardFailure{ViewSettingReason::InvalidExtent, Core::BoundedText("Forward extent is empty")};
         }
-        const auto display = ResolveDisplaySettings(mode, view.requestedAa);
+        const auto limit = std::min(m_MaxAttachmentSize, m_MaxTextureSize);
+        if (std::max({render.width, render.height, output.width, output.height}) > limit)
+        {
+            return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
+                                  Core::BoundedText("Forward extent exceeds the attachment limit")};
+        }
         const bool fxaa = display.antiAliasing == AntiAliasing::Fxaa;
-        const bool scale = view.layouts.display != view.layouts.render;
-        // HDR/D32 常驻本图. 各后继阶段才增加线性中间色, 最终 SRGBA8 按输出尺寸计费.
-        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(scale));
+        // RGBA16F 工作色和 D32 每个渲染像素合计 12 字节. FXAA 和重采样各需一个 8 字节的线性中间目标.
+        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(resample));
         if (render.height > ForwardAttachmentBudget / renderBytesPerPixel / render.width)
         {
-            Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Forward attachments exceed the view byte budget");
+            return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
+                                  Core::BoundedText("Forward attachments exceed the view byte budget")};
         }
         const auto renderBytes = std::size_t(render.width) * render.height * renderBytesPerPixel;
+        // 用余量核算显示画布的 SRGBA8. 两套栅格均先按行宽折算可容纳的高度, 避免直接相乘越界.
         if (output.height > (ForwardAttachmentBudget - renderBytes) / 4 / output.width)
         {
-            Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Display output exceeds the view byte budget");
+            return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
+                                  Core::BoundedText("Display output exceeds the view byte budget")};
+        }
+        return std::nullopt;
+    }
+
+    /// @brief 若尚无合法消费者, 丢弃失败路占用的 CPU 写入额度. 下路从新的准备代开始.
+    static void RejectView(Detail::ForwardFrameStorage &frame, std::size_t index) noexcept
+    {
+        ResetView(frame.views[index]);
+        if (!frame.hasPreparedView)
+        {
+            // 这批写入已失去消费者. 下路重新 Begin, 使设备缓存能识别只在旧批次中拥有生产者的代.
+            frame.uploads.Clear();
+            frame.begun = frame.lutReserved = false;
+        }
+    }
+
+    std::optional<ForwardFailure> ForwardRenderer::Prepare(ForwardFrame &frame, const PreparedView &view,
+                                                            PreviewMode mode, ViewResourceNeeds needs,
+                                                            std::size_t index)
+    try
+    {
+        assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
+        const auto display = ResolveDisplaySettings(mode, view.requestedAa);
+        if (const auto failure = CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
+                                                  display, view.layouts.render != view.layouts.display))
+        {
+            throw *failure;
         }
         if (!m_Resources)
         {
@@ -138,10 +202,15 @@ namespace Physara::Renderer
         }
         if (!frame.m_Data)
         {
-            frame.m_Data = std::make_unique<Detail::ForwardFrameData>();
+            frame.m_Data = std::make_unique<Detail::ForwardFrameStorage>();
         }
-        auto &data = *frame.m_Data;
-        assert(data.draws.empty() && data.materialRows.empty() && data.uploads.writes == 0);
+        if (!frame.m_Data->begun)
+        {
+            m_Resources->Begin();
+            frame.m_Data->begun = true;
+        }
+        auto &data = frame.m_Data->views[index];
+        assert(data.draws.empty() && data.materialRows.empty());
         // 普通灯缓冲和 View 行都随各自帧槽跨帧保留. 更换 Renderer 时以预算 owner 识别旧缓存.
         if (data.view && data.view->capacity != m_Resources->capacity)
         {
@@ -155,23 +224,34 @@ namespace Physara::Renderer
         }
         data.source = {view.view, view.scene.scene, view.scene.contentRevision, mode, *view.camera, view.layouts.render};
         data.needs = needs;
-        m_Resources->Begin();
+        m_Resources->BeginView();
         Detail::PrepareDraws(*m_Resources, data, view, mode);
         if (const auto failure = m_Resources->display.Prepare(data.display, view.layouts, display))
         {
             Detail::Reject(ViewSettingReason::DisplayUnavailable, failure->View());
         }
-        data.uploads.ReserveWrites(data.display.UploadBytes(), data.display.UploadCount());
+        const auto lutBytes = data.display.LutUploadBytes();
+        const bool sharedLut = lutBytes != 0 && frame.m_Data->lutReserved;
+        data.uploads.ReserveWrites(data.display.UploadBytes() - (sharedLut ? lutBytes : 0),
+                                   data.display.UploadCount() - std::size_t(sharedLut));
+        frame.m_Data->lutReserved |= lutBytes != 0;
+        frame.m_Data->hasPreparedView = true;
         return std::nullopt;
     }
     catch (const ForwardFailure &failure)
     {
-        frame.Reset();
+        if (frame.m_Data)
+        {
+            RejectView(*frame.m_Data, index);
+        }
         return failure;
     }
     catch (const std::bad_alloc &)
     {
-        frame.Reset();
+        if (frame.m_Data)
+        {
+            RejectView(*frame.m_Data, index);
+        }
         return ForwardFailure{ViewSettingReason::ScenePreparationFailed, Core::BoundedText("Forward preparation allocation failed")};
     }
 
@@ -217,11 +297,23 @@ namespace Physara::Renderer
 
     /// @brief 初次导入的存储未初始化. 消费者只能读取按 mip 或完整缓冲写后的版本.
     static SceneGraphResources DeclareUploads(RenderGraph &graph, const Detail::UploadBatch &batch,
-                                               std::vector<GraphUpload> &uploads)
+                                               std::vector<GraphUpload> &uploads,
+                                               std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites)
     {
         SceneGraphResources resources;
+        // 一代几何可有两块缓冲, 一个 cube 可有多个面和 mip. 确认时须能逐笔找到同一代的写入.
+        const auto record = [&](Detail::Allocation *storage, std::size_t first, GraphUploadSource source)
+        {
+            auto &passes = storageWrites[storage];
+            for (auto &write : std::span(uploads).subspan(first))
+            {
+                write.source = source;
+                passes.push_back(write.pass);
+            }
+        };
         for (const auto &upload : batch.textures)
         {
+            const auto first = uploads.size();
             const auto &texture = upload.revision->texture;
             auto version = TakeGraph(graph.ImportTexture(texture, {TextureBoundary, TextureBoundary, false}));
             auto width = texture->GetDesc().width;
@@ -232,9 +324,11 @@ namespace Physara::Renderer
                 width = std::max(1u, width / 2);
             }
             resources.textures.emplace(texture.Get(), version);
+            record(upload.revision.get(), first, GraphUploadSource::ForwardStatic);
         }
         for (const auto &upload : batch.environmentTextures)
         {
+            const auto first = uploads.size();
             const auto &texture = upload.revision->texture;
             const auto &desc = texture->GetDesc();
             auto version = TakeGraph(graph.ImportTexture(texture, {TextureBoundary, TextureBoundary, false}));
@@ -258,12 +352,16 @@ namespace Physara::Renderer
                 }
             }
             resources.textures.emplace(texture.Get(), version);
+            record(upload.revision.get(), first, GraphUploadSource::ForwardStatic);
         }
         for (const auto &upload : batch.buffers)
         {
+            const auto first = uploads.size();
             const auto initial = TakeGraph(graph.ImportBuffer(upload.buffer, {BufferBoundary, BufferBoundary, false}));
             resources.buffers.emplace(upload.buffer.Get(),
                 TakeGraph(AddBufferUpload(graph, initial, upload.payload, uploads)));
+            record(upload.revision.get(), first, upload.viewConstant ? GraphUploadSource::ForwardView :
+                                                                      GraphUploadSource::ForwardStatic);
         }
         return resources;
     }
@@ -566,15 +664,11 @@ namespace Physara::Renderer
             })));
     }
 
-    GraphResult<ForwardOutput> ForwardFrame::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
-    try
+    /// @brief 声明一个 View 的表面与显示目标, 私有输出不进入共享驻留映射.
+    static ForwardOutput DeclareView(RenderGraph &graph, SceneGraphResources &versions,
+                                     std::vector<GraphUpload> &uploads, const Detail::ForwardFrameData &frame,
+                                     TextureId lut)
     {
-        assert(m_Data);
-        const auto &frame = *m_Data;
-        const auto firstWrite = uploads.size();
-        // LUT 属于纹理写, 设备准入要求它在本图所有缓冲上传之前声明.
-        const auto lut = TakeGraph(frame.display.DeclareLut(graph, uploads));
-        auto versions = DeclareUploads(graph, frame.uploads, uploads);
         const auto extent = frame.source.layout.outputExtent;
         ForwardOutput output;
         output.source = frame.source;
@@ -586,11 +680,48 @@ namespace Physara::Renderer
         ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
         AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
-        output.displayColor = TakeGraph(frame.display.Declare(graph, uploads, output.workingColor, lut));
-        output.m_Uploads.reserve(frame.uploads.writes);
-        for (const auto &entry : std::span(uploads).subspan(firstWrite))
+        const auto first = uploads.size();
+        output.displayColor = TakeGraph(frame.display.Declare(graph, uploads, output.workingColor,
+                                                              frame.display.UsesLut() ? lut : TextureId{}));
+        for (auto &entry : std::span(uploads).subspan(first))
         {
-            output.m_Uploads.push_back(entry.pass);
+            entry.source = GraphUploadSource::ForwardView;
+        }
+        return output;
+    }
+
+    GraphResult<ForwardGraph> ForwardFrame::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads,
+        const std::array<bool, ForwardViewCount> &selected) const
+    try
+    {
+        assert(m_Data);
+        ForwardGraph output;
+        TextureId lut;
+        for (std::size_t index = 0; index < selected.size(); ++index)
+        {
+            const auto &display = m_Data->views[index].display;
+            if (selected[index] && display.UsesLut())
+            {
+                // 两个物理 View 的同一 atlas 只导入一次. 纹理写必须排在场景缓冲之前.
+                const auto first = uploads.size();
+                lut = TakeGraph(display.DeclareLut(graph, uploads));
+                if (uploads.size() != first)
+                {
+                    uploads.back().source = GraphUploadSource::ForwardStatic;
+                    output.m_LutWrite = uploads.back().pass;
+                    output.m_LutView = index;
+                }
+                break;
+            }
+        }
+        // 生产版本只建立一次. 逐路声明读取时沿用同一映射, 因而存活的任一路都能保住共享上传.
+        auto versions = DeclareUploads(graph, m_Data->uploads, uploads, output.m_StorageWrites);
+        for (std::size_t index = 0; index < selected.size(); ++index)
+        {
+            if (selected[index])
+            {
+                output.views[index] = DeclareView(graph, versions, uploads, m_Data->views[index], lut);
+            }
         }
         return output;
     }
@@ -599,26 +730,20 @@ namespace Physara::Renderer
         return failure;
     }
 
-    void ForwardFrame::Confirm(const ForwardOutput &output, const CompiledGraphPlan &plan) noexcept
+    void ForwardFrame::Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept
     {
-        assert(m_Data && output.m_Uploads.size() == m_Data->uploads.writes);
-        if (!output.HasCompleteUploads(plan))
+        assert(m_Data);
+        if (IsLivePass(plan, output.m_LutWrite))
         {
-            return;
+            m_Data->views[output.m_LutView].display.Confirm();
         }
-        m_Data->display.Confirm();
-        // 按整批确认驻留. 环境纹理的所有面和 mip 共用一个 accepted 位, 前缀提交保活但没有确认资格.
-        for (const auto &upload : m_Data->uploads.textures)
+        // 每一代只在自己的全部范围被写入后确认. 例如几何的顶点及索引, 或环境的所有面和 mip.
+        for (const auto &[storage, writes] : output.m_StorageWrites)
         {
-            upload.revision->accepted = true;
-        }
-        for (const auto &upload : m_Data->uploads.environmentTextures)
-        {
-            upload.revision->accepted = true;
-        }
-        for (const auto &upload : m_Data->uploads.buffers)
-        {
-            upload.revision->accepted = true;
+            if (std::ranges::all_of(writes, [&](PassId pass) { return IsLivePass(plan, pass); }))
+            {
+                storage->accepted = true;
+            }
         }
     }
 }

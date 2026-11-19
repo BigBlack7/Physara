@@ -36,8 +36,7 @@ namespace Physara::Renderer::Detail
     /// @brief 外置标志, 固定资产版本, 源 image 下标, 颜色域及完整 mip 策略, sampler 另行共享.
     using TextureKey = std::tuple<bool, AssetVersionKey, std::uint32_t, Asset::ImageDomain, bool>;
     using ObjectKey = std::array<std::uint64_t, 4>; ///< Scene 与对象各自的槽和分配代.
-    /// @brief 以对象身份和传给 Shader 的 FP32 世界基点定位对象行. 命中后核对原始世界矩阵,
-    /// 只有同基点且仿射系数仍匹配的图元才复用这一行及其编码余量.
+    /// @brief 以对象身份和固定图元的局部基点定位对象行. 命中后核对实际变换代.
     using ObjectRowKey = std::pair<ObjectKey, std::array<float, 3>>;
     /// @brief 模型版本, 源材质, 覆盖对象及源 Primitive 槽. 无覆盖时后两项为零, 行按源材质共享.
     using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t>;
@@ -61,7 +60,7 @@ namespace Physara::Renderer::Detail
 
         std::shared_ptr<ResidencyCapacity> capacity;
         std::size_t bytes;
-        std::uint64_t lastUse = 0; ///< ForwardDevice 的准备轮次, 不是 CPU 帧号或提交票据.
+        std::uint64_t lastUse = 0; ///< 最近一次 View 准备代, 不是 CPU 帧号或提交票据.
         bool accepted = false;
     };
 
@@ -97,24 +96,39 @@ namespace Physara::Renderer::Detail
         RHI::BindingSetHandle binding;
     };
 
-    /// @brief 一块定长灯缓冲及其 CPU 复用依据. indices 保存裁剪所得原序, 缓冲中的行按灯类型分段.
+    /// @brief 一行灯字节的源身份和数据代, 独立于当前提取数组中的索引.
+    struct LightSource
+    {
+        Scene::EntityHandle entity;
+        std::uint64_t revision;
+        bool operator==(const LightSource &) const = default;
+    };
+
+    /// @brief 一块定长灯缓冲及其 CPU 复用依据. sources 保存可见灯原序, 字节按灯类型分段.
     /// 两个计数随同槽 View 常量交付. 接受前只可依赖本图的上传版本, 同槽 GPU 完成后才可重写.
     struct LightTable final : Allocation
     {
         using Allocation::Allocation;
         RHI::BufferHandle buffer;
-        Scene::SceneId scene;
-        std::uint64_t contentRevision = 0;
-        std::vector<std::uint32_t> indices;
+        std::vector<LightSource> sources;
+        std::vector<StaticAbi::ForwardLight> packed;
         std::uint32_t directionalCount = 0;
         std::uint32_t localCount = 0;
     };
 
-    /// @brief 缓存完整世界变换以判定对象行是否仍匹配, 不以全场景版本触发无关重传.
+    /// @brief 只用此对象的变换代核对行, 兼容检查在矩阵编码前完成.
     struct ObjectRow
     {
-        std::array<double, 16> worldFromLocal;
+        std::uint64_t transformRevision;
         std::shared_ptr<ConstantRow> resident;
+    };
+
+    /// @brief 有效材质对几何和光栅状态的要求, 命中时无需重新解析全部纹理槽.
+    struct MaterialGeometry
+    {
+        std::uint8_t attributes{};
+        std::int8_t normalUv = -1;
+        bool doubleSided{};
     };
 
     /// @brief GPU 材质行与预解析集合. 缺席槽绑定共享白图, Shader 仍由有效 slot 判定是否采样.
@@ -128,12 +142,29 @@ namespace Physara::Renderer::Detail
         StaticAbi::ForwardMaterial values{};
     };
 
+    /// @brief 路由和版本只属于当前缓存, 已准备的 Draw 独立保有 GPU 行.
+    struct MaterialEntry
+    {
+        std::uint64_t revision;
+        MaterialGeometry geometry;
+        std::shared_ptr<MaterialRow> resident;
+    };
+
+    /// @brief 当前场景内一行已编码的世界灯, 供选择它的 View 复用.
+    struct EncodedLight
+    {
+        StaticAbi::ForwardLight row;
+        std::uint64_t revision;
+        const char *error; ///< 编码失败时为静态字段名, 只影响实际选择此灯的 View.
+    };
+
     /// @brief 拥有缓冲和稳定字节, revision 用于接受后确认所属存储代, 不以声明成功确认.
     struct BufferUpload
     {
         std::shared_ptr<Allocation> revision;
         RHI::BufferHandle buffer;
         std::vector<std::byte> payload;
+        bool viewConstant = false;
     };
 
     /// @brief levels 按 mip 0 起的完整紧密 RGBA8 层级排列, 同一次接受确认整条链.
@@ -153,8 +184,8 @@ namespace Physara::Renderer::Detail
     };
 
     /// @brief 帧拥有的写入内容. 每个普通缓冲从 0 写精确范围, 纹理按完整 mip 层写入.
-    /// @note 仅在准备阶段追加, Declare 后保持不变至图执行结束. bytes/writes 也计入显示阶段,
-    /// 但其矩形常量和 LUT 像素不在这三个容器中. 预算失败中止整份候选.
+    /// @note 各路在准备期间共用 bytes/writes 额度. 显示阶段的矩形常量和 LUT 也计入额度, 字节由 DisplayFrame 保有.
+    /// 超限使正在准备的 View 返回失败. 构图后, 本批字节保持稳定直到录制或放弃结束.
     struct UploadBatch
     {
         std::vector<BufferUpload> buffers;
@@ -167,7 +198,7 @@ namespace Physara::Renderer::Detail
         void ReserveWrites(std::size_t byteCount, std::size_t count);
         /// @brief 保有目标及所属代, 复制 source 全部字节. 调用返回后不再借用源区段.
         void Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                 std::span<const std::byte> source);
+                 std::span<const std::byte> source, bool viewConstant = false);
         /// @brief 结束 CPU 载荷与上传记录的所有权, 不修改资源代的 accepted 状态.
         void Clear() noexcept;
     };
@@ -215,6 +246,8 @@ namespace Physara::Renderer::Detail
     /// @note 图回调借用这里保有的 RHI 对象; graph 析构后才可释放载荷, 同槽完成后才可重置 Draw.
     struct ForwardFrameData
     {
+        explicit ForwardFrameData(UploadBatch &batch) noexcept : uploads(batch) {}
+
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
         std::shared_ptr<ConstantRow> view;
@@ -225,9 +258,21 @@ namespace Physara::Renderer::Detail
         EnvironmentFrame environment;
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
-        UploadBatch uploads;
+        UploadBatch &uploads;
         PostProcess::DisplayFrame display;
         std::optional<Core::BoundedText> degradation;
+        ForwardEncodingCounts encodings;
+    };
+
+    /// @brief 同槽的两份 Draw 各自保活, 通过 uploads 引用向一个图候选登记所需的写入.
+    /// lutReserved 记录共享 atlas 的 CPU 预算. GPU 是否已获得它的内容由图执行后的确认决定.
+    struct ForwardFrameStorage
+    {
+        UploadBatch uploads;
+        std::array<ForwardFrameData, ForwardViewCount> views{ForwardFrameData(uploads), ForwardFrameData(uploads)};
+        bool begun = false;
+        bool lutReserved = false;
+        bool hasPreparedView = false;
     };
 
     /// @brief 初始化完整程序代, 按真实布局和阶段从固定数量的 Pipeline 中准备所需变体.
@@ -260,9 +305,11 @@ namespace Physara::Renderer::Detail
     struct ForwardDevice
     {
         ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit);
-        /// @brief 分配本轮准备身份并清零工作集预算, 不清除旧缓存或上传确认事实.
+        /// @brief 分配共享图候选的准备代.
         void Begin();
-        /// @brief 已接受代可复用; 本轮尚未接受的代也可共享, 其写入已由同一批次拥有.
+        /// @brief 开始独立 View 的工作集记账, 继续使用当前候选的共享写入.
+        void BeginView();
+        /// @brief 接受过的代可跨图复用. 缓存发布的待写代只在持有其生产者的当前批次内共享.
         [[nodiscard]] bool Current(const Allocation &entry) const noexcept;
         /// @brief 每代每轮只计一次工作集占用, 超出单 View 硬预算时抛 ForwardFailure.
         void Use(Allocation &entry);
@@ -277,15 +324,19 @@ namespace Physara::Renderer::Detail
         PostProcess::DisplayDevice display;
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
+        std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.
         std::size_t preparedBytes = 0;
         std::size_t preparedEntries = 0;
         std::map<GeometryKey, std::shared_ptr<GeometryRef>> geometry;
         std::map<TextureKey, std::shared_ptr<ResidentTexture>> textures;
         std::map<ObjectRowKey, ObjectRow> objects;
-        std::map<MaterialKey, std::shared_ptr<MaterialRow>> materials;
+        std::map<MaterialKey, MaterialEntry> materials;
         std::map<SamplerKey, RHI::SamplerHandle> samplers;
         std::shared_ptr<ResidentTexture> white;
         std::shared_ptr<LightTable> emptyLights; ///< 初始化后只读, 供诊断、零灯及全 Unlit 工作集使用.
+        Scene::SceneId encodedLightScene;
+        std::uint64_t encodedLightStructure{};
+        std::map<std::pair<std::uint32_t, std::uint64_t>, EncodedLight> encodedLights; ///< 当前 Scene 的实体槽和代.
         EnvironmentCache environmentCache;
         std::map<std::pair<EnvironmentKey, bool>, std::shared_ptr<ResidentTexture>> environmentTextures;
         std::shared_ptr<ResidentTexture> dfgTexture;

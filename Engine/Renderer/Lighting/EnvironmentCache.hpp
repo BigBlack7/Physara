@@ -42,9 +42,14 @@ namespace Physara::Renderer::Detail
     class EnvironmentCache final
     {
     public:
-        /// @brief 推进当前需求与同键复用. source 为空时只准备所需的共享 DFG.
+        /// @brief 开始同一 Scene 的帧需求收集. 切换源时先撤销旧作业, 再收取完成结果.
+        void BeginFrame(const Asset::EnvironmentVersion &source) noexcept;
+        /// @brief 所有 View 均已表达需求后, 按活动作业的产品类型决定是否取消.
+        /// @note 帧内各路累计缺少的环境或 DFG. 诊断路跳过该产品时, 其它路的需求仍有效.
+        void EndFrame() noexcept;
+        /// @brief 推进一路所需的完整产品. source 为空时只准备所需的共享 DFG.
         /// @return worker 启动失败时返回带原因的拒绝, 此时没有活动作业. 后续调用可重新尝试启动.
-        /// @note 请求变化撤销旧环境作业的发布资格. 队列析构时停止并收拢 CPU worker.
+        /// @note 同源的其它 View 可以保留活动作业. 队列析构时停止并收拢 CPU worker.
         [[nodiscard]] std::variant<EnvironmentProducts, EnvironmentPreparationFailure> Prepare(
             const Asset::EnvironmentVersion &source, bool lighting, bool needsDfg);
 
@@ -85,6 +90,8 @@ namespace Physara::Renderer::Detail
         [[nodiscard]] static Completion Process(const Input &job, std::stop_token stop) noexcept;
         /// @brief owner 归还完成槽, 仅将仍匹配活动序号的结果转入缓存.
         void Collect() noexcept;
+        /// @brief 撤销当前作业的发布资格, 完成包仍由队列回收.
+        void CancelActive() noexcept;
 
         std::array<Slot, 2> m_Stored; ///< 最近使用及上一个源, 可复用已完成的基础层.
         std::shared_ptr<const DfgTable> m_Dfg;
@@ -93,5 +100,7 @@ namespace Physara::Renderer::Detail
         std::optional<Active> m_Active;
         std::uint64_t m_LastSerial = 0;
         std::unique_ptr<WorkQueue> m_Queue;
+        bool m_NeedsEnvironment{};
+        bool m_NeedsDfg{};
     };
 }

@@ -42,20 +42,48 @@ namespace Physara::Renderer
         SceneFrame scene;
         std::span<const std::uint32_t> primitives;
         std::span<const std::uint32_t> lights;
+        double cullingSeconds{};
+    };
+
+    /// @brief 一个正常候选的共享 SceneFrame. 首个合法 View 才提取, 后续 View 共享成功值或失败.
+    /// @note 槽已安全取得, Scene 及提取存储在本轮 View 准备结束前保持有效.
+    class SceneFramePreparation final
+    {
+    public:
+        SceneFramePreparation(SceneFrameStorage &storage, const Scene::Scene &scene) noexcept
+            : m_Storage(storage), m_Scene(scene) {}
+
+        [[nodiscard]] const Scene::Scene &Source() const noexcept { return m_Scene; }
+        /// @brief 首次调用取得本槽快照并保存结果, 同一轮的其余请求也会看到同一失败原因或记录.
+        [[nodiscard]] const std::variant<SceneFrame, Core::BoundedText> &Extract();
+        /// @brief 读取本轮已提取的快照. 未提取或失败时为空, 不触发新准备.
+        [[nodiscard]] const SceneFrame *Result() const noexcept;
+
+    private:
+        SceneFrameStorage &m_Storage;
+        const Scene::Scene &m_Scene;
+        std::optional<std::variant<SceneFrame, Core::BoundedText>> m_Extracted;
     };
 
     /// @brief 一个安全槽中供单个 View 复用的 CPU 索引区间. 多 View 的区间各自独立.
     class ViewWork final
     {
     public:
-        /// @brief 解析本轮布局与相机, 共享同槽的 SceneFrame, 写入自己的可见索引.
+        /// @brief 为单个请求打开一次提取作用域, 根据布局和相机写入自己的可见索引.
         /// @pre Scene 已接受本轮事务, sceneStorage 所属槽已安全取得.
-        /// @note 可用同一 sceneStorage 和各自的 ViewWork 顺序准备多个 View. 本对象再次准备即结束旧索引借用.
-        /// 多 View 准备期间保持 Scene 不变, 单次调用期间保持 View 请求不变, 以配对其版号和曝光.
+        /// @note 本对象再次准备即结束旧索引借用. 调用期间保持 View 请求不变, 以配对其版号和曝光.
         /// 无有效布局时不提取 Scene; 失败不交付矩阵或部分索引.
         [[nodiscard]] PreparedView Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene,
                                            const View &view, const std::optional<ViewportRequest> &request,
-                                           const CameraSampling &sampling = {});
+                                           const CameraSampling &sampling = {},
+                                           ViewportUse use = ViewportUse::DisplayOutput);
+        /// @brief 同帧的各路共用一个 SceneFramePreparation, 每路使用独立 ViewWork 保存索引.
+        /// @pre 全部请求准备完毕前保持 Scene 和本槽的提取数组稳定.
+        /// 显式离屏的两种像素范围都通过上限检查后, 才会请求共享提取.
+        [[nodiscard]] PreparedView Prepare(SceneFramePreparation &scene, const View &view,
+                                           const std::optional<ViewportRequest> &request,
+                                           const CameraSampling &sampling = {},
+                                           ViewportUse use = ViewportUse::DisplayOutput);
 
     private:
         std::vector<std::uint32_t> m_Primitives;

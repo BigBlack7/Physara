@@ -79,19 +79,47 @@ namespace Physara::Renderer::Detail
         }
     }
 
+    void EnvironmentCache::CancelActive() noexcept
+    {
+        m_Queue->Cancel(m_Active->job);
+        m_Active.reset();
+    }
+
+    void EnvironmentCache::BeginFrame(const Asset::EnvironmentVersion &source) noexcept
+    {
+        m_NeedsEnvironment = m_NeedsDfg = false;
+        // 换源时应先撤销旧序号, 否则队列中已经完成的旧环境仍能在本轮 Collect 中发布.
+        const auto key = source ? std::optional(EnvironmentKey{source->sourceFingerprint}) : std::nullopt;
+        if (m_Active && m_Active->request.key && m_Active->request.key != key)
+        {
+            CancelActive();
+        }
+        if (m_EnvironmentFailure && m_EnvironmentFailure->first.key != key)
+        {
+            m_EnvironmentFailure.reset();
+        }
+        Collect();
+    }
+
+    void EnvironmentCache::EndFrame() noexcept
+    {
+        if (m_Active && !(m_Active->request.key ? m_NeedsEnvironment : m_NeedsDfg))
+        {
+            CancelActive();
+        }
+    }
+
     std::variant<EnvironmentProducts, EnvironmentPreparationFailure> EnvironmentCache::Prepare(
         const Asset::EnvironmentVersion &source, bool lighting, bool needsDfg)
     {
         const auto key = source ? std::optional(EnvironmentKey{source->sourceFingerprint}) : std::nullopt;
-        // 换源或撤去照明时先撤销旧作业的发布资格, 随后才取可能已经到达的完成包.
-        if (m_Active && m_Active->request.key &&
-            (m_Active->request.key != key || (m_Active->request.lighting && !lighting)))
+        // 一路没有环境需求不代表同帧其它路也不需要. 实际换源仍先拒收旧作业.
+        if (key && m_Active && m_Active->request.key && m_Active->request.key != key)
         {
-            m_Queue->Cancel(m_Active->job);
-            m_Active.reset();
+            CancelActive();
         }
         Collect();
-        if (m_EnvironmentFailure && m_EnvironmentFailure->first.key != key)
+        if (key && m_EnvironmentFailure && m_EnvironmentFailure->first.key != key)
         {
             m_EnvironmentFailure.reset();
         }
@@ -108,6 +136,8 @@ namespace Physara::Renderer::Detail
         }
         const bool missingEnvironment = source && (!existing || (lighting && !existing->lighting));
         const bool missingDfg = needsDfg && !m_Dfg;
+        m_NeedsEnvironment |= missingEnvironment;
+        m_NeedsDfg |= missingDfg;
         if (!missingEnvironment && !missingDfg)
         {
             return EnvironmentProducts{std::move(existing), needsDfg ? m_Dfg : nullptr};

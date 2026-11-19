@@ -45,10 +45,10 @@ namespace Physara::Renderer::Detail
     }
 
     void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                          std::span<const std::byte> source)
+                          std::span<const std::byte> source, bool viewConstant)
     {
         ReserveWrites(source.size(), 1);
-        buffers.push_back({revision, buffer, {source.begin(), source.end()}});
+        buffers.push_back({revision, buffer, {source.begin(), source.end()}, viewConstant});
     }
 
     void UploadBatch::Clear() noexcept
@@ -268,12 +268,22 @@ namespace Physara::Renderer::Detail
         {
             Reject(ViewSettingReason::SceneResidencyLimit, "Forward preparation identity exhausted");
         }
+        frameBegin = stamp;
+    }
+
+    void ForwardDevice::BeginView()
+    {
+        // frameBegin 对两路相同. 每路另取一个 stamp, 让共享资源在各自的工作集预算中各计一次.
+        if (!Core::AdvanceGeneration(stamp))
+        {
+            Reject(ViewSettingReason::SceneResidencyLimit, "Forward view preparation identity exhausted");
+        }
         preparedBytes = preparedEntries = 0;
     }
 
     bool ForwardDevice::Current(const Allocation &entry) const noexcept
     {
-        return entry.accepted || entry.lastUse == stamp;
+        return entry.accepted || entry.lastUse >= frameBegin;
     }
 
     void ForwardDevice::Use(Allocation &entry)
@@ -294,10 +304,10 @@ namespace Physara::Renderer::Detail
     {
         const auto idle = [this](const auto &entry)
         {
-            return entry.use_count() == 1 && entry->lastUse != stamp;
+            return entry.use_count() == 1 && entry->lastUse < frameBegin;
         };
         // 材质拥有纹理依赖, 先释放它才能识别真正空闲的图像. 留在槽中的代始终占用额度.
-        std::erase_if(materials, [&](const auto &pair) { return idle(pair.second); });
+        std::erase_if(materials, [&](const auto &pair) { return idle(pair.second.resident); });
         std::erase_if(objects, [&](const auto &pair) { return idle(pair.second.resident); });
         std::erase_if(geometry, [&](const auto &pair) { return idle(pair.second); });
         std::erase_if(textures, [&](const auto &pair) { return idle(pair.second); });

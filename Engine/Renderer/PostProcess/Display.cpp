@@ -169,12 +169,17 @@ namespace Physara::Renderer::PostProcess
 
     std::size_t DisplayFrame::UploadBytes() const noexcept
     {
-        return (m_LutPixels ? m_LutPixels->size() * sizeof(LutTexel) : 0) + (m_Sampler ? sizeof(m_Rects) : 0);
+        return LutUploadBytes() + (m_Sampler ? sizeof(m_Rects) : 0);
     }
 
     std::size_t DisplayFrame::UploadCount() const noexcept
     {
         return std::size_t(bool(m_LutPixels)) + std::size_t(bool(m_Sampler));
+    }
+
+    std::size_t DisplayFrame::LutUploadBytes() const noexcept
+    {
+        return m_LutPixels ? m_LutPixels->size() * sizeof(LutTexel) : 0;
     }
 
     /// @brief 在候选声明内传递首个图错误, 调用者放弃部分声明的图.
@@ -195,6 +200,7 @@ namespace Physara::Renderer::PostProcess
         {
             return TextureId{};
         }
+        // 本候选持有待写字节时, 两路都读取下面这一笔写出的图版本. 新帧在确认后可直接导入.
         const auto version = TakeGraph(graph.ImportTexture(m_Lut->texture, {LutBoundary, LutBoundary, !m_LutPixels}));
         if (!m_LutPixels)
         {

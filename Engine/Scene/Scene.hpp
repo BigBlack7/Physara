@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -126,16 +127,42 @@ namespace Physara::Scene
         [[nodiscard]] std::array<double, 3> Forward() const noexcept;
     };
 
-    /// @brief 分开标识保存内容, 非相机渲染内容, 相机输入和世界数据更新.
-    /// 初始空场景均为零, 只在事务接受时递增; 名称编辑不推进后三项.
+    /// @brief 分别跟踪文档, 静态内容, 相机, 世界数据和提取布局. 版号只在各自的 Scene 内比较.
+    /// 空场景从零开始. 改名只推进文档代, 增删网格或灯还会推进静态内容代和结构代.
     struct Revisions
     {
         std::uint64_t document{};
         std::uint64_t renderContent{};
         std::uint64_t camera{};
         std::uint64_t transforms{};
+        std::uint64_t renderStructure{}; ///< 提取布局或固定来源结构的变化代.
 
         bool operator==(const Revisions &) const = default;
+    };
+
+    /// @brief 槽须更新的记录种类. 同一实体可分别改变对象矩阵, 显隐与投影标志, 灯或材质覆盖.
+    enum class RenderRecord : std::uint8_t { Transform, PrimitiveFlags, Light, Material };
+
+    /// @brief 结构不变时需要更新的输入. 只有 Material 使用源 Primitive 槽号.
+    struct RenderChange
+    {
+        EntityHandle entity;
+        RenderRecord record;
+        std::uint32_t sourceSlot{};
+
+        [[nodiscard]] bool operator<(const RenderChange &other) const noexcept;
+    };
+
+    /// @brief 从上次消费到当前提交的合并增量. records 借用 Scene, 直到下次事务或确认消费.
+    /// baseRevision 是上次分发的内容代, contentRevision 是当前终点. 结构换代会清除旧布局的明细.
+    /// 只改环境时内容代仍可前进, 即使 records 为空.
+    struct RenderChanges
+    {
+        SceneId scene;
+        std::uint64_t structureRevision;
+        std::uint64_t baseRevision;
+        std::uint64_t contentRevision;
+        const std::set<RenderChange> &records;
     };
 
     /// @brief 场景环境的创作值. rotation 是环境空间至世界空间的单位 xyzw 四元数.
@@ -166,6 +193,9 @@ namespace Physara::Scene
         const WorldState &world;
         const Asset::ModelVersion *model; ///< 实例根或源节点解析到的模型. 普通实体为空.
         const Asset::ModelNode *sourceNode;
+        std::uint64_t transformRevision;
+        std::uint64_t lightRevision;
+        std::span<const std::uint64_t> overrideRevisions; ///< 与 record.overrides 的源槽顺序一致.
     };
 
     /// @brief 当前 Scene 相机的独立值, 可在借用结束后用于同帧准备.
@@ -275,6 +305,11 @@ namespace Physara::Scene
 
         [[nodiscard]] SceneId Id() const noexcept;
         [[nodiscard]] Revisions Versions() const noexcept;
+        /// @brief 借用已提交的合并变更, 渲染编排可在 CPU 输入边界同步转发到各槽.
+        [[nodiscard]] RenderChanges PendingRenderChanges() const noexcept;
+        /// @brief 清除已分发明细, 将下批增量的起点移到当前内容代.
+        /// @pre 全部帧槽已观察同一批变更, 期间 Scene 仍处于同一次输入结算.
+        void AcknowledgeRenderChanges() noexcept;
         /// @brief 借用活动 Scene 固定的环境. 复制该值可使场景替换后的读者继续持有源.
         [[nodiscard]] const std::optional<SceneEnvironment> &Environment() const noexcept;
         [[nodiscard]] std::optional<EntityHandle> Find(std::string_view id) const noexcept;
