@@ -88,6 +88,7 @@ namespace Physara::Editor::Detail
         case SceneLightTableRejected: return "Failed - visible light table rejected";
         case EnvironmentPending: return "Pending - preparing HDR environment or DFG";
         case EnvironmentRejected: return "Failed - HDR environment unavailable";
+        case DisplayUnavailable: return "Failed - display processing unavailable";
         }
         return "";
     }
@@ -506,15 +507,46 @@ namespace Physara::Editor::Detail
                         {
                             frame.preview = static_cast<Renderer::PreviewMode>(preview);
                         }
-                        if (acceptedPreview)
+                        constexpr const char *aaNames[]{"None", "FXAA"};
+                        int antiAliasing = static_cast<int>(settings.requestedAa);
+                        ImGui::BeginDisabled(!allowEdits);
+                        const bool aaChanged = ImGui::Combo("Anti-aliasing", &antiAliasing, aaNames,
+                                                           IM_ARRAYSIZE(aaNames));
+                        ImGui::EndDisabled();
+                        if (aaChanged)
                         {
-                            // 来源是最近接受的显示颜色代. 本轮请求被拒绝或只提交 UI 时, 仍显示该代的模式.
-                            ImGui::Text("Last accepted preview - %s",
-                                        PreviewNames[static_cast<std::size_t>(acceptedPreview->mode)]);
+                            frame.antiAliasing = static_cast<Renderer::AntiAliasing>(antiAliasing);
+                        }
+                        if (antiAliasing == static_cast<int>(Renderer::AntiAliasing::Fxaa) &&
+                            preview != static_cast<int>(Renderer::PreviewMode::PhysicalLighting))
+                        {
+                            ImGui::TextUnformatted("FXAA applies in Physical Lighting.");
+                        }
+                        const auto &rendered = state.view->LastRenderedScene();
+                        const auto *lastScene = rendered && state.scene && rendered->scene == state.scene->Id() ?
+                            &*rendered : nullptr;
+                        if (lastScene)
+                        {
+                            // 同一文档换到测试图时仍显示最后一次场景实绩, 两个尺寸来自同一个场景记录.
+                            ImGui::Text("Last scene preview - %s",
+                                        PreviewNames[static_cast<std::size_t>(lastScene->mode)]);
+                            const auto display = lastScene->display;
+                            const auto render = lastScene->renderLayout.outputExtent;
+                            const auto output = lastScene->outputExtent;
+                            ImGui::Text("Last scene display - %s, AA %s",
+                                        display.profile == Renderer::DisplayProfile::AcesSdr ?
+                                            "Filament ACES SDR" : "Linear clamp",
+                                        aaNames[static_cast<std::size_t>(display.antiAliasing)]);
+                            ImGui::Text("Last scene render %u x %u", render.width, render.height);
+                            ImGui::Text("Last scene output %u x %u", output.width, output.height);
                         }
                         else
                         {
-                            ImGui::TextUnformatted("Last accepted preview - awaiting scene output");
+                            ImGui::TextUnformatted("Last scene preview - awaiting scene output");
+                        }
+                        if (settings.effective && !acceptedPreview)
+                        {
+                            ImGui::TextUnformatted("Current accepted output - test image");
                         }
                         if (preview == static_cast<int>(Renderer::PreviewMode::DirectLighting))
                         {
@@ -531,13 +563,13 @@ namespace Physara::Editor::Detail
                                 ImGui::TextUnformatted("Requested environment - none");
                             }
                         }
-                        if (acceptedPreview && acceptedPreview->environment)
+                        if (lastScene && lastScene->environment)
                         {
-                            DrawEnvironmentSummary("Last accepted environment", *acceptedPreview->environment);
+                            DrawEnvironmentSummary("Last scene environment", *lastScene->environment);
                         }
-                        else if (acceptedPreview && acceptedPreview->mode == Renderer::PreviewMode::PhysicalLighting)
+                        else if (lastScene && lastScene->mode == Renderer::PreviewMode::PhysicalLighting)
                         {
-                            ImGui::TextUnformatted("Last accepted environment - unused");
+                            ImGui::TextUnformatted("Last scene environment - unused");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
                         drawEditError();

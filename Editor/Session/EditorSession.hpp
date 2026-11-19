@@ -113,7 +113,7 @@ namespace Physara::Editor
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
             const Platform::WindowSettings *window = nullptr, Asset::AssetManager *assets = nullptr);
 
-        /// @brief 为 UI 正常候选设定本次准备布局, 仅用于渲染校验.
+        /// @brief 冻结两套布局、场景身份及内容/相机版本、View 文档代和预览模式, 供正常合成匹配候选.
         /// @pre 非空输入来自本次 Advance 后的 View 准备.
         void SetPreparedViewport(const Renderer::PreparedView *prepared) noexcept;
         /// @brief 记录本轮由正常图实际采样并发布的图像依据. 空值使旧输入映射失效.
@@ -129,8 +129,8 @@ namespace Physara::Editor
         /// @param extentPixels 与本次输入发布一致的实际像素尺寸. 无帧或零尺寸返回空值.
         /// @pre 在构图和打开列表前调用. 目标格式及像素范围由 BuildGraph 核对.
         /// arena 由调用方持有. 批次借用的字节区段须保持有效至 Finish 或 Cancel.
-        /// outputs 仅在准备调用期间借用. 正常模式要求来自本轮视口请求,
-        /// 颜色的 View 身份, 有效图像或比例请求代与本轮失配时使用占位.
+        /// @param outputs 仅在准备期间借用. 正常候选须匹配 View 身份与比例请求代.
+        /// 测试图核对渲染布局, 场景色核对两套布局和本轮准备的生产来源. 失配时改用占位并撤销命中.
         /// @param mode 上传压力模式重建占位; SafeUi 只接受同一 View 的只读旧输出快照或无输出.
         /// 安全图按当前矩形显示旧尺寸并标注恢复状态, 不能把它发布为本轮请求结果.
         /// 重建候选前须先销毁旧图并取消旧准备值, 然后再清理帧槽载荷和绑定.

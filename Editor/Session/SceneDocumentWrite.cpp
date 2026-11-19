@@ -281,6 +281,11 @@ namespace Physara::Editor::Detail
         Json mainView{{"cameraPose", WritePose(view.cameraPose)},
                       {"cameraEntityId", view.cameraEntityId ? Json(*view.cameraEntityId) : Json(nullptr)},
                       {"requested", {{"renderScale", view.renderScale}, {"physicalCamera", std::move(physicalCamera)}}}};
+        // 只保存文档快照的请求. 即使上一帧实际使用 None, 也不能丢掉待确认的 FXAA.
+        if (view.antiAliasing == Renderer::AntiAliasing::Fxaa)
+        {
+            mainView["requested"]["antiAliasing"] = "fxaa";
+        }
         CountValues(mainView, remaining);
         append("\n],\"mainView\":");
         append(mainView.dump());

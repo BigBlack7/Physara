@@ -38,9 +38,11 @@ namespace Physara::Shader
     /// @param expectedAbiHash 消费者所需的接口身份, 通常取自生成 Data.hpp 的 AbiHash.
     /// @param expectedActive 需要区分同 ABI 的角色时传入. 指定阶段和集合的活动资源必须恰好匹配,
     /// 否则在创建 RHI Shader 前返回 InterfaceMismatch.
+    /// @param expectedFragmentSource 可选的包内逻辑片元源. 算法使用同一布局时, 消费者用它确认实际阶段.
     /// @return 自持 VS/PS 与包身份, 或包校验/工厂失败; 先前创建的调用方对象不受影响.
     /// @note device 借用到返回, 原生后端的线程/context 前提由调用方满足; 结果保活各自 RHI 依赖.
     [[nodiscard]] Result<RhiProgram> LoadRhiProgram(RHI::Device &device, const std::filesystem::path &path,
                                                     std::string_view expectedAbiHash,
-                                                    std::optional<ExpectedActiveResources> expectedActive = {}) noexcept;
+                                                    std::optional<ExpectedActiveResources> expectedActive = {},
+                                                    std::string_view expectedFragmentSource = {}) noexcept;
 } // namespace Physara::Shader

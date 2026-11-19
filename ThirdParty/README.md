@@ -7,6 +7,7 @@
 | 目录 | 固定版本 / 源码 commit | 许可 | 保留范围与用途 |
 |---|---|---|---|
 | entt | v4.0.0 / [85c6bba014049b5de8fad49d25424df2f1f6a8c1](https://github.com/skypjack/entt/tree/85c6bba014049b5de8fad49d25424df2f1f6a8c1) | MIT，见 LICENSE | single_include 头文件 |
+| filament-display | 固定快照 / [b4dfdb073d5543d8569d37e0ee26f79cf794db14](https://github.com/google/filament/tree/b4dfdb073d5543d8569d37e0ee26f79cf794db14) | Apache-2.0；色域映射含嵌入 MIT 声明 | 标量 ACESToneMapper、所需颜色矩阵及 Rec.709 色域映射；Renderer 私有链接 |
 | glad | v2.0.8 / [73db193f853e2ee079bf3ca8a64aa2eaf6459043](https://github.com/Dav1dde/glad/tree/73db193f853e2ee079bf3ca8a64aa2eaf6459043) | 生成器 MIT；生成代码见头部 SPDX 与 LICENSE | GL 4.6 Core loader 的 include/src，无可选扩展 |
 | glfw | 3.5.1 / [d9d6f0f1f967807ffade6598ea9a631ebaf37a56](https://github.com/glfw/glfw/tree/d9d6f0f1f967807ffade6598ea9a631ebaf37a56) | Zlib，见 LICENSE.md | 公共头、Windows 后端及其公共/null 实现 |
 | glslang | 16.6.0 / [e1b562a8bed273a02f30b59b66a5d499793cede5](https://github.com/KhronosGroup/glslang/tree/e1b562a8bed273a02f30b59b66a5d499793cede5) | 多许可, 见 LICENSE.txt、LICENSES 及各源文件声明 | GLSL/SPIR-V 编译、Windows 适配、默认资源限制及其传递头, 固定 build_info.h; 无 C 包装、StandAlone、上游工程、HLSL、测试或外部依赖副本 |
@@ -39,6 +40,12 @@
 - glslang 有两项 Physara 私有协议适配: Public/ShaderLang.h 声明 IsReservedIdentifier 并为 Includer 增加默认空操作 RecordInclude; MachineIndependent/Scan.cpp 只读查询原 KeywordMap/ReservedSet, preprocessor/Pp.cpp 在成功 include 处报告原文件/行. 第一方据此提前拒绝词法器关键字及准确记录展开边. 三处源码保留原版权, 不改变语法、搜索、条件处理或 IR 算法. 第一方将源文件的 CRLF/CR 统一为 LF 编译视图以保持行号, 原始字节仍参与身份; 具体合同见 [Interface 说明](../Engine/Shader/Interface/README.md). 该私有头/库须一起重建, 指纹包含实际适配字节.
 
 除源码选择与 CMake 组织外，不修改上游算法。后续升级时从固定 tag/commit 获取源码，保留许可，更新本表及归档校验值，并检查实际消费者的构建。
+
+### D07-T05 显示算法适配
+
+`filament-display` 保留固定快照 `filament/src/ToneMapper.cpp` 的标量 ACESToneMapper 和 `ColorSpaceUtils.h/.cpp` 的必要矩阵、Oklab 变换和目标色域求交. 向量和矩阵运算由现有 GLM 提供. 适配入口固定单位亮度倍率、中性设置和线性 Rec.709 输出, 由 Renderer 生成查表数据. 保留 Apache-2.0 许可及色域映射的 MIT 声明. [ACESToneMapper](https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/ToneMapper.cpp#L377) · [色域映射](https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/ColorSpaceUtils.cpp#L263)
+
+FXAA 取同一快照 `filament/src/materials/antiAliasing/fxaa/fxaa.fs` 的 opaque PC Console/G3D 分支及 `fxaa.mat` 的锐度和阈值. Physara Shader 用有效矩形限制取样, 线性 RGB 负责混合, A 通道传递感知亮度. 上游 G3D 和 NVIDIA 声明保留在移植文件内. [FXAA 适配](../Shaders/PostProcess/DisplayFxaa.frag) · [固定 FXAA 来源](https://github.com/google/filament/blob/b4dfdb073d5543d8569d37e0ee26f79cf794db14/filament/src/materials/antiAliasing/fxaa/fxaa.fs)
 
 ## GLAD 生成来源
 

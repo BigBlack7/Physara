@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 持有主 View 的持久化位姿/物理相机/比例请求, 会话预览模式及最后接受的显示颜色.
+/// @brief 持有主 View 的位姿、物理相机、比例和 AA 请求, 会话预览模式及最后接受的显示颜色.
 /// Editor 提供离屏像素请求, Runtime 按本次合成的提交回执发布有效比例和尺寸.
 /// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
@@ -58,6 +58,13 @@ namespace Physara::Renderer
         bool operator==(const PhysicalCameraRequest &) const = default;
     };
 
+    /// @brief 主 View 持久化的单样本抗锯齿请求.
+    enum class AntiAliasing : std::uint8_t
+    {
+        None,
+        Fxaa
+    };
+
     /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
     struct ViewDocumentRequests
     {
@@ -65,6 +72,7 @@ namespace Physara::Renderer
         std::optional<Scene::EntityId> cameraEntityId;
         float renderScale = MaxRenderScale;
         PhysicalCameraRequest physicalCamera;
+        AntiAliasing antiAliasing = AntiAliasing::None;
 
         bool operator==(const ViewDocumentRequests &) const = default;
     };
@@ -104,7 +112,7 @@ namespace Physara::Renderer
         bool operator==(const ViewExtent &) const = default;
     };
 
-    /// @brief 在左上原点的输出画布内定位有效图像, 像素区间为半开.
+    /// @brief 在左上原点的像素画布内定位有效图像, 像素区间为半开.
     struct ViewImageRect
     {
         std::uint32_t x = 0;
@@ -114,25 +122,34 @@ namespace Physara::Renderer
         bool operator==(const ViewImageRect &) const = default;
     };
 
-    /// @brief 独立记录画布与有效图像. 当前无独立升采样, 渲染像素尺寸等于有效矩形尺寸.
+    /// @brief 一张栅格的完整画布与有效矩形. 两种范围均以像素为单位.
     struct ViewImageLayout
     {
         ViewExtent outputExtent;
         ViewImageRect rect;
 
-        [[nodiscard]] ViewExtent RenderExtent() const noexcept { return rect.extent; }
         /// @brief 由连续画布像素坐标得到左上原点的图像 UV. 留边与无效范围返回空.
         [[nodiscard]] std::optional<std::array<double, 2>> ImageUv(double x, double y) const noexcept;
 
         bool operator==(const ViewImageLayout &) const = default;
     };
 
-    /// @brief CPU UI 封存后按当前比例换算的一次离屏像素请求.
+    /// @brief 同一投影在渲染及显示栅格中的布局. 诊断测试图直接使用渲染布局.
+    struct ViewLayouts
+    {
+        ViewImageLayout render;
+        ViewImageLayout display;
+
+        bool operator==(const ViewLayouts &) const = default;
+    };
+
+    /// @brief CPU UI 封存后按当前面板及比例换算的离屏像素请求.
     /// @note View 用请求代确认换算依据, 颜色纹理另有自己的资源代.
     struct ViewportRequest
     {
         ViewId view;
-        ViewExtent extent; ///< 逻辑区域存在但无法换算时为零, 由 View 报告失败.
+        ViewExtent renderExtent; ///< 乘请求比例后取整. 无法换算时为零.
+        ViewExtent outputExtent; ///< 实际面板像素向下取整, 供正常场景的显示输出使用.
         std::uint64_t requestRevision = 0; ///< 用于计算像素范围的比例请求代.
     };
 
@@ -167,7 +184,8 @@ namespace Physara::Renderer
         SceneUploadLimit,
         SceneLightTableRejected, ///< 可见灯集合超容量或行字段无法编码.
         EnvironmentPending,
-        EnvironmentRejected
+        EnvironmentRejected,
+        DisplayUnavailable
     };
 
     /// @brief 会话内 Forward 模式. 顺序同时用于编辑器菜单和 ForwardView.mode 的 Shader ABI.
@@ -181,6 +199,27 @@ namespace Physara::Renderer
         PhysicalLighting
     };
 
+    /// @brief 场景输出实际采用的显示变换.
+    enum class DisplayProfile : std::uint8_t
+    {
+        LinearClamp,
+        AcesSdr
+    };
+
+    /// @brief 已解析的显示配置, 与正常帧实际生成的颜色配对.
+    struct DisplaySettings
+    {
+        DisplayProfile profile = DisplayProfile::LinearClamp;
+        AntiAliasing antiAliasing = AntiAliasing::None;
+    };
+
+    /// @brief 物理预览消费 AA 请求; 诊断预览使用可比较的线性限幅.
+    [[nodiscard]] constexpr DisplaySettings ResolveDisplaySettings(PreviewMode mode, AntiAliasing requested) noexcept
+    {
+        return mode == PreviewMode::PhysicalLighting ? DisplaySettings{DisplayProfile::AcesSdr, requested}
+                                                     : DisplaySettings{};
+    }
+
     /// @brief 同一 View 的请求和确认快照, 可独立用于面板显示.
     /// effective 在首个匹配的测试图或场景预览获接受前为空. 等待或拒绝时保留上次确认值.
     struct ViewSettings
@@ -189,8 +228,9 @@ namespace Physara::Renderer
         float requestedScale = MaxRenderScale;
         std::optional<EffectiveViewport> effective;
         ViewSettingReason reason = ViewSettingReason::LayoutPending;
-        std::uint64_t requestRevision = 0; ///< 随已接受的比例修改递增, 初始为零.
+        std::uint64_t requestRevision = 0; ///< 比例请求的布局代, 不是 AA 的版本或 GPU 输出代.
         PreviewMode preview = PreviewMode::BaseColor; ///< 当前请求模式; 已接受像素的模式由 ViewOutput::scene 表达.
+        AntiAliasing requestedAa = AntiAliasing::None; ///< 当前文档意图, 与最近场景帧实际采用的 AA 可以不同.
     };
 
     /// @brief Runtime 对诊断纹理像素记账的总字节上限, 同时约束单张诊断图的尺寸.
@@ -215,6 +255,9 @@ namespace Physara::Renderer
         std::optional<Core::BoundedText> degradation;
         std::uint64_t documentRevision; ///< 准备时的 View 文档代, 不等于 Scene 内容代或时域历史 key.
         std::optional<RenderedEnvironment> environment; ///< 本颜色代实际使用的源和角色, 无环境消费时为空.
+        DisplaySettings display; ///< 本场景候选选用的配置, 随正常图确认, 不是此刻界面上的请求.
+        ViewImageLayout renderLayout; ///< 配对 HDR、深度和相机实际采样的栅格.
+        ViewExtent outputExtent; ///< 此次场景输出的显示像素尺寸, 随场景历史保留.
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -339,7 +382,7 @@ namespace Physara::Renderer
         /// @brief 本轮没有提交候选颜色时记录真实等待原因, 已确认的当前请求保持有效.
         void Defer(ViewSettingReason reason) noexcept;
 
-        /// @brief 在场景准备前核对请求身份及设备纹理尺寸, 各生产者随后核对自己的字节/附件预算.
+        /// @brief 在场景准备前核对请求身份和渲染范围. 显示附件只在有场景输出时按实际设备能力检查.
         [[nodiscard]] ViewSettingReason CheckViewport(const std::optional<ViewportRequest> &request) const noexcept;
         /// @brief 复用布局相同的已接受测试图, 或按当前有效矩形建立测试图候选.
         /// @pre prepared 来自本轮已封存的布局和已应用的 Scene/View 请求.
@@ -348,7 +391,7 @@ namespace Physara::Renderer
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PrepareDiagnostic(const PreparedView &prepared, std::size_t remainingUploadBytes);
         /// @brief 通过已准备的场景和相机建立本轮显示色候选, 由 Forward 图生产实际内容.
-        /// @pre prepared 为当前已校验的 View, 场景 Draw 已准备. degradation 只描述被报告的局部不支持项.
+        /// @pre 场景 Draw 已使用此 View 准备值及其 preview 模式. degradation 只描述局部不支持项.
         /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,

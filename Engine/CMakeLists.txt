@@ -28,17 +28,21 @@ add_subdirectory(Scene)
 add_subdirectory(Renderer/RenderGraph)
 
 # 三个颜色变体和深度包共用 StaticForward 接口与顶点入口. 颜色变体按 DFG 和环境采样需求分别生成.
-# 天空与显示转换各有独立接口, 前者混入工作色, 后者读取最终工作色.
+# 天空混入工作色. 显示分级, FXAA 和缩放各自生成包; 后两者共用 DisplayPost 的同一组活动绑定.
 add_subdirectory(Shader)
 physara_add_shader_interface(StaticForward Shader/Interface/StaticForward.json)
 physara_add_shader_interface(ForwardDisplay Shader/Interface/ForwardDisplay.json)
 physara_add_shader_interface(ForwardSky Shader/Interface/ForwardSky.json)
+physara_add_shader_interface(DisplayPost Shader/Interface/DisplayPost.json)
 physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders)
 physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders)
 physara_add_shader_program(StaticForwardPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPhysical.json ../Shaders)
 physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forward/StaticForwardIbl.json ../Shaders)
 physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders)
 physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders)
+foreach(program DisplayColorGrading DisplayFxaa DisplayScale)
+    physara_add_shader_program(${program} DisplayPost ../Shaders/PostProcess/${program}.json ../Shaders)
+endforeach()
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
 # 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
@@ -56,19 +60,22 @@ add_library(PhysaraRenderer STATIC
     Renderer/Lighting/EnvironmentGpu.cpp
     Renderer/Materials/StaticGpu.hpp Renderer/Materials/StaticGpu.cpp Renderer/Materials/StaticTextures.cpp
     Renderer/Draw/StaticDraw.cpp
+    Renderer/PostProcess/ColorLut.hpp Renderer/PostProcess/ColorLut.cpp
+    Renderer/PostProcess/Display.hpp Renderer/PostProcess/Display.cpp
     Renderer/Paths/Forward.hpp Renderer/Paths/Forward.cpp
 )
 target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph
-    PRIVATE PhysaraShader glm)
+    PRIVATE PhysaraShader glm filament_display)
 target_include_directories(PhysaraRenderer PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
 add_dependencies(PhysaraRenderer PhysaraShaderInterfaceStaticForward PhysaraShaderInterfaceForwardDisplay
-    PhysaraShaderInterfaceForwardSky)
+    PhysaraShaderInterfaceForwardSky PhysaraShaderInterfaceDisplayPost)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
-foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky)
+foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
+        DisplayColorGrading DisplayFxaa DisplayScale)
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

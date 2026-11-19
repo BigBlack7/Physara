@@ -39,6 +39,7 @@ namespace Physara::Editor::Detail
         case UiFallback::SceneLightTableRejected: return "Visible light table rejected";
         case UiFallback::EnvironmentPending: return "Preparing HDR environment or DFG";
         case UiFallback::EnvironmentRejected: return "HDR environment unavailable";
+        case UiFallback::DisplayUnavailable: return "Display processing unavailable";
         case UiFallback::RetainedOutput: return "Frame failed";
         case UiFallback::FrameFailed: return "Frame failed - no accepted output";
         case UiFallback::None: return "";
@@ -162,7 +163,8 @@ namespace Physara::Editor::Detail
         return Renderer::ViewExtent{static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y)};
     }
 
-    // 像素范围与用于换算的比例请求代一起封存. 换算失败也保留身份, 供可见占位解释原因.
+    // 两套尺寸从同一未取整的逻辑范围独立换算, 不能把已取整的显示宽高再乘比例.
+    // 换算失败仍封存请求身份, 由 View 报告原因.
     std::optional<Renderer::ViewportRequest> Viewport::Request(const ViewportLayout &layout,
                                                                  const Platform::WindowState &window,
                                                                  const Renderer::ViewSettings &settings) const noexcept
@@ -172,7 +174,10 @@ namespace Physara::Editor::Detail
             return std::nullopt;
         }
         const auto extent = MeasureViewport(layout.image.size.x, layout.image.size.y, window, settings.requestedScale);
-        return Renderer::ViewportRequest{m_View, extent.value_or(Renderer::ViewExtent{}), settings.requestRevision};
+        const auto output = settings.requestedScale == 1.0f ? extent :
+            MeasureViewport(layout.image.size.x, layout.image.size.y, window, 1.0f);
+        return Renderer::ViewportRequest{m_View, extent.value_or(Renderer::ViewExtent{}),
+                                         output.value_or(Renderer::ViewExtent{}), settings.requestRevision};
     }
 
     // 只封存逻辑图像和状态文字需要的字形. 正常候选与安全 UI 随后可在同一布局上分别解析.

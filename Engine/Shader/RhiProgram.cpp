@@ -35,7 +35,8 @@ namespace Physara::Shader
 
     Result<RhiProgram> LoadRhiProgram(RHI::Device &device, const std::filesystem::path &path,
                                       std::string_view expectedAbiHash,
-                                      std::optional<ExpectedActiveResources> expectedActive) noexcept
+                                      std::optional<ExpectedActiveResources> expectedActive,
+                                      std::string_view expectedFragmentSource) noexcept
     {
         return GuardBuild<RhiProgram>([&]() -> Result<RhiProgram> {
             // 文件完整性, profile, ABI 与双阶段一致性先由包边界确认, 失败时尚未创建 RHI 对象.
@@ -45,6 +46,15 @@ namespace Physara::Shader
                 return *failure;
             }
             const auto &package = std::get<ShaderPackage>(loaded);
+            // ReadPackage 已验证图形包按 VS、FS 排列. 先核对包内阶段, 再交给 RHI 工厂.
+            if (!expectedFragmentSource.empty() && package.modules[1].sourcePath != expectedFragmentSource)
+            {
+                Core::BoundedText issue("Package fragment source mismatch. Expected ");
+                issue.Append(expectedFragmentSource);
+                issue.Append(", found ");
+                issue.Append(package.modules[1].sourcePath);
+                return MakeFailure(ErrorCode::InterfaceMismatch, issue.View());
+            }
             if (expectedActive && !MatchesActiveResources(package, *expectedActive))
             {
                 return MakeFailure(ErrorCode::InterfaceMismatch, "Package active resources do not match the required role");

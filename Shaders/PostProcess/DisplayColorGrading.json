@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "DisplayColorGrading",
+  "interface": "DisplayPost",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "PostProcess/DisplayColorGrading.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

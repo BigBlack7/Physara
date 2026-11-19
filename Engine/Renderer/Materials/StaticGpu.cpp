@@ -3,7 +3,6 @@
 #include <cassert>
 #include <utility>
 
-#include <ForwardDisplay/Bindings.hpp>
 #include <ForwardSky/Bindings.hpp>
 #include <StaticForward/Bindings.hpp>
 
@@ -103,23 +102,6 @@ namespace Physara::Renderer::Detail
             }
         }
         PrepareLighting(device, LightingProgram::Legacy);
-        namespace DisplayAbi = Shader::Generated::ForwardDisplay;
-        const auto program = LoadProgram(device, paths.display, DisplayAbi::AbiHash, "ForwardDisplay package");
-        displayLayout = device.CreateBindingLayout(DisplayAbi::MakeBindingLayouts().front());
-        if (!displayLayout)
-        {
-            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward display binding layout");
-        }
-        RHI::GraphicsPipelineDesc desc;
-        desc.SetVertexShader(program.vertex.Get()).SetFragmentShader(program.fragment.Get())
-            .AddBindingLayout(displayLayout.Get());
-        desc.renderState.depthStencilState.DisableDepthTest().DisableDepthWrite().DisableStencil();
-        desc.renderState.rasterState.SetCullMode(RHI::RasterCullMode::None);
-        displayPipeline = device.CreateGraphicsPipeline(desc, RHI::FramebufferInfo().AddColorFormat(DisplayFormat));
-        if (!displayPipeline)
-        {
-            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot link Forward display pipeline");
-        }
     }
 
     void ForwardPrograms::PrepareLighting(RHI::Device &device, LightingProgram kind)
@@ -268,7 +250,8 @@ namespace Physara::Renderer::Detail
     }
 
     ForwardDevice::ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit)
-        : device(source), maxTextureSize(textureLimit), programs(source, paths)
+        : device(source), maxTextureSize(textureLimit), programs(source, paths),
+          display(source, {paths.display, paths.grading, paths.fxaa, paths.scale})
     {
         const auto requiredColor = RHI::FormatSupport::RenderTarget | RHI::FormatSupport::ShaderSample;
         if ((device.QueryFormatSupport(WorkingFormat) & requiredColor) != requiredColor ||

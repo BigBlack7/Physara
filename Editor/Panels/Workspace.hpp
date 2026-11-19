@@ -64,6 +64,7 @@ namespace Physara::Editor::Detail
         std::optional<Scene::EntityHandle> selection;
         std::optional<CameraSource> camera;
         std::optional<PhysicalCameraEdit> physicalCamera;
+        std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;

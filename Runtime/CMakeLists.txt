@@ -9,7 +9,8 @@ get_target_property(editorUiPackageTarget PhysaraEditor PHYSARA_UI_PACKAGE_TARGE
 add_dependencies(Physara ${editorUiPackageTarget})
 # 产品包与 Renderer 使用同一接口生成目标; 不为不同消费者复制场景包的生成规则.
 set(forwardResourcePaths "")
-foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky)
+foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
+        DisplayColorGrading DisplayFxaa DisplayScale)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

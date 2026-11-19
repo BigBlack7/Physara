@@ -104,7 +104,7 @@ namespace Physara::Runtime
         }
     };
 
-    /// @brief 尝试结果只有一种动作. GraphRejected 才允许调用方在无录制阶段建立安全图.
+    /// @brief 一次尝试只返回一种动作. 开放列表前的图拒绝或视口准入失败可重建; 录制后的失败不追加安全图.
     enum class AttemptStatus { Succeeded, RebuildWithoutViewport, UploadPending, GraphRejected, Cancelled, Stopped };
 
     /// @brief 一张候选图的最终动作与拥有型失败摘要, 返回后不再依赖该图或准备值.
@@ -114,7 +114,7 @@ namespace Physara::Runtime
         AttemptStatus status;
         std::optional<Core::BoundedText> error;
         std::optional<Core::BoundedText> additional;
-        ViewSettingReason viewportReason = ViewSettingReason::None; ///< 仅重建占位时交给 View, 区分等待和硬拒绝.
+        ViewSettingReason viewportReason = ViewSettingReason::None; ///< 移除视口生产者时传给占位或旧图, 区分等待和硬拒绝.
         bool viewportPublished = false; ///< 仅完整正常图采样并实际发布时确认输入映射.
     };
 
@@ -488,7 +488,7 @@ namespace Physara::Runtime
     }
 
     // 一次取得最多尝试带视口的普通图, 去掉视口的普通图和安全 UI 图.
-    // 去掉视口后仍为 Normal, 但空颜色阻止再次进入视口上传分支; SafeUi 不返回普通图.
+    // 移除场景分支后, 无旧图可用时由普通 UI 画占位, 可保留的旧图只在 SafeUi 合成; 两者都不再上传本轮场景.
     // 可恢复分支在此消费取得或沿已提交前缀返回; Stopped 将尚未收拢的 owner 留给主循环退出.
     std::variant<FrameStatus, Core::BoundedText> RenderFrame(
         Platform::DeviceHost &host, Editor::EditorSession &editor, View &view, ForwardRenderer &forward,
@@ -528,15 +528,17 @@ namespace Physara::Runtime
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
         // 天空有独立的颜色写入, 只有相机和天空也可进入 Forward. 有几何时依据场景全集判断,
         // 使全部表面隐藏或移出视锥的场景仍由 Forward 清除颜色和深度.
-        const bool physical = view.Preview() == PreviewMode::PhysicalLighting;
+        const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
         const bool wantsSky = physical && prepared.scene.environment && prepared.scene.environment->settings.sky;
         const bool hasScene = prepared.camera && (wantsSky || std::ranges::any_of(prepared.scene.primitives,
             [](const PrimitiveRef &primitive) { return primitive.bounds.has_value(); }));
+        // 有场景的诊断预览也可选择缩放阶段. 显示准备或上传准入受阻时沿用同一旧图路径.
+        const bool retainOnFailure = physical || (hasScene && prepared.layouts.render != prepared.layouts.display);
         auto mode = Editor::UiFrameMode::Normal;
         if (hasScene)
         {
             const auto errors = host.BeginFrameGraphicsDiagnostics();
-            auto failure = forward.Prepare(slot.forward, prepared, view.Preview());
+            auto failure = forward.Prepare(slot.forward, prepared, prepared.preview);
             if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending))
             {
                 failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
@@ -550,7 +552,7 @@ namespace Physara::Runtime
                     remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
                 }
                 candidate = view.Unavailable(failure->reason);
-                if (physical)
+                if (retainOnFailure)
                 {
                     auto retained = view.LastAcceptedOutput(failure->reason);
                     if (retained.Color())
@@ -605,9 +607,9 @@ namespace Physara::Runtime
             }
             if (attempt.status == AttemptStatus::RebuildWithoutViewport)
             {
-                // 普通 UI 沿同一原因合成占位. 无可发布的颜色, 因此不会重复进入视口上传分支.
+                // 先保留准入原因. 物理或需缩放的场景有旧图时交给安全 UI, 否则正常 UI 使用占位.
                 outputs = view.Unavailable(attempt.viewportReason);
-                if (physical && mode == Editor::UiFrameMode::Normal)
+                if (retainOnFailure && mode == Editor::UiFrameMode::Normal)
                 {
                     auto retained = view.LastAcceptedOutput(attempt.viewportReason);
                     if (retained.Color())

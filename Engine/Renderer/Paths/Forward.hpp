@@ -22,6 +22,9 @@ namespace Physara::Renderer
         std::filesystem::path physical;
         std::filesystem::path ibl;
         std::filesystem::path sky;
+        std::filesystem::path grading;
+        std::filesystem::path fxaa;
+        std::filesystem::path scale;
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
@@ -37,13 +40,27 @@ namespace Physara::Renderer
         Core::BoundedText description;
     };
 
-    /// @brief 本图的工作颜色, 深度及显示颜色. 受光结果在工作附件中保留当帧预曝光的线性 HDR 值.
+    /// @brief 显示前工作色及深度共用的来源. layout 是渲染栅格, camera.exposure 是本帧的曝光快照.
+    /// mode 区分实际生产模式. PhysicalLighting 的受光值和天空为预曝光 linear Rec.709/D65.
+    /// DirectLighting 仅包含预曝光直接光与自发光. 诊断模式输出对应通道, Unlit 仍是标准基色.
+    struct ForwardWorkingSource
+    {
+        ViewId view;
+        Scene::SceneId scene;
+        std::uint64_t contentRevision;
+        PreviewMode mode;
+        CameraSnapshot camera;
+        ViewImageLayout layout;
+    };
+
+    /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
     /// 显示色已执行视口映射, 三个图版本均只在本图有效.
     struct ForwardOutput
     {
         TextureId workingColor;
         TextureId depth;
         TextureId displayColor;
+        ForwardWorkingSource source;
 
         /// @brief 是否有本候选的上传保留在同图计划中, 供准入失败时判定能否移除场景分支.
         [[nodiscard]] bool HasLiveUploads(const CompiledGraphPlan &plan) const noexcept;
@@ -88,7 +105,8 @@ namespace Physara::Renderer
         /// @pre output 来自此准备值, plan 是接受的同图计划. 安全 UI 或前缀票据不得调用.
         /// @note 本入口只核对图代和上传活性, 完整接受资格由 Runtime 保证; 此处不等待 GPU.
         void Confirm(const ForwardOutput &output, const CompiledGraphPlan &plan) noexcept;
-        /// @brief 录制结束后结束 CPU 字节借用. GPU 引用仍由槽和 RHI 提交包保活.
+        /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
+        /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;
 
     private:

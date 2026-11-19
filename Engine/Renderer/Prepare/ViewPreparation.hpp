@@ -33,10 +33,12 @@ namespace Physara::Renderer
         std::uint64_t requestRevision = 0;
         std::uint64_t cameraRevision = 0;
         std::uint64_t documentRevision = 0; ///< 场景候选核对此代, 使只变化曝光的旧快照也不能继续确认.
+        PreviewMode preview = PreviewMode::BaseColor; ///< 本次准备时的会话预览模式, 供绘制和合成共用.
         ViewSettingReason reason = ViewSettingReason::LayoutPending;
         std::optional<Core::BoundedText> failure;
         std::optional<CameraSnapshot> camera;
-        ViewImageLayout layout;
+        AntiAliasing requestedAa = AntiAliasing::None; ///< 随本轮文档代封存, 供后处理选择.
+        ViewLayouts layouts; ///< 同一相机的两次像素适配. 裁剪和抖动使用 render, 场景显示与命中使用 display.
         SceneFrame scene;
         std::span<const std::uint32_t> primitives;
         std::span<const std::uint32_t> lights;

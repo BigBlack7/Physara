@@ -34,13 +34,13 @@
 
 ### Requirement: Apply viewport extent at a frame boundary
 
-Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口比例和主 View 当前请求的渲染比例计算 View 像素请求。各轴 SHALL 在比例相乘后向下取整并检查范围和算术。窗口 PresentColor 和离屏 View 输出 SHALL 按各自尺寸准备。布局及相关资源请求 SHALL 在录制前确定，录制期间到达的变化只供后续帧消费。零面积或隐藏视口 SHALL 不发起新的离屏输出分配。
+Editor SHALL 从面板内容矩形和当前实际 framebuffer 对逻辑窗口的各轴比例取得未取整的物理像素范围。正常场景的显示画布 SHALL 对该范围向下取整，渲染栅格 SHALL 对原范围乘当前请求比例后各轴向下取整，并检查有效范围和算术。无场景的诊断测试图仍 SHALL 使用按渲染比例换算的像素范围。窗口 PresentColor SHALL 按实际 framebuffer 像素独立准备。布局及相关资源请求 SHALL 在录制前确定，录制期间到达的变化只供后续帧消费。零面积或隐藏视口 SHALL 不发起新的离屏输出分配。
 
-编辑器 SHALL 以同批逻辑布局和 View 准备的有效图像矩形建立内容映射。图像及其输入坐标 SHALL 采用该有效区域，留边或失效布局返回无有效图像位置。输入 SHALL 从当前封存布局的逻辑窗口坐标转换到画布、再映射到有效图像的左上 UV；不得再次计入 DPI 或 render scale。导航命中 SHALL 使用与当前 Scene、相机、预览请求以及布局相符的正常已接受图像，安全回退、未获接受的候选、占位和被剪掉的区域 SHALL 没有输入命中资格。画布的可见性和帧边界像素请求保持独立于导航捕获。
+合成 SHALL 使用该输出携带的布局和有效图像矩形，正常场景使用显示画布的矩形，无场景诊断图使用自身的矩形。图像输入 SHALL 以当前封存布局从逻辑窗口坐标转换到已接受输出的画布，再从该有效矩形取得左上 UV。该映射直接使用已换算的画布尺寸，留边或失效布局返回无有效图像位置。导航命中 SHALL 使用与当前 Scene、相机、预览和 AA 请求以及布局相符的正常已接受图像，安全回退、未获接受的候选、占位和被剪掉的区域 SHALL 没有输入命中资格。画布的可见性和帧边界像素请求保持独立于导航捕获。
 
 #### Scenario: Resize the window and viewport independently
 - **WHEN** 连续改变窗口像素尺寸、视口停靠布局或 framebuffer 比例
-- **THEN** 新帧的窗口目标匹配最新有效窗口像素范围，离屏输出对应当帧内容区域的像素请求，内容缩放不被重复计入，单独改变布局不重建窗口目标
+- **THEN** 新帧的窗口目标匹配最新有效窗口像素范围，正常场景的输出画布与渲染栅格分别对应当帧两个像素请求，诊断测试图使用其按比例换算的范围，内容缩放只计算一次，单独改变布局不重建窗口目标
 
 #### Scenario: Hide and reopen a viewport
 - **WHEN** 面板隐藏或内容面积变为零，随后恢复可绘制面积
@@ -57,6 +57,11 @@ Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口
 #### Scenario: Wait for a current image after layout or camera changes
 - **WHEN** 用户改变大小、切换场景相机或隐藏后重开，安全 UI 或等待状态可能保留旧有效颜色
 - **THEN** 旧色可按自身回退合同显示，不能启动新捕获或提供本次有效图像映射；正常图实际采样并接受匹配结果后，同一 View 和 token 可以继续使用
+
+#### Scenario: Keep display pixels at panel resolution when render scale changes
+
+- **WHEN** 正常视口的面板内容折算为 321.8×241.25 物理像素且窗口布局固定，渲染比例从 1 改为 0.75
+- **THEN** 输出画布仍为 321×241，渲染栅格变为 241×180；图像命中使用当前已接受的显示矩形，窗口目标继续由实际 framebuffer 决定
 
 ### Requirement: Present a diagnostic editor without advancing scene history
 
@@ -80,9 +85,9 @@ Editor SHALL 从面板内容矩形、本次有效的 framebuffer 对逻辑窗口
 
 View SHALL 分别公开最新合法请求比例、最后接受的有效比例及其输出像素范围。首次确认前有效值 SHALL 显示为尚未确认。待确认的请求缺少可用布局、槽或暂时可用的上传容量时 SHALL 报告 Pending 及原因。请求尺寸超出设备能力、有效像素范围或单目标预算时 SHALL 报告具体拒绝原因。两种结果均保留最后接受的有效状态。只有匹配当前请求的测试图或 Forward 预览实际用于完整正常图合成且该提交被接受后，View 才可发布其有效比例和尺寸。窗口交换结果 SHALL 与该确认独立。正常帧无匹配颜色时 SHALL 沿现有诊断占位合同呈现。
 
-正常候选 SHALL 匹配输出像素范围和有效图像矩形。Forward 预览还 SHALL 匹配当前 Scene 内容、渲染相机与所选预览模式，以该次实际渲染的相机和矩形提供图像映射。相机变化导致矩形变化时 SHALL 等待匹配候选被采纳，准备失败或等待期间保有最后接受的输出及其矩形。
+正常候选 SHALL 匹配其所需的输出像素范围和有效图像矩形。Forward 预览还 SHALL 匹配当前 Scene 内容、相机、预览模式、AA 请求以及渲染和显示布局，以该次实际渲染的快照和显示矩形提供图像映射。View Settings SHALL 分别显示合法的 AA 请求和最后一次被接受场景实际使用的 AA、显示 profile、渲染尺寸和输出尺寸；首次场景确认前这些有效值 SHALL 标为尚未确认。Physical Lighting SHALL 消费有效的 None 或 FXAA；诊断模式 SHALL 确认实际使用的 None，说明该模式下 FXAA 不生效，保留合法请求。诊断测试图只确认自身比例和有效布局。相机或请求变化时 SHALL 等待匹配候选被采纳，准备失败或等待期间保有最后接受的输出及其矩形。
 
-安全 UI 图读取旧输出或显示占位 SHALL 不确认当前请求, 即使旧输出的尺寸碰巧相同。最近主图失败及使用旧输出的状态 SHALL 可见, 原有效比例、尺寸和颜色代保持不变; 后续正常图成功才能清除该请求的失败/等待状态并发布匹配结果。没有当前有效图像时图像输入映射 SHALL 不可用。
+安全 UI 图读取旧输出或显示占位 SHALL 不确认当前请求, 即使旧输出的尺寸碰巧相同。最近主图失败及使用旧输出的状态 SHALL 可见, 原有效比例、尺寸和颜色代保持不变; 后续正常图成功才能清除该请求的失败/等待状态并发布匹配结果。所选显示 profile、FXAA 或缩放准备或执行失败时，当前状态 SHALL 提供可定位原因，旧结果的有效配置 SHALL 保持与旧图匹配。没有当前有效图像时图像输入映射 SHALL 不可用。
 
 #### Scenario: Keep the last effective setting while a request is pending
 
@@ -113,6 +118,16 @@ View SHALL 分别公开最新合法请求比例、最后接受的有效比例及
 
 - **WHEN** 当前画布及图像矩形相同，场景内容、相机或预览模式改变，随后新候选等待上传或发生图失败
 - **THEN** 先前预览只可从安全 UI 以旧输出标明，当前有效模式和图像映射等待匹配的新候选；该候选实际采样并获接受后，颜色与渲染相机记录一并推进
+
+#### Scenario: Confirm the actual display profile and AA only with a matching frame
+
+- **WHEN** 已有一个接受的 Physical Lighting 输出，用户在相同尺寸请求 FXAA；其首个候选失败或过期，后一匹配图实际采样新输出并成功提交
+- **THEN** 在安全 UI 期间可辨认当前请求、原因及旧图实际的 profile 和 AA；有效配置及图像命中由后续完整正常帧一并确认，窗口交换状态独立可见
+
+#### Scenario: Keep the FXAA request while inspecting diagnostic colors
+
+- **WHEN** 保有 FXAA 请求的 View 从已接受的 Physical Lighting 切到一个诊断预览，再切回 Physical Lighting
+- **THEN** 已接受的诊断帧报告诊断显示和实际 None，请求仍为 FXAA；匹配的下一物理帧实际执行并确认 FXAA
 
 ### Requirement: Record the pre-exposure of the last accepted scene render
 

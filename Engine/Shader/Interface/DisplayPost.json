@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "DisplayPost",
+  "blocks": [
+    {
+      "name": "DisplayRects",
+      "layout": "std140",
+      "fields": [
+        { "name": "renderRect", "type": "uint4" },
+        { "name": "outputRect", "type": "uint4" },
+        { "name": "renderExtent", "type": "uint2" },
+        { "name": "encodeLuma", "type": "uint32" }
+      ]
+    }
+  ],
+  "resources": [
+    { "name": "displayRects", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["fragment"], "block": "DisplayRects" },
+    { "name": "sourceColor", "kind": "texture2d", "set": 0, "slot": 0, "stages": ["fragment"] },
+    { "name": "colorLut", "kind": "texture2d", "set": 0, "slot": 1, "stages": ["fragment"] },
+    { "name": "linearSampler", "kind": "sampler", "set": 0, "slot": 0, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

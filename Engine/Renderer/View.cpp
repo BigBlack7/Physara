@@ -24,12 +24,16 @@ namespace Physara::Renderer
     // 进程只有一个活动宿主. View 在该宿主 owner 线程分配身份, 后续创建不会复用旧代.
     static std::uint64_t LastViewIdentity = 0;
 
-    /// @brief 校验文档中的比例、位姿和引用形状. 具体相机引用仍由组合方对 Scene 检查.
+    /// @brief 校验文档的 AA, 比例, 位姿和引用形状. 具体相机引用仍由组合方对 Scene 检查.
     static std::optional<Core::BoundedText> ValidateDocumentFields(const ViewDocumentRequests &requests) noexcept
     {
         if (!(requests.renderScale >= MinRenderScale && requests.renderScale <= MaxRenderScale))
         {
             return Core::BoundedText("Invalid mainView.requested.renderScale");
+        }
+        if (requests.antiAliasing > AntiAliasing::Fxaa)
+        {
+            return Core::BoundedText("Invalid mainView.requested.antiAliasing");
         }
         if (!Scene::IsValidPose(requests.cameraPose))
         {
@@ -163,7 +167,8 @@ namespace Physara::Renderer
     ViewSettings View::Settings() const noexcept
     {
         ViewSettings snapshot{.view = m_Id, .requestedScale = m_Document.renderScale, .reason = m_Reason,
-                              .requestRevision = m_RequestRevision, .preview = m_Preview};
+                              .requestRevision = m_RequestRevision, .preview = m_Preview,
+                              .requestedAa = m_Document.antiAliasing};
         if (m_Accepted)
         {
             snapshot.effective = EffectiveViewport{m_EffectiveScale, m_Accepted->layout};
@@ -269,7 +274,9 @@ namespace Physara::Renderer
             {
                 ++m_CameraRevision;
             }
-            if (m_Document.physicalCamera != update.m_Value.physicalCamera)
+            // AA 改动不推进像素比例代或几何相机代. 文档代使同尺寸的旧场景候选不能通过 Publish.
+            if (m_Document.physicalCamera != update.m_Value.physicalCamera ||
+                m_Document.antiAliasing != update.m_Value.antiAliasing)
             {
                 m_Reason = ViewSettingReason::SubmissionPending;
             }
@@ -325,8 +332,9 @@ namespace Physara::Renderer
         {
             return ViewSettingReason::LayoutPending;
         }
-        const auto extent = request->extent;
-        if (extent.width == 0 || extent.height == 0)
+        const auto extent = request->renderExtent;
+        if (extent.width == 0 || extent.height == 0 ||
+            request->outputExtent.width == 0 || request->outputExtent.height == 0)
         {
             return ViewSettingReason::InvalidExtent;
         }
@@ -355,9 +363,10 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
+        const auto &layout = prepared.layouts.render;
         // 画布尺寸相同且有效矩形吻合时, 可以直接读取已接受的颜色代.
         // 当前图案只依赖布局. 纯相机位姿变化不改写像素, 也不发布场景渲染历史.
-        if (m_Accepted && !m_Accepted->scene && m_Accepted->layout == prepared.layout)
+        if (m_Accepted && !m_Accepted->scene && m_Accepted->layout == layout)
         {
             outputs.m_Output = m_Accepted;
             if (m_Reason != ViewSettingReason::None || m_Document.renderScale != m_EffectiveScale)
@@ -366,7 +375,7 @@ namespace Physara::Renderer
             }
             return outputs;
         }
-        const auto bytes = DiagnosticPixelBytes(prepared.layout.outputExtent);
+        const auto bytes = DiagnosticPixelBytes(layout.outputExtent);
         if (bytes == 0)
         {
             return Unavailable(ViewSettingReason::DiagnosticBudget);
@@ -381,7 +390,7 @@ namespace Physara::Renderer
         {
             return Core::BoundedText("Viewport diagnostic generation exhausted");
         }
-        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {}, {}};
+        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, layout, {}, {}};
         outputs.m_UploadBytes = bytes;
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
@@ -401,10 +410,12 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
-        // 记录来自准备快照的曝光与请求代, 不能在确认阶段改取届时的当前请求.
-        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layout, {},
-            RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, m_Preview,
-                          std::move(degradation), prepared.documentRevision, std::move(environment)}};
+        // 颜色来源和显示选择均使用绘制所依据的准备快照.
+        outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
+            RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
+                          std::move(degradation), prepared.documentRevision, std::move(environment),
+                          ResolveDisplaySettings(prepared.preview, prepared.requestedAa), prepared.layouts.render,
+                          prepared.layouts.display.outputExtent}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }

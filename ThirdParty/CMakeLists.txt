@@ -3,6 +3,14 @@
 add_library(glm INTERFACE)
 target_include_directories(glm SYSTEM INTERFACE glm)
 
+# 固定 Filament SDR 显示路径只编译标量色调算子和色域映射, 由 Renderer 私有消费.
+add_library(filament_display STATIC filament-display/FilamentDisplay.cpp filament-display/FilamentDisplay.hpp)
+target_include_directories(filament_display SYSTEM PUBLIC filament-display)
+target_link_libraries(filament_display PUBLIC glm)
+target_compile_features(filament_display PRIVATE cxx_std_20)
+target_compile_options(filament_display PRIVATE /utf-8)
+set_target_properties(filament_display PROPERTIES CXX_EXTENSIONS OFF)
+
 add_library(entt INTERFACE)
 target_include_directories(entt SYSTEM INTERFACE entt/single_include)
 

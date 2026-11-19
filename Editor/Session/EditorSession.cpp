@@ -31,6 +31,41 @@ namespace Physara::Editor
     /// @brief 聚合本会话的布局, 编辑与纹理身份, 以及一轮内有效的 UI 借用.
     struct EditorSession::State
     {
+        /// @brief 本次正常合成期望的布局与场景来源, 从 Advance 后的准备值按值封存.
+        struct PreparedViewport
+        {
+            Renderer::ViewLayouts layouts;
+            Scene::SceneId scene;
+            std::uint64_t contentRevision;
+            std::uint64_t sceneCameraRevision; ///< 与所属 Scene 一起匹配; View 的相机请求由文档代覆盖.
+            std::uint64_t documentRevision;
+            Renderer::PreviewMode preview;
+
+            /// @pre prepared 已成功准备相机及所属场景.
+            explicit PreparedViewport(const Renderer::PreparedView &prepared) noexcept
+                : layouts(prepared.layouts), scene(prepared.scene.scene), contentRevision(prepared.scene.contentRevision),
+                  sceneCameraRevision(prepared.camera->sceneCameraRevision), documentRevision(prepared.documentRevision),
+                  preview(prepared.preview)
+            {
+            }
+
+            bool operator==(const PreparedViewport &) const noexcept = default;
+
+            /// @brief 测试图核对渲染布局; 场景色核对两套布局及其生产来源. 调用方核对 View 身份和比例请求代.
+            [[nodiscard]] bool Matches(const Renderer::ViewOutput &output) const noexcept
+            {
+                const auto &rendered = output.scene;
+                if (!rendered)
+                {
+                    return output.layout == layouts.render;
+                }
+                return output.layout == layouts.display && rendered->renderLayout == layouts.render &&
+                       rendered->scene == scene && rendered->contentRevision == contentRevision &&
+                       rendered->camera.sceneCameraRevision == sceneCameraRevision &&
+                       rendered->documentRevision == documentRevision && rendered->mode == preview;
+            }
+        };
+
         /// @brief 正常图已采样并确认的坐标依据. 两种视口颜色都带当时的 Scene 和相机版本.
         struct AcceptedImage
         {
@@ -42,6 +77,7 @@ namespace Physara::Editor
             std::uint64_t requestRevision;
             std::uint64_t metricsRevision;
             Renderer::PreviewMode preview;
+            Renderer::AntiAliasing requestedAa; ///< 命中匹配当时的请求, 不是诊断场景固定采用的 None.
             Detail::ViewportRegion region;
             Renderer::ViewImageLayout layout;
         };
@@ -61,7 +97,7 @@ namespace Physara::Editor
         Detail::ViewportLayout viewportLayout;
         std::optional<Detail::ViewportRegion> viewportRegion;
         std::optional<Renderer::ViewportRequest> viewportRequest;
-        std::optional<Renderer::ViewImageLayout> preparedViewport; ///< 候选专用, 仅供本轮 UI 准备校验.
+        std::optional<PreparedViewport> preparedViewport; ///< 候选专用, 仅供本轮 UI 准备校验.
         std::optional<AcceptedImage> acceptedImage;
         std::optional<Renderer::ViewImageLayout> imageInput; ///< 本轮匹配后的命中映射, 不代表图候选已被接受.
         std::uint64_t metricsRevision{};
@@ -104,7 +140,8 @@ namespace Physara::Editor
             const auto settings = view->Settings();
             if (view->Id() != image.view || scene->Id() != image.scene || revisions.renderContent != image.contentRevision ||
                 revisions.camera != image.sceneCameraRevision || view->CameraRevision() != image.viewCameraRevision ||
-                settings.requestRevision != image.requestRevision || settings.preview != image.preview)
+                settings.requestRevision != image.requestRevision || settings.preview != image.preview ||
+                settings.requestedAa != image.requestedAa)
             {
                 return std::nullopt;
             }
@@ -579,6 +616,12 @@ namespace Physara::Editor
             {
                 view->RequestPreview(*workspace.preview);
             }
+            if (view && scene && workspace.antiAliasing)
+            {
+                auto requests = view->DocumentRequests();
+                requests.antiAliasing = *workspace.antiAliasing;
+                state.editError = EditMainView(scene->Id(), *view, std::move(requests));
+            }
 
             if (!discard && !wasNavigating)
             {
@@ -693,11 +736,12 @@ namespace Physara::Editor
         auto &state = *m_State;
         const auto &request = state.viewportRequest;
         state.preparedViewport.reset();
-        if (prepared && prepared->reason == Renderer::ViewSettingReason::None && request &&
+        if (prepared && prepared->reason == Renderer::ViewSettingReason::None && prepared->camera && request &&
             prepared->view == request->view && prepared->requestRevision == request->requestRevision &&
-            prepared->layout.outputExtent == request->extent)
+            prepared->layouts.display.outputExtent == request->outputExtent &&
+            prepared->layouts.render.outputExtent == request->renderExtent)
         {
-            state.preparedViewport = prepared->layout;
+            state.preparedViewport.emplace(*prepared);
         }
     }
 
@@ -713,11 +757,14 @@ namespace Physara::Editor
         }
         assert(state.preparedViewport && state.viewportRequest && accepted->camera &&
                state.viewportRequest->view == accepted->view && state.viewportRequest->requestRevision ==
-                   accepted->requestRevision && state.preparedViewport == accepted->layout);
+                   accepted->requestRevision && state.preparedViewport == State::PreparedViewport{*accepted});
+        // 同一个 token 可以显示两种画布. 场景色已经过输出适配, 无场景测试图仍使用渲染栅格.
+        const auto &layout = view.AcceptedScenePreview() ? accepted->layouts.display : accepted->layouts.render;
         state.acceptedImage = State::AcceptedImage{accepted->view, accepted->scene.scene,
             accepted->scene.contentRevision, accepted->camera->sceneCameraRevision, accepted->cameraRevision,
-            accepted->requestRevision, state.metricsRevision, view.Preview(), *state.viewportRegion, accepted->layout};
-        state.imageInput = accepted->layout;
+            accepted->requestRevision, state.metricsRevision, accepted->preview, accepted->requestedAa,
+            *state.viewportRegion, layout};
+        state.imageInput = layout;
     }
 
     std::optional<std::array<double, 2>> EditorSession::ViewportImageUv(double x, double y) const noexcept
@@ -727,7 +774,7 @@ namespace Physara::Editor
             std::nullopt;
     }
 
-    // 正常模式核对当前布局候选, 安全模式核对已接受快照的来源, 两者共用本轮封存的 UI.
+    // 正常模式按本轮准备的布局及生产来源筛选场景色. 安全模式另取已接受快照, 不确认当前请求.
     // 不重放 Advance 或编辑事务, 不在会话状态中保存图版本或取得原生目标.
     PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                    Core::FrameArena &arena, const Renderer::PreparedViewOutput &outputs,
@@ -743,9 +790,9 @@ namespace Physara::Editor
         {
             return Core::BoundedText("Editor UI prepare requires a renderer and the sealed frame's pixel extent");
         }
-        const auto *diagnostic = outputs.Color();
+        const auto *color = outputs.Color();
         const auto &layout = state.viewportLayout;
-        if (!diagnostic || mode != UiFrameMode::Normal)
+        if (!color || mode != UiFrameMode::Normal)
         {
             // 占位与只读旧颜色都没有本轮图像输入资格.
             state.imageInput.reset();
@@ -753,20 +800,20 @@ namespace Physara::Editor
         if (mode == UiFrameMode::SafeUi)
         {
             // 旧输出无需匹配新尺寸和请求代, 但必须来自已接受快照和本会话的 View/角色.
-            if (!outputs.IsRetained() || (diagnostic &&
-                (diagnostic->view != state.viewport.Id() ||
-                 diagnostic->role != Renderer::ViewOutputRole::DisplayColor || !diagnostic->texture)))
+            if (!outputs.IsRetained() || (color &&
+                (color->view != state.viewport.Id() ||
+                 color->role != Renderer::ViewOutputRole::DisplayColor || !color->texture)))
             {
                 return Core::BoundedText("Safe UI requires this View's retained output snapshot");
             }
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
         }
-        if (outputs.IsRetained() || (diagnostic &&
-            (!state.viewportRequest || !state.preparedViewport || diagnostic->view != state.viewportRequest->view ||
-             diagnostic->layout != *state.preparedViewport ||
+        if (outputs.IsRetained() || (color &&
+            (!state.viewportRequest || !state.preparedViewport || color->view != state.viewportRequest->view ||
+             !state.preparedViewport->Matches(*color) ||
              outputs.RequestRevision() != state.viewportRequest->requestRevision)))
         {
-            // 请求与输出不匹配时仅向合成器提供空的 View 输出, 该 token 进入本帧占位解析.
+            // 生产来源失配时在图内采样前改用占位并撤销命中, 尺寸相同的旧场景也适用.
             state.imageInput.reset();
             return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
         }

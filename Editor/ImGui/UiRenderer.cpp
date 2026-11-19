@@ -479,6 +479,7 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::SceneLightTableRejected: return UiFallback::SceneLightTableRejected;
         case Renderer::ViewSettingReason::EnvironmentPending: return UiFallback::EnvironmentPending;
         case Renderer::ViewSettingReason::EnvironmentRejected: return UiFallback::EnvironmentRejected;
+        case Renderer::ViewSettingReason::DisplayUnavailable: return UiFallback::DisplayUnavailable;
         default: return UiFallback::MissingOutput;
         }
     }

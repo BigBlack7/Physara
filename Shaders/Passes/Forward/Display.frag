@@ -3,7 +3,7 @@
 #extension GL_EXT_samplerless_texture_functions : require
 #include <Interface/Fragment.glsl>
 
-// 同尺寸逐像素读取. 目标附件负责 sRGB 存储, UI 采样获得显示线性值.
+// 诊断限幅只逐像素读工作色. 需要缩放时写线性中间附件, 否则直接由最终 sRGB 附件编码.
 void main()
 {
     vec3 color = texelFetch(workingColor, ivec2(gl_FragCoord.xy), 0).rgb;

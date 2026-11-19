@@ -24,7 +24,7 @@ namespace Physara::Runtime
             return Core::BoundedText("Cannot locate the product executable directory");
         }
         const std::filesystem::path executable(std::wstring_view(module.data(), length));
-        // Assets 相对 exe 目录, Shader 包相对同一目录按生成布局定位.
+        // Assets 与包路径都以 exe 为基准. 这里只定位; 未选用的 FXAA 或缩放包不在此处打开.
         const auto directory = executable.parent_path();
         return ResourceLocations{directory, (directory / EditorUiPackageRelative).lexically_normal(),
                                 {(directory / StaticForwardPackageRelative).lexically_normal(),
@@ -32,6 +32,9 @@ namespace Physara::Runtime
                                  (directory / ForwardDisplayPackageRelative).lexically_normal(),
                                  (directory / StaticForwardPhysicalPackageRelative).lexically_normal(),
                                  (directory / StaticForwardIblPackageRelative).lexically_normal(),
-                                 (directory / ForwardSkyPackageRelative).lexically_normal()}};
+                                 (directory / ForwardSkyPackageRelative).lexically_normal(),
+                                 (directory / DisplayColorGradingPackageRelative).lexically_normal(),
+                                 (directory / DisplayFxaaPackageRelative).lexically_normal(),
+                                 (directory / DisplayScalePackageRelative).lexically_normal()}};
     }
 }

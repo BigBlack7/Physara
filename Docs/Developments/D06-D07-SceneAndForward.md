@@ -169,11 +169,13 @@
 
 **职责位置：** Renderer/PostProcess、Shaders/PostProcess、Editor/View。**前置：** [D07-T02](#d07-t02)、[D07-T04](#d07-t04)。**架构依据：** [9.4](../Architecture.md#display-output)、[conventions](../Architecture.md#conventions)。
 
-- [ ] 接入 Architecture 固定 Filament ACESToneMapper/ColorGrading profile 与成对原色转换，形成 display-linear ViewOutput。
-- [ ] 打通 None/FXAA、输出尺寸和基础空间缩放的图组装，FXAA 按感知亮度合同取样，不重复曝光/tonemap。
-- [ ] 验证 SRGB 颜色纹理、线性数据纹理、自发光、高亮、UI 色块和窗口编码，保留 HDR 比较出口。
+- [x] 接入 Architecture 固定 Filament ACESToneMapper/ColorGrading profile 与成对原色转换，形成 display-linear ViewOutput。
+- [x] 打通 None/FXAA、输出尺寸和基础空间缩放的图组装，FXAA 按感知亮度合同取样，不重复曝光/tonemap。
+- [x] 验证 SRGB 颜色纹理、线性数据纹理、自发光、高亮、UI 色块和窗口编码，保留 HDR 比较出口。
 
 **完成条件：** 首个 PBR 纵向切片已有正式显示链，后续镜头/时域阶段只扩充相应 Pass。
+
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-19-add-forward-display-profile/tasks.md#final-verification)
 
 <a id="d07-t06"></a>
 ### D07-T06 · 开放核心物理编辑并建立参考场景

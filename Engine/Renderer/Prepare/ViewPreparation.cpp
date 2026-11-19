@@ -30,6 +30,7 @@ namespace Physara::Renderer
         double nearPlane;
         std::optional<double> farPlane;
         bool orthographic;
+        bool fixedAspect; ///< 显式透视比例或正交画幅须分别在两张栅格留边; 自适应透视则共享显示投影.
     };
 
     /// @brief 从有效渲染像素换算的 NDC 参数, 将实际偏移与稳定裁剪上界分开保存.
@@ -68,10 +69,10 @@ namespace Physara::Renderer
         {
             const auto aspect = camera->aspectRatio.value_or(static_cast<double>(output.width) / output.height);
             const auto scale = 1.0 / std::tan(camera->yfov * 0.5);
-            return {aspect, scale / aspect, scale, camera->znear, camera->zfar, false};
+            return {aspect, scale / aspect, scale, camera->znear, camera->zfar, false, camera->aspectRatio.has_value()};
         }
         const auto &camera = std::get<Asset::ModelOrthographic>(projection);
-        return {camera.xmag / camera.ymag, 1.0 / camera.xmag, 1.0 / camera.ymag, camera.znear, camera.zfar, true};
+        return {camera.xmag / camera.ymag, 1.0 / camera.xmag, 1.0 / camera.ymag, camera.znear, camera.zfar, true, true};
     }
 
     /// @brief 以限制轴居中保留比例. 非限制轴向下取整, 余下的奇数像素位于右或下.
@@ -313,7 +314,7 @@ namespace Physara::Renderer
         m_Lights.clear();
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
-                            .reason = view.CheckViewport(request)};
+                            .preview = view.Preview(), .reason = view.CheckViewport(request)};
         if (result.reason != ViewSettingReason::None)
         {
             return result;
@@ -327,7 +328,7 @@ namespace Physara::Renderer
             result.reason = ViewSettingReason::CameraUnavailable;
             return result;
         }
-        const auto parameters = Parameters(camera->projection, request->extent);
+        const auto parameters = Parameters(camera->projection, request->outputExtent);
         if (!std::isfinite(parameters.aspect) || parameters.aspect <= 0 ||
             !std::isfinite(parameters.scaleX) || parameters.scaleX <= 0 ||
             !std::isfinite(parameters.scaleY) || parameters.scaleY <= 0)
@@ -335,13 +336,16 @@ namespace Physara::Renderer
             result.reason = ViewSettingReason::InvalidProjection;
             return result;
         }
-        const auto layout = FitImage(request->extent, parameters.aspect);
-        if (!layout)
+        // 固定投影在各栅格独立留边; 自适应透视取显示宽高比, 使用各栅格的全部像素.
+        const auto display = FitImage(request->outputExtent, parameters.aspect);
+        const auto render = parameters.fixedAspect ? FitImage(request->renderExtent, parameters.aspect) :
+            std::optional(ViewImageLayout{request->renderExtent, {0, 0, request->renderExtent}});
+        if (!display || !render)
         {
             result.reason = ViewSettingReason::InvalidImageRect;
             return result;
         }
-        const auto offsets = SampleOffsets(sampling, layout->RenderExtent());
+        const auto offsets = SampleOffsets(sampling, render->rect.extent);
         if (!offsets)
         {
             result.reason = ViewSettingReason::InvalidSampling;
@@ -399,7 +403,8 @@ namespace Physara::Renderer
             return result;
         }
         result.camera = snapshot;
-        result.layout = *layout;
+        result.requestedAa = document.antiAliasing;
+        result.layouts = {*render, *display};
         result.scene = frame;
         result.primitives = m_Primitives;
         result.lights = m_Lights;

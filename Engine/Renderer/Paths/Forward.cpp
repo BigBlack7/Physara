@@ -15,7 +15,6 @@ namespace Physara::Renderer
 {
     using Detail::BufferBoundary;
     using Detail::DepthFormat;
-    using Detail::DisplayFormat;
     using Detail::TextureBoundary;
     using Detail::WorkingFormat;
 
@@ -44,8 +43,7 @@ namespace Physara::Renderer
             m_Data->activeLights.reset();
             m_Data->lightLayout = nullptr;
             m_Data->environment = {};
-            m_Data->displayPipeline = nullptr;
-            m_Data->displayLayout = nullptr;
+            m_Data->display = {};
             m_Data->degradation.reset();
         }
     }
@@ -74,6 +72,7 @@ namespace Physara::Renderer
         if (m_Data)
         {
             m_Data->uploads.Clear();
+            m_Data->display.ReleasePayload();
         }
     }
 
@@ -91,16 +90,26 @@ namespace Physara::Renderer
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None);
-        const auto extent = view.layout.outputExtent;
-        if (extent.width > m_MaxAttachmentSize || extent.height > m_MaxAttachmentSize)
+        const auto output = view.layouts.display.outputExtent;
+        const auto render = view.layouts.render.outputExtent;
+        const auto limit = std::min(m_MaxAttachmentSize, m_MaxTextureSize);
+        if (output.width > limit || output.height > limit || render.width > limit || render.height > limit)
         {
             Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Forward extent exceeds the attachment limit");
         }
-        // RGBA16F、D32 和 SRGBA8 均为单样本同尺寸, 三者有短时重叠寿命.
-        constexpr std::size_t bytesPerPixel = 8 + 4 + 4;
-        if (extent.height > ForwardAttachmentBudget / bytesPerPixel / extent.width)
+        const auto display = ResolveDisplaySettings(mode, view.requestedAa);
+        const bool fxaa = display.antiAliasing == AntiAliasing::Fxaa;
+        const bool scale = view.layouts.display != view.layouts.render;
+        // HDR/D32 常驻本图. 各后继阶段才增加线性中间色, 最终 SRGBA8 按输出尺寸计费.
+        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(scale));
+        if (render.height > ForwardAttachmentBudget / renderBytesPerPixel / render.width)
         {
             Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Forward attachments exceed the view byte budget");
+        }
+        const auto renderBytes = std::size_t(render.width) * render.height * renderBytesPerPixel;
+        if (output.height > (ForwardAttachmentBudget - renderBytes) / 4 / output.width)
+        {
+            Detail::Reject(ViewSettingReason::SceneAttachmentLimit, "Display output exceeds the view byte budget");
         }
         if (!m_Resources)
         {
@@ -123,12 +132,15 @@ namespace Physara::Renderer
         {
             data.lightTable.reset();
         }
-        data.layout = view.layout;
+        data.source = {view.view, view.scene.scene, view.scene.contentRevision, mode, *view.camera, view.layouts.render};
         data.needs = needs;
         m_Resources->Begin();
         Detail::PrepareDraws(*m_Resources, data, view, mode);
-        data.displayPipeline = m_Resources->programs.displayPipeline;
-        data.displayLayout = m_Resources->programs.displayLayout;
+        if (const auto failure = m_Resources->display.Prepare(data.display, view.layouts, display))
+        {
+            Detail::Reject(ViewSettingReason::DisplayUnavailable, failure->View());
+        }
+        data.uploads.ReserveWrites(data.display.UploadBytes(), data.display.UploadCount());
         return std::nullopt;
     }
     catch (const ForwardFailure &failure)
@@ -283,7 +295,7 @@ namespace Physara::Renderer
                                     const Detail::ForwardFrameData &frame, bool depthOnly, RasterReads &reads)
     {
         SceneRaster raster;
-        raster.viewport = RasterViewport(frame.layout.rect);
+        raster.viewport = RasterViewport(frame.source.layout.rect);
         if (frame.draws.empty())
         {
             return raster;
@@ -508,7 +520,7 @@ namespace Physara::Renderer
             [&](PassBuilder &builder, SkyPass &data)
             {
                 data = {cube, constants, environment.sampler.Get(), environment.skyPipeline.Get(),
-                        environment.skyLayout.Get(), RasterViewport(frame.layout.rect)};
+                        environment.skyLayout.Get(), RasterViewport(frame.source.layout.rect)};
                 color = builder.Write(color, GraphUsage::ColorAttachment, {.load = LoadOp::Load});
                 return color.IsValid() && builder.Read(cube, GraphUsage::Sampled) &&
                        builder.Read(constants.resource, constants.usage, constants.range);
@@ -533,66 +545,27 @@ namespace Physara::Renderer
             })));
     }
 
-    /// @brief 显示转换只读同图工作颜色, 布局和 Pipeline 借用本槽持有的固定对象.
-    struct DisplayPass
-    {
-        TextureId workingColor;
-        RHI::GraphicsPipeline *pipeline;
-        RHI::BindingLayout *layout;
-    };
-
-    /// @brief 工作色是瞬态图资源. 只在其物化后用授权的实际纹理产生显示转换绑定.
-    static TextureId AddDisplay(RenderGraph &graph, const Detail::ForwardFrameData &frame, TextureId input,
-                                 TextureId target)
-    {
-        TextureId display;
-        static_cast<void>(TakeGraph(graph.AddPass<DisplayPass>("Forward display preview",
-            [&](PassBuilder &builder, auto &data)
-            {
-                data = {input, frame.displayPipeline.Get(), frame.displayLayout.Get()};
-                display = builder.Write(target, GraphUsage::ColorAttachment,
-                    {.load = LoadOp::Discard, .coverage = WriteCoverage::Full});
-                return display.IsValid() && builder.Read(input, GraphUsage::Sampled);
-            }, +[](PassResources &resources, const DisplayPass &data, RHI::CommandList &commands) noexcept -> GraphFailure
-            {
-                RHI::GraphicsState state;
-                auto *framebuffer = resources.Framebuffer();
-                state.SetFramebuffer(framebuffer).SetPipeline(data.pipeline).AddBindingSet(resources.BindingSet(0));
-                state.viewport.AddViewport(framebuffer->GetFramebufferInfo().GetViewport());
-                commands.SetGraphicsState(state);
-                commands.Draw(RHI::DrawArguments().SetVertexCount(3).SetInstanceCount(1));
-                return std::nullopt;
-            }, +[](PassPreparation &preparation, const DisplayPass &data) -> GraphFailure
-            {
-                if (auto binding = preparation.SampledTexture(0, data.workingColor))
-                {
-                    static_cast<void>(preparation.CreateBindingSet(*data.layout, std::span(&*binding, 1)));
-                }
-                return std::nullopt;
-            })));
-        return display;
-    }
-
     GraphResult<ForwardOutput> ForwardFrame::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
     try
     {
-        assert(m_Data && m_Data->displayPipeline);
+        assert(m_Data);
         const auto &frame = *m_Data;
         const auto firstWrite = uploads.size();
+        // LUT 属于纹理写, 设备准入要求它在本图所有缓冲上传之前声明.
+        const auto lut = TakeGraph(frame.display.DeclareLut(graph, uploads));
         auto versions = DeclareUploads(graph, frame.uploads, uploads);
-        const auto extent = frame.layout.outputExtent;
+        const auto extent = frame.source.layout.outputExtent;
         ForwardOutput output;
+        output.source = frame.source;
         output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
         output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = WorkingFormat, .debugName = "Forward linear working color", .isRenderTarget = true}));
-        const auto display = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
-            .format = DisplayFormat, .debugName = "Forward viewport color", .isRenderTarget = true,
-            .initialState = RHI::ResourceStates::ShaderResource, .keepInitialState = true}));
         PrepareSurface(graph, versions, frame, output.depth);
         ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
         AddSky(graph, versions, frame, output.workingColor);
-        output.displayColor = AddDisplay(graph, frame, output.workingColor, display);
+        // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
+        output.displayColor = TakeGraph(frame.display.Declare(graph, uploads, output.workingColor, lut));
         output.m_Uploads.reserve(frame.uploads.writes);
         for (const auto &entry : std::span(uploads).subspan(firstWrite))
         {
@@ -612,6 +585,7 @@ namespace Physara::Renderer
         {
             return;
         }
+        m_Data->display.Confirm();
         // 按整批确认驻留. 环境纹理的所有面和 mip 共用一个 accepted 位, 前缀提交保活但没有确认资格.
         for (const auto &upload : m_Data->uploads.textures)
         {

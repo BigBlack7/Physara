@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "DisplayScale",
+  "interface": "DisplayPost",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "PostProcess/DisplayScale.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

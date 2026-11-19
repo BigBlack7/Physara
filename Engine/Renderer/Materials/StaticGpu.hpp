@@ -13,6 +13,7 @@
 
 #include "../Paths/Forward.hpp"
 #include "../Lighting/EnvironmentCache.hpp"
+#include "../PostProcess/Display.hpp"
 
 namespace Physara::Renderer::Detail
 {
@@ -152,7 +153,8 @@ namespace Physara::Renderer::Detail
     };
 
     /// @brief 帧拥有的写入内容. 每个普通缓冲从 0 写精确范围, 纹理按完整 mip 层写入.
-    /// @note 仅在准备阶段追加, Declare 后保持不变至图执行结束. 预算失败中止整份候选.
+    /// @note 仅在准备阶段追加, Declare 后保持不变至图执行结束. bytes/writes 也计入显示阶段,
+    /// 但其矩形常量和 LUT 像素不在这三个容器中. 预算失败中止整份候选.
     struct UploadBatch
     {
         std::vector<BufferUpload> buffers;
@@ -209,11 +211,11 @@ namespace Physara::Renderer::Detail
     };
 
     /// @brief 同槽本轮的只读 Draw, 绑定和上传. view/viewValues 和普通灯表跨安全复用保留.
-    /// Reset 解除本次 Draw, 材质, 活动灯表和显示引用, layout/needs 在下次准备时替换.
+    /// Reset 解除本次 Draw, 材质, 活动灯表和显示引用. 下次准备替换 HDR 来源和表面需求.
     /// @note 图回调借用这里保有的 RHI 对象; graph 析构后才可释放载荷, 同槽完成后才可重置 Draw.
     struct ForwardFrameData
     {
-        ViewImageLayout layout;
+        ForwardWorkingSource source;
         ViewResourceNeeds needs;
         std::shared_ptr<ConstantRow> view;
         std::optional<StaticAbi::ForwardView> viewValues;
@@ -224,15 +226,14 @@ namespace Physara::Renderer::Detail
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
         UploadBatch uploads;
-        RHI::GraphicsPipelineHandle displayPipeline;
-        RHI::BindingLayoutHandle displayLayout;
+        PostProcess::DisplayFrame display;
         std::optional<Core::BoundedText> degradation;
     };
 
     /// @brief 初始化完整程序代, 按真实布局和阶段从固定数量的 Pipeline 中准备所需变体.
     struct ForwardPrograms
     {
-        /// @brief 一次取得三份 ABI 匹配的程序及显示 Pipeline, 任一失败由构造展开释放局部资源.
+        /// @brief 取得基线场景程序及布局, 任一失败由构造展开释放局部资源.
         ForwardPrograms(RHI::Device &device, const ForwardPackagePaths &paths);
         /// @brief 按属性, 镜像, 双面和阶段惰性创建并缓存 Pipeline, 失败抛 ForwardFailure.
         [[nodiscard]] RHI::GraphicsPipelineHandle GeometryPipeline(RHI::Device &device, std::uint8_t layout,
@@ -251,8 +252,6 @@ namespace Physara::Renderer::Detail
         std::filesystem::path skyPath;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
-        RHI::BindingLayoutHandle displayLayout;
-        RHI::GraphicsPipelineHandle displayPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
         std::array<RHI::GraphicsPipelineHandle, 8 * 4 * 3 * 3> pipelines;
     };
@@ -275,6 +274,7 @@ namespace Physara::Renderer::Detail
         RHI::Device &device;
         std::uint32_t maxTextureSize;
         ForwardPrograms programs;
+        PostProcess::DisplayDevice display;
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
         std::size_t preparedBytes = 0;

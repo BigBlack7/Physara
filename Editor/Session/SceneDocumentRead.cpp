@@ -513,7 +513,7 @@ namespace Physara::Editor::Detail
         const auto pose = field.Required("cameraPose");
         pose.Object({"translation", "rotation"});
         const auto requested = field.Required("requested");
-        requested.Object({"renderScale", "physicalCamera"});
+        requested.Object({"renderScale", "physicalCamera", "antiAliasing"});
         const auto camera = field.Required("cameraEntityId");
         Renderer::ViewDocumentRequests view{.cameraPose = ReadPose(pose),
                                             .renderScale = requested.Required("renderScale").Number<float>()};
@@ -525,6 +525,19 @@ namespace Physara::Editor::Detail
         {
             // 仅整个对象缺席时沿用 View 缺省; 显式 null, 缺字段和未知字段都交给严格读取拒绝.
             view.physicalCamera = ReadPhysicalCamera(*physical);
+        }
+        // 缺席和显式 none 都保留 View 缺省. 显式 null 走 Text 的字段错误, 不是缺席.
+        if (const auto aa = requested.Optional("antiAliasing"))
+        {
+            const auto value = aa->Text();
+            if (value == "fxaa")
+            {
+                view.antiAliasing = Renderer::AntiAliasing::Fxaa;
+            }
+            else if (value != "none")
+            {
+                aa->Error("Expected none or fxaa");
+            }
         }
         if (auto error = Renderer::View::ValidateDocumentRequests(view))
         {
