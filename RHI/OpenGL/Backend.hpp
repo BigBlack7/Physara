@@ -123,6 +123,9 @@ namespace Physara::RHI::OpenGL
     class OpenGLDevice final : public RefCounter<RHI::Device>
     {
     public:
+        /// @brief owner 线程读取命令与原生绑定缓存各自记录的事实.
+        [[nodiscard]] GraphicsOperationCounts GraphicsCounts() const noexcept;
+
         explicit OpenGLDevice(const DeviceDesc &desc);
         /// @brief 校验闭合包和源附件后, 在原包登记末端 FBO lease 并委托 ContextState 建立复制条件.
         [[nodiscard]] bool PrepareWindowPresentation(CommandList *commands, Framebuffer *source, bool srgb);
@@ -338,6 +341,8 @@ namespace Physara::RHI::OpenGL
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
+        // Draw, 上传和屏障由 owner 在发出命令处累计. GraphicsCounts 另从 context 缓存取得实际绑定数.
+        GraphicsOperationCounts m_CommandCounts;
         std::unique_ptr<NativeDeletion> m_DummySampler;
         bool m_WorkFailed = false;
         friend class OpenGLCommandList;

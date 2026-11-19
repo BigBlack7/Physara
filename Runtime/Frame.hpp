@@ -14,6 +14,8 @@
 #include <Renderer/Paths/Forward.hpp>
 #include <Session/EditorSession.hpp>
 
+#include "FrameStatistics.hpp"
+
 namespace Physara::Runtime
 {
     inline constexpr std::size_t FrameSlotCount = Platform::MaxPresentationSlots;
@@ -51,11 +53,14 @@ namespace Physara::Runtime
     /// @pre slot 对应 presentation 的安全取得, commands 来自同一宿主且无活动录制.
     /// editorFrame 来自本轮尚未失效的 Advance, editor 已装配 Scene 文档.
     /// remainingDiagnosticBytes 已扣除其它槽的在途额度.
+    /// @param editorSeconds 产生 editorFrame 的 Advance 实测秒数. 与本次 UI 准备时间共同归入 UI 阶段.
+    /// @param statistics 此宿主的查询及统计 owner. 只在 View 接受本次场景输出后发布场景统计.
     /// @return 正常或可恢复状态; 文本错误表示必须退出, 未证明完成的工作仍归 RHI/宿主收拢.
     /// @note 准备值和图的 CPU 借用在返回前结束, 已发 GPU 引用由原物理包保活.
     [[nodiscard]] std::variant<FrameStatus, Core::BoundedText> RenderFrame(
         Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
         Renderer::ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
-        std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics);
+        std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
+        FrameStatistics &statistics, double editorSeconds);
 }

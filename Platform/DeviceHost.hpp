@@ -15,6 +15,8 @@
 #include <variant>
 
 #include "Input.hpp"
+#include <GraphicsStatistics.hpp>
+
 #include "Presentation.hpp"
 
 #include <Core/Error.hpp>
@@ -260,6 +262,9 @@ namespace Physara::Platform
         /// @brief 仅在 owner/Ready 状态借出 Validation Device, 其他情况返回空指针.
         /// @note 不增加引用, 借用止于成功 Shutdown; 构造 owning handle 取得的额外引用须先释放.
         [[nodiscard]] RHI::Device *GetDevice() const noexcept;
+        /// @brief 在就绪宿主的 owner 线程复制原生图形计数. 调度方可对同一设备的两次采样取差.
+        /// @return 所属线程及就绪条件满足时返回当时的累计值, 其它情况返回全零.
+        [[nodiscard]] RHI::GraphicsOperationCounts ReadGraphicsCounts() const noexcept;
         /// @brief 在 owner/Ready 状态读取 cube 目标的实测采样能力和面宽上限.
         /// @return 无有效设备时返回 None 并清零 maxEdge. 可用时面宽为设备上限, 格式用途单独判断.
         [[nodiscard]] RHI::FormatSupport QueryCubeFormatSupport(RHI::Format format, std::uint32_t &maxEdge) const noexcept;

@@ -4,6 +4,7 @@
 /// @brief context 的唯一原生绑定/固定状态缓存, 不代替逻辑 Graphics 状态, 用途 tracker 或 GPU 完成.
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include <glad/gl.h>
@@ -80,6 +81,8 @@ namespace Physara::RHI::OpenGL
         {
             return m_ClearFramebuffer;
         }
+        /// @brief 复制 context 的对象绑定调用累计值, 包含实际解绑. 命中缓存的请求跳过计数.
+        [[nodiscard]] std::uint64_t BindingCount() const noexcept { return m_BindingCount; }
 
     private:
         // known=false 表示必须重新发出 native 设置; 保存的名称只是缓存, 不承担资源保活.
@@ -147,5 +150,6 @@ namespace Physara::RHI::OpenGL
         bool m_Known = false;
         GLuint m_UnpackBuffer = 0;
         bool m_QueryReadKnown = false; ///< true 只表示已建立 GL_QUERY_BUFFER=0, 不表示任何查询已 ready.
+        std::uint64_t m_BindingCount{}; ///< 实际发出的资源和管线对象绑定调用, 不受缓存失效影响.
     };
 }

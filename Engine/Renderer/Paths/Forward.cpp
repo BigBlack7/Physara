@@ -21,6 +21,16 @@ namespace Physara::Renderer
     ForwardFrame::ForwardFrame() noexcept = default;
     ForwardFrame::~ForwardFrame() = default;
 
+    ForwardWorkCounts ForwardFrame::WorkCounts() const noexcept
+    {
+        if (!m_Data)
+        {
+            return {};
+        }
+        const auto &lights = m_Data->activeLights;
+        return {m_Data->draws.size(), lights ? std::size_t(lights->directionalCount) + lights->localCount : 0};
+    }
+
     bool ForwardOutput::HasLiveUploads(const CompiledGraphPlan &plan) const noexcept
     {
         return std::ranges::any_of(m_Uploads, [&](PassId pass) { return IsLivePass(plan, pass); });
@@ -84,6 +94,17 @@ namespace Physara::Renderer
     }
 
     ForwardRenderer::~ForwardRenderer() = default;
+
+    ForwardResidencyCounts ForwardRenderer::ResidencyCounts() const noexcept
+    {
+        if (!m_Resources)
+        {
+            return {};
+        }
+        // 每个天空或反射 cube 缓存键算一项. 共享 DFG 和白纹理由单独的句柄持有.
+        return {m_Resources->geometry.size(), m_Resources->textures.size(), m_Resources->materials.size(),
+                m_Resources->environmentTextures.size()};
+    }
 
     std::optional<ForwardFailure> ForwardRenderer::Prepare(ForwardFrame &frame, const PreparedView &view,
                                                             PreviewMode mode, ViewResourceNeeds needs)

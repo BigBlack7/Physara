@@ -325,7 +325,8 @@ namespace Physara::Editor::Detail
 
     /// @brief 渲染 View 的物理请求及对应的当前、已接受场景曝光. 几何来源由当前相机选择决定.
     static void DrawPhysicalCamera(const Scene::Scene *scene, const Scene::Camera *projection,
-                                   const Renderer::View &view, bool allowEdits, WorkspaceFrame &frame)
+                                   const Renderer::View &view, bool allowEdits, WorkspaceFrame &frame,
+                                   bool showLens)
     {
         const auto &requests = view.DocumentRequests();
         const auto &physical = requests.physicalCamera;
@@ -342,18 +343,22 @@ namespace Physara::Editor::Detail
         DrawPhysicalField("Shutter (s)", physical, &Request::shutterSeconds, 1.0, frame);
         DrawPhysicalField("ISO", physical, &Request::iso, 1.0, frame);
         DrawPhysicalField("Exposure compensation (EV)", physical, &Request::exposureCompensationEv, 1.0, frame);
-        DrawPhysicalField("Sensor height (mm)", physical, &Request::sensorHeightMeters, MillimetersPerMeter, frame);
-        if (navigation)
+        // Inspector 与 View Settings 读同一曝光请求. 只有展示镜头的入口才需要当前相机投影.
+        if (showLens)
         {
-            DrawPhysicalField("Navigation focal length (mm)", physical, &Request::navigationFocalLengthMeters,
-                              MillimetersPerMeter, frame);
+            DrawPhysicalField("Sensor height (mm)", physical, &Request::sensorHeightMeters, MillimetersPerMeter, frame);
+            if (navigation)
+            {
+                DrawPhysicalField("Navigation focal length (mm)", physical, &Request::navigationFocalLengthMeters,
+                                  MillimetersPerMeter, frame);
+            }
+            DrawPhysicalField("Focus distance (m)", physical, &Request::focusDistanceMeters, 1.0, frame);
         }
-        DrawPhysicalField("Focus distance (m)", physical, &Request::focusDistanceMeters, 1.0, frame);
         ImGui::EndDisabled();
         ImGui::PopID();
         ImGui::PopID();
 
-        if (navigation || projection)
+        if (showLens && (navigation || projection))
         {
             const auto lens = view.ResolveLens(projection);
             if (lens.yfov)
@@ -394,6 +399,13 @@ namespace Physara::Editor::Detail
         }
     }
 
+    void ScenePanels::DrawExposure(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits,
+                                   WorkspaceFrame &frame)
+    {
+        ImGui::SeparatorText("Main View exposure");
+        DrawPhysicalCamera(scene, nullptr, view, allowEdits, frame, false);
+    }
+
     // 下拉框打开时才遍历相机实体. 标签可重名, 控件身份用 handle, 提交引用用持久化稳定 ID.
     void ScenePanels::DrawCamera(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits,
                                   WorkspaceFrame &frame)
@@ -432,6 +444,6 @@ namespace Physara::Editor::Detail
         ImGui::EndDisabled();
         const auto *projection = entity && entity->record.properties.camera ? &*entity->record.properties.camera :
             nullptr;
-        DrawPhysicalCamera(scene, projection, view, allowEdits, frame);
+        DrawPhysicalCamera(scene, projection, view, allowEdits, frame, true);
     }
 }

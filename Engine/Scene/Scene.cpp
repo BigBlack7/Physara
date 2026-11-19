@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -37,6 +38,16 @@ namespace Physara::Scene
         error.Append(": ");
         error.Append(reason);
         throw error;
+    }
+
+    void RejectPrimitiveOverride(std::string_view id, std::uint32_t slot, std::string_view reason)
+    {
+        std::array<char, std::numeric_limits<std::uint32_t>::digits10 + 1> number;
+        const auto end = std::to_chars(number.data(), number.data() + number.size(), slot).ptr;
+        Core::BoundedText field("primitiveOverrides[");
+        field.Append({number.data(), static_cast<std::size_t>(end - number.data())});
+        field.Append("]");
+        Reject(id, field.View(), reason);
     }
 
     SceneNode::SceneNode(entt::entity token, EntityHandle identity, EntityId id)
@@ -103,16 +114,36 @@ namespace Physara::Scene
 
     Scene::~Scene() = default;
 
+    std::optional<Core::BoundedText> CheckEnvironment(const SceneEnvironment &environment) noexcept
+    {
+        const auto &settings = environment.settings;
+        if (!environment.source)
+        {
+            return Core::BoundedText("Environment source requires a published HDR version");
+        }
+        if (!IsValidPose(Pose{{}, settings.rotation}))
+        {
+            return Core::BoundedText("Environment rotation must be a finite unit quaternion");
+        }
+        if (!std::isfinite(settings.intensity) || settings.intensity < 0)
+        {
+            return Core::BoundedText("Environment intensity must be finite and nonnegative");
+        }
+        if (!(settings.lighting || settings.sky))
+        {
+            return Core::BoundedText("Enable at least one environment role or remove the environment");
+        }
+        return std::nullopt;
+    }
+
     Scene::Creation Scene::Create(std::span<const EntityRecord> records, std::stop_token stop,
                                   std::optional<SceneEnvironment> environment)
     {
         if (environment)
         {
-            const auto &settings = environment->settings;
-            if (!environment->source || !IsValidPose(Pose{{}, settings.rotation}) ||
-                !std::isfinite(settings.intensity) || settings.intensity < 0 || !(settings.lighting || settings.sky))
+            if (const auto error = CheckEnvironment(*environment))
             {
-                return Core::BoundedText("Invalid scene environment or missing CPU source");
+                return *error;
             }
         }
         const auto id = AllocateSceneId();
@@ -420,7 +451,7 @@ namespace Physara::Scene
             if (!mesh || !FindPrimitive(*mesh, command.primitiveSlot) ||
                 (command.value && command.value->primitiveSlot != command.primitiveSlot))
             {
-                Reject(node.record.id, "primitiveOverrides", "Unknown Primitive slot");
+                RejectPrimitiveOverride(node.record.id, command.primitiveSlot, "Unknown or mismatched Primitive slot");
             }
             auto after = node.record;
             auto found = std::ranges::lower_bound(after.overrides, command.primitiveSlot, {},
@@ -458,6 +489,15 @@ namespace Physara::Scene
                 after.overrides.erase(found);
             }
             Replace(node, std::move(after));
+        }
+
+        /// @brief 仅在环境请求变化时固定前后版本, 留待提交统一校验.
+        void Prepare(const SetEnvironment &command)
+        {
+            if (command.value != m_State.environment)
+            {
+                m_Change.environment = EnvironmentChange{m_State.environment, command.value};
+            }
         }
 
         const SceneState &m_State;
@@ -506,6 +546,16 @@ namespace Physara::Scene
                 return Core::BoundedText("Scene history no longer matches its target");
             }
         }
-        return undo ? m_State->Commit({change.scene, change.after, change.before}) : m_State->Commit(change);
+        if (!undo)
+        {
+            return m_State->Commit(change);
+        }
+        Change reversed{change.scene, change.after, change.before};
+        if (change.environment)
+        {
+            // Commit 用 before 核对当前值. 交换两端后, 撤销与重做共用同一个校验和版本推进入口.
+            reversed.environment = EnvironmentChange{change.environment->after, change.environment->before};
+        }
+        return m_State->Commit(reversed);
     }
 }

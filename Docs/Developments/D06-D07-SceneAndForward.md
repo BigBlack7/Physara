@@ -182,10 +182,12 @@
 
 **职责位置：** Editor/Panels、Commands、Assets/Scenes。**前置：** [D07-T03](#d07-t03)、[D07-T04](#d07-t04)、[D07-T05](#d07-t05)。**架构依据：** [2.3](../Architecture.md#edits)、[4.4](../Architecture.md#physical-inputs)、[12.1](../Architecture.md#tests)、[12.2](../Architecture.md#benchmark)。
 
-- [ ] 接入实例材质因子/纹理覆盖、物理灯、环境和曝光 Inspector，显示导入支持范围与 Pending/失败原因；修改 Scene 覆盖与主 View 请求，不改写共享 glTF/GLB。
-- [ ] 建立材质球、标准尺度、已知光照、HDR 环境和非对称方向测试，固定输入 hash、曝光和线性/HDR 误差口径。
-- [ ] 采集 CPU/RHI 基本计数与资源数量，接好 GPU timer 指标接口，原生 query 就绪后再填时延；真实比较结论才保存长期性能报告。
+- [x] 接入实例材质因子/纹理覆盖、物理灯、环境和曝光 Inspector，显示导入支持范围与 Pending/失败原因；修改 Scene 覆盖与主 View 请求，不改写共享 glTF/GLB。
+- [x] 建立材质球、标准尺度、已知光照、HDR 环境和非对称方向测试，固定输入 hash、曝光和线性/HDR 误差口径。
+- [x] 采集 CPU/RHI 基本计数与资源数量，接好 GPU timer 指标接口，原生 query 就绪后再填时延；真实比较结论才保存长期性能报告。
 
 **完成条件：** 可加载、编辑并正确显示标准 PBR 场景，后续阶段有统一视觉/数值和成本基线。
 
-**D07 阶段出口：** 标准静态场景在固定曝光下完成直接光+IBL 的核心 PBR；有 HDR/数值参考，视口与窗口颜色一致，None/FXAA 已可用。
+**状态：** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-19-add-physical-scene-authoring/tasks.md#final-verification)
+
+**D07 阶段出口：** 已通过。标准静态场景在固定曝光下完成直接光+IBL 的核心 PBR；有 HDR/数值参考，视口与窗口颜色一致，None/FXAA 已可用。 [阶段出口验收](../../openspec/changes/archive/2026-11-19-add-physical-scene-authoring/tasks.md#final-verification)

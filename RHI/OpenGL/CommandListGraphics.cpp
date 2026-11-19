@@ -239,6 +239,8 @@ namespace Physara::RHI::OpenGL
                 if (texture->m_DepthWrites[depth.subresources.baseMipLevel] > m_Device->m_TextureBarrierEpoch)
                 {
                     glTextureBarrier();
+                    // 记录已发给驱动的屏障, 后续采样同一已覆盖写入时沿用设备进度.
+                    ++m_Device->m_CommandCounts.barriers;
                     if (!m_Device->CheckNative("TextureBarrier", texture->Name()))
                     {
                         m_Packet->invalid = true;

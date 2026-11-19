@@ -30,6 +30,9 @@ namespace Physara::Editor::Detail
         /// @brief 枚举相机来源, 读取 View 镜头及曝光. 选择提交稳定 ID, 物理控件提交领域字段值.
         /// 长度输入将 mm 转为 m; Enter 的净变化才形成离散意图, allowEdits 为 false 时只读.
         void DrawCamera(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits, WorkspaceFrame &frame);
+        /// @brief Inspector 读取主 View 的四个曝光字段及最近场景曝光, 复用 View Settings 的字段事务.
+        static void DrawExposure(const Scene::Scene *scene, const Renderer::View &view, bool allowEdits,
+                                 WorkspaceFrame &frame);
         void EndRotationInput() noexcept { m_Rotation.reset(); }
 
     private:

@@ -1,0 +1,836 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Physara numerical reference geometry"
+  },
+  "extensionsUsed": [
+    "KHR_materials_unlit",
+    "KHR_materials_emissive_strength"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Neutral 1 m receiver",
+      "mesh": 0,
+      "translation": [
+        -2.5,
+        -1.2,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "Matte dielectric",
+      "mesh": 1,
+      "translation": [
+        -2.4,
+        1.0,
+        0
+      ],
+      "scale": [
+        0.58,
+        0.58,
+        0.58
+      ]
+    },
+    {
+      "name": "Smooth dielectric",
+      "mesh": 2,
+      "translation": [
+        -0.8,
+        1.0,
+        0
+      ],
+      "scale": [
+        0.58,
+        0.58,
+        0.58
+      ]
+    },
+    {
+      "name": "Matte copper",
+      "mesh": 3,
+      "translation": [
+        0.8,
+        1.0,
+        0
+      ],
+      "scale": [
+        0.58,
+        0.58,
+        0.58
+      ]
+    },
+    {
+      "name": "Smooth copper",
+      "mesh": 4,
+      "translation": [
+        2.4,
+        1.0,
+        0
+      ],
+      "scale": [
+        0.58,
+        0.58,
+        0.58
+      ]
+    },
+    {
+      "name": "HDR emissive chip",
+      "mesh": 5,
+      "translation": [
+        0,
+        -1.65,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "+X slanted edge",
+      "mesh": 6,
+      "translation": [
+        2.55,
+        -1.62,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "One meter scale X",
+      "mesh": 7,
+      "translation": [
+        -3.0,
+        -2.14,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "Zero meter tick",
+      "mesh": 8,
+      "translation": [
+        -3.0,
+        -2.14,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "One meter tick",
+      "mesh": 8,
+      "translation": [
+        -2.0,
+        -2.14,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "+Y asymmetric marker",
+      "mesh": 9,
+      "translation": [
+        2.9,
+        1.62,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Neutral meter plate",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Matte dielectric",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Smooth dielectric",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "Matte copper",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 3
+        }
+      ]
+    },
+    {
+      "name": "Smooth copper",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 4
+        }
+      ]
+    },
+    {
+      "name": "HDR chip",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 8,
+            "NORMAL": 9,
+            "TEXCOORD_0": 10
+          },
+          "indices": 11,
+          "material": 5
+        }
+      ]
+    },
+    {
+      "name": "Slanted edge",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 12,
+            "NORMAL": 13,
+            "TEXCOORD_0": 14
+          },
+          "indices": 15,
+          "material": 6
+        }
+      ]
+    },
+    {
+      "name": "One meter mark",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 16,
+            "NORMAL": 17,
+            "TEXCOORD_0": 18
+          },
+          "indices": 19,
+          "material": 7
+        }
+      ]
+    },
+    {
+      "name": "Scale endpoint",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 20,
+            "NORMAL": 21,
+            "TEXCOORD_0": 22
+          },
+          "indices": 23,
+          "material": 7
+        }
+      ]
+    },
+    {
+      "name": "Vertical marker",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 24,
+            "NORMAL": 25,
+            "TEXCOORD_0": 26
+          },
+          "indices": 27,
+          "material": 7
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Calibrated neutral receiver",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.5,
+          0.5,
+          0.5,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    },
+    {
+      "name": "Matte dielectric",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.24,
+          0.47,
+          0.58,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.85
+      }
+    },
+    {
+      "name": "Smooth dielectric",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.24,
+          0.47,
+          0.58,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.24
+      }
+    },
+    {
+      "name": "Matte copper",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.92,
+          0.48,
+          0.24,
+          1
+        ],
+        "metallicFactor": 1,
+        "roughnessFactor": 0.78
+      }
+    },
+    {
+      "name": "Smooth copper",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.92,
+          0.48,
+          0.24,
+          1
+        ],
+        "metallicFactor": 1,
+        "roughnessFactor": 0.18
+      }
+    },
+    {
+      "name": "HDR emitter",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      },
+      "emissiveFactor": [
+        1,
+        0.25,
+        0.1
+      ],
+      "extensions": {
+        "KHR_materials_emissive_strength": {
+          "emissiveStrength": 768
+        }
+      }
+    },
+    {
+      "name": "01 +X marker",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.26,
+          0.06,
+          0.08,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      },
+      "extensions": {
+        "KHR_materials_unlit": {}
+      }
+    },
+    {
+      "name": "02 +Y meter ticks",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.08,
+          0.24,
+          0.14,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      },
+      "extensions": {
+        "KHR_materials_unlit": {}
+      }
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "Geometry.bin",
+      "byteLength": 18724
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 48,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 128,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 140,
+      "byteLength": 5100
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 5240,
+      "byteLength": 5100
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 10340,
+      "byteLength": 3400
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 13740,
+      "byteLength": 4320
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18060,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18108,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18156,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18188,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18200,
+      "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18236,
+      "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18272,
+      "byteLength": 24
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18296,
+      "byteLength": 6
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18304,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18352,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18400,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18432,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18444,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18492,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18540,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18572,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18584,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18632,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18680,
+      "byteLength": 32
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 18712,
+      "byteLength": 12
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        -0.5,
+        0.0
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 425,
+      "type": "VEC3",
+      "min": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "max": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 425,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 425,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 2160,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        -0.41999998688697815,
+        -0.3100000023841858,
+        0.0
+      ],
+      "max": [
+        0.41999998688697815,
+        0.3100000023841858,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 12,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        -0.550000011920929,
+        -0.5199999809265137,
+        0.0
+      ],
+      "max": [
+        0.5,
+        0.550000011920929,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 13,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 14,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 15,
+      "componentType": 5123,
+      "count": 3,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 16,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        1.0,
+        0.03500000014901161,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 17,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 18,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 19,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 20,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        -0.0949999988079071,
+        0.0
+      ],
+      "max": [
+        0.03500000014901161,
+        0.12999999523162842,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 21,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 22,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 23,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 24,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        0.07000000029802322,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 25,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 26,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 27,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    }
+  ]
+}

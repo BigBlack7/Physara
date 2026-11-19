@@ -104,6 +104,7 @@ namespace Physara::Editor
         std::optional<Scene::EntityHandle> selection;
         std::unique_ptr<Detail::SceneDocuments> documents;
         Detail::SceneImport modelImport;
+        Detail::PhysicalEdits physicalEdits;
         const ImDrawData *drawData = nullptr; ///< 借用本轮封存数据, 随下一次 Advance 失效.
         Platform::WindowExtent extentPixels; ///< 仅在 drawData 有效时使用, 单位为 framebuffer 像素.
         // 上一轮是否可接收交互, 与本批次的窗口事实合用.
@@ -266,7 +267,7 @@ namespace Physara::Editor
         }
         try
         {
-            auto result = state.edits->ApplyScene(state.documents->Active(), view, command);
+            auto result = state.physicalEdits.ApplyScene(state.documents->Active(), view, *state.edits, command);
             state.RetireSelection();
             return result;
         }
@@ -308,6 +309,7 @@ namespace Physara::Editor
             const Detail::EditAction action = undo ? Detail::HistoryAction::Undo : Detail::HistoryAction::Redo;
             auto error = state.edits->Apply(state.edits->Id(), &view, std::span(&action, 1),
                                             &documents.Active(), documents.Frozen());
+            state.physicalEdits.RefreshSourceStatus(documents.Active());
             state.RetireSelection();
             return error;
         }
@@ -329,6 +331,7 @@ namespace Physara::Editor
         if (!result && (request.action == SceneFileAction::New || request.action == SceneFileAction::Open))
         {
             state.modelImport.Retire();
+            state.physicalEdits.Reset();
         }
         state.RetireSelection();
         return result;
@@ -381,8 +384,13 @@ namespace Physara::Editor
         auto &state = *m_State;
         if (state.documents)
         {
+            const auto before = state.documents->Active().Id();
             state.documents->Advance(assets, view, *state.edits);
             state.RetireSelection();
+            if (state.documents->Active().Id() != before || state.documents->Frozen())
+            {
+                state.physicalEdits.Reset();
+            }
             if (state.documents->Frozen())
             {
                 state.modelImport.Retire();
@@ -390,6 +398,7 @@ namespace Physara::Editor
             else if (state.documents->MainView() == view.Id())
             {
                 state.modelImport.Advance(assets, state.documents->Active(), view, *state.edits);
+                state.physicalEdits.Advance(assets, state.documents->Active(), view, *state.edits);
             }
         }
     }
@@ -397,6 +406,7 @@ namespace Physara::Editor
     void EditorSession::ShutdownSceneDocument() noexcept
     {
         m_State->modelImport.Retire();
+        m_State->physicalEdits.Reset();
         m_State->navigation.Reset();
         if (m_State->documents)
         {
@@ -479,7 +489,7 @@ namespace Physara::Editor
 
     // 先封存布局, 再按本轮输入和领域状态产生事务及像素请求.
     EditorFrame EditorSession::Advance(const Platform::HostFrameInput &input, Renderer::View *view,
-        const Platform::WindowSettings *window, Asset::AssetManager *assets)
+        const Platform::WindowSettings *window, Asset::AssetManager *assets, const FrameStatistics *statistics)
     {
         auto &state = *m_State;
         if (state.renderer)
@@ -513,8 +523,9 @@ namespace Physara::Editor
         Detail::WorkspaceFrame workspace;
         auto document = view ? SceneStatus(*view) : std::nullopt;
         Detail::WorkspaceState snapshot{scene, state.selection, view, history.Snapshot(frozen), window,
-            document ? &*document : nullptr, state.modelImport.Status(), state.editError, state.fileError,
-            state.frameDiagnostic, !discard, frozen, wasNavigating};
+            document ? &*document : nullptr, state.modelImport.Status(), state.physicalEdits.Status(),
+            state.editError, state.fileError,
+            state.frameDiagnostic, statistics, !discard, frozen, wasNavigating};
         Detail::InputClaims claims{.cursorMode = input.state.cursorMode};
         if (discard)
         {
@@ -583,6 +594,10 @@ namespace Physara::Editor
                 if (!actions.empty())
                 {
                     state.editError = history.Apply(history.Id(), view, actions, scene, frozen);
+                    if (scene)
+                    {
+                        state.physicalEdits.RefreshSourceStatus(*scene);
+                    }
                     state.RetireSelection();
                     document = view ? SceneStatus(*view) : std::nullopt;
                     snapshot.document = document ? &*document : nullptr;
@@ -621,6 +636,38 @@ namespace Physara::Editor
                 auto requests = view->DocumentRequests();
                 requests.antiAliasing = *workspace.antiAliasing;
                 state.editError = EditMainView(scene->Id(), *view, std::move(requests));
+            }
+            if (view && scene && !frozen && !discard)
+            {
+                // 控件可以来自同一批布局. 按顺序把每个字段合入当前 Scene, 文件替换在本批最后处理.
+                if (workspace.cancelPhysicalSource)
+                {
+                    state.physicalEdits.Cancel();
+                }
+                if (workspace.physicalInputError || !workspace.physicalEdits.empty())
+                {
+                    // 文本解析失败没有对应的领域命令. 保留本批首错, 同批其它字段仍逐项提交.
+                    state.editError = std::move(workspace.physicalInputError);
+                    for (const auto &edit : workspace.physicalEdits)
+                    {
+                        if (const auto error = state.physicalEdits.Apply(*scene, *view, history, edit);
+                            error && !state.editError)
+                        {
+                            state.editError = error;
+                        }
+                    }
+                }
+                if (workspace.physicalSource)
+                {
+                    if (assets)
+                    {
+                        state.physicalEdits.Begin(*assets, *scene, *workspace.physicalSource);
+                    }
+                    else
+                    {
+                        state.editError.emplace("No asset service is attached to this editor frame");
+                    }
+                }
             }
 
             if (!discard && !wasNavigating)

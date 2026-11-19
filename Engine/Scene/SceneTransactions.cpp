@@ -33,6 +33,31 @@ namespace Physara::Scene
         void Prepare(const Change &change)
         {
             CheckStop();
+            if (change.environment)
+            {
+                const auto &environment = *change.environment;
+                if (environment.before != m_State.environment)
+                {
+                    throw Core::BoundedText("Environment history no longer matches the scene");
+                }
+                if (environment.after)
+                {
+                    if (const auto error = CheckEnvironment(*environment.after))
+                    {
+                        throw *error;
+                    }
+                }
+                if (environment.after != environment.before)
+                {
+                    // 地址标记本次需要发布环境. 即使 after 为空也要保留这个地址, 以便 Publish 移除旧源.
+                    m_Environment = &environment.after;
+                    m_RenderChanged = true;
+                }
+            }
+            if (change.before.empty() && change.after.empty() && !m_Environment)
+            {
+                return;
+            }
             TrackRecords(change);
             for (auto &[id, entry] : m_Entries)
             {
@@ -91,6 +116,10 @@ namespace Physara::Scene
             }
             m_State.lastEntityId = m_LastId;
             m_State.lastGeneration = m_Generation;
+            if (m_Environment)
+            {
+                m_State.environment = *m_Environment;
+            }
             m_State.revisions = m_Revision;
             m_Created.clear();
         }
@@ -304,9 +333,12 @@ namespace Physara::Scene
             {
                 Reject(next.id, "camera", "Invalid camera parameters");
             }
-            if (value.light && (!prev || value.light != prev->properties.light) && !ValidLight(*value.light))
+            if (value.light && (!prev || value.light != prev->properties.light))
             {
-                Reject(next.id, "light", "Invalid light parameters");
+                if (const auto *error = LightError(*value.light))
+                {
+                    Reject(next.id, "light", error);
+                }
             }
             if (value.castsShadow && (!source || !source->mesh))
             {
@@ -329,11 +361,11 @@ namespace Physara::Scene
                 const auto *primitive = FindPrimitive(mesh, value.primitiveSlot);
                 if (!primitive || (last && value.primitiveSlot <= *last))
                 {
-                    Reject(next.id, "primitiveOverrides", "Invalid or repeated Primitive slot");
+                    RejectPrimitiveOverride(next.id, value.primitiveSlot, "Invalid or repeated Primitive slot");
                 }
                 if (auto error = ValidateOverride(model, *primitive, value))
                 {
-                    Reject(next.id, "primitiveOverrides", error->View());
+                    RejectPrimitiveOverride(next.id, value.primitiveSlot, error->View());
                 }
                 last = value.primitiveSlot;
             }
@@ -568,6 +600,7 @@ namespace Physara::Scene
         std::uint64_t m_LastId;
         bool m_RenderChanged{};
         bool m_CameraChanged{};
+        const std::optional<SceneEnvironment> *m_Environment{}; ///< 借用提交输入, 仅在同次 Prepare/Publish 使用.
         std::map<EntityId, Entry, std::less<>> m_Entries;
         std::vector<entt::entity> m_Created;
         std::map<EntityId, SceneNode *, std::less<>> m_NewEntries;

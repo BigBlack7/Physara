@@ -115,6 +115,8 @@ namespace Physara::RHI::OpenGL
         const auto topology = Topologies[unsigned(pipeline->GetDesc().primType)];
         // 首个可能发出的 Draw 前登记工作; 后续诊断失败也不能撤销前缀或提前释放其依赖.
         packet->issuedWork = true;
+        // instanced Draw 只发出一次 GL 调用. 该计数与绘制了多少实例或前面设置了几次状态无关.
+        ++m_Device->m_CommandCounts.draws;
         if (indexed)
         {
             glDrawElementsInstancedBaseVertexBaseInstance(

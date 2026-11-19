@@ -12,8 +12,10 @@
 #include <DeviceHost.hpp>
 
 #include "Commands/EditHistory.hpp"
+#include "Commands/PhysicalEdits.hpp"
 #include "DocumentPanel.hpp"
 #include "ScenePanels.hpp"
+#include "Session/FrameStatistics.hpp"
 #include "Session/SceneDocumentTypes.hpp"
 #include "Session/UiFrame.hpp"
 #include "Viewport/Viewport.hpp"
@@ -22,12 +24,13 @@ namespace Physara::Editor::Detail
 {
     struct InputClaims;
 
-    /// @brief 菜单及快捷键的共享动作. 前三项的序号同时索引本地面板展示状态.
+    /// @brief 菜单及快捷键的共享动作. 前四项的序号同时索引本地面板展示状态.
     enum class ActionId : std::uint8_t
     {
         ToggleHierarchy,
         ToggleInspector,
         ToggleViewSettings,
+        ToggleStatistics,
         ToggleViewport,
         NewScene,
         OpenScene,
@@ -57,6 +60,7 @@ namespace Physara::Editor::Detail
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
     /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
     /// 相机字段意图只在本批当前文档的编辑边界消费, 先于可替换 Scene 的文件操作.
+    /// physicalEdits 按收集顺序合并字段, physicalSource 单独保留最后一次确认的资源路径.
     struct WorkspaceFrame
     {
         ViewportLayout viewport;
@@ -64,6 +68,10 @@ namespace Physara::Editor::Detail
         std::optional<Scene::EntityHandle> selection;
         std::optional<CameraSource> camera;
         std::optional<PhysicalCameraEdit> physicalCamera;
+        std::vector<PhysicalEdit> physicalEdits;
+        std::optional<Core::BoundedText> physicalInputError; ///< 仅确认文本解析失败时提交诊断.
+        std::optional<PhysicalResourceIntent> physicalSource;
+        bool cancelPhysicalSource = false;
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::vector<EditAction> edits;
@@ -85,9 +93,11 @@ namespace Physara::Editor::Detail
         const Platform::WindowSettings *window;
         const SceneDocumentStatus *document;
         const SceneImportStatus &model;
+        const PhysicalResourceStatus &physicalResource;
         const std::optional<Core::BoundedText> &editError;
         const std::optional<Core::BoundedText> &fileError;
         const std::optional<FrameDiagnostic> &frameDiagnostic;
+        const FrameStatistics *statistics;
         bool allowActions;
         bool frozen;
         bool navigating;
@@ -115,7 +125,7 @@ namespace Physara::Editor::Detail
         void DrawActions(const WorkspaceState &state, WorkspaceFrame &frame);
         void DrawWindowMenu(const Platform::WindowSettings *window, WorkspaceFrame &frame, bool allowActions);
 
-        std::array<bool, 3> m_Visible{true, true, true}; ///< Hierarchy, Inspector 和 View 面板的展示状态.
+        std::array<bool, 4> m_Visible{true, true, true, false}; ///< 层级, Inspector, View 和统计面板的展示状态.
         ScenePanels m_ScenePanels;
         DocumentPanel m_Documents;
         /// @brief 控件激活期间保留 UTF-8 草稿. 退出编辑后重新从宿主快照取值.

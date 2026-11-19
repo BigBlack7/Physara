@@ -53,26 +53,34 @@ namespace Physara::Scene
         }, camera);
     }
 
-    bool ValidLight(const Light &light) noexcept
+    const char *LightError(const Light &light) noexcept
     {
         using Kind = Asset::ModelLightKind;
-        if (!std::ranges::all_of(light.color, [](float x) { return x >= 0 && x <= 1; }) ||
-            !std::isfinite(light.intensity) || light.intensity < 0 ||
-            (light.range && (!std::isfinite(*light.range) || *light.range <= 0)))
+        if (!std::ranges::all_of(light.color, [](float x) { return x >= 0 && x <= 1; }))
         {
-            return false;
+            return "Light color must be linear RGB in [0, 1]";
         }
-        switch (light.type)
+        if (!std::isfinite(light.intensity) || light.intensity < 0)
         {
-        case Kind::Directional:
-            return !light.range && light.innerConeAngle == 0 && light.outerConeAngle == 0;
-        case Kind::Point:
-            return light.innerConeAngle == 0 && light.outerConeAngle == 0;
-        case Kind::Spot:
+            return "Light intensity must be finite and nonnegative";
+        }
+        if (light.range && (!std::isfinite(*light.range) || *light.range <= 0 || light.type == Kind::Directional))
+        {
+            return "Light range must be absent or a positive finite distance on a local light";
+        }
+        if (light.type == Kind::Spot)
+        {
+            // Scene 和 v1 均存弧度. 内外锥须留有过渡区, 外锥的合法上界包含直角.
             return light.innerConeAngle >= 0 && light.outerConeAngle > light.innerConeAngle &&
-                light.outerConeAngle <= std::numbers::pi / 2;
+                light.outerConeAngle <= std::numbers::pi / 2 ? nullptr :
+                "Spot angles must satisfy 0 <= inner < outer <= 90 degrees";
         }
-        return false;
+        if (light.type != Kind::Directional && light.type != Kind::Point)
+        {
+            return "Unsupported punctual light type";
+        }
+        return light.innerConeAngle == 0 && light.outerConeAngle == 0 ? nullptr :
+            "Cone angles apply to Spot lights";
     }
 
     /// @brief 将 Scene 的 xyzw 值交给 GLM 的 wxyz 构造入口.

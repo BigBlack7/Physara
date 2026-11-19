@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include "PhysicalInspector.hpp"
 #include "Session/ActionRouter.hpp"
 
 /// @file
@@ -31,6 +32,7 @@ namespace Physara::Editor::Detail
         Panel{ActionId::ToggleHierarchy, "Hierarchy", "Hierarchy###Physara.Hierarchy", nullptr},
         Panel{ActionId::ToggleInspector, "Inspector", "Inspector###Physara.Inspector", "Ctrl+Shift+I"},
         Panel{ActionId::ToggleViewSettings, "View Settings", "View Settings###Physara.ViewSettings", nullptr},
+        Panel{ActionId::ToggleStatistics, "Frame Statistics", "Frame Statistics###Physara.FrameStatistics", nullptr},
         Panel{ActionId::ToggleViewport, "Viewport", "Viewport###Physara.Viewport", nullptr}};
 
     constexpr auto Control = static_cast<unsigned>(Platform::Modifier::Control);
@@ -120,6 +122,61 @@ namespace Physara::Editor::Detail
         else
         {
             ImGui::TextWrapped("%s, relative radiance, intensity %.4g", roles, settings.intensity);
+        }
+    }
+
+    /// @brief 直接显示 Runtime 的实际帧事实. GPU 若较晚就绪, 单独标注它所属的场景及提交.
+    static void DrawFrameStatistics(const WorkspaceState &state)
+    {
+        if (!state.statistics || !state.statistics->latestScene)
+        {
+            ImGui::TextUnformatted("Awaiting accepted scene frame");
+            return;
+        }
+        const auto &frame = *state.statistics->latestScene;
+        const auto &source = frame.source;
+        const bool current = state.scene && state.view && source.scene == state.scene->Id() &&
+            source.view == state.view->Id();
+        ImGui::Text("%s scene #%llu / View #%llu / ticket %llu", current ? "Accepted" : "Previous",
+                    static_cast<unsigned long long>(source.scene.generation),
+                    static_cast<unsigned long long>(source.view.generation),
+                    static_cast<unsigned long long>(source.submission));
+        ImGui::Text("%s / %s / %s", PreviewNames[static_cast<std::size_t>(source.preview)],
+                    source.display.profile == Renderer::DisplayProfile::AcesSdr ? "Filament ACES SDR" : "Linear clamp",
+                    source.display.antiAliasing == Renderer::AntiAliasing::Fxaa ? "FXAA" : "None");
+        ImGui::Text("Render %u x %u / Output %u x %u", source.render.outputExtent.width,
+                    source.render.outputExtent.height, source.displayLayout.outputExtent.width,
+                    source.displayLayout.outputExtent.height);
+        ImGui::Text("CPU (ms) UI %.3f / Scene & View %.3f", frame.cpu.ui * 1000, frame.cpu.scenePreparation * 1000);
+        ImGui::Text("CPU (ms) graph compile %.3f / execute %.3f", frame.cpu.graphCompile * 1000,
+                    frame.cpu.graphExecute * 1000);
+        if (frame.presentWaitSeconds)
+        {
+            ImGui::Text("Present wait (ms) %.3f", *frame.presentWaitSeconds * 1000);
+        }
+        else
+        {
+            ImGui::TextUnformatted("Window exchange skipped");
+        }
+        ImGui::Text("Draw items %zu / lights %zu / live passes %zu", frame.forward.draws, frame.forward.lights,
+                    frame.livePasses);
+        ImGui::Text("Native draws %llu / binds %llu / barriers %llu",
+                    static_cast<unsigned long long>(frame.native.draws),
+                    static_cast<unsigned long long>(frame.native.bindings),
+                    static_cast<unsigned long long>(frame.native.barriers));
+        ImGui::Text("Native uploads %llu / %llu bytes", static_cast<unsigned long long>(frame.native.uploads),
+                    static_cast<unsigned long long>(frame.native.uploadBytes));
+        ImGui::Text("Forward cache: geometry %zu / textures %zu / materials %zu / environment %zu",
+                    frame.residency.geometry, frame.residency.textures, frame.residency.materials,
+                    frame.residency.environment);
+        constexpr const char *timingStates[]{"Unavailable", "Skipped - query capacity", "Pending", "Ready", "Failed"};
+        ImGui::Text("GPU graph (scene + UI): %s", timingStates[static_cast<std::size_t>(frame.gpu)]);
+        // 面板可能先看到新场景票据, 后收到旧区间的时长. 两行分别使用各自快照中的身份.
+        if (const auto &gpu = state.statistics->latestGpu)
+        {
+            ImGui::Text("GPU %.3f ms / Scene #%llu / ticket %llu", gpu->seconds * 1000,
+                        static_cast<unsigned long long>(gpu->source.scene.generation),
+                        static_cast<unsigned long long>(gpu->source.submission));
         }
     }
 
@@ -351,6 +408,7 @@ namespace Physara::Editor::Detail
         case ToggleHierarchy:
         case ToggleInspector:
         case ToggleViewSettings:
+        case ToggleStatistics:
         case ToggleViewport:
             SetVisible(action, !Visible(action, state.edits), frame);
             break;
@@ -484,9 +542,29 @@ namespace Physara::Editor::Detail
                 case ActionId::ToggleHierarchy:
                     m_ScenePanels.DrawHierarchy(state.scene, state.selection, state.allowActions, frame);
                     break;
+                case ActionId::ToggleStatistics:
+                    DrawFrameStatistics(state);
+                    break;
                 case ActionId::ToggleInspector:
                     inspectorDrawn = true;
                     m_ScenePanels.DrawInspector(state.scene, state.selection, allowEdits, frame);
+                    if (state.scene)
+                    {
+                        DrawPhysicalInspector(*state.scene, state.selection, state.physicalResource,
+                                              allowEdits && state.view, frame);
+                    }
+                    if (state.view)
+                    {
+                        const auto &last = state.view->LastRenderedScene();
+                        ImGui::TextWrapped("Scene output - %s", ViewStatus(state.view->Settings().reason));
+                        if (last && last->environment)
+                        {
+                            const bool currentScene = state.scene && last->scene == state.scene->Id();
+                            const auto *label = currentScene ? "Last scene environment" : "Previous scene environment";
+                            DrawEnvironmentSummary(label, *last->environment);
+                        }
+                        ScenePanels::DrawExposure(state.scene, *state.view, allowEdits, frame);
+                    }
                     drawEditError();
                     break;
                 case ActionId::ToggleViewSettings:

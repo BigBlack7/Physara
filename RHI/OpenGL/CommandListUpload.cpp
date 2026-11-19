@@ -68,6 +68,8 @@ namespace Physara::RHI::OpenGL
         ++packet->writes;
         packet->logicalBytes += size;
         packet->issuedWork = true;
+        ++m_Device->m_CommandCounts.uploads;
+        m_Device->m_CommandCounts.uploadBytes += size;
         if (size <= SmallBufferLimit)
         {
             glNamedBufferSubData(native->m_Deletion->name, GLintptr(offset), GLsizeiptr(size), data);
@@ -164,6 +166,9 @@ namespace Physara::RHI::OpenGL
         ++packet->writes;
         packet->logicalBytes += layout.tightBytes;
         packet->issuedWork = true;
+        // 一次完整子资源写算一笔. 行尾填充与 PBO 对齐间隙都在拷入紧密区段时去掉.
+        ++m_Device->m_CommandCounts.uploads;
+        m_Device->m_CommandCounts.uploadBytes += layout.tightBytes;
         switch (desc.dimension)
         {
         case TextureDimension::Texture1D:

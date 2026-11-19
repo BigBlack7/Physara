@@ -19,6 +19,8 @@
 
 namespace Physara::Editor
 {
+    struct FrameStatistics;
+
     /// @brief 一次 Advance 的值结果. 暂停轮次也可以请求归还光标.
     struct EditorFrame
     {
@@ -95,8 +97,8 @@ namespace Physara::Editor
         [[nodiscard]] const SceneImportStatus &ImportStatus() const noexcept;
         /// @brief 取消匹配的实例意图, 其它消费者可继续使用共享解码结果.
         [[nodiscard]] bool CancelModelImport(std::uint64_t operation) noexcept;
-        /// @brief 在资产发布之后推进文件及模型实例, 不依赖可绘制状态或空闲 GPU 槽.
-        /// @note 先处理文件替换和选择退役, 再提交仍属于活动 Scene 的模型; 活动手势期间等待.
+        /// @brief 在资产发布后推进文档, 模型实例和待应用的纹理或环境来源, 窗口暂停时也可调用.
+        /// @note 先处理文档替换与冻结, 再将仍属于活动 Scene 的候选交给共享编辑历史. 活动手势期间等待.
         void AdvanceSceneDocument(Asset::AssetManager &assets, Renderer::View &view);
         /// @brief 所有退出路径在销毁发布目标前收拢后台文件任务.
         void ShutdownSceneDocument() noexcept;
@@ -106,12 +108,14 @@ namespace Physara::Editor
         /// events 在调用期间有效. 会话只将接入后到达的事件用于交互路由.
         /// @param view 可借用本会话登记的主 View. 面板取快照, 会话应用比例后生成本轮像素请求.
         /// 缺省或身份失配时仍可封存 UI, 可见视口由合成器显示占位.
-        /// @param assets 仅在本次调用中借用, 用于 UI 导入准入; 实例结果由 AdvanceSceneDocument 推进.
+        /// @param assets 供本轮模型和物理资源路径请求使用. 已准入的结果由 AdvanceSceneDocument 推进.
         /// @param window 可借用活动宿主的窗口设置, 供本轮菜单生成请求和显示回执.
+        /// @param statistics 本次布局借用的最近正常场景统计和最近就绪的 GPU 区间. 两者各自带提交身份.
         /// @return 当前 CPU 帧状态, 本轮离屏及独立宿主请求. 暂停时 hasDrawData 为 false.
         /// @note 进入下一次 Advance 即结束前一轮封存数据的借用, 并取消未确认的离屏准备值.
         [[nodiscard]] EditorFrame Advance(const Platform::HostFrameInput &input, Renderer::View *view = nullptr,
-            const Platform::WindowSettings *window = nullptr, Asset::AssetManager *assets = nullptr);
+            const Platform::WindowSettings *window = nullptr, Asset::AssetManager *assets = nullptr,
+            const FrameStatistics *statistics = nullptr);
 
         /// @brief 冻结两套布局、场景身份及内容/相机版本、View 文档代和预览模式, 供正常合成匹配候选.
         /// @pre 非空输入来自本次 Advance 后的 View 准备.

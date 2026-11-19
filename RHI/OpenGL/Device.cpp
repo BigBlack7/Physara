@@ -463,6 +463,20 @@ namespace Physara::RHI::OpenGL
         return m_Caps.formats[std::size_t(format)][std::size_t(dimension)];
     }
 
+    GraphicsOperationCounts OpenGLDevice::GraphicsCounts() const noexcept
+    {
+        // 两处状态都只由设备 owner 写入. 在同一线程取样得到同一命令边界上的累计值.
+        auto counts = m_CommandCounts;
+        counts.bindings = m_ContextState.BindingCount();
+        return counts;
+    }
+
+    GraphicsOperationCounts ReadGraphicsCounts(Device *device) noexcept
+    {
+        const auto *native = dynamic_cast<const OpenGLDevice *>(device);
+        return native ? native->GraphicsCounts() : GraphicsOperationCounts{};
+    }
+
     FormatSupport QueryCubeFormatSupport(Device *device, Format format, std::uint32_t &maxEdge) noexcept
     {
         const auto *native = dynamic_cast<const OpenGLDevice *>(device);

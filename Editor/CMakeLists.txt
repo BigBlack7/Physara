@@ -6,13 +6,16 @@ physara_add_shader_program(EditorUi EditorUi "../Shaders/UI/EditorUi.json" "../S
 # Editor 拥有 UI 会话, 编辑历史, 工作区, 原生输入适配及公共 RHI 绘制入口.
 # Commands 随会话编译, 通过 Scene/View 的领域入口应用和重放事务.
 # Session 组合文档与资产工作, JSON 只在私有编解码边界出现.
+# 统计面板只消费帧快照的声明. 原生计时查询随 Runtime 的设备寿命管理.
 # Panels 只收集展示意图, ViewportNavigation 生成相机字段手势; 两者通过 Session/Commands 写领域 owner.
 add_library(PhysaraEditor STATIC
     Commands/EditHistory.hpp
     Commands/EditHistory.cpp
+    Commands/PhysicalEdits.hpp Commands/PhysicalEdits.cpp
     Session/EditorSession.hpp
     Session/EditorSession.cpp
     Session/UiFrame.hpp
+    Session/FrameStatistics.hpp
     Session/ActionRouter.hpp
     Session/ActionRouter.cpp
     Session/SceneDocument.hpp
@@ -26,6 +29,7 @@ add_library(PhysaraEditor STATIC
     Panels/Workspace.cpp
     Panels/DocumentPanel.hpp Panels/DocumentPanel.cpp
     Panels/ScenePanels.hpp Panels/ScenePanels.cpp
+    Panels/PhysicalInspector.hpp Panels/PhysicalInspector.cpp
     Viewport/Viewport.hpp
     Viewport/Viewport.cpp
     Viewport/ViewportNavigation.hpp Viewport/ViewportNavigation.cpp

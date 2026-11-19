@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 
+#include "GraphicsStatistics.hpp"
 #include "RHI.hpp"
 
 namespace Physara::RHI::OpenGL
@@ -63,6 +64,10 @@ namespace Physara::RHI::OpenGL
     /// @param nativeError 可空输出, 先置零, GL 失败记录首个实际错误.
     /// @return 成功 owning handle, 参数/环境不支持或 bad_alloc 时为空.
     [[nodiscard]] DeviceHandle CreateDevice(const DeviceDesc &desc, std::uint32_t *nativeError = nullptr);
+
+    /// @brief 在设备 owner 线程复制原生状态计数, 不调用 GL. device 为宿主持有的原生根.
+    /// @return 同一设备自创建以来的累计值. 空指针或其它后端类型返回全零.
+    [[nodiscard]] GraphicsOperationCounts ReadGraphicsCounts(Device *device) noexcept;
 
     /// @brief 读取原生 Device 初始化时观察到的单个 cube 目标能力与最大面宽.
     /// @note 只借用有效原生 Device. 无对应能力时返回 None, 不查询 GL 或从二维格式能力推断.

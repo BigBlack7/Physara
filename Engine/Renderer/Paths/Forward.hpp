@@ -78,6 +78,22 @@ namespace Physara::Renderer
         struct ForwardDevice;
     }
 
+    /// @brief 准备值的实际绘制项和提交给本 View 的灯表行.
+    struct ForwardWorkCounts
+    {
+        std::size_t draws{};
+        std::size_t lights{};
+    };
+
+    /// @brief 设备级 Forward 驻留缓存的当前索引数量, 含等待淘汰的缓存代.
+    struct ForwardResidencyCounts
+    {
+        std::size_t geometry{};
+        std::size_t textures{};
+        std::size_t materials{};
+        std::size_t environment{};
+    };
+
     /// @brief 槽拥有的 Draw 和上传快照. Draw 及其 RHI 引用持续保活至槽取得安全复用证明.
     class ForwardFrame final
     {
@@ -95,6 +111,8 @@ namespace Physara::Renderer
         [[nodiscard]] const std::optional<RenderedEnvironment> &Environment() const noexcept;
         /// @brief 图回调对象所需的 arena 预留量, 不含帧拥有的 Draw 容器, 像素或 GPU 存储.
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
+        /// @brief 返回本槽已准备的几何绘制项和活动灯表行数. 同一项供深度及颜色 Pass 消费时仍只计一次.
+        [[nodiscard]] ForwardWorkCounts WorkCounts() const noexcept;
 
         /// @brief 声明实际上传及 Forward 输出, 在 UI 缓冲上传之前调用.
         /// @pre 此槽已有成功的准备值, 且保持至图执行结束. 纯声明失败后放弃候选图.
@@ -130,6 +148,8 @@ namespace Physara::Renderer
         /// @note 成功后帧独立持有 Draw/上传, 不再借用 PreparedView; 部分缓存可在失败后留下未接受代.
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {});
+        /// @brief 在设备 owner 线程读取四张缓存索引当时的条目数. 首次准备前各项为零.
+        [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
 
     private:
         RHI::Device &m_Device;

@@ -8,6 +8,7 @@
 #include <array>
 #include <cassert>
 #include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <exception>
@@ -164,6 +165,7 @@ namespace Physara::Runtime
             PrintError(Core::BoundedText("Cannot create the product Graphics list"));
             return 1;
         }
+        FrameStatistics statistics(host);
         for (;;)
         {
             if (host.HasFatalGraphicsError())
@@ -183,6 +185,8 @@ namespace Physara::Runtime
             {
                 return 0;
             }
+            // 此时持有宿主 context 且还未打开录制. 上一提交的计时若已可读, 本轮布局即可显示.
+            statistics.Poll(host);
 
             // CPU 发布独立于 GPU 槽. 终止轮次在上面直接退出, 不再接受新版本.
             assets.PublishCompleted();
@@ -204,7 +208,10 @@ namespace Physara::Runtime
             const auto *presentation = std::get_if<Platform::PresentationFrame>(&acquired);
 
             // CPU 仍在槽忙时推进. Advance 封存 UI 并应用领域编辑, 窗口请求随后在录制前处理.
-            const auto frame = editor.Advance(input, &view, host.GetWindowSettings(), &assets);
+            const auto startUi = std::chrono::steady_clock::now();
+            const auto frame = editor.Advance(input, &view, host.GetWindowSettings(), &assets, &statistics.Snapshot());
+            const auto editorElapsed = std::chrono::steady_clock::now() - startUi;
+            const auto editorSeconds = std::chrono::duration<double>(editorElapsed).count();
             if (host.HasFatalGraphicsError())
             {
                 PrintError(host.FirstGraphicsError().value_or(Core::BoundedText("Fatal UI preparation")));
@@ -272,7 +279,8 @@ namespace Physara::Runtime
                     }
                 }
                 const auto rendered =
-                    RenderFrame(host, editor, view, forward, frame, *presentation, slot, remaining, *commands, diagnostics);
+                    RenderFrame(host, editor, view, forward, frame, *presentation, slot, remaining, *commands,
+                                diagnostics, statistics, editorSeconds);
                 if (const auto *error = std::get_if<Core::BoundedText>(&rendered))
                 {
                     PrintError(*error);

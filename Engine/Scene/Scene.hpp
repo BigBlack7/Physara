@@ -146,6 +146,8 @@ namespace Physara::Scene
         double intensity = 1; ///< 无量纲倍率, 场景曝光与源标定另由实际消费者取得.
         bool lighting = false;
         bool sky = false;
+
+        bool operator==(const EnvironmentSettings &) const = default;
     };
 
     /// @brief Scene 固定当前环境的源版本, 用途与创作值随文档整体发布.
@@ -153,6 +155,8 @@ namespace Physara::Scene
     {
         Asset::EnvironmentVersion source;
         EnvironmentSettings settings;
+
+        bool operator==(const SceneEnvironment &) const = default;
     };
 
     /// @brief 同步的只读借用, 有效至下一次场景编辑或替换.
@@ -223,7 +227,22 @@ namespace Physara::Scene
         std::optional<PrimitiveOverride> value; ///< 空值清除该 Primitive 的修改.
     };
 
-    using Command = std::variant<CreateEntity, Instantiate, EraseSubtree, Reparent, EditProperties, EditOverride>;
+    /// @brief 为当前 Scene 设置完整环境请求. 空值移除环境, 不影响实体和主 View.
+    /// @note 非空值须引用 Asset 已发布的环境版本. 编辑入口负责把延迟意图定位到所属 Scene.
+    struct SetEnvironment
+    {
+        std::optional<SceneEnvironment> value;
+    };
+
+    using Command = std::variant<CreateEntity, Instantiate, EraseSubtree, Reparent, EditProperties, EditOverride,
+                                 SetEnvironment>;
+
+    /// @brief 环境历史固定变更两端的 CPU 资源版本. 空端表示该端未配置环境, 两端都随历史项保活.
+    struct EnvironmentChange
+    {
+        std::optional<SceneEnvironment> before;
+        std::optional<SceneEnvironment> after;
+    };
 
     /// @brief 一次已接受的变更. 历史保有受影响记录及其版本, 重放解析同一 Scene 内的稳定 ID.
     struct Change
@@ -231,8 +250,9 @@ namespace Physara::Scene
         SceneId scene;
         std::vector<EntityRecord> before;
         std::vector<EntityRecord> after;
+        std::optional<EnvironmentChange> environment{};
 
-        [[nodiscard]] bool Empty() const noexcept { return before.empty() && after.empty(); }
+        [[nodiscard]] bool Empty() const noexcept { return before.empty() && after.empty() && !environment; }
     };
 
     struct SceneState;

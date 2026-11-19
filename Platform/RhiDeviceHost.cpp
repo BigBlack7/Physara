@@ -3,6 +3,7 @@
 /// @file
 /// @brief 在 GLFW context 与 RHI 互操作边界装配 raw/Validation 根, 捕获诊断并收拢工作.
 /// 上传准入直接读取 raw Device 的保留容量, 在宿主侧返回供帧调度使用的结果.
+/// 统计采样沿同一个原生根读取命令和绑定计数, 对外只交付值快照.
 
 #include <limits>
 
@@ -11,6 +12,11 @@
 
 namespace Physara::Platform
 {
+    RHI::GraphicsOperationCounts DeviceHost::ReadGraphicsCounts() const noexcept
+    {
+        return GetDevice() ? RHI::OpenGL::ReadGraphicsCounts(m_State->rawDevice.Get()) : RHI::GraphicsOperationCounts{};
+    }
+
     // 就绪宿主才可借用设备. 原生入口随后核对 current context 与录制状态.
     UploadAdmission DeviceHost::CheckUploadCapacity(std::size_t chunkSize,
                                                      std::span<const std::size_t> textureWrites,

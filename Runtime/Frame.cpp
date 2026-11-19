@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <charconv>
 #include <memory>
 #include <new>
@@ -19,6 +20,14 @@
 
 namespace Physara::Runtime
 {
+    using CpuClock = std::chrono::steady_clock;
+
+    /// @brief 将同一次 CPU 阶段的单调时钟差换成统计快照使用的秒数.
+    static double SecondsSince(CpuClock::time_point start) noexcept
+    {
+        return std::chrono::duration<double>(CpuClock::now() - start).count();
+    }
+
     using namespace Renderer;
 
     Platform::DeviceHost::PresentationAcquire AcquireFrame(Platform::DeviceHost &host, std::size_t &next)
@@ -245,14 +254,22 @@ namespace Physara::Runtime
         return true;
     }
 
+    /// @brief 继承本轮 CPU 准备事实, 图候选只补充自己实际执行的阶段.
+    struct FrameMeasurements
+    {
+        FrameStatistics &statistics;
+        Editor::FrameCpuSeconds cpu;
+        ForwardResidencyCounts residency;
+    };
+
     // Open 后所有失败留在原录制, 依次完成图执行, Close, 提交, 发布资格核对和取得消费.
     // Close/交接区间独立检查, 但不能清除原图的失败结论. 无可靠票据时保持原 owner 等待退出收拢.
     static AttemptResult ExecuteFrame(Platform::DeviceHost &host, Editor::EditorSession &editor,
         View &view, const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
         Core::Diagnostics &diagnostics, RenderGraph &graph, const CompiledGraphPlan &plan,
         const FrameDeclaration &declared, PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared,
-        Editor::UiFrameMode mode, const Platform::RhiErrorScope &errors, GraphExecutionDiagnostics graphErrors,
-        bool &opened)
+        Editor::UiFrameMode mode, Platform::RhiErrorScope &errors, GraphExecutionDiagnostics graphErrors,
+        bool &opened, FrameMeasurements measurements)
     {
         std::optional<Core::BoundedText> failure;
         const auto stopped = [&](std::string_view stage, const Core::BoundedText &reason)
@@ -280,10 +297,61 @@ namespace Physara::Runtime
             return Failed(host, AttemptStatus::Stopped, "Frame.Open",
                           Core::BoundedText("Fatal before graph execution"));
         }
+        // 以本图实际声明的 Forward 分支界定候选. 记录区间含场景和 UI, 到图执行结束即截止.
+        const bool measure = declared.scene && mode == Editor::UiFrameMode::Normal;
+        const auto displayLayout = measure ? outputs.Color()->layout : ViewImageLayout{};
+        const auto before = measure ? host.ReadGraphicsCounts() : RHI::GraphicsOperationCounts{};
+        auto timer = measure && errors.IsClear() ? measurements.statistics.ReserveTimer() :
+            FrameStatistics::TimerReservation{};
+        std::optional<Core::BoundedText> timerBeginError;
+        if (timer.query)
+        {
+            commands.BeginTimerQuery(timer.query);
+            if (!errors.IsClear())
+            {
+                bool reusable = false;
+                if (!host.HasFatalGraphicsError())
+                {
+                    timerBeginError = host.FirstGraphicsError();
+                    // 起点拒绝可发生在时间戳发出前. 由 RHI 确认原查询可重置, 成功则保留池项.
+                    const auto reset = host.CaptureRhiErrors();
+                    host.GetDevice()->ResetTimerQuery(timer.query);
+                    reusable = reset.IsClear();
+                }
+                if (!reusable)
+                {
+                    measurements.statistics.FailTimer(timer);
+                }
+                timer = {.state = Editor::GpuIntervalState::Failed};
+                if (!host.HasFatalGraphicsError())
+                {
+                    // 计时前区间已干净. 为实际图和其消费者重开同一个诊断对象, 由图接管确认包仍有效.
+                    // 原生起点失败已使包或设备失效, 接管仍会拒绝.
+                    errors = host.BeginFrameGraphicsDiagnostics();
+                }
+            }
+        }
+        const auto graphStart = CpuClock::now();
         auto executed = ExecuteRenderGraph(graph, plan, *host.GetDevice(), commands, graphErrors);
+        measurements.cpu.graphExecute = SecondsSince(graphStart);
+        const auto native = measure ? host.ReadGraphicsCounts() - before : RHI::GraphicsOperationCounts{};
+        if (timer.query)
+        {
+            // 保留正常录制的配对义务. 失败候选即使有完整区间也只获得退休资格.
+            const auto end = host.CaptureRhiErrors();
+            commands.EndTimerQuery(timer.query);
+            if (!end.IsClear())
+            {
+                measurements.statistics.FailTimer(timer);
+                timer = {.state = Editor::GpuIntervalState::Failed};
+            }
+        }
         if (const auto *error = std::get_if<GraphError>(&executed))
         {
-            failure = Failed(host, AttemptStatus::Cancelled, "Frame.Execute", error->description).error;
+            // 接管拒绝时保留可能造成包失效的原始时间戳错误. 图内其余失败使用自己的首错.
+            failure = timerBeginError && error->code == GraphErrorCode::InvalidRecording ?
+                Failed(host, AttemptStatus::Cancelled, "Frame.TimerBegin", *timerBeginError).error :
+                Failed(host, AttemptStatus::Cancelled, "Frame.Execute", error->description).error;
         }
         else
         {
@@ -353,6 +421,21 @@ namespace Physara::Runtime
         {
             return stopped("Frame.Present", Platform::DescribeHostError(*hostError));
         }
+        std::optional<Editor::SceneFrameIdentity> measuredSource;
+        if (published && measure)
+        {
+            // 场景及显示配置取自 View 刚确认的颜色代. 交换是否发生单独记录, 计时稍后按票据回填.
+            const auto &last = *view.LastRenderedScene();
+            measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, view.Id(), last.contentRevision,
+                last.documentRevision, last.mode, last.renderLayout, displayLayout, last.display};
+            measurements.statistics.Publish({*measuredSource, measurements.cpu, native, slot.forward.WorkCounts(),
+                measurements.residency, plan.passes.size(), result.swapped,
+                result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state});
+        }
+        if (timer.query)
+        {
+            measurements.statistics.FinishTimer(timer, measuredSource ? &*measuredSource : nullptr);
+        }
         if (failure)
         {
             // Present 已消耗无效颜色的取得, 未交换. 能否继续还取决于基础 UI 和其它持久导入.
@@ -378,18 +461,21 @@ namespace Physara::Runtime
     // 宿主首错捕获持续到下一候选或 Shutdown; 本次错误须在返回前复制到 AttemptResult.
     static AttemptResult TryFrame(Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
         const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
-        Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode)
+        Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode,
+        FrameMeasurements measurements)
     {
         bool opened = false;
         try
         {
-            const auto errors = host.BeginFrameGraphicsDiagnostics();
+            auto errors = host.BeginFrameGraphicsDiagnostics();
             const GraphExecutionDiagnostics graphErrors{&errors, +[](const void *scope) noexcept
             {
                 return static_cast<const Platform::RhiErrorScope *>(scope)->IsClear();
             }};
             const auto preparationFailure = editor.BaseFontReady() ? AttemptStatus::Cancelled : AttemptStatus::Stopped;
+            const auto uiStart = CpuClock::now();
             auto ui = editor.PrepareUiFrame(presentation.target.extentPixels, slot.arena, outputs, mode);
+            measurements.cpu.ui += SecondsSince(uiStart);
             if (const auto *error = std::get_if<Core::BoundedText>(&ui))
             {
                 return Failed(host, preparationFailure, "Frame.UiPrepare", *error);
@@ -429,7 +515,9 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.Profile",
                               Core::BoundedText("Cannot prepare graph capabilities"));
             }
+            const auto compileStart = CpuClock::now();
             auto compiled = CompileRenderGraph(graph, profile.options);
+            measurements.cpu.graphCompile = SecondsSince(compileStart);
             if (const auto *error = std::get_if<GraphError>(&compiled))
             {
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Compile", error->description);
@@ -471,8 +559,8 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UploadAdmission",
                               Core::BoundedText("UI upload capacity rejected"));
             }
-            return ExecuteFrame(host, editor, view, presentation, slot, commands, diagnostics,
-                                graph, plan, declared, outputs, prepared, mode, errors, graphErrors, opened);
+            return ExecuteFrame(host, editor, view, presentation, slot, commands, diagnostics, graph, plan, declared,
+                                outputs, prepared, mode, errors, graphErrors, opened, measurements);
         }
         catch (const std::bad_alloc &)
         {
@@ -493,7 +581,8 @@ namespace Physara::Runtime
     std::variant<FrameStatus, Core::BoundedText> RenderFrame(
         Platform::DeviceHost &host, Editor::EditorSession &editor, View &view, ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
-        std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics)
+        std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
+        FrameStatistics &statistics, double editorSeconds)
     {
         std::optional<Core::BoundedText> primary;
         std::optional<Core::BoundedText> additional;
@@ -518,6 +607,7 @@ namespace Physara::Runtime
             return stop();
         }
         // 本轮事务已提交且同槽已 Ready. 在图尝试外准备, 安全 UI 和上传重试不再读取 Scene.
+        const auto sceneStart = CpuClock::now();
         slot.forward.Reset();
         const auto *scene = editor.ActiveScene();
         assert(scene);
@@ -581,6 +671,8 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
+        const FrameMeasurements measurements{statistics, {editorSeconds, SecondsSince(sceneStart)},
+                                              forward.ResidencyCounts()};
         // 本次取得已证明同槽上次工作完成. 后续失败分支只检查本轮是否真的提交过前缀.
         slot.lastSubmission = 0;
         slot.diagnosticUploadBytes = 0;
@@ -590,7 +682,8 @@ namespace Physara::Runtime
             // 图 arena 已由 RenderGraph 析构回退; 这里重置独立载荷区和仅属于旧图的 token 绑定.
             slot.arena.Reset();
             slot.bindings.Reset();
-            const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode);
+            const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode,
+                                          measurements);
             // TryFrame 已结束图回调和 CPU 借用. 后继尝试只含 UI, Draw 强引用仍保留到同槽完成.
             slot.forward.ReleasePayload();
             remember(attempt.error);

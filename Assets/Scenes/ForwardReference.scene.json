@@ -1,0 +1,609 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": "reference",
+      "name": "Reference geometry",
+      "parent": null,
+      "local": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "modelInstance": {
+        "path": "Assets/Models/ForwardReference/Reference.gltf",
+        "scene": 0,
+        "sourceVersion": "19bc38d466634badb6be69ccd70f5be73d79dfe9c0bda7f5c5a51d6ef1495700"
+      }
+    },
+    {
+      "id": "receiver",
+      "name": "Neutral 1 m receiver",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -2.5,
+          -1.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 0
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-01",
+      "name": "Matte dielectric",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -2.4,
+          1.0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.58,
+          0.58,
+          0.58
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 1
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-02",
+      "name": "Smooth dielectric",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -0.8,
+          1.0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.58,
+          0.58,
+          0.58
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 2
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-03",
+      "name": "Matte copper",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          0.8,
+          1.0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.58,
+          0.58,
+          0.58
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 3
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-04",
+      "name": "Smooth copper",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          2.4,
+          1.0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.58,
+          0.58,
+          0.58
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 4
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-05",
+      "name": "HDR emissive chip",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          0,
+          -1.65,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 5
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-06",
+      "name": "+X slanted edge",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          2.55,
+          -1.62,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 6
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-07",
+      "name": "One meter scale X",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -3.0,
+          -2.14,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 7
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-08",
+      "name": "Zero meter tick",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -3.0,
+          -2.14,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 8
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-09",
+      "name": "One meter tick",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          -2.0,
+          -2.14,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 9
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "reference-10",
+      "name": "+Y asymmetric marker",
+      "parent": "reference",
+      "local": {
+        "translation": [
+          2.9,
+          1.62,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "reference",
+        "node": 10
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "comparison",
+      "name": "Independent instance of reference model",
+      "parent": null,
+      "local": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "modelInstance": {
+        "path": "Assets/Models/ForwardReference/Reference.gltf",
+        "scene": 0,
+        "sourceVersion": "19bc38d466634badb6be69ccd70f5be73d79dfe9c0bda7f5c5a51d6ef1495700"
+      }
+    },
+    {
+      "id": "receiver-copy",
+      "name": "Independent 1 m receiver",
+      "parent": "comparison",
+      "local": {
+        "translation": [
+          1.4,
+          -1.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "sourceRef": {
+        "instanceEntityId": "comparison",
+        "node": 0
+      },
+      "meshRenderer": {
+        "castsShadow": false
+      }
+    },
+    {
+      "id": "day",
+      "name": "Directional 96 lux",
+      "parent": null,
+      "local": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "light": {
+        "type": "directional",
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "intensity": 96
+      }
+    },
+    {
+      "id": "point",
+      "name": "Point 16 cd at 2 m",
+      "parent": null,
+      "local": {
+        "translation": [
+          -2.5,
+          -1.2,
+          2
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "light": {
+        "type": "point",
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "intensity": 16
+      }
+    },
+    {
+      "id": "spot",
+      "name": "Spot 240 cd",
+      "parent": null,
+      "local": {
+        "translation": [
+          1.4,
+          -1.2,
+          3
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "light": {
+        "type": "spot",
+        "color": [
+          0.65,
+          0.8,
+          1
+        ],
+        "intensity": 240,
+        "range": 8,
+        "innerConeAngle": 0.2617993877991494,
+        "outerConeAngle": 0.4363323129985824
+      }
+    },
+    {
+      "id": "camera",
+      "name": "Orthographic 8 m \u00d7 6 m",
+      "parent": null,
+      "local": {
+        "translation": [
+          0,
+          0,
+          8
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "visible": true,
+      "camera": {
+        "type": "orthographic",
+        "xmag": 4,
+        "ymag": 3,
+        "near": 0.1,
+        "far": 25
+      }
+    }
+  ],
+  "mainView": {
+    "cameraEntityId": "camera",
+    "cameraPose": {
+      "translation": [
+        0,
+        0,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    "requested": {
+      "renderScale": 1,
+      "antiAliasing": "none",
+      "physicalCamera": {
+        "fNumber": 4,
+        "shutterSeconds": 0.0625,
+        "iso": 100,
+        "exposureCompensationEv": 0,
+        "sensorHeightMeters": 0.024,
+        "navigationFocalLengthMeters": 0.05,
+        "focusDistanceMeters": 8
+      }
+    }
+  },
+  "environment": {
+    "path": "Assets/Environments/ForwardReference.exr",
+    "rotation": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "intensity": 16,
+    "lighting": true,
+    "sky": true
+  }
+}

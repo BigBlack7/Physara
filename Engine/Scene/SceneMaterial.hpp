@@ -41,6 +41,7 @@ namespace Physara::Scene
     };
 
     /// @brief 局部纹理修改. 有 image 时固定项目纹理版本, use 必须与槽的用途一致.
+    /// 继承源图像的槽仍可单独覆盖采样器或 UV 变换. 各分量缺省时继续取源槽的有效值.
     struct TextureOverride
     {
         Asset::ImageVersion image;
@@ -55,6 +56,10 @@ namespace Physara::Scene
     };
 
     inline constexpr std::size_t MaterialSlotCount = static_cast<std::size_t>(Asset::MaterialSlot::Count);
+
+    /// @brief 返回标准材质槽的图像用途, 由实例编辑、校验和采样解析共用.
+    /// @pre slot 是有效的材质槽枚举.
+    [[nodiscard]] Asset::ImageUse TextureUse(Asset::MaterialSlot slot) noexcept;
 
     /// @brief 槽位是 glTF 源 Primitive 下标, 由实体固定的模型版本解释.
     struct PrimitiveOverride

@@ -66,6 +66,7 @@ namespace Physara::RHI::OpenGL
     void ContextState::Invalidate() noexcept
     {
         // 只撤销已知性, 保留名称以便真正删除前仍能解除原生引用; 不查询或保存外部 GL 状态.
+        // 累计值跨缓存失效保留, 下一次实际重绑由各 Apply 入口计入.
         m_Known = false;
         m_QueryReadKnown = false;
         m_SeamlessCubeKnown = false;
@@ -97,9 +98,11 @@ namespace Physara::RHI::OpenGL
             // 单一 VAO 的 element 解绑走绑定入口, 避开本机 DSA 对合法 buffer=0 的拒绝.
             glBindVertexArray(m_VertexArray);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+            m_BindingCount += 2;
             for (GLuint index = 0; index < m_VertexBindings.size(); ++index)
             {
                 glVertexArrayVertexBuffer(m_VertexArray, index, 0, 0, 0);
+                ++m_BindingCount;
                 m_VertexBindings[index].name = 0;
             }
         }
@@ -108,6 +111,7 @@ namespace Physara::RHI::OpenGL
             if (m_UniformRanges[index].name != 0)
             {
                 glBindBufferBase(GL_UNIFORM_BUFFER, index, 0);
+                ++m_BindingCount;
             }
             m_UniformRanges[index].name = 0;
         }
@@ -116,6 +120,7 @@ namespace Physara::RHI::OpenGL
             if (m_StorageRanges[index].name != 0)
             {
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, index, 0);
+                ++m_BindingCount;
             }
             m_StorageRanges[index].name = 0;
         }
@@ -124,15 +129,18 @@ namespace Physara::RHI::OpenGL
             if (m_TextureUnits[index].texture != 0)
             {
                 glBindTextureUnit(index, 0);
+                ++m_BindingCount;
             }
             if (m_TextureUnits[index].sampler != 0)
             {
                 glBindSampler(index, 0);
+                ++m_BindingCount;
             }
             m_TextureUnits[index] = {};
         }
         glUseProgram(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        m_BindingCount += 2;
         m_Program = m_Framebuffer = m_IndexBuffer = 0;
         Invalidate();
     }
@@ -143,6 +151,7 @@ namespace Physara::RHI::OpenGL
         if (!m_QueryReadKnown)
         {
             glBindBuffer(GL_QUERY_BUFFER, 0);
+            ++m_BindingCount;
             m_QueryReadKnown = true;
         }
     }
@@ -152,6 +161,7 @@ namespace Physara::RHI::OpenGL
         if (!m_ProgramKnown || m_Program != program)
         {
             glUseProgram(program);
+            ++m_BindingCount;
         }
         if (!m_ProgramKnown || m_PointSize != pointSize)
         {
@@ -175,6 +185,7 @@ namespace Physara::RHI::OpenGL
         if (!m_FramebufferKnown || m_Framebuffer != framebuffer)
         {
             glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            ++m_BindingCount;
         }
         m_Framebuffer = framebuffer;
         m_FramebufferKnown = true;
@@ -187,6 +198,7 @@ namespace Physara::RHI::OpenGL
         if (!current.known || current.name != name || current.offset != offset || current.size != size)
         {
             glBindBufferRange(storage ? GL_SHADER_STORAGE_BUFFER : GL_UNIFORM_BUFFER, unit, name, offset, size);
+            ++m_BindingCount;
         }
         current = {name, offset, size, true};
     }
@@ -203,10 +215,12 @@ namespace Physara::RHI::OpenGL
         if (!current.known || current.texture != texture)
         {
             glBindTextureUnit(unit, texture);
+            ++m_BindingCount;
         }
         if (!current.known || current.sampler != sampler)
         {
             glBindSampler(unit, sampler);
+            ++m_BindingCount;
         }
         current = {texture, sampler, true};
     }
@@ -218,6 +232,7 @@ namespace Physara::RHI::OpenGL
         if (!m_VertexArrayKnown)
         {
             glBindVertexArray(m_VertexArray);
+            ++m_BindingCount;
         }
         m_VertexArrayKnown = true;
         for (GLuint location = 0; location < m_Attributes.size(); ++location)
@@ -263,6 +278,7 @@ namespace Physara::RHI::OpenGL
         if (!current.known || current.name != name || current.offset != offset || current.stride != stride)
         {
             glVertexArrayVertexBuffer(m_VertexArray, slot, name, offset, stride);
+            ++m_BindingCount;
         }
         if (!current.known || current.divisor != divisor)
         {
@@ -275,6 +291,7 @@ namespace Physara::RHI::OpenGL
     {
         if (!m_IndexKnown || m_IndexBuffer != name)
         {
+            ++m_BindingCount;
             if (name != 0)
             {
                 glVertexArrayElementBuffer(m_VertexArray, name);
@@ -293,6 +310,7 @@ namespace Physara::RHI::OpenGL
         if (!m_Known || m_UnpackBuffer != buffer)
         {
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer);
+            ++m_BindingCount;
         }
         if (!m_Known)
         {

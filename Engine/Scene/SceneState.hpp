@@ -57,9 +57,14 @@ namespace Physara::Scene
     [[nodiscard]] bool ValidLocal(const LocalTransform &value) noexcept;
     /// @brief 以实体和字段补齐定位并抛出有界错误, 由事务入口统一转为失败值.
     [[noreturn]] void Reject(std::string_view id, std::string_view field, std::string_view reason);
-    /// @brief 检查支持的投影及物理灯参数, 包括可空远面和各灯类型的字段约束.
+    /// @brief 定位到固定模型的源 Primitive, 保留该覆盖字段或纹理槽的拒绝原因.
+    [[noreturn]] void RejectPrimitiveOverride(std::string_view id, std::uint32_t slot, std::string_view reason);
+    /// @brief 检查支持的投影参数, 包括透视相机的可空远面.
     [[nodiscard]] bool ValidCamera(const Camera &camera) noexcept;
-    [[nodiscard]] bool ValidLight(const Light &light) noexcept;
+    /// @brief 检查灯的线性色值, 光度, 米制范围和锥角. 合法时返回空指针, 失败正文为静态字符串.
+    [[nodiscard]] const char *LightError(const Light &light) noexcept;
+    /// @brief 候选文档与编辑共用的环境源及创作字段校验.
+    [[nodiscard]] std::optional<Core::BoundedText> CheckEnvironment(const SceneEnvironment &environment) noexcept;
     /// @brief 将已导入的矩阵或 TRS 转为 Scene local; 无法表示为有限 TRS 时返回空.
     [[nodiscard]] std::optional<LocalTransform> ImportLocal(const Asset::ModelTransform &value) noexcept;
     /// @brief 反解新父级下可保持原 world 的 local. 空父级表示根.
