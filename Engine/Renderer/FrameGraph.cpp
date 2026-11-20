@@ -15,25 +15,31 @@ namespace Physara::Renderer
         std::span<const std::byte> pixels;
         std::size_t rowPitch = 0;
         TextureRange range;
+        bool *recorded = nullptr;
     };
 
     // 每次完整定义指定 mip/layer, 其它子资源由各自生产者回溯. 执行沿用同一范围及行距.
     GraphResult<GraphTextureWrite> AddTextureUpload(RenderGraph &graph, TextureId target,
         std::span<const std::byte> pixels, std::size_t rowPitch, std::vector<GraphUpload> &uploads, std::uint32_t mip,
-        std::uint32_t layer)
+        std::uint32_t layer, bool *recorded)
     {
         const TextureRange range{.firstMip = mip, .firstLayer = layer};
         TextureId written;
         auto pass = graph.AddPass<TextureUploadData>("Texture upload", [&](PassBuilder &builder, auto &data)
         {
             written = builder.Write(target, GraphUsage::CopyDestination, {.coverage = WriteCoverage::Full}, range);
-            data = {written, pixels, rowPitch, range};
+            data = {written, pixels, rowPitch, range, recorded};
             return written.IsValid();
         }, +[](PassResources &resources, const TextureUploadData &data, RHI::CommandList &commands) noexcept
             -> GraphFailure
         {
             if (auto *texture = resources.Resolve(data.texture, GraphUsage::CopyDestination, data.range))
             {
+                if (data.recorded)
+                {
+                    // 同代可能已交给原生写入, 后续未获接受时只能用独立存储重试.
+                    *data.recorded = true;
+                }
                 commands.WriteTexture(texture, data.range.firstLayer, data.range.firstMip, data.pixels.data(),
                                       data.rowPitch);
             }
@@ -53,25 +59,26 @@ namespace Physara::Renderer
     {
         BufferId buffer;
         std::span<const std::byte> bytes;
+        RHI::BufferRange range;
     };
 
-    // 声明与执行使用相同字节区间, 使后续顶点, 索引和常量读取有可追溯的初始化来源.
+    // 将物理页内的绝对区间同时交给声明和延迟回调, Draw 可沿写版本追溯实际被初始化的字节.
     GraphResult<BufferId> AddBufferUpload(RenderGraph &graph, BufferId target,
-        std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads)
+        std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads, std::uint64_t offset)
     {
         BufferId written;
+        const RHI::BufferRange range(offset, bytes.size());
         auto pass = graph.AddPass<BufferUploadData>("Buffer upload", [&](PassBuilder &builder, auto &data)
         {
-            written = builder.Write(target, GraphUsage::CopyDestination, RHI::BufferRange(0, bytes.size()));
-            data = {written, bytes};
+            written = builder.Write(target, GraphUsage::CopyDestination, range);
+            data = {written, bytes, range};
             return written.IsValid();
         }, +[](PassResources &resources, const BufferUploadData &data, RHI::CommandList &commands) noexcept
             -> GraphFailure
         {
-            if (auto *buffer = resources.Resolve(data.buffer, GraphUsage::CopyDestination,
-                                                RHI::BufferRange(0, data.bytes.size())))
+            if (auto *buffer = resources.Resolve(data.buffer, GraphUsage::CopyDestination, data.range))
             {
-                commands.WriteBuffer(buffer, data.bytes.data(), data.bytes.size());
+                commands.WriteBuffer(buffer, data.bytes.data(), data.bytes.size(), data.range.byteOffset);
             }
             return std::nullopt;
         });

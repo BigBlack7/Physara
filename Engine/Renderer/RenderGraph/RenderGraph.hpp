@@ -184,8 +184,12 @@ namespace Physara::Renderer
         /// @note 省略 range 导入整个资源. 等价导入始终返回版本 0, 冲突时保留原记录.
         [[nodiscard]] GraphResult<TextureId> ImportTexture(const RHI::TextureHandle &texture, ImportState states,
                                                             std::optional<TextureRange> range = std::nullopt);
+        /// @brief 部分有效的 Buffer 通过借用区间声明, 图复制并规范化其覆盖.
+        /// @pre contentDefined 为 true 时, 通过整范围简写声明, 不同时提供已定义区间.
+        /// @note defined 的起点相对物理 Buffer. 覆盖恰好铺满 range 时与整段有效的简写共用版本 0.
         [[nodiscard]] GraphResult<BufferId> ImportBuffer(const RHI::BufferHandle &buffer, ImportState states,
-                                                          std::optional<RHI::BufferRange> range = std::nullopt);
+            std::optional<RHI::BufferRange> range = std::nullopt,
+            std::span<const RHI::BufferRange> defined = {});
 
         /// @brief 标记外部读用途. 省略 range 表示资源的整个图内允许范围.
         /// @return 成功时为空. 拒绝时保留此前的导出记录.
@@ -423,7 +427,8 @@ namespace Physara::Renderer
                                                       const typename Declaration::Description &desc,
                                                       std::optional<typename Declaration::AccessRange> requested,
                                                       const typename Declaration::ResourceHandle &imported,
-                                                      std::optional<ImportState> state);
+                                                      std::optional<ImportState> state,
+                                                      std::span<const RHI::BufferRange> defined = {});
 
         static constexpr auto MaxIndex = (std::numeric_limits<std::uint32_t>::max)();
 

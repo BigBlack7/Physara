@@ -1,13 +1,15 @@
 #include "StaticGpu.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <utility>
 
 #include <ForwardSky/Bindings.hpp>
 #include <StaticForward/Bindings.hpp>
 
 /// @file
-/// @brief 管理设备级程序, 绑定布局, Pipeline 及驻留额度. 资源创建与图内上传分开进行.
+/// @brief 为 Forward 创建程序与 Pipeline, 按逻辑版本分配驻留资源. 页拥有物理容量, 区间跟随使用它的版本释放.
 
 namespace Physara::Renderer::Detail
 {
@@ -21,24 +23,155 @@ namespace Physara::Renderer::Detail
         throw ForwardFailure{reason, Core::BoundedText(description)};
     }
 
-    Allocation::Allocation(std::shared_ptr<ResidencyCapacity> quota, std::size_t size) noexcept
-        : capacity(std::move(quota)), bytes(size)
+    /// @brief 保留超限发生位置和预算口径, 供待处理状态及诊断使用.
+    [[noreturn]] static void RejectCapacity(ViewSettingReason reason, const char *resource,
+                                           std::size_t requested, std::size_t retained, std::size_t limit)
     {
-        capacity->bytes += bytes;
+        char description[144];
+        std::snprintf(description, sizeof(description), "%s: requested=%zu retained=%zu limit=%zu",
+                      resource, requested, retained, limit);
+        Reject(reason, description);
+    }
+
+    Allocation::Allocation(std::shared_ptr<ResidencyCapacity> quota, std::size_t size, bool paged) noexcept
+        : capacity(std::move(quota)), bytes(size), chargedBytes(paged ? 0 : size)
+    {
+        capacity->bytes += chargedBytes;
         ++capacity->entries;
     }
 
     Allocation::~Allocation()
     {
-        capacity->bytes -= bytes;
+        capacity->bytes -= chargedBytes;
         --capacity->entries;
+    }
+
+    BufferPage::BufferPage(std::shared_ptr<ResidencyCapacity> quota, RHI::BufferHandle storage, GraphUsage use,
+                           std::uint8_t layoutKey)
+        : capacity(std::move(quota)), buffer(std::move(storage)), usage(use), layout(layoutKey),
+          largestGap(static_cast<std::size_t>(buffer->GetDesc().byteSize))
+    {
+        capacity->bytes += buffer->GetDesc().byteSize;
+    }
+
+    BufferPage::~BufferPage()
+    {
+        assert(occupied.empty());
+        capacity->bytes -= buffer->GetDesc().byteSize;
+    }
+
+    std::optional<RHI::BufferRange> BufferPage::Claim(const Allocation &owner, std::size_t size,
+                                                      std::size_t alignment)
+    {
+        assert(size != 0 && alignment != 0);
+        // 每个已占区间之间只检查一次. 已占和可用区间均受页的实际容量约束.
+        if (size > largestGap)
+        {
+            return std::nullopt;
+        }
+        std::uint64_t start = 0;
+        for (auto it = occupied.begin();;)
+        {
+            const auto end = it == occupied.end() ? buffer->GetDesc().byteSize : it->range.byteOffset;
+            const auto padding = (alignment - start % alignment) % alignment;
+            if (padding <= end - start && size <= end - start - padding)
+            {
+                const RHI::BufferRange range{start + padding, size};
+                occupied.insert(it, Occupied{range, &owner});
+                usedBytes += size;
+                if (end - start == largestGap)
+                {
+                    // 原最大空洞切开后, 从剩余空洞重新确定上界. 稳态统计可直接读取该事实.
+                    largestGap = 0;
+                    std::uint64_t previousEnd = 0;
+                    for (const auto &entry : occupied)
+                    {
+                        largestGap = std::max(largestGap, std::size_t(entry.range.byteOffset - previousEnd));
+                        previousEnd = entry.range.byteOffset + entry.range.byteSize;
+                    }
+                    largestGap = std::max(largestGap, std::size_t(buffer->GetDesc().byteSize - previousEnd));
+                }
+                return range;
+            }
+            if (it == occupied.end())
+            {
+                return std::nullopt;
+            }
+            start = it->range.byteOffset + it->range.byteSize;
+            ++it;
+        }
+    }
+
+    void BufferPage::Release(RHI::BufferRange range) noexcept
+    {
+        const auto existing = std::ranges::lower_bound(occupied, range.byteOffset, {},
+            [](const Occupied &entry) { return entry.range.byteOffset; });
+        assert(existing != occupied.end() && existing->range == range);
+        // 移除后只有前后两个邻居之间的空洞可能变大, 其余空洞沿用已有上界.
+        const auto start = existing == occupied.begin() ? 0 : (existing - 1)->range.byteOffset +
+                                                               (existing - 1)->range.byteSize;
+        if (existing->retiring)
+        {
+            retiringBytes -= static_cast<std::size_t>(range.byteSize);
+        }
+        const auto next = occupied.erase(existing);
+        const auto end = next == occupied.end() ? buffer->GetDesc().byteSize : next->range.byteOffset;
+        largestGap = std::max(largestGap, std::size_t(end - start));
+        usedBytes -= static_cast<std::size_t>(range.byteSize);
+    }
+
+    void BufferPage::Retire(RHI::BufferRange range) noexcept
+    {
+        const auto existing = std::ranges::lower_bound(occupied, range.byteOffset, {},
+            [](const Occupied &entry) { return entry.range.byteOffset; });
+        assert(existing != occupied.end() && existing->range == range && !existing->retiring);
+        existing->retiring = true;
+        retiringBytes += static_cast<std::size_t>(range.byteSize);
+    }
+
+    PageSlice::~PageSlice()
+    {
+        if (page)
+        {
+            page->Release(range);
+        }
+    }
+
+    void PageSlice::Retire() noexcept
+    {
+        assert(page);
+        page->Retire(range);
+    }
+
+    void GeometryRef::Retire() noexcept
+    {
+        vertices.Retire();
+        indices.Retire();
+    }
+
+    ResidentTexture::ResidentTexture(std::shared_ptr<ResidencyCapacity> quota, std::size_t bytes, bool hdr)
+        : Allocation(std::move(quota), bytes), environment(hdr)
+    {
+        (environment ? capacity->environmentBytes : capacity->textureBytes) += bytes;
+    }
+
+    ResidentTexture::~ResidentTexture()
+    {
+        (environment ? capacity->environmentBytes : capacity->textureBytes) -= bytes;
     }
 
     void UploadBatch::ReserveWrites(std::size_t byteCount, std::size_t count)
     {
-        if (byteCount > ForwardUploadBudget - bytes || count > ForwardUploadItems - writes)
+        assert(!sealed);
+        if (byteCount > ForwardUploadBudget - bytes)
         {
-            Reject(ViewSettingReason::SceneUploadLimit, "Forward upload batch exceeds its byte or write limit");
+            RejectCapacity(ViewSettingReason::SceneUploadLimit, "Forward upload batch bytes",
+                           byteCount, bytes, ForwardUploadBudget);
+        }
+        if (count > ForwardUploadItems - writes)
+        {
+            RejectCapacity(ViewSettingReason::SceneUploadLimit, "Forward upload batch writes",
+                           count, writes, ForwardUploadItems);
         }
         bytes += byteCount;
         writes += count;
@@ -51,12 +184,23 @@ namespace Physara::Renderer::Detail
         buffers.push_back({revision, buffer, {source.begin(), source.end()}, viewConstant});
     }
 
+    void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
+                          std::span<const std::byte> source)
+    {
+        assert(slice.range.byteSize == source.size());
+        ReserveWrites(source.size(), 1);
+        buffers.push_back({revision, slice.page->buffer, {source.begin(), source.end()}, false,
+                           slice.range.byteOffset, slice.page.get()});
+    }
+
     void UploadBatch::Clear() noexcept
     {
         buffers.clear();
         textures.clear();
         environmentTextures.clear();
+        merged.clear();
         bytes = writes = 0;
+        sealed = false;
     }
 
     /// @brief 包读取失败保留包角色及首个编译/反射诊断, 不交付半套 Shader.
@@ -249,10 +393,15 @@ namespace Physara::Renderer::Detail
         return pipeline;
     }
 
-    ForwardDevice::ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit)
-        : device(source), maxTextureSize(textureLimit), programs(source, paths),
+    ForwardDevice::ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit,
+                                 std::uint32_t alignment)
+        : device(source), maxTextureSize(textureLimit), uniformAlignment(alignment), programs(source, paths),
           display(source, {paths.display, paths.grading, paths.fxaa, paths.scale})
     {
+        if (uniformAlignment == 0)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Forward requires known constant-buffer alignment");
+        }
         const auto requiredColor = RHI::FormatSupport::RenderTarget | RHI::FormatSupport::ShaderSample;
         if ((device.QueryFormatSupport(WorkingFormat) & requiredColor) != requiredColor ||
             (device.QueryFormatSupport(DisplayFormat) & requiredColor) != requiredColor ||
@@ -271,6 +420,53 @@ namespace Physara::Renderer::Detail
         frameBegin = stamp;
     }
 
+    void ForwardDevice::ObserveGeometry(const SceneFrame &scene)
+    {
+        if (geometryScene == scene.scene && geometryStructure == scene.structureRevision &&
+            geometryContent == scene.contentRevision)
+        {
+            return;
+        }
+        if (scene.models.empty())
+        {
+            // 先登记每代的待退休字节, 再清除目录. 此时仍有 Draw 持有的区间在相应槽安全释放后归还.
+            for (const auto &entry : geometry)
+            {
+                entry.second->Retire();
+            }
+            geometry.clear();
+            geometryVersions.clear();
+        }
+        else
+        {
+            // 使用整个 SceneFrame 的固定资产, 与当前相机剔除无关. 同一源的多个固定代可以同时有效.
+            std::vector<AssetVersionKey> active(0);
+            active.reserve(scene.models.size());
+            for (const auto &model : scene.models)
+            {
+                active.push_back(Version(model->asset, model->revision));
+            }
+            std::ranges::sort(active);
+            // 变换或材质编辑可以推进内容代, 固定版本集合不变时沿用原几何目录.
+            if (active != geometryVersions)
+            {
+                std::erase_if(geometry, [&](const auto &entry)
+                {
+                    if (std::ranges::binary_search(active, std::get<0>(entry.first)))
+                    {
+                        return false;
+                    }
+                    entry.second->Retire();
+                    return true;
+                });
+                geometryVersions = std::move(active);
+            }
+        }
+        geometryScene = scene.scene;
+        geometryStructure = scene.structureRevision;
+        geometryContent = scene.contentRevision;
+    }
+
     void ForwardDevice::BeginView()
     {
         // frameBegin 对两路相同. 每路另取一个 stamp, 让共享资源在各自的工作集预算中各计一次.
@@ -286,14 +482,26 @@ namespace Physara::Renderer::Detail
         return entry.accepted || entry.lastUse >= frameBegin;
     }
 
+    /// @brief 新分配和缓存命中共用同一 View 工作集预算.
+    static void CheckViewCapacity(std::size_t bytes, std::size_t usedBytes, std::size_t usedEntries)
+    {
+        if (usedEntries == FrameResidentEntries)
+        {
+            RejectCapacity(ViewSettingReason::SceneResidencyLimit, "Forward view residency entries",
+                           1, usedEntries, FrameResidentEntries);
+        }
+        if (bytes > FrameResidentBytes - usedBytes)
+        {
+            RejectCapacity(ViewSettingReason::SceneResidencyLimit, "Forward view residency bytes",
+                           bytes, usedBytes, FrameResidentBytes);
+        }
+    }
+
     void ForwardDevice::Use(Allocation &entry)
     {
         if (entry.lastUse != stamp)
         {
-            if (entry.bytes > FrameResidentBytes - preparedBytes || preparedEntries == FrameResidentEntries)
-            {
-                Reject(ViewSettingReason::SceneResidencyLimit, "Forward view exceeds its residency budget");
-            }
+            CheckViewCapacity(entry.bytes, preparedBytes, preparedEntries);
             entry.lastUse = stamp;
             preparedBytes += entry.bytes;
             ++preparedEntries;
@@ -311,28 +519,82 @@ namespace Physara::Renderer::Detail
         std::erase_if(objects, [&](const auto &pair) { return idle(pair.second.resident); });
         std::erase_if(geometry, [&](const auto &pair) { return idle(pair.second); });
         std::erase_if(textures, [&](const auto &pair) { return idle(pair.second); });
-        std::erase_if(environmentTextures, [&](const auto &pair) { return idle(pair.second); });
+        std::erase_if(environmentTextures, [&](const auto &pair) { return idle(pair.second.texture); });
+        std::erase_if(samplers, [](const auto &pair) { return pair.second->GetRefCount() == 1; });
+        std::erase_if(pages, [](const auto &page) { return page->occupied.empty(); });
     }
 
-    void ForwardDevice::Reserve(std::size_t bytes)
+    void ForwardDevice::Reserve(std::size_t bytes, bool paged)
     {
         // 单 View 超限无法靠等待消除. 仅全缓存被其它引用占用时报告 Pending.
-        if (bytes > FrameResidentBytes - preparedBytes || preparedEntries == FrameResidentEntries)
-        {
-            Reject(ViewSettingReason::SceneResidencyLimit, "Forward resource exceeds its residency budget");
-        }
+        CheckViewCapacity(bytes, preparedBytes, preparedEntries);
+        const auto storageBytes = paged ? 0 : bytes;
         const auto full = [&]
         {
-            return bytes > ResidentBytes - capacity->bytes || capacity->entries == ResidentEntries;
+            return storageBytes > ResidentBytes - capacity->bytes || capacity->entries == ResidentEntries;
         };
         if (full())
         {
             EvictUnused();
             if (full())
             {
-                Reject(ViewSettingReason::SceneResidencyPending, "Forward residency waiting for frame-slot completion");
+                if (capacity->entries == ResidentEntries)
+                {
+                    RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward residency entries pending",
+                                   1, capacity->entries, ResidentEntries);
+                }
+                RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward residency bytes pending",
+                               storageBytes, capacity->bytes, ResidentBytes);
             }
         }
+    }
+
+    void ForwardDevice::AllocateSlice(PageSlice &slice, const Allocation &owner, GraphUsage usage,
+                                      std::uint8_t layout, std::size_t bytes, std::size_t alignment)
+    {
+        assert(!slice.page && bytes != 0 && alignment != 0);
+        const auto tryPages = [&]
+        {
+            for (const auto &page : pages)
+            {
+                if (page->usage != usage || page->layout != layout)
+                {
+                    continue;
+                }
+                if (const auto available = page->Claim(owner, bytes, alignment))
+                {
+                    slice.range = *available;
+                    slice.page = page;
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (tryPages())
+        {
+            return;
+        }
+        // 新页通常按用途的基准粒度增长. 额度紧张时允许缩到实际余量, 仍须能容纳完整申请.
+        const std::size_t minimum = usage == GraphUsage::VertexBuffer ? 4 * 1024 * 1024 :
+                                    usage == GraphUsage::IndexBuffer ? 1024 * 1024 : 64 * 1024;
+        if (bytes > ResidentBytes - capacity->bytes)
+        {
+            EvictUnused();
+            if (tryPages())
+            {
+                return;
+            }
+            if (bytes > ResidentBytes - capacity->bytes)
+            {
+                RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward page bytes pending",
+                               bytes, capacity->bytes, ResidentBytes);
+            }
+        }
+        const auto storage = std::min(std::max(bytes, minimum), ResidentBytes - capacity->bytes);
+        auto page = std::make_shared<BufferPage>(capacity, AllocateBuffer(device, usage, storage), usage, layout);
+        pages.push_back(page);
+        slice.range = page->Claim(owner, bytes, alignment).value();
+        slice.page = std::move(page);
     }
 
     RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size)

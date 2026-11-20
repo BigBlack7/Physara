@@ -14,6 +14,7 @@ namespace Physara::RHI::OpenGL
     inline constexpr std::size_t UploadCapacityLimit = 64 * 1024 * 1024;
     inline constexpr std::size_t UploadItemLimit = 4096;
     inline constexpr std::size_t SmallBufferLimit = 256 * 1024;
+    inline constexpr std::size_t VolatileCapacityLimit = 16 * 1024 * 1024;
 
     /// @brief 可精确记账的内部强引用, 构造/退休均由 owner 执行, worker 不销毁 lease.
     class UploadResourceLease
@@ -47,10 +48,10 @@ namespace Physara::RHI::OpenGL
         std::vector<InternalOwnership *> m_Dependencies;
     };
 
-    /// @brief 包独有的 persistent/coherent 存储, used 单调增长, 退休前不覆写, capacity 计入设备总预算.
+    /// @brief 一块 persistent/coherent 存储. 租给物理包期间 used 单调增长, 退休后可由设备保留整块映射.
     struct UploadChunk
     {
-        // 这里只描述已取得的原生存储, 销毁/解映射由 owning/current 的 RetirePacket 统一完成.
+        // 在空闲表中仍按 capacity 收费. 新包取得整块后从偏移 0 写起.
         GLuint name = 0;
         std::byte *mapping = nullptr;
         std::size_t capacity = 0;
@@ -83,6 +84,6 @@ namespace Physara::RHI::OpenGL
     [[nodiscard]] bool BuildUploadLayout(const TextureDesc &desc, std::uint32_t slice, std::uint32_t mip,
                                          std::size_t rowPitch, std::size_t depthPitch,
                                          TextureUploadLayout &layout) noexcept;
-    /// @brief 对正二次幂对齐执行受检上取整, 非法对齐或溢出返回 false 且不写 result.
+    /// @brief 对正对齐值执行受检上取整, 非法对齐或溢出返回 false 且不写 result.
     [[nodiscard]] bool CheckedAlign(std::size_t value, std::size_t alignment, std::size_t &result) noexcept;
 }

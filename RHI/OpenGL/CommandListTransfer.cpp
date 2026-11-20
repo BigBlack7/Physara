@@ -243,6 +243,12 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
+        // 普通 CopyBuffer 使用固定物理地址, 而 volatile 的逻辑偏移 0 随 recording 选择版本.
+        if (dest->GetDesc().isVolatile || src->GetDesc().isVolatile)
+        {
+            m_Device->Report(Operation, "Unsupported: copying volatile constant buffers");
+            return;
+        }
         if (!BufferInterval(*dest, destinationOffset, size) || !BufferInterval(*src, sourceOffset, size) ||
             (dest == src && size != 0 && destinationOffset < sourceOffset + size &&
              sourceOffset < destinationOffset + size))

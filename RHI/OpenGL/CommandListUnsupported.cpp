@@ -6,7 +6,7 @@
 namespace Physara::RHI::OpenGL
 {
     // 以下同组薄入口只保留完整公共方法表, 共用 Unsupported 的 context/诊断合同.
-    // 已交付 Begin/EndTimerQuery 位于 CommandListQueries.cpp, 不再沿本表拒绝, 也不扩张 staging/扩展支持.
+    // 图形 push 的录制见 CommandListUpload.cpp, Begin/EndTimerQuery 的配对见 CommandListQueries.cpp.
     void OpenGLCommandList::CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
                                         const TextureSlice &srcSlice)
     {
@@ -64,13 +64,6 @@ namespace Physara::RHI::OpenGL
         static_cast<void>(texture);
         static_cast<void>(stateBits);
         Unsupported("SetSamplerFeedbackTextureState");
-    }
-
-    void OpenGLCommandList::SetPushConstants(const void *data, size_t byteSize)
-    {
-        static_cast<void>(data);
-        static_cast<void>(byteSize);
-        Unsupported("SetPushConstants");
     }
 
     void OpenGLCommandList::DrawIndirect(uint32_t offsetBytes, uint32_t drawCount)

@@ -11,14 +11,14 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | 当前入口 | 支持和边界 |
 |---|---|
 | Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 有限离屏直接绘制不代表稳定图像/呈现阶段出口 |
-| Buffer | 普通 immutable storage, null data/GL_DYNAMIC_STORAGE_BIT; 保留 raw/structured 和 vertex/index/constant 等描述, 拒绝 CPU/volatile/typed/virtual/shared/RT profile. 列表支持 checked interval 写入和普通 byte copy, 公共 Map/readback 与 UInt clear 仍拒绝 |
+| Buffer | 普通 immutable storage 保留 raw/structured 和 vertex/index/constant 描述. volatile 常量使用有界 coherent backing, `GetDesc` 返回逻辑大小和版本数. 列表支持普通 byte copy 与受检区间写, volatile 从 offset 0 写有效前缀. 公共 Map/readback、UInt clear 及 typed/virtual/shared/RT profile 仍拒绝 |
 | Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建. 公共格式 flags 表示 2D 基线, 包括按驱动实际查询公布的 ReadOnlyDepthSampling. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
-| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通 UBO、只读定长 record SSBO、浮点二维视图、同格式深度采样视图及完整六面的颜色 cube 视图. Draw 消费独立 Sampler 并核对活动 IR 和视图维度, cube 线性采样按真实目标能力准备并支持跨面过滤. 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV、volatile/push 消费拒绝 |
+| BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通及 volatile UBO、push 声明、只读定长 record SSBO、浮点二维视图、同格式深度采样视图及完整六面的颜色 cube 视图. Draw 消费独立 Sampler 并核对活动 IR 和视图维度, cube 线性采样按真实目标能力准备并支持跨面过滤. 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV 仍拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
-| CommandList | 61 项 override 完整; 仅 Graphics/immediate、无外部 lifetimeTracker. 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例; 其余命令在读取专有 payload 前 Unsupported |
+| CommandList | 61 项 override 完整. Graphics/immediate 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例. 活动 volatile 常量使用本 recording 最近的有效区间, push 由有效状态设置后的 `SetPushConstants` 写入. 其他未交付命令按原有入口报告 Unsupported |
 | 即时录制互操作 | ImmediateGraphics.hpp 的 GraphRecording 借用经 Validation 和后端确认的当前录制, 负责状态准备和提交. GraphManaged 的普通列表核对已授权的用途、字节区间和纹理分量; Automatic 由 RHI 入口推导. 两种模式共用 tracker 与后端发射 |
 | 附件分量 | RHI.hpp 的 FramebufferAttachment 增加可选 aspects, 默认使用视图格式的全部分量. OpenGL 按选中分量挂载 packed depth/stencil, 预检 FBO 完整性及 Pipeline 需要的分量 |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy、Draw 或时间戳. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
@@ -35,6 +35,8 @@ GL 4.6 Core 8.5 不允许 TEXTURE_3D 的深度/模板存储. 自有 `Formats.cpp
 上传策略为设备总 mapped capacity 64 MiB、最多 64 物理包、每包最多 4096 非空写入/不同资源及 64 MiB 逻辑目标字节. 小于等于 256 KiB 的 Buffer 写入使用 DSA subdata, 更大写入使用包独有的 persistent/coherent chunk 和 GPU copy. 所有 Texture 上传使用同类 PBO chunk; 完成前不覆写或跨包复用, 完成即释放, 没有 idle cache. 耗尽报告 requested/retained/limit, 不隐式等待. 这些是初始有界策略, 不是设备显存或性能结论.
 
 颜色上传沿唯一 FormatMapping 扩充 external format/type, 支持 R8_UNORM/R8_UINT/RG8_UNORM/RGBA8_UNORM/RGBA8_UINT/SRGBA8_UNORM、R16/RG16/RGBA16_FLOAT、R32_UINT/R32/RG32/RGBA32_FLOAT, 覆盖七种非 MS 维度. 每次写完整选定 mip/layer/face 或 3D volume; row/depth footprint 检查后逐行紧凑复制, 不读取 padding 为 texel, 不翻转或做 gamma 转换. 单行允许 rowPitch=0, 单 depth 忽略 depthPitch; caller 须保证源指针覆盖计算出的可读 footprint. Write 返回后源可释放. 深度/模板/MS 仍可按原分配 profile 创建, 上传拒绝; 已知有限 half/float 值的存储行为不扩展为任意 NaN 位模式保证.
+
+staging 大写、PBO 与图形 push 共享 64 MiB 映射预算, 至多保留 64 个完成区段. 同容量的空闲 chunk 可重借, 受压时回收不匹配的空闲容量. volatile backing 按 UBO 与映射对齐计入独立的 16 MiB 预算. 版本与 chunk 由物理录制包持有, 仅在实际退休后复用. push 的 canonical 块由公开 `CreateShader` 接入图形计划, 按反射匹配大小、布局和可见性, 占用与普通/volatile UBO 独立的位置. 产品包使用既有 `GraphicsBaselineV1`. [上传与动态常量合同](../Docs/Architecture.md#uploads)
 
 ContextState 统一拥有 unpack、Program/FBO、ranges、采样对、VAO 输入及普通固定/动态状态缓存, 只有一个辅助 VAO 和完整子资源 clear FBO. 逻辑 Graphics 状态与 Common 用途 tracker 另由同一物理包拥有; 外部原生互操作后在 recording 中 ClearState 并重新设置图形状态, 已发工作和引用仍保留. Automatic 在每次实际消费建立用途; 显式模式由调用方请求并 Commit. 缓存命中不能跳过依赖, Close 同样恢复 keepInitialState; 当前只读 Shader profile 不发无依据的全域 barrier/等待. 只有 fence/flush 接受后才发布 tracker metadata, 不表示 texel 初始化或 GPU 完成.
 

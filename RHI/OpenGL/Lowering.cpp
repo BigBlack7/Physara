@@ -47,6 +47,7 @@ namespace Physara::RHI::OpenGL
         options.version = 460;
         options.es = false;
         options.vulkan_semantics = false;
+        options.emit_push_constant_as_uniform_buffer = true;
         // Device 已建立 upper-left/zero-to-one, 不再套用旧 GL 的深度修正或顶点 Y 翻转.
         options.vertex.fixup_clipspace = false;
         options.vertex.flip_vert_y = false;
@@ -56,25 +57,33 @@ namespace Physara::RHI::OpenGL
         compiler.set_common_options(options);
         // 先按原始 IR 身份配置 buffer, dummy 分析之后再计算活动变量并建立 combined samplers.
         const auto resources = compiler.get_shader_resources();
+        const auto lowerBlock = [&](const spirv_cross::Resource &block, ShaderBindingKey key)
+        {
+            const auto found =
+                std::ranges::find_if(plan.resources, [&](const auto &entry) { return entry.resource.key == key; });
+            if (found == plan.resources.end())
+            {
+                return;
+            }
+            compiler.set_decoration(block.id, spv::DecorationBinding, found->unit);
+            compiler.unset_decoration(block.id, spv::DecorationDescriptorSet);
+            compiler.set_name(block.base_type_id, BlockName(key));
+            compiler.set_name(block.id,
+                              "PhysaraResource_" + std::to_string(key.set) + "_" + std::to_string(key.binding));
+            NormalizeMembers(compiler, compiler.get_type(block.base_type_id));
+        };
         for (const auto &blocks : {resources.uniform_buffers, resources.storage_buffers})
         {
             for (const auto &block : blocks)
             {
-                ShaderBindingKey key{compiler.get_decoration(block.id, spv::DecorationDescriptorSet),
-                                     compiler.get_decoration(block.id, spv::DecorationBinding)};
-                const auto found =
-                    std::ranges::find_if(plan.resources, [&](const auto &entry) { return entry.resource.key == key; });
-                if (found == plan.resources.end())
-                {
-                    continue;
-                }
-                compiler.set_decoration(block.id, spv::DecorationBinding, found->unit);
-                compiler.unset_decoration(block.id, spv::DecorationDescriptorSet);
-                compiler.set_name(block.base_type_id, BlockName(key));
-                compiler.set_name(block.id,
-                                  "PhysaraResource_" + std::to_string(key.set) + "_" + std::to_string(key.binding));
-                NormalizeMembers(compiler, compiler.get_type(block.base_type_id));
+                lowerBlock(block, {compiler.get_decoration(block.id, spv::DecorationDescriptorSet),
+                                   compiler.get_decoration(block.id, spv::DecorationBinding)});
             }
+        }
+        for (const auto &block : resources.push_constant_buffers)
+        {
+            // canonical push 块没有 descriptor 地址. 两个阶段用同一保留键取块名及物理绑定点.
+            lowerBlock(block, GraphicsPushConstantKey);
         }
         const auto dummy = compiler.build_dummy_sampler_for_combined_images();
         compiler.set_enabled_interface_variables(compiler.get_active_interface_variables());

@@ -47,6 +47,11 @@ namespace Physara::Renderer
         return counts;
     }
 
+    std::pair<std::size_t, std::size_t> ForwardFrame::UploadDemand() const noexcept
+    {
+        return m_Data ? std::pair{m_Data->uploads.writes, m_Data->uploads.bytes} : std::pair<std::size_t, std::size_t>{};
+    }
+
     /// @brief 解除本轮着色引用, 槽内 View 行和普通灯缓冲留给下一次安全复用.
     static void ResetView(Detail::ForwardFrameData &view) noexcept
     {
@@ -106,9 +111,9 @@ namespace Physara::Renderer
     }
 
     ForwardRenderer::ForwardRenderer(RHI::Device &device, ForwardPackagePaths packages, std::uint32_t maxTextureSize,
-                                     std::uint32_t maxAttachmentSize) noexcept
+                                     std::uint32_t maxAttachmentSize, std::uint32_t uniformAlignment) noexcept
         : m_Device(device), m_Packages(std::move(packages)), m_MaxTextureSize(maxTextureSize),
-          m_MaxAttachmentSize(maxAttachmentSize)
+          m_MaxAttachmentSize(maxAttachmentSize), m_UniformAlignment(uniformAlignment)
     {
     }
 
@@ -130,15 +135,51 @@ namespace Physara::Renderer
         }
     }
 
+    std::optional<ForwardFailure> ForwardRenderer::ObserveModelTable(const SceneFrame &scene) noexcept
+    try
+    {
+        if (m_Resources)
+        {
+            m_Resources->ObserveGeometry(scene);
+        }
+        return std::nullopt;
+    }
+    catch (const std::bad_alloc &)
+    {
+        return ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                              Core::BoundedText("Forward model table observation allocation failed")};
+    }
+
     ForwardResidencyCounts ForwardRenderer::ResidencyCounts() const noexcept
     {
         if (!m_Resources)
         {
             return {};
         }
-        // 每个天空或反射 cube 缓存键算一项. 共享 DFG 和白纹理由单独的句柄持有.
-        return {m_Resources->geometry.size(), m_Resources->textures.size(), m_Resources->materials.size(),
-                m_Resources->environmentTextures.size()};
+        const auto &cache = *m_Resources;
+        ForwardResidencyCounts result{cache.geometry.size(), cache.textures.size() + std::size_t(bool(cache.white)),
+            cache.materials.size(), cache.environmentTextures.size() + std::size_t(bool(cache.dfgTexture))};
+        result.textureBytes = cache.capacity->textureBytes;
+        result.environmentBytes = cache.capacity->environmentBytes;
+        result.samplerEntries = cache.samplers.size() + std::size_t(bool(cache.environmentSampler));
+        result.materialRequests = cache.materialRequests;
+        result.materialHits = cache.materialHits;
+        result.materialGeneration = cache.materialGeneration;
+        for (const auto &page : cache.pages)
+        {
+            const auto bytes = static_cast<std::size_t>(page->buffer->GetDesc().byteSize);
+            if (page->usage == GraphUsage::ConstantBuffer)
+            {
+                result.materialPageBytes += bytes;
+                continue;
+            }
+            ++result.geometryPages;
+            result.geometryPageBytes += bytes;
+            result.geometryUsedBytes += page->usedBytes;
+            result.geometryRetiringBytes += page->retiringBytes;
+            result.largestGeometryGap = std::max(result.largestGeometryGap, page->largestGap);
+        }
+        return result;
     }
 
     std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
@@ -198,14 +239,17 @@ namespace Physara::Renderer
         }
         if (!m_Resources)
         {
-            m_Resources = std::make_unique<Detail::ForwardDevice>(m_Device, m_Packages, m_MaxTextureSize);
+            m_Resources = std::make_unique<Detail::ForwardDevice>(m_Device, m_Packages, m_MaxTextureSize,
+                                                                  m_UniformAlignment);
         }
         if (!frame.m_Data)
         {
             frame.m_Data = std::make_unique<Detail::ForwardFrameStorage>();
         }
+        assert(!frame.m_Data->uploads.sealed);
         if (!frame.m_Data->begun)
         {
+            m_Resources->ObserveGeometry(view.scene);
             m_Resources->Begin();
             frame.m_Data->begun = true;
         }
@@ -272,34 +316,134 @@ namespace Physara::Renderer
         std::map<RHI::Buffer *, BufferId> buffers;
         std::map<RHI::Texture *, TextureId> textures;
 
-        /// @brief 待写缓冲优先取得本图的最终写版本, 其余仅从已经接受的驻留代导入已定义内容.
-        [[nodiscard]] BufferId ReadBuffer(RenderGraph &graph, const RHI::BufferHandle &buffer)
+        /// @brief 每页只导入一次. 已接受的区间可读, 新代仍须找到本图的生产者.
+        [[nodiscard]] BufferId &BufferVersion(RenderGraph &graph, const RHI::BufferHandle &buffer,
+            const Detail::BufferPage *page, bool defined)
         {
             const auto [item, inserted] = buffers.try_emplace(buffer.Get());
             if (inserted)
             {
-                item->second = TakeGraph(graph.ImportBuffer(buffer, {BufferBoundary, BufferBoundary, true}));
+                std::vector<RHI::BufferRange> initial(0);
+                if (page)
+                {
+                    for (const auto &entry : page->occupied)
+                    {
+                        if (entry.owner->accepted)
+                        {
+                            initial.push_back(entry.range);
+                        }
+                    }
+                }
+                item->second = TakeGraph(graph.ImportBuffer(buffer, {BufferBoundary, BufferBoundary, defined && !page},
+                                                            std::nullopt, initial));
             }
             return item->second;
         }
 
-        /// @brief 所有待写 mip 已由 DeclareUploads 形成最终版本, 这里为共享读取保持唯一导入身份.
-        [[nodiscard]] TextureId ReadTexture(RenderGraph &graph, const RHI::TextureHandle &texture)
+        /// @brief 优先取本图的生产版本. 首次以读者身份导入时沿用纹理代的接受状态, 由图检查读取权限.
+        [[nodiscard]] TextureId ReadTexture(RenderGraph &graph, const Detail::ResidentTexture &product)
         {
+            const auto &texture = product.texture;
             const auto [item, inserted] = textures.try_emplace(texture.Get());
             if (inserted)
             {
-                item->second = TakeGraph(graph.ImportTexture(texture, {TextureBoundary, TextureBoundary, true}));
+                item->second = TakeGraph(graph.ImportTexture(texture,
+                    {TextureBoundary, TextureBoundary, product.accepted}));
             }
             return item->second;
         }
     };
 
-    /// @brief 初次导入的存储未初始化. 消费者只能读取按 mip 或完整缓冲写后的版本.
-    static SceneGraphResources DeclareUploads(RenderGraph &graph, const Detail::UploadBatch &batch,
+    /// @brief 归并同页且消费者集合相同的相邻写入. 未选中的页区间保持未确认.
+    static void DeclarePageUploads(RenderGraph &graph, SceneGraphResources &resources,
+        Detail::ForwardFrameStorage &frame, const std::array<bool, ForwardViewCount> &selected,
+        std::vector<GraphUpload> &uploads, std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites)
+    {
+        std::map<const Detail::Allocation *, unsigned> consumers;
+        for (std::size_t index = 0; index < selected.size(); ++index)
+        {
+            if (!selected[index])
+            {
+                continue;
+            }
+            const auto &view = frame.views[index];
+            for (const auto &draw : view.draws)
+            {
+                consumers[draw.geometry.get()] |= 1u << index;
+                consumers[view.materialRows[draw.material].get()] |= 1u << index;
+            }
+        }
+
+        struct Write
+        {
+            const Detail::BufferUpload *source;
+            unsigned consumers;
+        };
+        std::vector<Write> ordered(0);
+        for (const auto &upload : frame.uploads.buffers)
+        {
+            const auto match = consumers.find(upload.revision.get());
+            if (upload.page && match != consumers.end())
+            {
+                ordered.push_back({&upload, match->second});
+            }
+        }
+        std::ranges::sort(ordered, [](const Write &a, const Write &b)
+        {
+            if (a.source->page != b.source->page)
+            {
+                return std::less<const Detail::BufferPage *>{}(a.source->page, b.source->page);
+            }
+            return a.source->offset < b.source->offset;
+        });
+        for (std::size_t first = 0; first < ordered.size();)
+        {
+            // 只有同一组 View 消费的连续区间才共用一个生产 Pass, 任一路被裁剪时仍可独立判断活性.
+            const auto &head = *ordered[first].source;
+            auto end = head.offset + head.payload.size();
+            auto last = first + 1;
+            for (; last < ordered.size(); ++last)
+            {
+                const auto &next = ordered[last];
+                if (next.source->page != head.page || next.consumers != ordered[first].consumers ||
+                    next.source->offset != end)
+                {
+                    break;
+                }
+                end += next.source->payload.size();
+            }
+
+            std::span<const std::byte> bytes = head.payload;
+            if (last != first + 1)
+            {
+                // 合并载荷留在封存批中, Graph 的回调直到执行结束都借用此区段.
+                auto &merged = frame.uploads.merged.emplace_back(0);
+                merged.reserve(static_cast<std::size_t>(end - head.offset));
+                for (auto part : std::span(ordered).subspan(first, last - first))
+                {
+                    merged.insert(merged.end(), part.source->payload.begin(), part.source->payload.end());
+                }
+                bytes = merged;
+            }
+            auto &version = resources.BufferVersion(graph, head.buffer, head.page, false);
+            version = TakeGraph(AddBufferUpload(graph, version, bytes, uploads, head.offset));
+            const auto pass = uploads.back().pass;
+            uploads.back().source = GraphUploadSource::ForwardStatic;
+            for (auto part : std::span(ordered).subspan(first, last - first))
+            {
+                storageWrites[part.source->revision.get()].push_back(pass);
+            }
+            first = last;
+        }
+    }
+
+    /// @brief 按资源接续待写版本, 保留已有有效页区间与新写入的不同来源.
+    static SceneGraphResources DeclareUploads(RenderGraph &graph, Detail::ForwardFrameStorage &frame,
+                                               const std::array<bool, ForwardViewCount> &selected,
                                                std::vector<GraphUpload> &uploads,
                                                std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites)
     {
+        const auto &batch = frame.uploads;
         SceneGraphResources resources;
         // 一代几何可有两块缓冲, 一个 cube 可有多个面和 mip. 确认时须能逐笔找到同一代的写入.
         const auto record = [&](Detail::Allocation *storage, std::size_t first, GraphUploadSource source)
@@ -320,7 +464,7 @@ namespace Physara::Renderer
             for (std::uint32_t mip = 0; mip < upload.levels.size(); ++mip)
             {
                 version = TakeGraph(AddTextureUpload(graph, version, upload.levels[mip], std::size_t(width) * 4,
-                                                     uploads, mip)).texture;
+                    uploads, mip, 0, &upload.revision->uploadRecorded)).texture;
                 width = std::max(1u, width / 2);
             }
             resources.textures.emplace(texture.Get(), version);
@@ -356,13 +500,17 @@ namespace Physara::Renderer
         }
         for (const auto &upload : batch.buffers)
         {
+            if (upload.page)
+            {
+                continue;
+            }
             const auto first = uploads.size();
-            const auto initial = TakeGraph(graph.ImportBuffer(upload.buffer, {BufferBoundary, BufferBoundary, false}));
-            resources.buffers.emplace(upload.buffer.Get(),
-                TakeGraph(AddBufferUpload(graph, initial, upload.payload, uploads)));
+            auto &version = resources.BufferVersion(graph, upload.buffer, upload.page, false);
+            version = TakeGraph(AddBufferUpload(graph, version, upload.payload, uploads, upload.offset));
             record(upload.revision.get(), first, upload.viewConstant ? GraphUploadSource::ForwardView :
                                                                       GraphUploadSource::ForwardStatic);
         }
+        DeclarePageUploads(graph, resources, frame, selected, uploads, storageWrites);
         return resources;
     }
 
@@ -392,10 +540,10 @@ namespace Physara::Renderer
         std::vector<GraphDraw> draws;
     };
 
-    /// @brief 同一 Pass 按物理资源身份去重的精确读取, 在 setup 时交给图建立依赖与执行权限.
+    /// @brief 同一 Pass 按资源及范围去重, 同页上不同几何或材质区间仍各自保留.
     struct RasterReads
     {
-        std::map<std::uint32_t, BufferAccess> buffers;
+        std::map<std::tuple<std::uint32_t, std::uint64_t, std::uint64_t, GraphUsage>, BufferAccess> buffers;
         std::map<std::uint32_t, TextureAccess> textures;
     };
 
@@ -419,11 +567,21 @@ namespace Physara::Renderer
         {
             return raster;
         }
+        const auto readBuffer = [&](const RHI::BufferHandle &handle, GraphUsage usage, RHI::BufferRange range,
+                                    const Detail::BufferPage *page)
+        {
+            BufferAccess access{versions.BufferVersion(graph, handle, page, true), range, usage};
+            reads.buffers.try_emplace(std::tuple{access.resource.identity.index, range.byteOffset, range.byteSize,
+                                                 usage}, access);
+            return access;
+        };
         const auto buffer = [&](const RHI::BufferHandle &handle, GraphUsage usage)
         {
-            BufferAccess access{versions.ReadBuffer(graph, handle), {0, handle->GetDesc().byteSize}, usage};
-            reads.buffers.try_emplace(access.resource.identity.index, access);
-            return access;
+            return readBuffer(handle, usage, {0, handle->GetDesc().byteSize}, nullptr);
+        };
+        const auto slice = [&](const Detail::PageSlice &storage)
+        {
+            return readBuffer(storage.page->buffer, storage.page->usage, storage.range, storage.page.get());
         };
         static_cast<void>(buffer(frame.view->buffer, GraphUsage::ConstantBuffer));
         raster.view = frame.view->binding.Get();
@@ -432,10 +590,10 @@ namespace Physara::Renderer
             raster.lights = buffer(frame.activeLights->buffer, GraphUsage::ShaderRead);
             raster.lightLayout = frame.lightLayout.Get();
             const auto &environment = frame.environment;
-            const auto sample = [&](const RHI::TextureHandle &texture)
+            const auto sample = [&](const Detail::ResidentTexture &texture)
             {
                 const auto version = versions.ReadTexture(graph, texture);
-                const auto &desc = texture->GetDesc();
+                const auto &desc = texture.texture->GetDesc();
                 const TextureAccess access{version, {.mipCount = desc.mipLevels, .layerCount = desc.arraySize},
                                            GraphUsage::Sampled};
                 reads.textures.try_emplace(version.identity.index, access);
@@ -443,12 +601,12 @@ namespace Physara::Renderer
             };
             if (environment.dfg)
             {
-                raster.dfg = sample(environment.dfg->texture);
+                raster.dfg = sample(*environment.dfg);
                 raster.environmentSampler = environment.sampler.Get();
             }
             if (environment.reflection)
             {
-                raster.reflection = sample(environment.reflection->texture);
+                raster.reflection = sample(*environment.reflection);
                 raster.environment = buffer(environment.lightingConstants->buffer, GraphUsage::ConstantBuffer);
             }
         }
@@ -457,17 +615,18 @@ namespace Physara::Renderer
         {
             const auto &material = *frame.materialRows[draw.material];
             static_cast<void>(buffer(draw.object->buffer, GraphUsage::ConstantBuffer));
-            static_cast<void>(buffer(material.buffer, GraphUsage::ConstantBuffer));
+            static_cast<void>(slice(material.storage));
             const auto slots = depthOnly ? 1 : material.textures.size();
             for (std::size_t i = 0; i < slots; ++i)
             {
-                const auto &texture = material.textures[i]->texture;
-                const auto version = versions.ReadTexture(graph, texture);
+                const auto &product = *material.textures[i];
+                const auto version = versions.ReadTexture(graph, product);
                 reads.textures.try_emplace(version.identity.index,
-                    TextureAccess{version, {.mipCount = texture->GetDesc().mipLevels}, GraphUsage::Sampled});
+                    TextureAccess{version, {.firstMip = product.sampling.baseMipLevel,
+                        .mipCount = product.sampling.numMipLevels}, GraphUsage::Sampled});
             }
-            raster.draws.push_back({buffer(draw.geometry->vertices, GraphUsage::VertexBuffer),
-                buffer(draw.geometry->indices, GraphUsage::IndexBuffer), draw.object->binding.Get(),
+            raster.draws.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices),
+                draw.object->binding.Get(),
                 material.binding.Get(), (depthOnly ? draw.depthPipeline : draw.pipeline).Get(), draw.geometry->indexCount});
         }
         return raster;
@@ -494,8 +653,9 @@ namespace Physara::Renderer
             RHI::GraphicsState state;
             state.SetFramebuffer(resources.Framebuffer()).SetPipeline(draw.pipeline).SetViewport(raster.viewport)
                 .AddBindingSet(raster.view).AddBindingSet(draw.object).AddBindingSet(draw.material)
-                .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices))
-                .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT));
+                .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices).SetOffset(draw.vertices.range.byteOffset))
+                .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT)
+                    .SetOffset(static_cast<std::uint32_t>(draw.indices.range.byteOffset)));
             if (lights)
             {
                 state.AddBindingSet(lights);
@@ -632,8 +792,8 @@ namespace Physara::Renderer
             return;
         }
         const auto &view = environment.skyConstants->buffer;
-        const auto cube = resources.ReadTexture(graph, environment.sky->texture);
-        const BufferAccess constants{resources.ReadBuffer(graph, view), {0, view->GetDesc().byteSize},
+        const auto cube = resources.ReadTexture(graph, *environment.sky);
+        const BufferAccess constants{resources.BufferVersion(graph, view, nullptr, true), {0, view->GetDesc().byteSize},
                                      GraphUsage::ConstantBuffer};
         static_cast<void>(TakeGraph(graph.AddPass<SkyPass>("Forward Sky",
             [&](PassBuilder &builder, SkyPass &data)
@@ -691,10 +851,11 @@ namespace Physara::Renderer
     }
 
     GraphResult<ForwardGraph> ForwardFrame::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads,
-        const std::array<bool, ForwardViewCount> &selected) const
+        const std::array<bool, ForwardViewCount> &selected)
     try
     {
-        assert(m_Data);
+        assert(m_Data && !m_Data->uploads.sealed);
+        m_Data->uploads.sealed = true;
         ForwardGraph output;
         TextureId lut;
         for (std::size_t index = 0; index < selected.size(); ++index)
@@ -715,7 +876,7 @@ namespace Physara::Renderer
             }
         }
         // 生产版本只建立一次. 逐路声明读取时沿用同一映射, 因而存活的任一路都能保住共享上传.
-        auto versions = DeclareUploads(graph, m_Data->uploads, uploads, output.m_StorageWrites);
+        auto versions = DeclareUploads(graph, *m_Data, selected, uploads, output.m_StorageWrites);
         for (std::size_t index = 0; index < selected.size(); ++index)
         {
             if (selected[index])
@@ -737,7 +898,8 @@ namespace Physara::Renderer
         {
             m_Data->views[output.m_LutView].display.Confirm();
         }
-        // 每一代只在自己的全部范围被写入后确认. 例如几何的顶点及索引, 或环境的所有面和 mip.
+        // 一代几何须同时确认顶点和索引, 一个 cube 须确认所有面和 mip.
+        // 材质行与其引用的纹理分别拥有写入记录, 各自依据本图的存活 Pass 取得确认.
         for (const auto &[storage, writes] : output.m_StorageWrites)
         {
             if (std::ranges::all_of(writes, [&](PassId pass) { return IsLivePass(plan, pass); }))

@@ -67,7 +67,7 @@ namespace Physara::RHI::OpenGL
         const auto *set = static_cast<const OpenGLBindingSet *>(state.bindings[entry.layoutIndex]);
         const auto found =
             std::ranges::find_if(set->Bindings(), [&](const auto &binding)
-                                 { return binding.type == entry.resource.type && binding.slot == entry.slot; });
+                                 { return binding.type == entry.bindingType && binding.slot == entry.slot; });
         assert(found != set->Bindings().end());
         return *found;
     }
@@ -317,7 +317,9 @@ namespace Physara::RHI::OpenGL
             m_Device->m_ContextState.Invalidate();
             return;
         }
+        // 只有被接受的图形状态才开启新的 push 写入区间, 即使它沿用相同 Pipeline 和集合.
         m_Packet->graphics = candidate;
+        m_Packet->push = {};
         m_Packet->graphicsSet = true;
         m_Packet->viewportSet = !candidate.viewport.viewports.empty();
         m_Packet->scissorSet = !candidate.viewport.scissorRects.empty();

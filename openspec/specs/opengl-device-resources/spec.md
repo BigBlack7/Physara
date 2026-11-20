@@ -41,7 +41,8 @@ Reported resource support SHALL be the intersection of the implemented resource 
 - **THEN** the device and its validation layer report no enabled support and leave optional output data unchanged
 
 ### Requirement: Create immutable buffer allocations
-A valid supported buffer description SHALL produce one device-owned immutable allocation with the requested byte capacity and preserved descriptor meaning. Size conversions and layout constraints SHALL be checked before allocation. CPU mapping, volatile storage and typed views outside this profile SHALL be rejected. Allocating storage SHALL NOT initialize its contents or represent a completed upload.
+
+A valid supported ordinary buffer description SHALL produce one device-owned immutable allocation with the requested byte capacity and preserved descriptor meaning. A supported volatile constant-buffer description SHALL retain its public logical byte capacity and nonzero `maxVersions`, with storage for that many aligned versions under the actual device limits and a finite device budget. Size conversions, stride multiplication, applicable UBO and mapping alignments, and layout constraints SHALL be checked before allocation. CPU mapping, typed views and volatile uses outside the constant-buffer profile SHALL be rejected. Allocating storage SHALL NOT initialize its contents or represent a completed upload.
 
 #### Scenario: Create and inspect an ordinary buffer
 - **WHEN** a caller requests a supported nonzero buffer allocation
@@ -52,8 +53,12 @@ A valid supported buffer description SHALL produce one device-owned immutable al
 - **THEN** creation reports the invalid request before allocating a native object
 
 #### Scenario: Request unavailable buffer access
-- **WHEN** a caller requests CPU mapping, volatile storage or a typed buffer view outside this profile
+- **WHEN** a caller requests CPU mapping, a typed buffer view or a volatile use outside the supported constant-buffer profile
 - **THEN** the request fails explicitly without substituting ordinary storage or reporting a successful upload
+
+#### Scenario: Allocate bounded volatile constant storage
+- **WHEN** a caller requests a supported volatile constant buffer with a small nonzero `maxVersions`, then requests one whose aligned backing exceeds the allowed capacity
+- **THEN** the accepted descriptor reports its logical size and version count and starts without a usable written version; the excessive request fails before native allocation with a specific limit diagnostic
 
 ### Requirement: Create texture storage with explicit shape and usage
 Valid supported textures SHALL retain their dimensions, mip and array semantics, sample count, usage and color encoding. Storage and creation checks SHALL use the actual target and format. Unsupported usages or formats SHALL fail without conversion to another resource. Initial-state and clear-value metadata SHALL NOT be interpreted as initialized pixels or completed transitions.

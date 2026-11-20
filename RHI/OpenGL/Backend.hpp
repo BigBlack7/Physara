@@ -100,6 +100,7 @@ namespace Physara::RHI::OpenGL
         GLuint name = 0;
         std::array<GLuint, MaxRenderTargets + 1> views{};
         std::uint32_t viewCount = 0;
+        std::size_t volatileBytes = 0; ///< 版本化常量 backing 在 owner 删除时归还额度.
         NativeDeletion *next = nullptr;
 
         explicit NativeDeletion(NativeKind value) noexcept : kind(value)
@@ -112,6 +113,7 @@ namespace Physara::RHI::OpenGL
     };
 
     struct UploadWorkPacket;
+    struct UploadChunk;
     struct UploadSlice;
     struct SubmissionState;
     class OpenGLCommandList;
@@ -125,6 +127,8 @@ namespace Physara::RHI::OpenGL
     public:
         /// @brief owner 线程读取命令与原生绑定缓存各自记录的事实.
         [[nodiscard]] GraphicsOperationCounts GraphicsCounts() const noexcept;
+        /// @brief 读取已分配及可重借的映射容量. volatile backing 独立记账, 单位均为字节.
+        [[nodiscard]] GraphicsUploadStorage UploadStorage() const noexcept;
 
         explicit OpenGLDevice(const DeviceDesc &desc);
         /// @brief 校验闭合包和源附件后, 在原包登记末端 FBO lease 并委托 ContextState 建立复制条件.
@@ -313,8 +317,12 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
         /// @brief 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
         [[nodiscard]] bool CheckCompletionFence(GLsync sync, const char *operation) noexcept;
-        /// @brief 从当前包尾部或新 coherent chunk 分配, 受设备总预算约束, 不隐式等待其他包退休.
-        [[nodiscard]] bool AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice);
+        /// @brief 优先使用本包尾部, 再借同容量的空闲 chunk 或新建映射, 按设备总额度准入.
+        /// @param requiredAlignment 消费命令对区段起点的额外字节对齐, push 写取 UBO 的对齐值.
+        [[nodiscard]] bool AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice,
+                                          std::size_t requiredAlignment = 1);
+        /// @brief 扣除 chunk 容量. context 可用时解映射并删除, 原生清理失败由设备退出路径收拢.
+        [[nodiscard]] bool DeleteUploadChunk(UploadChunk &chunk, bool nativeAvailable) noexcept;
         /// @brief 输出 requested/retained/limit, 让容量拒绝可归因, 不伪装成硬件显存不足.
         void ReportBudget(const char *operation, std::size_t requested, std::size_t retained,
                           std::size_t limit) const noexcept;
@@ -333,8 +341,12 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_LastRecordingId = 0;
         std::uint64_t m_LastSubmissionId = 0;
         std::uint64_t m_CompletedSubmissionId = 0;
-        // 由 owner 计入已分配 chunk 的实际容量, 在物理包退休时归还.
+        // 已完成的 chunk 可保留映射. 设备预算同时覆盖包内和有界空闲表中的存储.
+        std::array<std::unique_ptr<UploadChunk>, UploadPacketLimit> m_AvailableUploads{};
         std::size_t m_UploadCapacity = 0;
+        std::size_t m_AvailableUploadCapacity = 0;
+        std::size_t m_UploadHighWater = 0;
+        std::size_t m_VolatileCapacity = 0;
         std::uint64_t m_DepthWriteEpoch = 0;     ///< owner 已发出的深度附件写入序号, 独立于包和状态缓存.
         std::uint64_t m_TextureBarrierEpoch = 0; ///< 最近一次 GL TextureBarrier 覆盖的设备级写入进度.
         std::size_t m_TimerNames = 0; ///< 实际存活/待删除名字, 只有原生删除或最终失效退出归还.
@@ -394,6 +406,14 @@ namespace Physara::RHI::OpenGL
         BufferDesc m_Desc;
         BufferStateExtension m_State{m_Desc};
         std::unique_ptr<NativeDeletion> m_Deletion;
+        // 每个版本记录其物理包身份, 由同一 owner 录制并退休. 零表示可用, 包内索引零合法.
+        std::vector<std::uint64_t> m_Versions = std::vector<std::uint64_t>(0);
+        std::byte *m_Mapping = nullptr;
+        std::size_t m_VersionStride = 0;
+        std::size_t m_ValidPrefix = 0;
+        std::uint64_t m_LatestRecording = 0;
+        std::uint32_t m_LatestVersion = 0;
+        std::uint32_t m_NextVersion = 0;
         bool m_Published = false;
         friend class OpenGLDevice;
         friend class OpenGLCommandList;

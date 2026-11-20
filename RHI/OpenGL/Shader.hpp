@@ -19,6 +19,8 @@ namespace Physara::RHI::OpenGL
         std::uint32_t binding = 0;
         auto operator<=>(const ShaderBindingKey &) const = default;
     };
+    /// @brief canonical PushConstant 没有 descriptor set, 用保留键合并相容阶段.
+    inline constexpr ShaderBindingKey GraphicsPushConstantKey{~std::uint32_t{}, 0};
 
     /// @brief 活动资源及其完整数值布局签名, extent/stride 的单位为字节.
     /// @note id 只属于该模块, 跨阶段以 key 合并; layout 比较数值字段而非名称或对象 padding.

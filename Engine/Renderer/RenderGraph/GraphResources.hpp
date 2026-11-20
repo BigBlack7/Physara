@@ -119,7 +119,7 @@ namespace Physara::Renderer
     /// @brief 外部 owner 提供允许范围的进出状态与初始内容事实.
     /// @note 导入方须填写 entry 和 final. 两者都须为公共 RHI 定义的非零状态位组合.
     /// entry 用于接管外部对象时的状态跟踪, final 用于将其交还给外部 owner.
-    /// 整个导入范围的初始内容有效性由 contentDefined 单独声明.
+    /// contentDefined 为 true 时, 整个导入范围初始有效. Buffer 也可单独提供部分有效区间.
     struct ImportState
     {
         RHI::ResourceStates entry = RHI::ResourceStates::Unknown;
@@ -224,7 +224,12 @@ namespace Physara::Renderer
     };
 
     using TextureDeclaration = ResourceDeclaration<RHI::TextureDesc, TextureRange, RHI::TextureHandle>;
-    using BufferDeclaration = ResourceDeclaration<RHI::BufferDesc, RHI::BufferRange, RHI::BufferHandle>;
+    /// @brief 共享页的初始有效字节. 部分区间互不重叠, 不相邻并按起点排序.
+    struct BufferDeclaration : ResourceDeclaration<RHI::BufferDesc, RHI::BufferRange, RHI::BufferHandle>
+    {
+        using ResourceDeclaration::ResourceDeclaration;
+        std::vector<RHI::BufferRange> initialContent = std::vector<RHI::BufferRange>(0);
+    };
 
     /// @brief 供编译读取的已发布 Pass. 名称仅用于诊断, uses 按 setup 的声明顺序保存.
     /// @invariant 生产者和读回记录的用途索引均指向同一份 uses. 图通过 PassId 关联拥有型回调.

@@ -21,6 +21,8 @@
 
 入口和结束状态 SHALL 各自提供公共 RHI 定义的非零状态。遇到 `Unknown` 或未定义状态位，图 SHALL 报告资源及对应字段，并拒绝发布导入记录。
 
+Buffer 导入 SHALL 能表达允许范围中全部有效、全部未定义或一组确切的已定义字节区间。区间 SHALL 经范围校验、归一化后纳入同一导入身份的等价判断。编译及执行期权限 SHALL 以同一份覆盖信息保留已定义区间，直到被对应写版本改变。未定义的间隙 SHALL 保持不可读，直到有实际写入完整覆盖它。
+
 #### Scenario: Reuse only an equivalent import
 
 - **WHEN** 同一外部资源以等价的规范范围和相同进出状态、内容声明重复导入，随后同一资源以冲突条件再导入
@@ -30,6 +32,11 @@
 
 - **WHEN** 纹理访问的 mip、layer 或 aspect 超出声明允许范围，或缓冲访问只超出可用字节区间末端一字节
 - **THEN** 合法边界内的范围可声明，越界请求不生成用途、写版本或导出记录
+
+#### Scenario: Import initialized buffer intervals with an unwritten gap
+
+- **WHEN** 一份页 Buffer 有已驻留区间、待上传区间及一个未写空洞，随后图以精确范围写入待上传区间
+- **THEN** 两个已定义范围按其导入或生产版本合法消费，跨空洞的读取被拒绝；声明等价初始覆盖继续使用同一图身份，改变覆盖的重复导入被拒绝
 
 ### Requirement: Record version producers and content effects
 

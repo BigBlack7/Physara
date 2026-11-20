@@ -139,18 +139,18 @@ namespace Physara::RHI::OpenGL
     }
 
     /// @brief 检查链接后仍活动的 native 接口, 允许驱动移除未消费资源, 不允许保留资源绑定错位.
-    static void CheckLinkedBindings(GLuint program, const PipelineBindingPlan &plan)
+    static void CheckLinkedBindings(GLuint program, PipelineBindingPlan &plan, const ShaderCaps &caps)
     {
-        // 这里只核对仍活动的块/sampler 的原生绑定值, 不是再次扫描 canonical 字段或重算布局.
-        for (const auto &entry : plan.resources)
+        // 核对仍活动的块和 sampler 的绑定位置. 动态 UBO 还须取得驱动报告的完整块大小以确定绑定范围.
+        for (auto &entry : plan.resources)
         {
             const auto type = entry.resource.type;
-            if (type != ResourceType::ConstantBuffer && type != ResourceType::StructuredBuffer_SRV)
+            const bool uniform = type == ResourceType::ConstantBuffer || type == ResourceType::PushConstants;
+            if (!uniform && type != ResourceType::StructuredBuffer_SRV)
             {
                 continue;
             }
-            const auto interfaceType =
-                type == ResourceType::ConstantBuffer ? GL_UNIFORM_BLOCK : GL_SHADER_STORAGE_BLOCK;
+            const auto interfaceType = uniform ? GL_UNIFORM_BLOCK : GL_SHADER_STORAGE_BLOCK;
             const auto name = BlockName(entry.resource.key);
             const auto index = glGetProgramResourceIndex(program, interfaceType, name.c_str());
             if (index == GL_INVALID_INDEX)
@@ -161,6 +161,19 @@ namespace Physara::RHI::OpenGL
             GLint binding = -1;
             glGetProgramResourceiv(program, interfaceType, index, 1, &Property, 1, nullptr, &binding);
             RequirePreparation(binding == GLint(entry.unit), "InterfaceMismatch: linked block " + name);
+            if (type == ResourceType::PushConstants || entry.bindingType == ResourceType::VolatileConstantBuffer)
+            {
+                constexpr GLenum Size = GL_BUFFER_DATA_SIZE;
+                GLint extent = 0;
+                glGetProgramResourceiv(program, interfaceType, index, 1, &Size, 1, nullptr, &extent);
+                RequirePreparation(extent > 0 && extent <= caps.uniformBlockBytes,
+                                   "InterfaceMismatch: native dynamic block size " + name);
+                entry.nativeExtent = (std::max)(entry.resource.extent, static_cast<std::uint32_t>(extent));
+                if (type == ResourceType::PushConstants)
+                {
+                    plan.pushBackingBytes = (std::max)(plan.pushBytes, entry.nativeExtent);
+                }
+            }
         }
         for (const auto &entry : plan.pairs)
         {
@@ -371,7 +384,7 @@ namespace Physara::RHI::OpenGL
             {
                 glDetachShader(program, attached[std::size_t(index)]);
             }
-            CheckLinkedBindings(program, pipeline->m_Plan);
+            CheckLinkedBindings(program, pipeline->m_Plan, m_Caps.shader);
             if (!CheckNative("CreateGraphicsPipeline.Interfaces", program))
             {
                 return nullptr;

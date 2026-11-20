@@ -101,13 +101,17 @@ namespace Physara::Renderer
         std::size_t lights{};
     };
 
-    /// @brief 设备级 Forward 驻留缓存的当前索引数量, 含等待淘汰的缓存代.
+    /// @brief 设备级 Forward 缓存快照. 几何已用字节包含标为待退休的区间, 最大空洞取单页的连续空闲长度.
+    /// @note 材质请求和命中按设备累计, materialGeneration 在发布新材质行时推进.
     struct ForwardResidencyCounts
     {
         std::size_t geometry{};
         std::size_t textures{};
         std::size_t materials{};
         std::size_t environment{};
+        std::size_t geometryPages{}, geometryPageBytes{}, geometryUsedBytes{}, geometryRetiringBytes{};
+        std::size_t largestGeometryGap{}, materialPageBytes{}, textureBytes{}, environmentBytes{}, samplerEntries{};
+        std::uint64_t materialRequests{}, materialHits{}, materialGeneration{};
     };
 
     /// @brief 槽拥有的 Draw 和上传快照. Draw 及其 RHI 引用持续保活至槽取得安全复用证明.
@@ -131,12 +135,14 @@ namespace Physara::Renderer
         [[nodiscard]] ForwardWorkCounts WorkCounts(std::size_t index = 0) const noexcept;
         /// @brief 汇总自本槽 Reset 起两路实际执行的编码. 命中已编码的共享行时计数保持原值.
         [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
+        /// @brief 封存前拥有的写入需求, 包含之后可能不进入存活计划的写入.
+        [[nodiscard]] std::pair<std::size_t, std::size_t> UploadDemand() const noexcept;
 
         /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
         /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
         /// @note 返回值带各路独立的显示色版本. 调用方按 UI 采样或显式导出建立各自的消费者.
         [[nodiscard]] GraphResult<ForwardGraph> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads,
-            const std::array<bool, ForwardViewCount> &selected = {true, false}) const;
+            const std::array<bool, ForwardViewCount> &selected = {true, false});
         /// @brief 完整正常图获接受后, 分别确认全部所需写入均存活的存储代.
         /// @pre output 来自本次声明, plan 是接受的同图计划, 前缀提交不具备确认资格.
         void Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept;
@@ -155,7 +161,8 @@ namespace Physara::Renderer
     {
     public:
         ForwardRenderer(RHI::Device &device, ForwardPackagePaths packages, std::uint32_t maxTextureSize,
-                        std::uint32_t maxAttachmentSize) noexcept;
+                        std::uint32_t maxAttachmentSize,
+                        std::uint32_t uniformAlignment = RHI::ConstantBufferOffsetSizeAlignment) noexcept;
         ~ForwardRenderer();
         ForwardRenderer(const ForwardRenderer &) = delete;
         ForwardRenderer &operator=(const ForwardRenderer &) = delete;
@@ -164,6 +171,12 @@ namespace Physara::Renderer
         void BeginEnvironmentRequests(const Asset::EnvironmentVersion &source) noexcept;
         /// @brief 所有可消费的 View 已准备, 撤销已失去消费者的环境作业.
         void EndEnvironmentRequests() noexcept;
+
+        /// @brief 用完整模型表更新已有几何目录, 包括本帧只构建诊断图的情况.
+        /// @pre scene 来自本轮成功提取. 本轮未提取时调用方沿用上次观察.
+        /// @return 模型表准备内存不足时报告错误并保留上次观察.
+        /// @note 此入口不创建驻留缓存. 目录撤销后的区间由持有相应 Draw 的槽保活.
+        [[nodiscard]] std::optional<ForwardFailure> ObserveModelTable(const SceneFrame &scene) noexcept;
 
         /// @brief 在创建资源前核对渲染和显示画布的单边上限及本 View 的固定附件预算.
         /// @param display 本路预览模式和 AA 请求解析出的实际显示配置.
@@ -177,7 +190,7 @@ namespace Physara::Renderer
         /// @note 局部失败清理该路的 Draw, 已完整登记的生产仍由共同批次保有, 图将核对活性.
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
-        /// @brief 在设备 owner 线程读取四张缓存索引当时的条目数. 首次准备前各项为零.
+        /// @brief 在设备 owner 线程读取目录条目数, 物理存储占用和材质复用计数. 首次准备前各项为零.
         [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
 
     private:
@@ -185,6 +198,7 @@ namespace Physara::Renderer
         ForwardPackagePaths m_Packages;
         std::uint32_t m_MaxTextureSize;
         std::uint32_t m_MaxAttachmentSize;
+        std::uint32_t m_UniformAlignment;
         std::unique_ptr<Detail::ForwardDevice> m_Resources;
     };
 }

@@ -40,7 +40,16 @@ namespace Physara::RHI::OpenGL
         for (const auto &entry : pipeline.Plan().resources)
         {
             const auto &binding = BindingFor(state, entry);
-            if (binding.type == ResourceType::ConstantBuffer || binding.type == ResourceType::StructuredBuffer_SRV)
+            if (binding.type == ResourceType::VolatileConstantBuffer)
+            {
+                // 版本范围由本包拥有的 host 写建立. 图权限仍用公开 Buffer 的逻辑范围.
+                if (!CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(binding.resource), ResourceStates::ConstantBuffer,
+                                         operation, binding.range))
+                {
+                    return false;
+                }
+            }
+            else if (binding.type == ResourceType::ConstantBuffer || binding.type == ResourceType::StructuredBuffer_SRV)
             {
                 const auto use = binding.type == ResourceType::ConstantBuffer ? ResourceStates::ConstantBuffer
                                                                               : ShaderReads(entry.stages);
@@ -192,7 +201,8 @@ namespace Physara::RHI::OpenGL
         const auto shaderState = GetShaderResourceStateForBindingLayout(set->GetLayout());
         for (const auto &binding : set->Bindings())
         {
-            if (binding.type == ResourceType::Sampler)
+            if (binding.type == ResourceType::Sampler || binding.type == ResourceType::PushConstants ||
+                binding.type == ResourceType::VolatileConstantBuffer)
             {
                 continue;
             }
@@ -212,6 +222,52 @@ namespace Physara::RHI::OpenGL
                 m_Packet->tracker.RequireBufferState(&buffer->m_State, binding.type == ResourceType::ConstantBuffer
                                                                            ? ResourceStates::ConstantBuffer
                                                                            : shaderState);
+            }
+        }
+    }
+
+    bool OpenGLCommandList::CheckDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
+                                               const char *operation) const
+    {
+        for (const auto &entry : pipeline.Plan().resources)
+        {
+            if (entry.bindingType == ResourceType::PushConstants && !m_Packet->push.buffer)
+            {
+                m_Device->Report(operation, "InvalidState: push constants missing for current graphics state");
+                return false;
+            }
+            if (entry.bindingType == ResourceType::VolatileConstantBuffer)
+            {
+                const auto &binding = BindingFor(state, entry);
+                const auto &buffer = *static_cast<OpenGLBuffer *>(binding.resource);
+                // 成员有效字节须落在本次写入前缀内. 原生绑定另计块尾对齐, 整段须落在同一版本槽内.
+                if (buffer.m_LatestRecording != m_Packet->recordingId || buffer.m_ValidPrefix < entry.resource.extent ||
+                    entry.nativeExtent > buffer.m_VersionStride)
+                {
+                    m_Device->Report(operation, "InvalidState: volatile version missing or too small for active block",
+                                     buffer.GetDesc().debugName.c_str());
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void OpenGLCommandList::ApplyDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline)
+    {
+        auto &context = m_Device->m_ContextState;
+        for (const auto &entry : pipeline.Plan().resources)
+        {
+            if (entry.bindingType == ResourceType::PushConstants)
+            {
+                const auto &push = m_Packet->push;
+                context.ApplyBufferRange(false, entry.unit, push.buffer, GLintptr(push.offset), entry.nativeExtent);
+            }
+            else if (entry.bindingType == ResourceType::VolatileConstantBuffer)
+            {
+                const auto &buffer = *static_cast<OpenGLBuffer *>(BindingFor(state, entry).resource);
+                const auto offset = buffer.m_LatestVersion * buffer.m_VersionStride;
+                context.ApplyBufferRange(false, entry.unit, buffer.Name(), GLintptr(offset), entry.nativeExtent);
             }
         }
     }

@@ -120,33 +120,24 @@ namespace Physara::RHI::OpenGL
         // 只由完成收集或最终退出调用. 先收拢查询并断开包借用, 再释放 tracker/chunk, lease 和包.
         ReconcileQueries(packet, true);
         packet.tracker.Reset();
+        // 版本记录借用 Buffer wrapper. 必须先归还版本再释放 resources 中的强引用.
+        for (const auto &lease : packet.volatileLeases)
+        {
+            lease.buffer->m_Versions[lease.version] = 0;
+        }
         for (auto &chunk : packet.chunks)
         {
-            if (nativeAvailable && m_NativeUsable && chunk->name != 0)
+            if (nativeAvailable && m_NativeUsable && m_Phase == Phase::Active && chunk->mapping != nullptr)
             {
-                m_ContextState.Invalidate();
-                if (chunk->mapping != nullptr)
+                const auto available = std::ranges::find_if(m_AvailableUploads, [](const auto &item) { return !item; });
+                if (available != m_AvailableUploads.end())
                 {
-                    const auto valid = glUnmapNamedBuffer(chunk->name);
-                    nativeAvailable = CheckNative("RetireUpload.Unmap", chunk->name);
-                    if (valid != GL_TRUE)
-                    {
-                        if (nativeAvailable)
-                        {
-                            Report("RetireUpload.Unmap", "NativeFailure: mapped storage contents became invalid");
-                        }
-                        m_Phase = Phase::Faulted;
-                        m_WorkFailed = true;
-                        nativeAvailable = false;
-                    }
-                }
-                if (nativeAvailable && m_NativeUsable)
-                {
-                    glDeleteBuffers(1, &chunk->name);
-                    nativeAvailable = CheckNative("RetireUpload.Delete", chunk->name);
+                    m_AvailableUploadCapacity += chunk->capacity;
+                    *available = std::move(chunk);
+                    continue;
                 }
             }
-            m_UploadCapacity -= chunk->capacity;
+            nativeAvailable = DeleteUploadChunk(*chunk, nativeAvailable);
         }
         // 先解除 lease 计数再 Release wrapper; 后者只入原生删除 FIFO.
         packet.resources.clear();
@@ -468,6 +459,16 @@ namespace Physara::RHI::OpenGL
                 nativeAvailable = nativeAvailable && m_NativeUsable && m_Phase != Phase::Faulted;
             }
         }
+        // 活动包已收拢. 设备保留的空闲映射也须在宿主释放 context 前解除.
+        for (auto &chunk : m_AvailableUploads)
+        {
+            if (chunk)
+            {
+                m_AvailableUploadCapacity -= chunk->capacity;
+                nativeAvailable = DeleteUploadChunk(*chunk, nativeAvailable);
+                chunk.reset();
+            }
+        }
         // 包依赖已退休后才释放唯一 VAO/清除 FBO, 随后排空 wrapper 的原生删除记录.
         // 设备自有 dummy sampler 没有 wrapper/反向引用, 与普通退休记录一起在正确 context 收拢.
         m_ContextState.Shutdown(*this, nativeAvailable);
@@ -476,6 +477,7 @@ namespace Physara::RHI::OpenGL
         Drain(nativeAvailable);
         // 原生删除失败或 context 不可用时, 剩余名字交确切 context 的最终销毁, 不恢复 Active 预算.
         m_TimerNames = 0;
+        m_VolatileCapacity = 0;
         m_Phase = Phase::Stopped;
         if (nativeError != nullptr)
         {

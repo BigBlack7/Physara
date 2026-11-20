@@ -1,10 +1,12 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 受检 Buffer 区间与整纹理子资源上传, 先准备 lease/状态/容量, 再消费源并发出即时 GL.
+/// @brief 执行普通 Buffer 和纹理传输, 并为图形动态常量登记版本. CPU 源在调用内复制或交给即时 GL 命令.
 
 #include <cstring>
 #include <limits>
+#include <new>
+#include "Pipeline.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -28,6 +30,12 @@ namespace Physara::RHI::OpenGL
             m_Device->Report("WriteBuffer", "InvalidArgument: source or destination interval");
             return;
         }
+        const bool isVolatile = native->m_Desc.isVolatile;
+        if (isVolatile && (offset != 0 || size == 0))
+        {
+            m_Device->Report("WriteBuffer", "InvalidArgument: volatile write requires a nonempty prefix");
+            return;
+        }
         if (size == 0)
         {
             // 严格空区间不取得上传容量/lease, 也不解引用 data; offset 已按实际容量检查.
@@ -41,6 +49,11 @@ namespace Physara::RHI::OpenGL
         if (size > UploadCapacityLimit - packet->logicalBytes)
         {
             m_Device->ReportBudget("WriteBuffer", size, packet->logicalBytes, UploadCapacityLimit);
+            return;
+        }
+        if (isVolatile)
+        {
+            WriteVolatile(*native, data, size);
             return;
         }
         if (!Retain(native, native->m_InternalOwners) ||
@@ -83,6 +96,88 @@ namespace Physara::RHI::OpenGL
         {
             packet->invalid = true;
         }
+    }
+
+    void OpenGLCommandList::WriteVolatile(OpenGLBuffer &buffer, const void *data, std::size_t size)
+    {
+        if (!CheckGraphBufferUse(buffer, ResourceStates::CopyDest, "WriteBuffer.Volatile", BufferRange{0, size}))
+        {
+            return;
+        }
+        auto &packet = *m_Packet;
+        const auto count = buffer.m_Versions.size();
+        // 从上次写入的后一槽开始绕回. 非零身份表示仍由某个包持有, 包退休统一清零.
+        auto version = static_cast<std::size_t>(buffer.m_NextVersion);
+        std::size_t checked = 0;
+        while (checked < count && buffer.m_Versions[version] != 0)
+        {
+            version = (version + 1) % count;
+            ++checked;
+        }
+        if (checked == count)
+        {
+            m_Device->ReportBudget("WriteBuffer.VolatileVersions", 1, count, count);
+            return;
+        }
+        if (!Retain(&buffer, buffer.m_InternalOwners))
+        {
+            return;
+        }
+        try
+        {
+            packet.volatileLeases.push_back({&buffer, static_cast<std::uint32_t>(version)});
+        }
+        catch (const std::bad_alloc &)
+        {
+            m_Device->Report("WriteBuffer.Volatile", "CPU allocation failed before reserving a version");
+            return;
+        }
+        // 最后才发布新版本. 早先 Draw 仍访问原区段, 此处的 CPU 复制不发出设备工作.
+        std::memcpy(buffer.m_Mapping + version * buffer.m_VersionStride, data, size);
+        buffer.m_Versions[version] = packet.recordingId;
+        buffer.m_LatestRecording = packet.recordingId;
+        buffer.m_LatestVersion = static_cast<std::uint32_t>(version);
+        buffer.m_NextVersion = static_cast<std::uint32_t>((version + 1) % count);
+        buffer.m_ValidPrefix = size;
+        ++packet.writes;
+        packet.logicalBytes += size;
+    }
+
+    void OpenGLCommandList::SetPushConstants(const void *data, size_t byteSize)
+    {
+        auto *packet = Recording("SetPushConstants");
+        if (!packet)
+        {
+            return;
+        }
+        if (!packet->graphicsSet)
+        {
+            m_Device->Report("SetPushConstants", "InvalidState: set graphics state before push constants");
+            return;
+        }
+        const auto &plan = static_cast<const OpenGLGraphicsPipeline *>(packet->graphics.pipeline)->Plan();
+        if (!data || byteSize == 0 || byteSize != plan.pushBytes)
+        {
+            m_Device->Report("SetPushConstants", "InvalidArgument: push bytes must match the active graphics layout");
+            return;
+        }
+        if (packet->writes == UploadItemLimit || byteSize > UploadCapacityLimit - packet->logicalBytes)
+        {
+            m_Device->Report("SetPushConstants", "CapacityExceeded: recording write count or byte budget");
+            return;
+        }
+        UploadSlice slice;
+        if (!m_Device->AllocateUpload(*packet, plan.pushBackingBytes, slice,
+                                       std::size_t(m_Device->m_Caps.shader.uniformAlignment)))
+        {
+            return;
+        }
+        // 只读调用者声明的逻辑字节. 驱动链接后的块末尾可能有对齐填充, 填充由后端写零.
+        std::memcpy(slice.cpu, data, byteSize);
+        std::memset(slice.cpu + byteSize, 0, plan.pushBackingBytes - byteSize);
+        packet->push = slice;
+        ++packet->writes;
+        packet->logicalBytes += byteSize;
     }
 
     // 先确定合法 footprint 和紧凑 PBO 容量, 逐行只复制 texel, 最后按实际 target 发出上传, 不翻转或转色.

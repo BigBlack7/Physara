@@ -691,7 +691,8 @@ namespace Physara::RHI::Validation
             return;
         }
 
-        if (dataSize > 0x10000 && b->GetDesc().isVolatile)
+        // OpenGL 的逻辑常量容量在创建时受设备 block 上限约束, 写入时由所属 recording 选择版本.
+        if (dataSize > 0x10000 && b->GetDesc().isVolatile && !Profile::IsOpenGL(m_Device))
         {
             Error("writeBuffer: cannot write more than 65535 bytes into volatile buffers");
             return;
@@ -835,11 +836,6 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::SetPushConstants(const void *data, size_t byteSize)
     {
-        // GL 不维护用于执行的候选快照且尚未交付 push, 在读取载荷或检查候选协议前直接拒绝.
-        if (Profile::RejectOpenGL(m_Device))
-        {
-            return;
-        }
         if (!RequireOpenState())
         {
             return;
@@ -847,6 +843,12 @@ namespace Physara::RHI::Validation
         if (!data || byteSize == 0 || byteSize % 4 != 0)
         {
             Error("InvalidArgument: push constant data/size/alignment is invalid");
+            return;
+        }
+        // GL 的候选状态和当前 push 尺寸属于真实物理包, 由后端在消费载荷前核对.
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->SetPushConstants(data, byteSize);
             return;
         }
 

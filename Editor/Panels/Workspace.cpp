@@ -204,6 +204,26 @@ namespace Physara::Editor::Detail
         ImGui::Text("Forward cache: geometry %zu / textures %zu / materials %zu / environment %zu",
                     frame.residency.geometry, frame.residency.textures, frame.residency.materials,
                     frame.residency.environment);
+        // 待退休区间仍占用页容量. 总空闲字节可分布在多页, 最大空洞表示单次连续分配的上界.
+        const auto &resident = frame.residency;
+        ImGui::Text("Geometry: %zu pages, %zu used / %zu free B, %zu retiring / largest gap %zu B",
+                    resident.geometryPages, resident.geometryUsedBytes, resident.geometryPageBytes -
+                    resident.geometryUsedBytes, resident.geometryRetiringBytes, resident.largestGeometryGap);
+        ImGui::Text("Material pages %zu B / binding hits %llu of %llu / generation %llu",
+                    resident.materialPageBytes, static_cast<unsigned long long>(resident.materialHits),
+                    static_cast<unsigned long long>(resident.materialRequests),
+                    static_cast<unsigned long long>(resident.materialGeneration));
+        ImGui::Text("Texture %zu B / Environment %zu B / samplers %zu",
+                    resident.textureBytes, resident.environmentBytes, resident.samplerEntries);
+        const auto &mapping = frame.uploadStorage;
+        ImGui::Text("Upload pool %llu of %llu B / available %llu B / peak %llu B / volatile %llu B",
+                    static_cast<unsigned long long>(mapping.capacity), static_cast<unsigned long long>(mapping.limit),
+                    static_cast<unsigned long long>(mapping.available), static_cast<unsigned long long>(mapping.highWater),
+                    static_cast<unsigned long long>(mapping.volatileCapacity));
+        ImGui::Text("Upload chunks %llu new / %llu reused / prepared %zu writes (%zu B)",
+                    static_cast<unsigned long long>(frame.native.uploadChunksAllocated),
+                    static_cast<unsigned long long>(frame.native.uploadChunksReused),
+                    frame.preparation.uploadDemand.writes, frame.preparation.uploadDemand.bytes);
         constexpr const char *timingStates[]{"Unavailable", "Skipped - query capacity", "Pending", "Ready", "Failed"};
         ImGui::Text("GPU graph (scene + UI): %s", timingStates[static_cast<std::size_t>(frame.gpu)]);
         // 面板可能先看到新场景票据, 后收到旧区间的时长. 两行分别使用各自快照中的身份.

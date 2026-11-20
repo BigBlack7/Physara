@@ -72,17 +72,19 @@ namespace Physara::Renderer::Detail
                                                                      std::size_t bytes)
     {
         device.Reserve(bytes);
-        auto entry = std::make_shared<ResidentTexture>(device.capacity, bytes);
+        auto entry = std::make_shared<ResidentTexture>(device.capacity, bytes, true);
         entry->texture = device.device.CreateTexture(desc);
         if (!entry->texture)
         {
             Reject(ViewSettingReason::EnvironmentRejected, "Cannot allocate sampled HDR environment storage");
         }
+        entry->sampling = {0, desc.mipLevels, 0, desc.arraySize};
         device.Use(*entry);
         return entry;
     }
 
     /// @brief DFG 与场景源独立. 只在第一份真实需要 DFG 的正常图中初始化其完整单层.
+    /// @param data 命中驻留代时可为空. 冷建时由上传批持有像素到图录制结束.
     static std::shared_ptr<ResidentTexture> PrepareDfg(ForwardDevice &device, UploadBatch &uploads,
                                                        const std::shared_ptr<const DfgTable> &data)
     {
@@ -98,18 +100,22 @@ namespace Physara::Renderer::Detail
         return device.dfgTexture;
     }
 
-    /// @brief 天空和镜面分配独立存储. 同一源键和角色可复用已接受代或本轮仍有完整写入的代.
-    static std::shared_ptr<ResidentTexture> PrepareCube(ForwardDevice &device, UploadBatch &uploads,
-                                                        const Scene::SceneEnvironment &source, const std::shared_ptr<const BakedEnvironment> &data, bool reflection)
+    /// @brief 识别同烘焙键及角色下可读的代. 提前登记本轮使用, 避免后续资源准备淘汰它.
+    static const ResidentEnvironment *FindCube(ForwardDevice &device, EnvironmentKey key, bool reflection)
     {
-        const auto key = std::pair(EnvironmentKey{source.source->sourceFingerprint}, reflection);
-        const auto found = device.environmentTextures.find(key);
-        if (found != device.environmentTextures.end() && device.Current(*found->second))
+        const auto found = device.environmentTextures.find({key, reflection});
+        if (found != device.environmentTextures.end() && device.Current(*found->second.texture))
         {
-            device.Use(*found->second);
-            return found->second;
+            device.Use(*found->second.texture);
+            return &found->second;
         }
+        return nullptr;
+    }
 
+    /// @brief 按完整 cube 范围准备新代. 反射产品保存 SH9, 后续查询无需访问烘焙像素.
+    static const ResidentEnvironment &PrepareCube(ForwardDevice &device, UploadBatch &uploads, EnvironmentKey key,
+        const std::shared_ptr<const BakedEnvironment> &data, bool reflection)
+    {
         auto pixels = data->base->pixels.size();
         const auto mips = reflection ? EnvironmentMipCount : 1u;
         if (reflection)
@@ -123,8 +129,8 @@ namespace Physara::Renderer::Detail
         uploads.ReserveWrites(bytes, 6 * mips);
         auto entry = CreateEnvironmentTexture(device, {.width = EnvironmentEdge, .height = EnvironmentEdge, .arraySize = 6, .mipLevels = mips, .format = RHI::Format::RGBA32_FLOAT, .dimension = RHI::TextureDimension::TextureCube, .debugName = reflection ? "Environment GGX reflection" : "Environment sky", .initialState = TextureBoundary, .keepInitialState = true}, bytes);
         uploads.environmentTextures.push_back({entry, data, {}});
-        device.environmentTextures.insert_or_assign(key, entry);
-        return entry;
+        return device.environmentTextures.insert_or_assign({key, reflection}, ResidentEnvironment{entry, data->sh})
+            .first->second;
     }
 
     /// @brief 取实际过滤器, 纹理视图各自限定 mip. 同一个线性 clamp sampler 供 DFG 和 cube.
@@ -143,7 +149,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 打包世界到环境的旋转, 曝光倍率和 SH9. 每一色通道的九项系数共用该通道的指数.
-    static StaticAbi::ForwardEnvironment LightingConstants(const BakedEnvironment &data,
+    static StaticAbi::ForwardEnvironment LightingConstants(const std::array<EnvironmentTexel, 9> &sh,
                                                            const glm::dmat3 &environmentFromWorld, RadianceScale scale) noexcept
     {
         StaticAbi::ForwardEnvironment constants{};
@@ -152,7 +158,7 @@ namespace Physara::Renderer::Detail
         constants.radianceExponent = scale.exponent;
         constants.maxMip = float(EnvironmentMipCount - 1);
         std::array<float, 3> maxCoefficients{};
-        for (const auto &term : data.sh)
+        for (const auto &term : sh)
         {
             for (std::size_t channel = 0; channel != maxCoefficients.size(); ++channel)
             {
@@ -165,9 +171,9 @@ namespace Physara::Renderer::Detail
             int exponent = 0;
             static_cast<void>(std::frexp(maxCoefficients[channel], &exponent));
             constants.shExponent[channel] = exponent;
-            for (std::size_t term = 0; term != data.sh.size(); ++term)
+            for (std::size_t term = 0; term != sh.size(); ++term)
             {
-                constants.sh[term].value[channel] = float(std::ldexp(double(data.sh[term][channel]), -exponent));
+                constants.sh[term].value[channel] = float(std::ldexp(double(sh[term][channel]), -exponent));
             }
         }
         return constants;
@@ -212,7 +218,14 @@ namespace Physara::Renderer::Detail
         {
             return;
         }
-        auto prepared = device.environmentCache.Prepare((ibl || sky) ? source->source : nullptr, ibl, dfg);
+        const auto key = (ibl || sky) ? EnvironmentKey{source->source->sourceFingerprint} : EnvironmentKey{};
+        const auto *reflection = ibl ? FindCube(device, key, true) : nullptr;
+        const auto *background = sky ? FindCube(device, key, false) : nullptr;
+        // 两种角色可分别命中. 复用反射纹理时从同代保存的 SH9 生成查询常量, 仅为缺少的角色索取 CPU 产品.
+        const bool needsEnvironment = (ibl && !reflection) || (sky && !background);
+        const bool needsDfg = dfg && (!device.dfgTexture || !device.Current(*device.dfgTexture));
+        auto prepared = device.environmentCache.Prepare(needsEnvironment ? source->source : nullptr,
+                                                         ibl && !reflection, needsDfg);
         if (const auto *failure = std::get_if<EnvironmentPreparationFailure>(&prepared))
         {
             throw ForwardFailure{failure->pending ? ViewSettingReason::EnvironmentPending : ViewSettingReason::EnvironmentRejected, failure->reason};
@@ -234,8 +247,12 @@ namespace Physara::Renderer::Detail
             const auto scale = Scale(*source, *view.camera);
             if (ibl)
             {
-                environment.reflection = PrepareCube(device, frame.uploads, *source, products.environment, true);
-                const auto values = LightingConstants(*products.environment, inverse, scale);
+                if (!reflection)
+                {
+                    reflection = &PrepareCube(device, frame.uploads, key, products.environment, true);
+                }
+                environment.reflection = reflection->texture;
+                const auto values = LightingConstants(reflection->sh, inverse, scale);
                 environment.lightingConstants = WriteConstants(device, frame.uploads, std::as_bytes(std::span(&values, 1)));
             }
             if (sky)
@@ -243,7 +260,11 @@ namespace Physara::Renderer::Detail
                 device.programs.PrepareSky(device.device);
                 environment.skyLayout = device.programs.skyLayout;
                 environment.skyPipeline = device.programs.skyPipeline;
-                environment.sky = PrepareCube(device, frame.uploads, *source, products.environment, false);
+                if (!background)
+                {
+                    background = &PrepareCube(device, frame.uploads, key, products.environment, false);
+                }
+                environment.sky = background->texture;
                 const auto values = SkyConstants(*view.camera, inverse, scale);
                 environment.skyConstants = WriteConstants(device, frame.uploads, std::as_bytes(std::span(&values, 1)));
             }

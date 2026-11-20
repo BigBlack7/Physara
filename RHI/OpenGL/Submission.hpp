@@ -71,6 +71,15 @@ namespace Physara::RHI::OpenGL
         bool graphicsSet = false;
         bool viewportSet = false;
         bool scissorSet = false;
+        // push 只借用本包 chunk 中最近一次设置的区段, 重设图形状态即结束这次借用.
+        UploadSlice push;
+        /// @brief 本物理包占用的一槽 volatile backing. 资源 lease 保证退休时仍可归还该槽.
+        struct VolatileLease
+        {
+            OpenGLBuffer *buffer; ///< 借用包已取得的资源 lease.
+            std::uint32_t version;
+        };
+        std::vector<VolatileLease> volatileLeases = std::vector<VolatileLease>(0);
         std::size_t writes = 0;
         std::size_t logicalBytes = 0;
         std::vector<UploadResourceLease> resources;

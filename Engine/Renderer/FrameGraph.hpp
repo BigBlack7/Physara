@@ -30,15 +30,19 @@ namespace Physara::Renderer
 
     /// @brief 完整定义颜色纹理的一层 mip 和 array slice, 载荷在执行结束前由帧槽保活.
     /// @pre mip 和 layer 在 target 的范围内, pixels 覆盖完整紧密像素, rowPitch 匹配行宽.
+    /// @param recorded 可选的存储代标记, 由调用方保活至回调结束. 回调在调用 WriteTexture 前置位,
+    /// 即使随后录制失败也保留该值. 上传版本的接受由调用方依据完整图回执确认.
     /// @note 声明成功才追加账单. 返回错误或存储分配抛出后放弃候选图, 不在部分图上重试.
     [[nodiscard]] GraphResult<GraphTextureWrite> AddTextureUpload(
         RenderGraph &graph, TextureId target, std::span<const std::byte> pixels, std::size_t rowPitch,
-        std::vector<GraphUpload> &uploads, std::uint32_t mip = 0, std::uint32_t layer = 0);
-    /// @brief 写入从零开始的实际字节区间, 后续消费者须声明同一有效范围.
+        std::vector<GraphUpload> &uploads, std::uint32_t mip = 0, std::uint32_t layer = 0, bool *recorded = nullptr);
+    /// @brief 写入指定偏移处的实际字节区间, 后续消费者须声明所读的有效范围.
+    /// @param offset 从物理 Buffer 起点计的字节偏移, 导入页子区间时也使用同一坐标.
     /// @pre bytes 非空, 位于 target 的允许范围内, 底层字节在图执行结束前保持地址及内容稳定.
     /// @note 同一 Pass 对应一次 WriteBuffer. 几何缓冲的剩余容量不属于本次已初始化内容.
     [[nodiscard]] GraphResult<BufferId> AddBufferUpload(
-        RenderGraph &graph, BufferId target, std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads);
+        RenderGraph &graph, BufferId target, std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads,
+        std::uint64_t offset = 0);
     /// @brief 只从同图代的存活计划判断生产者, 不将声明成功当成执行成功.
     [[nodiscard]] bool IsLivePass(const CompiledGraphPlan &plan, PassId pass) noexcept;
     /// @brief 在成功执行的导出中查找精确版本. 返回借用句柄, 调用者按接受回执决定是否持久保存.

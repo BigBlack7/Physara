@@ -268,8 +268,10 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLCommandList::ResetGraphicsState() noexcept
     {
+        // push 依附这次图形状态. volatile 前缀依附 recording, 下次设置状态后仍可解析它.
         m_Packet->graphics = {};
         m_Packet->graphicsSet = false;
+        m_Packet->push = {};
         m_Packet->viewportSet = false;
         m_Packet->scissorSet = false;
         m_Device->m_ContextState.Invalidate();

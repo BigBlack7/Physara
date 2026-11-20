@@ -83,6 +83,32 @@ namespace Physara::Renderer::Detail
         Undefined
     };
 
+    /// @brief 用版本 0 的内容填补尚未被图内写入解释的区间.
+    /// @note 空 optional 表示整段仍待解释. 导入时已合并相邻覆盖, 每个余段只需检查起点所在的一个区间.
+    template <typename Declaration, typename Range>
+    bool ContainsInitialContent(const Declaration &resource, const Range &requested,
+                                const std::optional<std::vector<Range>> &remaining) noexcept
+    {
+        if (resource.importState && resource.importState->contentDefined)
+        {
+            return true;
+        }
+        if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
+        {
+            const auto covered = [&](const RHI::BufferRange &interval)
+            {
+                const auto end = std::ranges::upper_bound(resource.initialContent, interval.byteOffset, {},
+                                                          &RHI::BufferRange::byteOffset);
+                return end != resource.initialContent.begin() && Contains(*(end - 1), interval);
+            };
+            return remaining ? std::ranges::all_of(*remaining, covered) : covered(requested);
+        }
+        else
+        {
+            return false;
+        }
+    }
+
     // 一次查询从空 optional 开始. 首次局部覆盖后, remaining 保存尚未确定来源的互斥分片.
     // 调用方为每次写入将 contributed 初始化为 false. 写入定义任一未决分片时将其置为 true.
     // Defined 和 Undefined 都结束本次查询. 只有 Pending 需要继续检查前一版本或导入内容.

@@ -1034,7 +1034,7 @@ namespace Physara::RHI
     {
         uint64_t byteSize = 0;
         uint32_t structStride = 0; // if non-zero it's structured
-        uint32_t maxVersions = 0;  // only valid and required to be nonzero for volatile buffers on Vulkan
+        uint32_t maxVersions = 0;  ///< Vulkan 和 OpenGL 的 volatile 常量缓冲必须指定非零的版本容量.
         std::string debugName;
         Format format = Format::UNKNOWN; // for typed buffer views
         bool canHaveUAVs = false;
@@ -5233,6 +5233,8 @@ namespace Physara::RHI
         //   For non-volatile buffers, writes of 64 kB or smaller use vkCmdUpdateBuffer. Larger writes suballocate
         //   a portion of the automatic upload buffer and copy the data to the real GPU buffer through that and
         //   vkCmdCopyBuffer.
+        /// @note OpenGL 的 volatile 常量从逻辑偏移 0 写入非空前缀. Draw 读取本录制最新的有效版本,
+        /// 早先的写入随各自物理包保活. 槽耗尽时保留原版本并报告容量错误.
         virtual void WriteBuffer(Buffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes = 0) = 0;
 
         // Fills the entire buffer using the provided uint32 value.
@@ -5278,6 +5280,7 @@ namespace Physara::RHI
         //   compute or ray tracing pipelines.
         // - Vulkan: Push constants are just Vulkan push constants. This function maps to vkCmdPushConstants.
         // Note that NVRHI only supports one push constants binding in all layouts used in a pipeline.
+        /// @note OpenGL 在有效图形状态上复制布局规定的全部字节. 再次设置图形状态后须重新提供活动 push 数据.
         virtual void SetPushConstants(const void *data, size_t byteSize) = 0;
 
         // Sets the specified graphics state on the command list.

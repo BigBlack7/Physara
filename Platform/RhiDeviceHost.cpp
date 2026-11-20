@@ -17,6 +17,11 @@ namespace Physara::Platform
         return GetDevice() ? RHI::OpenGL::ReadGraphicsCounts(m_State->rawDevice.Get()) : RHI::GraphicsOperationCounts{};
     }
 
+    RHI::GraphicsUploadStorage DeviceHost::ReadUploadStorage() const noexcept
+    {
+        return GetDevice() ? RHI::OpenGL::ReadUploadStorage(m_State->rawDevice.Get()) : RHI::GraphicsUploadStorage{};
+    }
+
     // 就绪宿主才可借用设备. 原生入口随后核对 current context 与录制状态.
     UploadAdmission DeviceHost::CheckUploadCapacity(std::size_t chunkSize,
                                                      std::span<const std::size_t> textureWrites,

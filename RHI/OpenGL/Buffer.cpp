@@ -1,12 +1,15 @@
 #include "Backend.hpp"
 
 /// @file
-/// @brief 创建普通不可变 Buffer 存储, 先取得 wrapper/删除节点再分配 GL 对象, 不初始化内容.
+/// @brief 创建设备拥有的普通或 volatile Buffer. 公开描述保存逻辑容量, 多版本常量另分配对齐的映射存储.
 
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <new>
+#include <numeric>
 #include <utility>
+#include "Upload.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -35,17 +38,60 @@ namespace Physara::RHI::OpenGL
             Report("CreateBuffer", "InvalidArgument: size, layout or initial state", desc.debugName.c_str());
             return nullptr;
         }
-        if (desc.cpuAccess != CpuAccessMode::None || desc.isVolatile || desc.isVirtual || desc.canHaveTypedViews ||
+        if (desc.cpuAccess != CpuAccessMode::None || desc.isVirtual || desc.canHaveTypedViews ||
             desc.format != Format::UNKNOWN || desc.sharedResourceFlags != SharedResourceFlags::None ||
             desc.isAccelStructBuildInput || desc.isAccelStructStorage || desc.isShaderBindingTable)
         {
             Report("CreateBuffer", "Unsupported: buffer profile", desc.debugName.c_str());
             return nullptr;
         }
+        std::size_t storageBytes = static_cast<std::size_t>(desc.byteSize);
+        std::size_t stride = 0;
+        if (desc.isVolatile)
+        {
+            if (!desc.isConstantBuffer || desc.maxVersions == 0 || desc.structStride != 0 || desc.isVertexBuffer ||
+                desc.isIndexBuffer || desc.isDrawIndirectArgs || desc.canHaveUAVs || desc.canHaveRawViews ||
+                desc.byteSize > static_cast<std::uint64_t>(m_Caps.shader.uniformBlockBytes))
+            {
+                Report("CreateBuffer", "InvalidArgument: volatile constant-buffer description", desc.debugName.c_str());
+                return nullptr;
+            }
+            // 每槽起点同时满足映射和 UBO range 的对齐. 原生分配和设备预算均使用所有槽的总字节数.
+            const auto alignment = std::lcm(std::size_t(m_Caps.minMapAlignment),
+                                            std::size_t(m_Caps.shader.uniformAlignment));
+            if (!CheckedAlign(storageBytes, alignment, stride))
+            {
+                char reason[128];
+                std::snprintf(reason, sizeof(reason),
+                              "Aligned stride unrepresentable: bytes=%zu alignment=%zu versions=%u",
+                              storageBytes, alignment, desc.maxVersions);
+                Report("CreateBuffer.VolatileBacking", reason, desc.debugName.c_str());
+                return nullptr;
+            }
+            if (stride > std::numeric_limits<std::size_t>::max() / desc.maxVersions)
+            {
+                char reason[128];
+                std::snprintf(reason, sizeof(reason), "Total backing unrepresentable: stride=%zu versions=%u",
+                              stride, desc.maxVersions);
+                Report("CreateBuffer.VolatileBacking", reason, desc.debugName.c_str());
+                return nullptr;
+            }
+            storageBytes = stride * desc.maxVersions;
+            if (storageBytes > VolatileCapacityLimit - m_VolatileCapacity)
+            {
+                ReportBudget("CreateBuffer.VolatileBacking", storageBytes, m_VolatileCapacity, VolatileCapacityLimit);
+                return nullptr;
+            }
+        }
         try
         {
             // 字符串副本/删除节点的分配必须先于原生 name. wrapper 发布前的任何返回都会清理本次取得的对象.
             auto buffer = std::make_unique<OpenGLBuffer>(this, desc);
+            if (desc.isVolatile)
+            {
+                buffer->m_Versions.resize(desc.maxVersions);
+                buffer->m_VersionStride = stride;
+            }
             if (!BeginNative("CreateBuffer", desc.debugName.c_str()))
             {
                 return nullptr;
@@ -61,10 +107,29 @@ namespace Physara::RHI::OpenGL
                 Report("CreateBuffer", "NativeFailure: zero object name", desc.debugName.c_str());
                 return nullptr;
             }
-            glNamedBufferStorage(buffer->m_Deletion->name, GLsizeiptr(desc.byteSize), nullptr, GL_DYNAMIC_STORAGE_BIT);
+            constexpr GLbitfield Mapping = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+            glNamedBufferStorage(buffer->m_Deletion->name, GLsizeiptr(storageBytes), nullptr,
+                                 desc.isVolatile ? Mapping : GL_DYNAMIC_STORAGE_BIT);
             if (!CheckNative("CreateBuffer.Storage", buffer->m_Deletion->name, desc.debugName.c_str()))
             {
                 return nullptr;
+            }
+            if (desc.isVolatile)
+            {
+                buffer->m_Mapping = static_cast<std::byte *>(
+                    glMapNamedBufferRange(buffer->Name(), 0, GLsizeiptr(storageBytes), Mapping));
+                const bool ok = CheckNative("CreateBuffer.VolatileMap", buffer->Name(), desc.debugName.c_str());
+                if (!ok || !buffer->m_Mapping)
+                {
+                    if (ok)
+                    {
+                        Report("CreateBuffer", "NativeFailure: persistent constant-buffer mapping unavailable",
+                               desc.debugName.c_str());
+                    }
+                    return nullptr;
+                }
+                buffer->m_Deletion->volatileBytes = storageBytes;
+                m_VolatileCapacity += storageBytes;
             }
             buffer->Publish();
             return BufferHandle::Create(buffer.release());

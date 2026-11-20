@@ -85,7 +85,7 @@ namespace Physara::RHI::OpenGL
         const auto all = compiler.get_shader_resources();
         RequirePreparation(all.subpass_inputs.empty() && all.storage_images.empty() && all.sampled_images.empty() &&
                                all.atomic_counters.empty() && all.acceleration_structures.empty() &&
-                               all.gl_plain_uniforms.empty() && all.push_constant_buffers.empty() &&
+                               all.gl_plain_uniforms.empty() && all.push_constant_buffers.size() <= 1 &&
                                all.shader_record_buffers.empty() && all.tensors.empty(),
                            "Unsupported: resource class outside GraphicsBaselineV1");
         compiler.update_active_builtins();
@@ -112,21 +112,34 @@ namespace Physara::RHI::OpenGL
     static ShaderResource ReflectResource(const spirv_cross::Compiler &compiler, const spirv_cross::Resource &item,
                                           ResourceType kind)
     {
-        RequirePreparation(compiler.has_decoration(item.id, spv::DecorationDescriptorSet) &&
-                               compiler.has_decoration(item.id, spv::DecorationBinding) &&
-                               compiler.get_type(item.type_id).array.empty(),
-                           "InvalidArgument: missing set/binding or descriptor array");
         ShaderResource result;
         result.id = item.id;
         result.type = kind;
-        result.key = {compiler.get_decoration(item.id, spv::DecorationDescriptorSet),
-                      compiler.get_decoration(item.id, spv::DecorationBinding)};
-        RequirePreparation(result.key.set < 4, "Unsupported: logical set outside GraphicsBaselineV1");
         const auto &type = compiler.get_type(item.base_type_id);
-        if (kind == ResourceType::ConstantBuffer)
+        RequirePreparation(compiler.get_type(item.type_id).array.empty(), "InvalidArgument: block or descriptor array");
+        if (kind == ResourceType::PushConstants)
+        {
+            // 合并阶段时使用 push 专用键. 字段形状和偏移仍走与常量块相同的签名比较.
+            RequirePreparation(!compiler.has_decoration(item.id, spv::DecorationDescriptorSet) &&
+                                   !compiler.has_decoration(item.id, spv::DecorationBinding),
+                               "InvalidArgument: descriptor decoration on push constants");
+            result.key = GraphicsPushConstantKey;
+        }
+        else
+        {
+            RequirePreparation(compiler.has_decoration(item.id, spv::DecorationDescriptorSet) &&
+                                   compiler.has_decoration(item.id, spv::DecorationBinding),
+                               "InvalidArgument: missing descriptor set/binding");
+            result.key = {compiler.get_decoration(item.id, spv::DecorationDescriptorSet),
+                          compiler.get_decoration(item.id, spv::DecorationBinding)};
+            RequirePreparation(result.key.set < 4, "Unsupported: logical set outside graphics profile");
+        }
+        if (kind == ResourceType::ConstantBuffer || kind == ResourceType::PushConstants)
         {
             BlockLayout(compiler, type, result.layout);
             result.extent = static_cast<std::uint32_t>(compiler.get_declared_struct_size(type));
+            RequirePreparation(kind != ResourceType::PushConstants || result.extent <= MaxPushConstantSize,
+                               "Unsupported: canonical push block exceeds public size limit");
         }
         else if (kind == ResourceType::StructuredBuffer_SRV)
         {
@@ -222,6 +235,7 @@ namespace Physara::RHI::OpenGL
             }
         };
         append(all.uniform_buffers, ResourceType::ConstantBuffer);
+        append(all.push_constant_buffers, ResourceType::PushConstants);
         append(all.storage_buffers, ResourceType::StructuredBuffer_SRV);
         append(all.separate_images, ResourceType::Texture_SRV);
         append(all.separate_samplers, ResourceType::Sampler);

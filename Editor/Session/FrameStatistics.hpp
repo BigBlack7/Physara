@@ -57,7 +57,7 @@ namespace Physara::Editor
         std::size_t capacity{}, highWater{}, growths{};
     };
 
-    /// @brief 完整提交中同类 Forward 上传的笔数和逻辑字节, 每笔取自一个实际存活的写 Pass.
+    /// @brief 按对应阶段统计的 Forward 写入笔数与载荷字节数.
     struct ForwardUploadStatistics
     {
         std::size_t writes{}, bytes{};
@@ -72,6 +72,8 @@ namespace Physara::Editor
         Renderer::ForwardEncodingCounts encodings;
         std::array<ViewCullingStatistics, Renderer::ForwardViewCount> views;
         ForwardUploadStatistics staticUploads, viewUploads;
+        /// 封存前两路合计的原始需求. staticUploads 和 viewUploads 只计最终计划中的存活写 Pass.
+        ForwardUploadStatistics uploadDemand;
         FrameArenaStatistics payload, graph;
     };
 
@@ -83,6 +85,7 @@ namespace Physara::Editor
         SceneFrameIdentity source;
         FrameCpuSeconds cpu;
         RHI::GraphicsOperationCounts native;
+        RHI::GraphicsUploadStorage uploadStorage;
         Renderer::ForwardWorkCounts forward;
         Renderer::ForwardResidencyCounts residency;
         std::size_t livePasses;

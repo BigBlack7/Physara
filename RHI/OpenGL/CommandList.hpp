@@ -215,6 +215,13 @@ namespace Physara::RHI::OpenGL
                                         const char *operation);
         /// @brief 调用方已满足用途及 BeginNative, 本函数只通过唯一 ContextState 应用绑定/普通状态.
         void ApplyGraphics(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
+        /// @brief 在真实 Draw 前验证本 recording 中最近写入覆盖活动动态块.
+        [[nodiscard]] bool CheckDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
+                                              const char *operation) const;
+        /// @brief 按本次 Draw 选出的版本刷新动态 UBO range. 调用前已通过 CheckDrawConstants.
+        void ApplyDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
+        /// @brief 占用一个可写版本并复制逻辑前缀. 槽耗尽时报告原因, 先前已写版本继续由包持有.
+        void WriteVolatile(OpenGLBuffer &buffer, const void *data, std::size_t size);
         /// @brief 验证本次参数/可知数据范围, 恢复实际用途与缓存后发出一个直接 Draw.
         void DrawDirect(const DrawArguments &args, bool indexed);
         /// @brief 保留完整公共命令表的失败出口, 不解引用专有 payload 或发出替代 GPU 工作.

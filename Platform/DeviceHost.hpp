@@ -265,6 +265,9 @@ namespace Physara::Platform
         /// @brief 在就绪宿主的 owner 线程复制原生图形计数. 调度方可对同一设备的两次采样取差.
         /// @return 所属线程及就绪条件满足时返回当时的累计值, 其它情况返回全零.
         [[nodiscard]] RHI::GraphicsOperationCounts ReadGraphicsCounts() const noexcept;
+        /// @brief 在就绪宿主的 owner 线程复制上传池容量, 空闲字节和高水位, 不轮询 GPU.
+        /// @return 无法取得当前设备或 context 时返回全零.
+        [[nodiscard]] RHI::GraphicsUploadStorage ReadUploadStorage() const noexcept;
         /// @brief 在 owner/Ready 状态读取 cube 目标的实测采样能力和面宽上限.
         /// @return 无有效设备时返回 None 并清零 maxEdge. 可用时面宽为设备上限, 格式用途单独判断.
         [[nodiscard]] RHI::FormatSupport QueryCubeFormatSupport(RHI::Format format, std::uint32_t &maxEdge) const noexcept;
@@ -283,7 +286,7 @@ namespace Physara::Platform
         /// @brief 预检新 Graphics 包的纹理和缓冲写入. 尺寸为单次写入的紧密字节数, 0 表示省略.
         /// @pre 宿主就绪且 owner 持有 current context. 无开放录制, chunkSize 取自拟使用的列表.
         /// 提供的序列与实际录制一致, 纹理写入后录制缓冲写入.
-        /// @return Ready 表示当前余量容得下该包, Pending 随设备退休可重试.
+        /// @return Ready 表示物理录制包槽和上传余量均可用. Pending 可在释放占用并收集后重试.
         /// @note 只读取容量. 准入后须在同一 owner 上先录制该包.
         [[nodiscard]] UploadAdmission CheckUploadCapacity(std::size_t chunkSize,
                                                            std::span<const std::size_t> textureWrites,

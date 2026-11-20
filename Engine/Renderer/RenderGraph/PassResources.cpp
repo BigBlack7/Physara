@@ -199,8 +199,8 @@ namespace Physara::Renderer
             id = use->write->previous;
         }
 
-        // 回到版本 0 时, 只有明确有效的导入内容能填补剩余范围.
-        if (resource.importState && resource.importState->contentDefined)
+        // 图内写入可以只解释请求的一部分. 其余每个区间都须有版本 0 的导入覆盖才能授予本次读权限.
+        if (Detail::ContainsInitialContent(resource, range, remaining))
         {
             return true;
         }

@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief 维护包的资源保活和上传源布局, 为即时写入取得有界 coherent 区段.
-/// 准入与实际分配使用同一最小 chunk 和对齐规则, 已分配容量沿物理包退休.
+/// 普通上传的准入与分配共用尾部对齐规则. 归还的完整 chunk 可供下一包重借, 直到回收时才扣减容量.
 
 #include <algorithm>
 #include <array>
@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <numeric>
 #include <utility>
 
 #include "Submission.hpp"
@@ -64,12 +65,16 @@ namespace Physara::RHI::OpenGL
 
     bool CheckedAlign(std::size_t value, std::size_t alignment, std::size_t &result) noexcept
     {
-        if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
-            value > std::numeric_limits<std::size_t>::max() - (alignment - 1))
+        if (alignment == 0)
         {
             return false;
         }
-        result = (value + alignment - 1) & ~(alignment - 1);
+        const auto padding = (alignment - value % alignment) % alignment;
+        if (padding > std::numeric_limits<std::size_t>::max() - value)
+        {
+            return false;
+        }
+        result = value + padding;
         return true;
     }
 
@@ -231,8 +236,12 @@ namespace Physara::RHI::OpenGL
                 return UploadAdmission::ExceedsLimit;
             }
         }
-        return mappedCapacity <= UploadCapacityLimit - m_UploadCapacity ? UploadAdmission::Ready :
-                                                                         UploadAdmission::Pending;
+        // 确定工作量在空闲设备能录制后, 再检查实际 Open 所需的槽和映射余量.
+        // 闭合未提交的包也占槽, 只有 Device 退休或收拢后才能重新认领.
+        const bool hasPacketSlot = std::ranges::any_of(m_Packets, [](const auto &packet) { return !packet; });
+        const auto leased = m_UploadCapacity - m_AvailableUploadCapacity;
+        return hasPacketSlot && mappedCapacity <= UploadCapacityLimit - leased ? UploadAdmission::Ready :
+                                                                                UploadAdmission::Pending;
     }
 
     UploadAdmission CheckUploadCapacity(Device *device, std::size_t chunkSize,
@@ -244,10 +253,11 @@ namespace Physara::RHI::OpenGL
                                    UploadAdmission::InvalidState;
     }
 
-    bool OpenGLDevice::AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice)
+    bool OpenGLDevice::AllocateUpload(UploadWorkPacket &packet, std::size_t size, UploadSlice &slice,
+                                      std::size_t requiredAlignment)
     {
         // 只从当前包已有 chunk 的未使用尾部取空间. 新 chunk 同时受对齐/设备总预算限制, 不等待 GPU 腾空间.
-        const auto alignment = std::size_t(m_Caps.minMapAlignment);
+        const auto alignment = std::lcm(std::size_t(m_Caps.minMapAlignment), requiredAlignment);
         for (auto &chunk : packet.chunks)
         {
             std::size_t offset = 0;
@@ -260,13 +270,27 @@ namespace Physara::RHI::OpenGL
         }
         std::size_t capacity = 0;
         if (!GetChunkCapacity(size, packet.minimumChunk, alignment, capacity) ||
-            capacity > UploadCapacityLimit - m_UploadCapacity)
+            capacity > UploadCapacityLimit - (m_UploadCapacity - m_AvailableUploadCapacity))
         {
             ReportBudget("AllocateUpload", capacity != 0 ? capacity : size, m_UploadCapacity, UploadCapacityLimit);
             return false;
         }
         try
         {
+            // 取与本次需求同容量的空闲块, 使后续可用尾部与准入模拟中的容量一致.
+            const auto available = std::ranges::find_if(m_AvailableUploads,
+                [&](const auto &chunk) { return chunk && chunk->capacity == capacity; });
+            if (available != m_AvailableUploads.end())
+            {
+                // vector 先取得节点. 借出后 GL 可见的地址不变, 重新由本包持有到真实完成.
+                packet.chunks.push_back(std::move(*available));
+                auto &chunk = *packet.chunks.back();
+                m_AvailableUploadCapacity -= chunk.capacity;
+                chunk.used = size;
+                slice = {chunk.name, 0, chunk.mapping};
+                ++m_CommandCounts.uploadChunksReused;
+                return true;
+            }
             auto prepared = std::make_unique<UploadChunk>();
             packet.chunks.push_back(std::move(prepared));
         }
@@ -279,6 +303,24 @@ namespace Physara::RHI::OpenGL
         if (!BeginNative("AllocateUpload"))
         {
             return false;
+        }
+        for (auto &available : m_AvailableUploads)
+        {
+            if (capacity <= UploadCapacityLimit - m_UploadCapacity)
+            {
+                break;
+            }
+            if (available)
+            {
+                m_AvailableUploadCapacity -= available->capacity;
+                const bool deleted = DeleteUploadChunk(*available, true);
+                available.reset();
+                if (!deleted)
+                {
+                    packet.invalid = true;
+                    return false;
+                }
+            }
         }
         // 节点和预算先归设备, GL 错误也不会把已取得的 name 丢到失败的栈帧之外.
         chunk.capacity = capacity;
@@ -317,7 +359,47 @@ namespace Physara::RHI::OpenGL
             return false;
         }
         chunk.used = size;
+        m_UploadHighWater = std::max(m_UploadHighWater, m_UploadCapacity);
+        ++m_CommandCounts.uploadChunksAllocated;
         slice = {chunk.name, 0, chunk.mapping};
         return true;
+    }
+
+    bool OpenGLDevice::DeleteUploadChunk(UploadChunk &chunk, bool nativeAvailable) noexcept
+    {
+        m_UploadCapacity -= chunk.capacity;
+        if (!nativeAvailable || !m_NativeUsable || chunk.name == 0)
+        {
+            return nativeAvailable && m_NativeUsable;
+        }
+        m_ContextState.Invalidate();
+        if (chunk.mapping != nullptr)
+        {
+            const auto valid = glUnmapNamedBuffer(chunk.name);
+            if (!CheckNative("RetireUpload.Unmap", chunk.name) || valid != GL_TRUE)
+            {
+                if (valid != GL_TRUE && m_NativeUsable)
+                {
+                    Report("RetireUpload.Unmap", "NativeFailure: mapped storage contents became invalid");
+                }
+                m_Phase = Phase::Faulted;
+                m_WorkFailed = true;
+                return false;
+            }
+        }
+        glDeleteBuffers(1, &chunk.name);
+        return CheckNative("RetireUpload.Delete", chunk.name);
+    }
+
+    GraphicsUploadStorage OpenGLDevice::UploadStorage() const noexcept
+    {
+        return {m_UploadCapacity, m_AvailableUploadCapacity, m_UploadHighWater, UploadCapacityLimit,
+                m_VolatileCapacity};
+    }
+
+    GraphicsUploadStorage ReadUploadStorage(Device *device) noexcept
+    {
+        const auto *native = dynamic_cast<OpenGLDevice *>(device);
+        return native && native->RequireContext("ReadUploadStorage") ? native->UploadStorage() : GraphicsUploadStorage{};
     }
 }

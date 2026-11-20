@@ -68,13 +68,16 @@ namespace Physara::RHI::OpenGL
     /// @brief 在设备 owner 线程复制原生状态计数, 不调用 GL. device 为宿主持有的原生根.
     /// @return 同一设备自创建以来的累计值. 空指针或其它后端类型返回全零.
     [[nodiscard]] GraphicsOperationCounts ReadGraphicsCounts(Device *device) noexcept;
+    /// @brief 在原生设备的 owner 线程及 current context 中读取上传容量快照, 不触发完成收集.
+    /// @return 缺少适用设备或 context 时返回全零.
+    [[nodiscard]] GraphicsUploadStorage ReadUploadStorage(Device *device) noexcept;
 
     /// @brief 读取原生 Device 初始化时观察到的单个 cube 目标能力与最大面宽.
     /// @note 只借用有效原生 Device. 无对应能力时返回 None, 不查询 GL 或从二维格式能力推断.
     [[nodiscard]] FormatSupport QueryCubeFormatSupport(Device *device, Format format,
                                                         std::uint32_t &maxEdge) noexcept;
 
-    /// @brief 新包上传的容量预检结果. Pending 表示当前持有的区段退休后可重试.
+    /// @brief 新包上传的容量预检结果. Pending 表示等待物理录制包槽或映射容量释放后可重试.
     enum class UploadAdmission : std::uint8_t
     {
         Ready,
@@ -87,7 +90,7 @@ namespace Physara::RHI::OpenGL
     /// @pre device 为原生 Device, owning context current, 无开放录制. chunkSize 来自拟录制的列表.
     /// @param textureWrites 按录制顺序提供的紧密字节数, 0 表示该项无写入.
     /// @param bufferWrites 纹理写入后按录制顺序提供的缓冲写入字节数, 0 表示该项无写入.
-    /// @return ExceedsLimit 表示该录制计划在空闲设备上也超限. Pending 表示现有区段退休后可重试.
+    /// @return ExceedsLimit 表示该计划在空闲设备上也超限. 能容纳该计划但包槽或映射余量不足时返回 Pending.
     /// InvalidState 表示设备状态或列表参数不满足前提.
     /// @note 只读取容量. Ready 后在同一 owner 上先录制该包.
     [[nodiscard]] UploadAdmission CheckUploadCapacity(Device *device, std::size_t chunkSize,

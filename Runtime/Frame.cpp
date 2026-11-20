@@ -524,7 +524,8 @@ namespace Physara::Runtime
             const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
             CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
                                           measuredOffscreen);
-            measurements.statistics.Publish({*measuredSource, measurements.cpu, native, slot.forward.WorkCounts(index),
+            measurements.statistics.Publish({*measuredSource, measurements.cpu, native, host.ReadUploadStorage(),
+                slot.forward.WorkCounts(index),
                 measurements.residency, plan.passes.size(), result.swapped,
                 result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state,
                 measurements.preparation});
@@ -883,12 +884,23 @@ namespace Physara::Runtime
         // 只有准备出本轮颜色候选的附加路才进入图. 响应对象即使被拒绝也保留原因供调用方读取.
         auto *selectedOffscreen = offscreen.outputs.Color() ? &offscreen : nullptr;
         const auto *extracted = shared.Result();
+        // 两路 View 准备结束后交付成功提取的模型表. 诊断帧据此退休旧代, 常规 Forward 已观察的同一版本可直接复用.
+        if (extracted)
+        {
+            if (const auto failure = forward.ObserveModelTable(*extracted))
+            {
+                remember(Failed(host, AttemptStatus::Cancelled, "Frame.SceneResidency", failure->description).error);
+            }
+        }
+        // 在构图合并及裁剪前取准备需求. ExecuteFrame 只在场景出口获接受后随对应票据发布这些值.
+        const auto [requestedWrites, requestedBytes] = slot.forward.UploadDemand();
         const FrameMeasurements measurements{statistics, {editorSeconds, SecondsSince(sceneStart)},
             forward.ResidencyCounts(),
             {.slot = presentation.token.slotIndex, .structureRevision = extracted ? extracted->structureRevision : 0,
              .extraction = extracted ? extracted->extraction : SceneExtractionStatistics{},
              .encodings = slot.forward.EncodingCounts(), .views = {MeasureCulling(prepared),
-                                                                  MeasureCulling(offscreen.prepared)}}};
+                                                                  MeasureCulling(offscreen.prepared)},
+             .uploadDemand = {requestedWrites, requestedBytes}}};
         // 本次取得已证明同槽上次工作完成. 后续失败分支只检查本轮是否真的提交过前缀.
         slot.lastSubmission = 0;
         slot.diagnosticUploadBytes = 0;

@@ -21,6 +21,7 @@ namespace Physara::RHI::OpenGL
         switch (item.type)
         {
         case ResourceType::ConstantBuffer:
+        case ResourceType::VolatileConstantBuffer:
             offset = desc.bindingOffsets.constantBuffer;
             break;
         case ResourceType::StructuredBuffer_SRV:
@@ -53,12 +54,30 @@ namespace Physara::RHI::OpenGL
             RequirePreparation(desc.registerSpace < 4 && (desc.registerSpaceIsDescriptorSet || desc.registerSpace == 0),
                                "InvalidArgument: layout register-space strategy");
             std::set<std::uint32_t> bindings;
+            std::optional<std::uint32_t> pushSlot;
+            std::uint32_t volatileCount = 0;
             for (const auto &item : desc.bindings)
             {
+                if (item.type == ResourceType::PushConstants)
+                {
+                    RequirePreparation(!pushSlot && item.size != 0 && item.size <= MaxPushConstantSize &&
+                                           item.size % 4 == 0 && item.slot < 128,
+                                       "InvalidArgument: push-constant layout count, size or slot");
+                    pushSlot = item.slot;
+                    continue;
+                }
                 RequirePreparation(item.size == 1 && item.slot < 128, "Unsupported: descriptor count or slot");
+                RequirePreparation(item.type != ResourceType::VolatileConstantBuffer ||
+                                       ++volatileCount <= MaxVolatileConstantBuffersPerLayout,
+                                   "InvalidArgument: too many volatile constants in one layout");
                 RequirePreparation(bindings.insert(CanonicalBinding(desc, item)).second,
                                    "InvalidArgument: colliding canonical layout bindings");
             }
+            RequirePreparation(!pushSlot || std::ranges::none_of(desc.bindings, [&](const auto &item)
+            {
+                return item.slot == *pushSlot && (item.type == ResourceType::ConstantBuffer ||
+                                                 item.type == ResourceType::VolatileConstantBuffer);
+            }), "InvalidArgument: push constants reuse a constant-buffer slot");
             return BindingLayoutHandle::Create(new OpenGLBindingLayout(this, desc));
         }
         catch (const std::exception &error)
@@ -80,10 +99,7 @@ namespace Physara::RHI::OpenGL
         {
             m_Resources.emplace_back(item.resourceHandle);
             m_Bindings.emplace_back();
-            // 所有删除节点先于任何 GL 创建分配, 析构只交接这些节点.
-            m_Views.push_back(item.type == ResourceType::Texture_SRV
-                                  ? std::make_unique<NativeDeletion>(NativeKind::Texture)
-                                  : nullptr);
+            m_Views.emplace_back();
         }
     }
 
@@ -103,8 +119,9 @@ namespace Physara::RHI::OpenGL
     static BufferRange ResolveBuffer(const BindingSetItem &item, OpenGLBuffer &buffer, const ShaderCaps &caps)
     {
         const auto &desc = buffer.GetDesc();
-        const bool constant = item.type == ResourceType::ConstantBuffer;
-        RequirePreparation(!desc.isVolatile && (constant ? desc.isConstantBuffer : desc.structStride > 0),
+        const bool isVolatile = item.type == ResourceType::VolatileConstantBuffer;
+        const bool constant = isVolatile || item.type == ResourceType::ConstantBuffer;
+        RequirePreparation(desc.isVolatile == isVolatile && (constant ? desc.isConstantBuffer : desc.structStride > 0),
                            "InvalidArgument: buffer binding usage");
         const auto offset = item.range.byteOffset;
         RequirePreparation(offset < desc.byteSize, "InvalidArgument: buffer binding offset");
@@ -116,6 +133,7 @@ namespace Physara::RHI::OpenGL
         const auto maximum = constant ? caps.uniformBlockBytes : caps.storageBlockBytes;
         // 公共 RHI 对 partial CBV 的 offset/size 另有 256-byte 合同, 不能只按较小的 GL 对齐放宽.
         const bool whole = offset == 0 && size == desc.byteSize;
+        RequirePreparation(!isVolatile || whole, "InvalidArgument: volatile binding must cover the logical buffer");
         RequirePreparation(
             !constant || whole ||
                 (offset % ConstantBufferOffsetSizeAlignment == 0 && size % ConstantBufferOffsetSizeAlignment == 0),
@@ -135,6 +153,7 @@ namespace Physara::RHI::OpenGL
         GLenum format = 0;
         TextureSubresourceSet range;
         std::array<GLint, 4> swizzle{};
+        bool usesStorage = false;
     };
 
     /// @brief 仅在拒绝时格式化可用槽身份及实际输入. 非 descriptor 布局的 set 由后续 Pipeline 分配.
@@ -215,6 +234,11 @@ namespace Physara::RHI::OpenGL
             RequirePreparation(std::size_t(components[index]) < Swizzles.size(), "InvalidArgument: component mapping");
             result.swizzle[index] = Swizzles[std::size_t(components[index])];
         }
+        const auto defaults = ResolveComponentMapping(std::nullopt, desc.defaultComponentMapping);
+        // 完全相同的视图直接共享现有 native 名字. 独立 view 仅用于实际解释或范围变化.
+        result.usesStorage = dimension == desc.dimension && format == desc.format && range.baseMipLevel == 0 &&
+            range.numMipLevels == desc.mipLevels && range.baseArraySlice == 0 &&
+            range.numArraySlices == desc.arraySize && mapping == defaults;
         return result;
     }
 
@@ -235,7 +259,7 @@ namespace Physara::RHI::OpenGL
             RequirePreparation(desc.bindings.size() == items.size(), "InvalidArgument: binding set item count");
             auto set = std::make_unique<OpenGLBindingSet>(this, desc, nativeLayout);
             std::vector<SamplingView> views(desc.bindings.size());
-            std::set<std::uint32_t> occupied;
+            std::set<const BindingLayoutItem *> occupied;
             // 完整输入预检不发原生工作, 所有成功记录仍由未发布的 set 拥有.
             // 数量一致还不足以证明匹配, type/slot 与 occupied 共同拒绝缺项被重复项替代的情况.
             for (std::size_t index = 0; index < desc.bindings.size(); ++index)
@@ -243,19 +267,36 @@ namespace Physara::RHI::OpenGL
                 const auto &item = desc.bindings[index];
                 const auto found = std::ranges::find_if(
                     items, [&](const auto &entry) { return entry.slot == item.slot && entry.type == item.type; });
-                RequirePreparation(found != items.end() && item.arrayElement == 0 && item.resourceHandle &&
-                                       occupied.insert(CanonicalBinding(*nativeLayout->GetDesc(), *found)).second,
+                RequirePreparation(found != items.end() && item.arrayElement == 0 && occupied.insert(&*found).second &&
+                                       (item.type == ResourceType::PushConstants ? !item.resourceHandle
+                                                                                 : item.resourceHandle != nullptr),
                                    "InvalidArgument: missing, duplicated or mismatched binding item");
                 auto &record = set->m_Bindings[index];
                 record.slot = item.slot;
                 record.type = item.type;
                 record.resource = item.resourceHandle;
-                if (item.type == ResourceType::Texture_SRV)
+                if (item.type == ResourceType::PushConstants)
+                {
+                    // 集合只携带布局占位和字节数. 每次图形状态设置后由命令提供实际数据.
+                    RequirePreparation(item.range.byteOffset == 0 && item.range.byteSize == found->size,
+                                       "InvalidArgument: push constant set size");
+                    record.range = item.range;
+                }
+                else if (item.type == ResourceType::Texture_SRV)
                 {
                     views[index] = InspectTexture(*this, item, *nativeLayout->GetDesc());
                     // 保存 storage 空间中的实际范围, view 的 mip/layer 重编号不能用于用途或 feedback 判断.
                     record.dimension = views[index].dimension;
                     record.subresources = views[index].range;
+                    if (views[index].usesStorage)
+                    {
+                        record.name = views[index].texture->Name();
+                    }
+                    else
+                    {
+                        // 需要独立 view 时先预留删除节点, 后面的原生创建不再分配它.
+                        set->m_Views[index] = std::make_unique<NativeDeletion>(NativeKind::Texture);
+                    }
                 }
                 else if (item.type == ResourceType::Sampler)
                 {
@@ -281,7 +322,7 @@ namespace Physara::RHI::OpenGL
             for (std::size_t index = 0; index < views.size(); ++index)
             {
                 const auto &view = views[index];
-                if (!view.texture)
+                if (!set->m_Views[index])
                 {
                     continue;
                 }

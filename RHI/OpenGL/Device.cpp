@@ -23,7 +23,7 @@ namespace Physara::RHI::OpenGL
     // 最后 CPU 引用可在 worker 释放, 但显式退出必须已经撤销全部物理包, 内部 lease 和原生删除记录.
     OpenGLDevice::~OpenGLDevice()
     {
-        if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr || m_UploadCapacity != 0 ||
+        if (m_Phase != Phase::Stopped || m_DeletionHead != nullptr || m_UploadCapacity != 0 || m_VolatileCapacity != 0 ||
             m_InternallyRetainedWrappers != 0 || m_TimerNames != 0 || (m_Submissions && m_Submissions->count != 0) ||
             std::any_of(m_Packets.begin(), m_Packets.end(), [](const auto &packet) { return packet != nullptr; }))
         {
@@ -278,6 +278,8 @@ namespace Physara::RHI::OpenGL
                 // 入队/CPU wrapper 析构不归还预算, 只有实际删除成功才减少活名字数.
                 --m_TimerNames;
             }
+            // 最后一个 CPU 引用只交接删除节点. 直到原生名字删除成功, 版本槽的 backing 才退还设备预算.
+            m_VolatileCapacity -= record.volatileBytes;
         }
         // FBO 已解除原生附件引用, 才撤销该 FBO 自己拥有的 view.
         for (std::uint32_t index = 0; index < record.viewCount && m_NativeUsable; ++index)

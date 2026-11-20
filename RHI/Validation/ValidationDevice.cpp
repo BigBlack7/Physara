@@ -2693,6 +2693,14 @@ namespace Physara::RHI::Validation
             bool isConstantView = (binding.type == ResourceType::ConstantBuffer) ||
                                   (binding.type == ResourceType::VolatileConstantBuffer);
 
+            // Resolve 会截断显式长度. 常量绑定须先拒绝越界, 再解释零长度或全一长度哨兵.
+            if (isConstantView && (binding.range.byteOffset >= desc.byteSize ||
+                (binding.range.byteSize != ~0ull &&
+                 binding.range.byteSize > desc.byteSize - binding.range.byteOffset)))
+            {
+                errorStream << "Constant buffer binding range exceeds buffer capacity";
+                return false;
+            }
             const auto resolvedRange = binding.range.Resolve(desc);
             if (resolvedRange.byteSize == 0)
             {
@@ -2791,7 +2799,7 @@ namespace Physara::RHI::Validation
                 return false;
             }
 
-            if (binding.type == ResourceType::ConstantBuffer && !binding.range.IsEntireBuffer(desc))
+            if (binding.type == ResourceType::ConstantBuffer && !resolvedRange.IsEntireBuffer(desc))
             {
                 if (!QueryFeatureSupport(Feature::ConstantBufferRanges))
                 {
@@ -2800,32 +2808,30 @@ namespace Physara::RHI::Validation
                     return false;
                 }
 
-                const BufferRange range = binding.range.Resolve(desc);
-                if ((range.byteOffset % ConstantBufferOffsetSizeAlignment) != 0)
+                if ((resolvedRange.byteOffset % ConstantBufferOffsetSizeAlignment) != 0)
                 {
                     errorStream << "Constant buffer offsets must be a multiple of " << ConstantBufferOffsetSizeAlignment
                                 << " bytes. Buffer " << Utils::DebugNameToString(desc.debugName)
-                                << " is bound with effective byteOffset = " << range.byteOffset << ".";
+                                << " is bound with effective byteOffset = " << resolvedRange.byteOffset << ".";
                     return false;
                 }
 
-                if (range.byteSize == 0 || (range.byteSize % ConstantBufferOffsetSizeAlignment) != 0)
+                if ((resolvedRange.byteSize % ConstantBufferOffsetSizeAlignment) != 0)
                 {
                     errorStream << "Constant buffer bindings must have nonzero byteSize that is a multiple of "
                                 << ConstantBufferOffsetSizeAlignment << " bytes. Buffer "
                                 << Utils::DebugNameToString(desc.debugName)
-                                << " is bound with effective byteSize = " << range.byteSize << ".";
+                                << " is bound with effective byteSize = " << resolvedRange.byteSize << ".";
                     return false;
                 }
             }
 
-            if (binding.type == ResourceType::VolatileConstantBuffer && !binding.range.IsEntireBuffer(desc))
+            if (binding.type == ResourceType::VolatileConstantBuffer && !resolvedRange.IsEntireBuffer(desc))
             {
-                const BufferRange range = binding.range.Resolve(desc);
                 errorStream << "Volatile constant buffers cannot be partially bound. Buffer "
                             << Utils::DebugNameToString(desc.debugName)
-                            << " is bound with effective byteOffset = " << range.byteOffset
-                            << ", byteSize = " << range.byteSize << ".";
+                            << " is bound with effective byteOffset = " << resolvedRange.byteOffset
+                            << ", byteSize = " << resolvedRange.byteSize << ".";
                 return false;
             }
 

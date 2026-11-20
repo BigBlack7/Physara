@@ -96,6 +96,28 @@ namespace Physara::Renderer
         return state != RHI::ResourceStates::Unknown && Detail::HasKnownResourceStateBits(state);
     }
 
+    // 先按起点排序, 再原地合并重叠或相邻的覆盖. 导入等价比较和版本 0 的内容查询共用这个表示.
+    static void MergeDefinedRanges(std::vector<RHI::BufferRange> &ranges)
+    {
+        std::ranges::sort(ranges, {}, &RHI::BufferRange::byteOffset);
+        std::size_t count = 0;
+        for (const auto range : ranges)
+        {
+            if (count != 0)
+            {
+                auto &last = ranges[count - 1];
+                const auto end = last.byteOffset + last.byteSize;
+                if (range.byteOffset <= end)
+                {
+                    last.byteSize = (std::max)(end, range.byteOffset + range.byteSize) - last.byteOffset;
+                    continue;
+                }
+            }
+            ranges[count++] = range;
+        }
+        ranges.resize(count);
+    }
+
     // 先确定完整范围和导入合同, 再查同一公共 RHI 对象是否已有身份.
     // 成功时复制描述, 导入还取得强引用. 所有校验通过后才追加新的资源记录.
     template <typename Id, typename Declaration>
@@ -103,7 +125,9 @@ namespace Physara::Renderer
                                                 const typename Declaration::Description &desc,
                                                 std::optional<typename Declaration::AccessRange> requested,
                                                 const typename Declaration::ResourceHandle &imported,
-                                                std::optional<ImportState> state)
+                                                std::optional<ImportState> state,
+                                                std::span<const RHI::BufferRange> defined)
+    try
     {
         const auto full = Detail::FullRange(desc);
         if (!full)
@@ -118,6 +142,7 @@ namespace Physara::Renderer
         }
         const auto range = requested.value_or(*full);
 
+        std::optional<std::vector<RHI::BufferRange>> initialContent;
         if (state)
         {
             if (!IsExplicitImportState(state->entry))
@@ -131,6 +156,26 @@ namespace Physara::Renderer
                                               "Import final state is unknown or contains undefined RHI bits");
             }
 
+            if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
+            {
+                if (!defined.empty())
+                {
+                    if (state->contentDefined || !std::ranges::all_of(defined, [&](const auto &interval)
+                        { return Detail::Contains(range, interval); }))
+                    {
+                        return Detail::MakeGraphError(GraphErrorCode::InvalidRange, stage, {}, desc.debugName,
+                                                      "Invalid initial buffer content ranges");
+                    }
+                    auto &ranges = initialContent.emplace(defined.begin(), defined.end());
+                    MergeDefinedRanges(ranges);
+                    if (ranges.size() == 1 && ranges.front() == range)
+                    {
+                        state->contentDefined = true;
+                        initialContent.reset();
+                    }
+                }
+            }
+
             // 公共 RHI 对象是导入键. 返回版本 0, 后续写入不改变外部输入身份.
             for (std::size_t i = 0; i < resources.size(); ++i)
             {
@@ -139,7 +184,13 @@ namespace Physara::Renderer
                 {
                     continue;
                 }
-                if (resource.range != range || resource.importState != state)
+                bool equivalent = resource.range == range && resource.importState == state;
+                if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
+                {
+                    equivalent = equivalent && (initialContent ? resource.initialContent == *initialContent
+                                                               : resource.initialContent.empty());
+                }
+                if (!equivalent)
                 {
                     return Detail::MakeGraphError(GraphErrorCode::ConflictingImport, stage, {}, desc.debugName,
                                                   "External resource already has a different import declaration");
@@ -154,16 +205,25 @@ namespace Physara::Renderer
                                           "Resource index space exhausted");
         }
         const Id id{{static_cast<std::uint32_t>(resources.size()), m_Generation}, 0};
-        try
+        resources.emplace_back(desc, range, imported, state);
+        if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
         {
-            resources.emplace_back(desc, range, imported, state);
-        }
-        catch (const std::bad_alloc &)
-        {
-            return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
-                                          "Could not store resource");
+            if (initialContent)
+            {
+                resources.back().initialContent = std::move(*initialContent);
+            }
         }
         return id;
+    }
+    catch (const std::bad_alloc &)
+    {
+        return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
+                                      "Could not store resource");
+    }
+    catch (const std::length_error &)
+    {
+        return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
+                                      "Resource content coverage exceeds storage");
     }
 
     GraphResult<TextureId> RenderGraph::CreateTexture(const RHI::TextureDesc &desc)
@@ -200,7 +260,7 @@ namespace Physara::Renderer
     }
 
     GraphResult<BufferId> RenderGraph::ImportBuffer(const RHI::BufferHandle &buffer, ImportState states,
-                                                   std::optional<RHI::BufferRange> range)
+        std::optional<RHI::BufferRange> range, std::span<const RHI::BufferRange> defined)
     {
         if (auto failure = CheckBuilding("ImportBuffer", {}))
         {
@@ -211,7 +271,7 @@ namespace Physara::Renderer
             return Detail::MakeGraphError(GraphErrorCode::InvalidResource, "ImportBuffer", {}, {},
                                           "Missing external buffer");
         }
-        return DeclareResource<BufferId>("ImportBuffer", m_Buffers, buffer->GetDesc(), range, buffer, states);
+        return DeclareResource<BufferId>("ImportBuffer", m_Buffers, buffer->GetDesc(), range, buffer, states, defined);
     }
 
     // 直接导出沿用 Builder 的版本, 内容和范围规则. 空 PassId 表示图级声明.

@@ -12,6 +12,10 @@ namespace Physara::RHI::OpenGL
     /// @brief 为失败保留逻辑 set/binding, 不把它们误写成原生单元.
     static std::string KeyText(ShaderBindingKey key)
     {
+        if (key == GraphicsPushConstantKey)
+        {
+            return " push constants";
+        }
         return " set=" + std::to_string(key.set) + " binding=" + std::to_string(key.binding);
     }
 
@@ -40,6 +44,8 @@ namespace Physara::RHI::OpenGL
         std::set<std::uint32_t> sets;
         bool first = true;
         bool explicitSets = false;
+        std::optional<std::uint32_t> pushLayout;
+        std::uint32_t pushSlot = 0;
         // 先确认布局的 set 解释唯一, 逻辑 slot 的稀疏程度不参与任何原生容量分配.
         for (std::size_t index = 0; index < layouts.size(); ++index)
         {
@@ -55,6 +61,17 @@ namespace Physara::RHI::OpenGL
             const auto set = explicitSets ? layout->registerSpace : static_cast<std::uint32_t>(index);
             RequirePreparation(set < 4 && (explicitSets || layout->registerSpace == 0) && sets.insert(set).second,
                                "InvalidArgument: duplicate or invalid logical set");
+            for (const auto &item : layout->bindings)
+            {
+                if (item.type == ResourceType::PushConstants)
+                {
+                    // push 在整条 Pipeline 上只有一个逻辑声明. 到活动反射匹配它时才分配物理 UBO 位置.
+                    RequirePreparation(!pushLayout, "InvalidArgument: more than one graphics push layout");
+                    pushLayout = static_cast<std::uint32_t>(index);
+                    pushSlot = item.slot;
+                    result.pushBytes = result.pushBackingBytes = item.size;
+                }
+            }
         }
         for (const auto *shader : shaders)
         {
@@ -67,7 +84,7 @@ namespace Physara::RHI::OpenGL
                     result.resources, [&](const auto &entry) { return entry.resource.key == resource.key; });
                 if (existing != result.resources.end())
                 {
-                    // 跨阶段相同的 t 槽只能指向一种视图维度, 之后由该逻辑键分配物理单元.
+                    // 跨阶段共用同一物理位置, 因此块的大小和字段布局, 或采样视图的维度都须一致.
                     RequirePreparation(existing->resource.type == resource.type &&
                                            existing->resource.dimension == resource.dimension &&
                                            existing->resource.extent == resource.extent &&
@@ -77,6 +94,14 @@ namespace Physara::RHI::OpenGL
                     RequirePreparation((layout.visibility & shader->GetDesc().shaderType) != ShaderType::None,
                                        "InterfaceMismatch: resource visibility" + KeyText(resource.key));
                     existing->stages |= bit;
+                    continue;
+                }
+                if (resource.type == ResourceType::PushConstants)
+                {
+                    RequirePreparation(pushLayout && resource.extent <= result.pushBytes &&
+                        (layouts[*pushLayout]->GetDesc()->visibility & shader->GetDesc().shaderType) != ShaderType::None,
+                        "InterfaceMismatch: active push constant layout/size/visibility");
+                    result.resources.push_back({resource, *pushLayout, pushSlot, 0, bit, ResourceType::PushConstants});
                     continue;
                 }
                 bool matched = false;
@@ -89,12 +114,16 @@ namespace Physara::RHI::OpenGL
                         continue;
                     }
                     const auto item = std::ranges::find_if(layout.bindings, [&](const auto &entry) {
-                        return entry.type == resource.type && CanonicalBinding(layout, entry) == resource.key.binding;
+                        const bool matchingType = entry.type == resource.type ||
+                            (resource.type == ResourceType::ConstantBuffer &&
+                             entry.type == ResourceType::VolatileConstantBuffer);
+                        return matchingType && CanonicalBinding(layout, entry) == resource.key.binding;
                     });
                     RequirePreparation(item != layout.bindings.end() &&
                                            (layout.visibility & shader->GetDesc().shaderType) != ShaderType::None,
                                        "InterfaceMismatch: resource layout/type/visibility" + KeyText(resource.key));
-                    result.resources.push_back({resource, static_cast<std::uint32_t>(index), item->slot, 0, bit});
+                    result.resources.push_back({resource, static_cast<std::uint32_t>(index), item->slot, 0, bit,
+                                                item->type});
                     matched = true;
                     break;
                 }
@@ -120,12 +149,14 @@ namespace Physara::RHI::OpenGL
         std::uint32_t ssbo = 0;
         for (auto &entry : result.resources)
         {
-            const bool constant = entry.resource.type == ResourceType::ConstantBuffer;
+            const bool constant = entry.resource.type == ResourceType::ConstantBuffer ||
+                                  entry.resource.type == ResourceType::PushConstants;
             if (!constant && entry.resource.type != ResourceType::StructuredBuffer_SRV)
             {
                 continue;
             }
             entry.unit = constant ? ubo++ : ssbo++;
+            entry.nativeExtent = entry.resource.extent;
             Limit((constant ? "UBO block bytes" : "SSBO block bytes"), entry.resource.extent,
                   constant ? caps.uniformBlockBytes : caps.storageBlockBytes);
             for (std::uint32_t stage = 0; stage < 2; ++stage)

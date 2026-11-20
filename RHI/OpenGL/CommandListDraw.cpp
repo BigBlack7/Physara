@@ -91,15 +91,16 @@ namespace Physara::RHI::OpenGL
                     return;
                 }
                 const BufferRange covered{found->offset + firstByte, lastByte - firstByte + attribute.byteSize};
-                if (knownRange && !CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(found->buffer),
-                                                      ResourceStates::VertexBuffer, operation, covered))
+                if (!CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(found->buffer),
+                                         ResourceStates::VertexBuffer, operation, covered))
                 {
                     return;
                 }
             }
         }
         // 上传/clear/copy 可能改变用途或 native 状态, 即使没有再次 SetGraphicsState 也要重新满足它们.
-        if (!GraphicsUses(state, *pipeline, operation) || !m_Device->BeginNative(operation))
+        if (!CheckDrawConstants(state, *pipeline, operation) || !GraphicsUses(state, *pipeline, operation) ||
+            !m_Device->BeginNative(operation))
         {
             return;
         }
@@ -109,6 +110,8 @@ namespace Physara::RHI::OpenGL
             return;
         }
         ApplyGraphics(state, *pipeline);
+        // 同一状态下连续写入也可选中不同版本. 每次实际 Draw 都把当前物理区段交给绑定缓存.
+        ApplyDrawConstants(state, *pipeline);
         constexpr GLenum Topologies[] = {
             GL_POINTS,         GL_LINES,        GL_LINE_STRIP,          GL_TRIANGLES,
             GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN, GL_TRIANGLES_ADJACENCY, GL_TRIANGLE_STRIP_ADJACENCY};

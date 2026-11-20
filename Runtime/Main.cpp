@@ -362,7 +362,8 @@ namespace Physara::Runtime
         // 场景包延迟到首次真实预览才消费. forward 和帧槽在宿主关闭前释放, 已发引用由 RHI 收拢.
         Renderer::ForwardRenderer forward(*host.GetDevice(),
             resources.forward,
-            info.maxTextureSizePixels, std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels));
+            info.maxTextureSizePixels, std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels),
+            info.uniformBufferOffsetAlignmentBytes);
         const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, options.pollLimit);
         editor.ShutdownSceneDocument();
         manager.Shutdown();

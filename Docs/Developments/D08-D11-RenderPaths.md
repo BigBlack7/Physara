@@ -27,9 +27,11 @@
 
 **职责位置：** Renderer/Materials、Lighting、RHI/OpenGL Upload。**前置：** [D08-T01](#d08-t01)。**架构依据：** [5.5](../Architecture.md#gpu-residency)、[7.4](../Architecture.md#uploads)、[11.1](../Architecture.md#retirement)。
 
-- [ ] 把初始缓存扩充为受预算约束的 Geometry pages、Texture views、Material tables/Binding caches 与环境版本；有效 mip 层级和 sampler LOD 配套，颜色/数据过滤语义分开，查询环境朝向/强度不触发重复卷积。
-- [ ] 实现 persistent/coherent 区段、volatile CB 与 push-constant 兼容区；明确保留 binding 范围，避免与 lowering 分配冲突。
-- [ ] 把 recording/submission/completion 关联到区段/版本复用，合并脏上传 range；场景上传包在 Draw 阶段追加 View/实例/indirect 数据后封存并检查全部准备结果，UI 上传独立声明，裁剪或失败不确认上传版本；测试小容量环回、在途改材质/重导入及超预算。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-20-complete-versioned-gpu-residency/tasks.md#final-verification)
+
+- [x] 把初始缓存扩充为受预算约束的 Geometry pages、Texture views、Material tables/Binding caches 与环境版本；有效 mip 层级和 sampler LOD 配套，颜色/数据过滤语义分开，查询环境朝向/强度不触发重复卷积。
+- [x] 实现 persistent/coherent 区段、volatile CB 与 push-constant 兼容区；明确保留 binding 范围，避免与 lowering 分配冲突。
+- [x] 把 recording/submission/completion 关联到区段/版本复用，合并脏上传 range；场景上传包在 Draw 阶段追加 View/实例/indirect 数据后封存并检查全部准备结果，UI 上传独立声明，裁剪或失败不确认上传版本；测试小容量环回、在途改材质/重导入及超预算。
 
 **完成条件：** 不覆盖在途 GPU 数据，缓存与上传区段均有容量、超限策略、失效与退休协议。
 

@@ -20,12 +20,6 @@
 
 namespace Physara::Renderer::Detail
 {
-    /// @brief 资源键只由发布身份组成, 不使用路径、进程内地址或绘制顺序.
-    static AssetVersionKey Version(const Asset::AssetId &id, Asset::ContentRevision revision) noexcept
-    {
-        return {id.index, id.generation, revision.value};
-    }
-
     /// @brief Scene 和实体的完整分配代隔离资源, 防止文档替换或 ECS 槽复用后命中旧行.
     static ObjectKey ObjectIdentity(Scene::SceneId scene, Scene::EntityHandle entity) noexcept
     {
@@ -250,14 +244,17 @@ namespace Physara::Renderer::Detail
         return result;
     }
 
-    /// @brief 新覆盖代才重新解析写入. 有效 GPU 字段及绑定相同时沿用原存储.
+    /// @brief 准备新覆盖代或补齐缓存行未获接受的纹理. 相同字段及绑定沿用原存储.
     static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, ForwardFrameData &frame,
         const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
-        const MaterialGeometry &geometry)
+        const MaterialGeometry &geometry, const MaterialRow *cachedRow)
     {
         auto &uploads = frame.uploads;
-        ++frame.encodings.materials;
-        const auto values = EncodeMaterial(material);
+        const auto values = cachedRow ? cachedRow->values : EncodeMaterial(material);
+        if (!cachedRow)
+        {
+            ++frame.encodings.materials;
+        }
         // 覆盖行除 ABI 数值外还比较实际纹理代和 sampler, 同一路径的新像素也须建立新行.
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
         std::array<RHI::SamplerHandle, Scene::MaterialSlotCount> samplers;
@@ -280,20 +277,26 @@ namespace Physara::Renderer::Detail
                 entry.revision = revision;
                 entry.geometry = geometry;
                 device.Use(row);
+                ++device.materialHits;
                 return entry.resident;
             }
         }
-        device.Reserve(sizeof(values));
-        auto row = std::make_shared<MaterialRow>(device.capacity, sizeof(values));
+        constexpr auto rowBytes = RHI::ConstantBufferOffsetSizeAlignment;
+        static_assert(sizeof(values) <= rowBytes);
+        // 部分 UBO 绑定同时受公共 256-byte 范围和设备 offset 对齐约束.
+        const auto alignment = std::lcm<std::size_t>(rowBytes, device.uniformAlignment);
+        device.Reserve(rowBytes, true);
+        auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
-        row->buffer = AllocateBuffer(device.device, GraphUsage::ConstantBuffer, sizeof(values));
+        device.AllocateSlice(row->storage, *row, GraphUsage::ConstantBuffer, 0, rowBytes, alignment);
         RHI::BindingSetDesc bindings;
-        bindings.AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->buffer.Get()));
+        bindings.AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->storage.page->buffer.Get(), row->storage.range));
         for (std::uint32_t i = 0; i < row->textures.size(); ++i)
         {
-            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(i, row->textures[i]->texture.Get()));
+            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(i, row->textures[i]->texture.Get())
+                .SetSubresources(row->textures[i]->sampling));
             bindings.AddItem(RHI::BindingSetItem::Sampler(i, row->samplers[i].Get()));
         }
         row->binding = device.device.CreateBindingSet(bindings, device.programs.layouts[2].Get());
@@ -302,8 +305,16 @@ namespace Physara::Renderer::Detail
             Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare effective material binding");
         }
         device.Use(*row);
-        uploads.Add(row, row->buffer, std::as_bytes(std::span(&values, 1)));
+        // 绑定和图写都覆盖完整的对齐行. 末尾补零后, 图声明的范围与实际复制字节一致.
+        std::array<std::byte, rowBytes> payload{};
+        std::ranges::copy(std::as_bytes(std::span(&values, 1)), payload.begin());
+        uploads.Add(row, row->storage, payload);
+        if (const auto previous = device.materials.find(key); previous != device.materials.end())
+        {
+            previous->second.resident->storage.Retire();
+        }
         device.materials.insert_or_assign(key, MaterialEntry{revision, geometry, row});
+        ++device.materialGeneration;
         return row;
     }
 
@@ -374,17 +385,27 @@ namespace Physara::Renderer::Detail
         }
         const auto vertexBytes = primitive.vertices.size() * layout.stride;
         uploads.ReserveWrites(vertexBytes + indexBytes.size(), 2);
-        device.Reserve(vertexBytes + indexBytes.size());
-        auto geometry = std::make_shared<GeometryRef>(device.capacity, vertexBytes + indexBytes.size());
+        device.Reserve(vertexBytes + indexBytes.size(), true);
+        auto geometry = std::make_shared<GeometryRef>(device.capacity, vertexBytes + indexBytes.size(), true);
         geometry->key = key;
         geometry->indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-        geometry->vertices = AllocateBuffer(device.device, GraphUsage::VertexBuffer, vertexBytes);
-        geometry->indices = AllocateBuffer(device.device, GraphUsage::IndexBuffer, indexBytes.size());
+        device.AllocateSlice(geometry->vertices, *geometry, GraphUsage::VertexBuffer, attributes, vertexBytes, 4);
+        device.AllocateSlice(geometry->indices, *geometry, GraphUsage::IndexBuffer, 0, indexBytes.size(),
+                             sizeof(std::uint32_t));
         std::vector<std::byte> packed(vertexBytes);
         PackVertices(packed, primitive, attributes, layout);
-        uploads.buffers.push_back({geometry, geometry->vertices, std::move(packed)});
-        uploads.buffers.push_back({geometry, geometry->indices, {indexBytes.begin(), indexBytes.end()}});
+        const auto &vertices = geometry->vertices;
+        const auto &indices = geometry->indices;
+        // 两项写入共用几何代, 各自携带目的页偏移. 确认时须同时找到顶点和索引的生产 Pass.
+        uploads.buffers.push_back({geometry, vertices.page->buffer, std::move(packed), false,
+                                   vertices.range.byteOffset, vertices.page.get()});
+        uploads.buffers.push_back({geometry, indices.page->buffer, {indexBytes.begin(), indexBytes.end()}, false,
+                                   indices.range.byteOffset, indices.page.get()});
         device.Use(*geometry);
+        if (const auto previous = device.geometry.find(key); previous != device.geometry.end())
+        {
+            previous->second->Retire();
+        }
         device.geometry.insert_or_assign(key, geometry);
         return geometry;
     }
@@ -490,6 +511,7 @@ namespace Physara::Renderer::Detail
         const auto entity = ObjectIdentity(view.scene.scene, object.entity);
         const MaterialKey key{version, ref.material, ref.materialOverride ? entity : ObjectKey{},
                               ref.materialOverride ? ref.sourceSlot : 0};
+        ++device.materialRequests;
         const auto *cached = FindMaterial(device, key, ref.materialRevision);
         std::shared_ptr<MaterialRow> row;
         std::optional<Scene::EffectiveMaterial> sourceMaterial;
@@ -500,7 +522,12 @@ namespace Physara::Renderer::Detail
             requirements = cached->geometry;
             row = cached->resident;
         }
-        else
+        // 深度图可能只确认材质行和基色纹理. 其余槽须各自有已接受内容或本批生产者, 才能直接使用原集合.
+        const bool texturesReady = row && std::ranges::all_of(row->textures, [&](const auto &texture)
+        {
+            return frame.uploads.HasMaterialTexture(*texture);
+        });
+        if (!texturesReady)
         {
             if (ref.materialOverride)
             {
@@ -510,12 +537,15 @@ namespace Physara::Renderer::Detail
             {
                 material = &sourceMaterial.emplace(Scene::ResolveMaterial(model, source, nullptr));
             }
-            if (material->values.alphaMode == Asset::ModelAlpha::Blend)
+            if (!row && material->values.alphaMode == Asset::ModelAlpha::Blend)
             {
                 DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
                 return;
             }
-            requirements = MaterialRequirements(*material);
+            if (!row)
+            {
+                requirements = MaterialRequirements(*material);
+            }
         }
 
         // 固定源局部基点构成缓存键. 世界 FP32 基点及余量只在对象真实换代时编码.
@@ -561,9 +591,10 @@ namespace Physara::Renderer::Detail
             frame.uploads.Add(instance, instance->buffer, std::as_bytes(std::span(&encoded, 1)));
             device.objects.insert_or_assign(objectKey, ObjectRow{object.transformRevision, instance});
         }
-        if (row)
+        if (texturesReady)
         {
             // 快速命中跳过了逐槽准备. 本 View 的驻留账单仍须包含绑定集合引用的每个纹理代.
+            ++device.materialHits;
             for (const auto &texture : row->textures)
             {
                 device.Use(*texture);
@@ -572,7 +603,7 @@ namespace Physara::Renderer::Detail
         }
         else
         {
-            row = PrepareMaterial(device, frame, key, ref.materialRevision, *material, requirements);
+            row = PrepareMaterial(device, frame, key, ref.materialRevision, *material, requirements, row.get());
         }
         const auto [slot, newRow] = rows.try_emplace(row.get(), frame.materialRows.size());
         if (newRow)
@@ -596,7 +627,7 @@ namespace Physara::Renderer::Detail
 
     void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
     {
-        // 先封存可绘项及静态上传. 被跳过的 Primitive 不参与本帧灯表需求判断.
+        // 先收集几何和材质写入, 据实际可绘项选择后续灯表和 View 常量. 各路准备结束后统一封存.
         std::map<MaterialRow *, std::size_t> rows;
         for (const auto index : view.primitives)
         {

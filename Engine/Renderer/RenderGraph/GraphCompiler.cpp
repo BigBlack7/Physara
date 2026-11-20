@@ -181,7 +181,7 @@ namespace Physara::Renderer::Detail
             }
             id = use.write->previous;
         }
-        if (resource.importState && resource.importState->contentDefined)
+        if (ContainsInitialContent(resource, range, remaining))
         {
             return std::nullopt;
         }

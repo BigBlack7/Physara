@@ -31,6 +31,11 @@ namespace Physara::Renderer::Detail
     inline constexpr auto TextureBoundary = RHI::ResourceStates::Common;
 
     using AssetVersionKey = std::array<std::uint64_t, 3>; ///< 领域槽、分配代、该资产内容版本.
+    /// @brief 资源键只由发布身份组成, 不使用路径、进程内地址或绘制顺序.
+    [[nodiscard]] inline AssetVersionKey Version(Asset::AssetId id, Asset::ContentRevision revision) noexcept
+    {
+        return {id.index, id.generation, revision.value};
+    }
     /// @brief 模型版本, 紧凑 mesh, 源 Primitive 槽, 属性位和重建切线的 UV. UV=-1 表示沿用源几何.
     using GeometryKey = std::tuple<AssetVersionKey, std::uint32_t, std::uint32_t, std::uint8_t, std::int8_t>;
     /// @brief 外置标志, 固定资产版本, 源 image 下标, 颜色域及完整 mip 策略, sampler 另行共享.
@@ -47,21 +52,69 @@ namespace Physara::Renderer::Detail
     {
         std::size_t bytes = 0;
         std::size_t entries = 0;
+        std::size_t textureBytes = 0;
+        std::size_t environmentBytes = 0;
     };
 
     /// @brief 一代存储的逻辑预算与上传事实. accepted 允许后继有序读取, 不表示 GPU 已完成.
     /// @note 由派生类型的 shared_ptr 销毁, 最后一个缓存或帧槽引用释放时归还预算.
     struct Allocation
     {
-        Allocation(std::shared_ptr<ResidencyCapacity> quota, std::size_t size) noexcept;
+        Allocation(std::shared_ptr<ResidencyCapacity> quota, std::size_t size, bool paged = false) noexcept;
         ~Allocation();
         Allocation(const Allocation &) = delete;
         Allocation &operator=(const Allocation &) = delete;
 
         std::shared_ptr<ResidencyCapacity> capacity;
         std::size_t bytes;
+        std::size_t chargedBytes; ///< 分页资源的物理容量只由页计入设备账目.
         std::uint64_t lastUse = 0; ///< 最近一次 View 准备代, 不是 CPU 帧号或提交票据.
         bool accepted = false;
+    };
+
+    /// @brief 兼容用途的物理页及其已出租区间. 空洞可用于新代, 活区间不迁移.
+    struct BufferPage
+    {
+        /// @brief 按起点排序的一笔租用. owner 的上传确认决定本区间能否作为图的初始内容.
+        struct Occupied
+        {
+            RHI::BufferRange range;
+            const Allocation *owner; ///< 区间随该代的最后一个强引用退回, 页只借用该地址.
+            bool retiring = false;
+        };
+
+        BufferPage(std::shared_ptr<ResidencyCapacity> quota, RHI::BufferHandle storage, GraphUsage use,
+                   std::uint8_t layout);
+        ~BufferPage();
+        /// @brief 从首个满足对齐的空洞分配连续字节. 容量不足时返回空值, 原有租用保持有效.
+        [[nodiscard]] std::optional<RHI::BufferRange> Claim(const Allocation &owner, std::size_t size,
+                                                            std::size_t alignment);
+        /// @brief 所属版本的 PageSlice 析构时归还这个区间, 相邻空洞随即可以一起出租.
+        void Release(RHI::BufferRange range) noexcept;
+        /// @brief 目录替换该代时标为待退休. 原租用一直保留到 Release.
+        void Retire(RHI::BufferRange range) noexcept;
+
+        std::shared_ptr<ResidencyCapacity> capacity;
+        RHI::BufferHandle buffer;
+        GraphUsage usage;
+        std::uint8_t layout;
+        std::vector<Occupied> occupied = std::vector<Occupied>(0);
+        std::size_t usedBytes = 0;
+        std::size_t retiringBytes = 0;
+        std::size_t largestGap;
+    };
+
+    /// @brief 一个固定版本的页内区间. 由拥有它的几何代或材质行携带到槽安全复用.
+    struct PageSlice
+    {
+        PageSlice() = default;
+        ~PageSlice();
+        PageSlice(const PageSlice &) = delete;
+        PageSlice &operator=(const PageSlice &) = delete;
+        void Retire() noexcept;
+
+        std::shared_ptr<BufferPage> page;
+        RHI::BufferRange range;
     };
 
     /// @brief 仅存此布局实际消费的 UV 与切线. 缺席的输入位置绑定到不会被材质读取的字段.
@@ -71,21 +124,34 @@ namespace Physara::Renderer::Detail
         std::uint32_t stride = 0;
     };
 
-    /// @brief 一项固定布局的独占顶点/索引存储. 首版直接绘制从索引 0 开始的完整区间.
+    /// @brief 一项固定布局的顶点和索引区间. 索引值保留原图元的局部顶点地址.
     struct GeometryRef final : Allocation
     {
         using Allocation::Allocation;
+        /// @brief 目录撤销命中资格时登记两个区间待退休. Draw 强引用仍保活原区间.
+        void Retire() noexcept;
         GeometryKey key;
-        RHI::BufferHandle vertices;
-        RHI::BufferHandle indices;
+        PageSlice vertices;
+        PageSlice indices;
         std::uint32_t indexCount = 0;
     };
 
     /// @brief 指定颜色解释及 mip 策略的图像代, 层级内容由 UploadBatch 完整生产.
     struct ResidentTexture final : Allocation
     {
-        using Allocation::Allocation;
+        ResidentTexture(std::shared_ptr<ResidencyCapacity> quota, std::size_t bytes, bool environment = false);
+        ~ResidentTexture();
         RHI::TextureHandle texture;
+        RHI::TextureSubresourceSet sampling; ///< 与初始化上传范围匹配的视图.
+        bool environment;
+        bool uploadRecorded = false; ///< 材质上传回调触及目标后锁存, 即使图未获接受.
+    };
+
+    /// @brief GPU 环境代及其查询所需的小量 CPU 元数据. 像素仍由冷烘焙缓存或本轮上传持有.
+    struct ResidentEnvironment
+    {
+        std::shared_ptr<ResidentTexture> texture;
+        std::array<EnvironmentTexel, 9> sh{};
     };
 
     /// @brief 一个普通 UBO 及其布局匹配的集合. 对象行换代, per-view 行只在安全槽内重写.
@@ -137,7 +203,7 @@ namespace Physara::Renderer::Detail
         using Allocation::Allocation;
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
         std::array<RHI::SamplerHandle, Scene::MaterialSlotCount> samplers;
-        RHI::BufferHandle buffer;
+        PageSlice storage;
         RHI::BindingSetHandle binding;
         StaticAbi::ForwardMaterial values{};
     };
@@ -165,6 +231,8 @@ namespace Physara::Renderer::Detail
         RHI::BufferHandle buffer;
         std::vector<std::byte> payload;
         bool viewConstant = false;
+        std::uint64_t offset = 0;
+        const BufferPage *page = nullptr; ///< 非空时由 revision 的区间强引用保活.
     };
 
     /// @brief levels 按 mip 0 起的完整紧密 RGBA8 层级排列, 同一次接受确认整条链.
@@ -183,7 +251,7 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<const DfgTable> dfg;
     };
 
-    /// @brief 帧拥有的写入内容. 每个普通缓冲从 0 写精确范围, 纹理按完整 mip 层写入.
+    /// @brief 帧拥有的写入内容. 缓冲按精确字节区间, 纹理按完整 mip 层写入.
     /// @note 各路在准备期间共用 bytes/writes 额度. 显示阶段的矩形常量和 LUT 也计入额度, 字节由 DisplayFrame 保有.
     /// 超限使正在准备的 View 返回失败. 构图后, 本批字节保持稳定直到录制或放弃结束.
     struct UploadBatch
@@ -191,14 +259,21 @@ namespace Physara::Renderer::Detail
         std::vector<BufferUpload> buffers;
         std::vector<TextureUpload> textures;
         std::vector<EnvironmentUpload> environmentTextures;
+        std::vector<std::vector<std::byte>> merged;
         std::size_t bytes = 0;
         std::size_t writes = 0;
+        bool sealed = false;
 
         /// @brief 在复制载荷前累计逻辑字节和命令数, 超限抛 ForwardFailure; 不预留设备上传池.
         void ReserveWrites(std::size_t byteCount, std::size_t count);
+        /// @brief 材质纹理已接受, 或本批持有定义全部可采样层的载荷.
+        [[nodiscard]] bool HasMaterialTexture(const ResidentTexture &texture) const noexcept;
         /// @brief 保有目标及所属代, 复制 source 全部字节. 调用返回后不再借用源区段.
         void Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
                  std::span<const std::byte> source, bool viewConstant = false);
+        /// @brief 复制恰好覆盖 slice 的字节, 保留页内偏移和所属代供构图合并及逐代确认.
+        void Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
+                 std::span<const std::byte> source);
         /// @brief 结束 CPU 载荷与上传记录的所有权, 不修改资源代的 accepted 状态.
         void Clear() noexcept;
     };
@@ -304,22 +379,30 @@ namespace Physara::Renderer::Detail
     /// @brief 缓存映射只拥有可复用代或本次准备候选. 单线程推进 stamp, 前一帧槽保有退役代.
     struct ForwardDevice
     {
-        ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit);
+        ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit,
+                      std::uint32_t uniformAlignment);
         /// @brief 分配共享图候选的准备代.
         void Begin();
+        /// @brief 按当前 SceneFrame 的完整模型版本表撤销旧几何代的命中资格.
+        /// @note 空模型表撤销全部几何目录项, 在途 Draw 继续持有页区间直到其槽安全释放.
+        void ObserveGeometry(const SceneFrame &scene);
         /// @brief 开始独立 View 的工作集记账, 继续使用当前候选的共享写入.
         void BeginView();
-        /// @brief 接受过的代可跨图复用. 缓存发布的待写代只在持有其生产者的当前批次内共享.
+        /// @brief 检查该代是否已接受或已在本轮登记使用. 共用待写代的调用方须确保本批已持有生产者.
         [[nodiscard]] bool Current(const Allocation &entry) const noexcept;
         /// @brief 每代每轮只计一次工作集占用, 超出单 View 硬预算时抛 ForwardFailure.
         void Use(Allocation &entry);
         /// @brief 分配前核对单 View 及全缓存容量, 尝试淘汰空闲代, 仍受占用时返回等待错误.
-        void Reserve(std::size_t bytes);
+        void Reserve(std::size_t bytes, bool paged = false);
+        /// @brief 从兼容页中借出一个新代的区间. 失败由已有准备边界回收未发布区间.
+        void AllocateSlice(PageSlice &slice, const Allocation &owner, GraphUsage usage, std::uint8_t layout,
+                           std::size_t bytes, std::size_t alignment);
         /// @brief 只删除缓存独占且本轮未使用的代. 帧槽保有的引用阻止在途代被提前扣账.
         void EvictUnused() noexcept;
 
         RHI::Device &device;
         std::uint32_t maxTextureSize;
+        std::uint32_t uniformAlignment;
         ForwardPrograms programs;
         PostProcess::DisplayDevice display;
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
@@ -327,7 +410,15 @@ namespace Physara::Renderer::Detail
         std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.
         std::size_t preparedBytes = 0;
         std::size_t preparedEntries = 0;
+        std::uint64_t materialRequests = 0;
+        std::uint64_t materialHits = 0;
+        std::uint64_t materialGeneration = 0;
+        std::vector<std::shared_ptr<BufferPage>> pages = std::vector<std::shared_ptr<BufferPage>>(0);
         std::map<GeometryKey, std::shared_ptr<GeometryRef>> geometry;
+        Scene::SceneId geometryScene;
+        std::uint64_t geometryStructure{};
+        std::uint64_t geometryContent{};
+        std::vector<AssetVersionKey> geometryVersions = std::vector<AssetVersionKey>(0);
         std::map<TextureKey, std::shared_ptr<ResidentTexture>> textures;
         std::map<ObjectRowKey, ObjectRow> objects;
         std::map<MaterialKey, MaterialEntry> materials;
@@ -338,7 +429,7 @@ namespace Physara::Renderer::Detail
         std::uint64_t encodedLightStructure{};
         std::map<std::pair<std::uint32_t, std::uint64_t>, EncodedLight> encodedLights; ///< 当前 Scene 的实体槽和代.
         EnvironmentCache environmentCache;
-        std::map<std::pair<EnvironmentKey, bool>, std::shared_ptr<ResidentTexture>> environmentTextures;
+        std::map<std::pair<EnvironmentKey, bool>, ResidentEnvironment> environmentTextures;
         std::shared_ptr<ResidentTexture> dfgTexture;
         RHI::SamplerHandle environmentSampler;
     };
@@ -363,7 +454,7 @@ namespace Physara::Renderer::Detail
     /// @brief 冻结当前有效角色与曝光. 产品未准备时中止当前正常候选, 由 View 保留旧接受输出.
     void PrepareEnvironment(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
                             PreviewMode mode, bool litDraws);
-    /// @brief 复用匹配且有效的纹理代, 或创建新存储并把所有层级字节交给本轮上传.
+    /// @brief 复用已接受或本批能完整生产的纹理. 从未录制的代可原地补传, 已尝试写入的未接受代另建存储.
     /// @pre image 来自固定的已发布 CPU 记录, key 包含对应版本, 颜色解释和 mip 策略.
     [[nodiscard]] std::shared_ptr<ResidentTexture> PrepareTexture(ForwardDevice &device, UploadBatch &uploads,
         const TextureKey &key, const Asset::Rgba8Image &image);

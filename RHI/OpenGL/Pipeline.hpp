@@ -18,6 +18,8 @@ namespace Physara::RHI::OpenGL
         std::uint32_t slot = 0;
         std::uint32_t unit = 0;
         std::uint32_t stages = 0;
+        ResourceType bindingType = ResourceType::None; ///< UBO 反射可匹配普通或 volatile 绑定.
+        std::uint32_t nativeExtent = 0; ///< 动态 UBO 的实际原生范围, 包含 link 后的尾部对齐.
     };
 
     /// @brief 按纹理与采样器双方身份合并的单元, stages 的位含义与 PlannedResource 相同.
@@ -39,6 +41,9 @@ namespace Physara::RHI::OpenGL
         std::array<std::uint32_t, 2> uniformCounts{};
         std::array<std::uint32_t, 2> storageCounts{};
         std::array<std::uint32_t, 2> textureCounts{};
+        std::uint32_t pushBytes = 0; ///< 公共图形布局声明的逻辑字节.
+        /// 实际分配给一次 push 的字节数, link 后至少覆盖驱动报告的块尾对齐.
+        std::uint32_t pushBackingBytes = 0;
     };
 
     /// @brief 纯 CPU 计划计算, 接受生产查询的 caps, 失败抛准备错误且不创建 GL 对象.
