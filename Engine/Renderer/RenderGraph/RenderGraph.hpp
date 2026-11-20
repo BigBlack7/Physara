@@ -117,6 +117,12 @@ namespace Physara::Renderer
         [[nodiscard]] bool Read(TextureId id, GraphUsage usage, std::optional<TextureRange> range = std::nullopt);
         [[nodiscard]] bool Read(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range = std::nullopt);
 
+        /// @brief 已初始化结构化表只声明实际索引的行, 同时授权精确的完整表绑定.
+        /// @param rows 从物理 Buffer 起点计的连续完整记录, 决定内容依赖和 PassResources 的可查询范围.
+        /// @param binding 同一字节坐标下的 SSBO 绑定区间, 由编译器核对设备对齐和大小.
+        /// @pre 调用方已按本次提交的索引证明所有实际访问的行. 绑定区间须由初始导入内容覆盖.
+        [[nodiscard]] bool ReadIndexedRows(BufferId id, RHI::BufferRange rows, RHI::BufferRange binding);
+
         /// @brief 将本 Pass 已声明的同版本, 同范围 CopySource 读取标记为图内读回.
         /// @note 省略范围时选择整个允许范围. 重复标记共用索引, 无匹配读取时拒绝候选 Pass.
         /// 标记随 Pass 发布, 由编译器作为活性根消费. 请求与结果的寿命由读回消费方管理.
@@ -147,6 +153,9 @@ namespace Physara::Renderer
         [[nodiscard]] std::size_t LatestVersion(Id id, const Declaration &resource) const noexcept;
         template <typename Use, typename Id, typename Range, typename Declaration>
         [[nodiscard]] bool RequireContent(Id id, const Range &range, const Declaration &resource);
+        /// @brief Buffer 读的共同校验入口, 可核对预先定义的结构化绑定与实际行之间的关系.
+        [[nodiscard]] bool ReadBuffer(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> requested,
+                                      std::optional<RHI::BufferRange> indexedBinding);
         template <typename Use, typename Id, typename Range, typename Declaration>
         [[nodiscard]] bool MarkReadbackUse(Id id, const std::optional<Range> &requested,
                                            const std::deque<Declaration> &resources);

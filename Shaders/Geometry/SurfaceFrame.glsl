@@ -10,12 +10,18 @@ struct SurfaceGeometry
     vec3 shadingNormal;
 };
 
+// 未使用材质贴图或面向条件的几何法线, 也供一致控制流中的粗糙度求导使用.
+vec3 GeometricNormal()
+{
+    return UnitOr(vNormal, vec3(0.0, 0.0, 1.0));
+}
+
 // 由插值的逆转置法线和仿射切线构造表面. usesNormalMap 为真时 tangentNormal 须已解码及规范化.
 // vTangent.w 已包含源切线, 有效 UV 和实例的手性; Pipeline 已将实例镜像计入 gl_FrontFacing.
 // 几何法线插值为零时回退世界 +Z, 框架变换结果为零时回退该几何法线, 最后才处理背面.
 SurfaceGeometry PrepareSurfaceGeometry(vec3 tangentNormal, bool usesNormalMap)
 {
-    vec3 geometricNormal = UnitOr(vNormal, vec3(0.0, 0.0, 1.0));
+    vec3 geometricNormal = GeometricNormal();
     vec3 shadingNormal = geometricNormal;
     if (usesNormalMap)
     {

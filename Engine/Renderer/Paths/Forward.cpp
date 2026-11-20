@@ -29,7 +29,29 @@ namespace Physara::Renderer
         }
         const auto &view = m_Data->views[index];
         const auto &lights = view.activeLights;
-        return {view.draws.size(), lights ? std::size_t(lights->directionalCount) + lights->localCount : 0};
+        return {.draws = view.draws.size(),
+                .lights = lights ? std::size_t(lights->directionalCount) + lights->localCount : 0};
+    }
+
+    ForwardWorkCounts ForwardFrame::ExecutedWorkCounts(std::size_t index, const ForwardOutput &output,
+                                                       const CompiledGraphPlan &plan) const noexcept
+    {
+        auto counts = WorkCounts(index);
+        const auto &view = m_Data->views[index];
+        ForwardPassWork work{view.batches.size(), 0};
+        for (const auto &batch : view.batches)
+        {
+            work.records += batch.commandCount;
+        }
+        if (IsLivePass(plan, output.depthPass))
+        {
+            counts.depth = work;
+        }
+        if (IsLivePass(plan, output.colorPass))
+        {
+            counts.color = work;
+        }
+        return counts;
     }
 
     ForwardEncodingCounts ForwardFrame::EncodingCounts() const noexcept
@@ -52,9 +74,10 @@ namespace Physara::Renderer
         return m_Data ? std::pair{m_Data->uploads.writes, m_Data->uploads.bytes} : std::pair<std::size_t, std::size_t>{};
     }
 
-    /// @brief 解除本轮着色引用, 槽内 View 行和普通灯缓冲留给下一次安全复用.
+    /// @brief 解除本轮着色引用. 槽内保留 View 行, 普通灯表和批次缓冲, 下轮准备时再比较其内容.
     static void ResetView(Detail::ForwardFrameData &view) noexcept
     {
+        view.batches.clear();
         view.draws.clear();
         view.materialRows.clear();
         view.activeLights.reset();
@@ -168,9 +191,11 @@ namespace Physara::Renderer
         for (const auto &page : cache.pages)
         {
             const auto bytes = static_cast<std::size_t>(page->buffer->GetDesc().byteSize);
-            if (page->usage == GraphUsage::ConstantBuffer)
+            if (page->usage == GraphUsage::ShaderRead)
             {
-                result.materialPageBytes += bytes;
+                auto &tables = page->layout == std::uint8_t(Detail::TableLayout::Materials) ?
+                    result.materialPageBytes : result.objectPageBytes;
+                tables += bytes;
                 continue;
             }
             ++result.geometryPages;
@@ -324,7 +349,7 @@ namespace Physara::Renderer
             if (inserted)
             {
                 std::vector<RHI::BufferRange> initial(0);
-                if (page)
+                if (page && !page->initialized)
                 {
                     for (const auto &entry : page->occupied)
                     {
@@ -334,7 +359,8 @@ namespace Physara::Renderer
                         }
                     }
                 }
-                item->second = TakeGraph(graph.ImportBuffer(buffer, {BufferBoundary, BufferBoundary, defined && !page},
+                const bool initialContents = page ? page->initialized : defined;
+                item->second = TakeGraph(graph.ImportBuffer(buffer, {BufferBoundary, BufferBoundary, initialContents},
                                                             std::nullopt, initial));
             }
             return item->second;
@@ -354,10 +380,12 @@ namespace Physara::Renderer
         }
     };
 
-    /// @brief 归并同页且消费者集合相同的相邻写入. 未选中的页区间保持未确认.
+    /// @brief 按选入图的 View 收集行写入. 冷表生成一份整页载荷, 暖页按消费集合归并连续区间.
+    /// 各行关联实际写 Pass, 供正常提交后对照编译计划确认.
     static void DeclarePageUploads(RenderGraph &graph, SceneGraphResources &resources,
         Detail::ForwardFrameStorage &frame, const std::array<bool, ForwardViewCount> &selected,
-        std::vector<GraphUpload> &uploads, std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites)
+        std::vector<GraphUpload> &uploads, std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites,
+        std::vector<std::pair<Detail::BufferPage *, PassId>> &tableWrites)
     {
         std::map<const Detail::Allocation *, unsigned> consumers;
         for (std::size_t index = 0; index < selected.size(); ++index)
@@ -370,6 +398,7 @@ namespace Physara::Renderer
             for (const auto &draw : view.draws)
             {
                 consumers[draw.geometry.get()] |= 1u << index;
+                consumers[draw.object.get()] |= 1u << index;
                 consumers[view.materialRows[draw.material].get()] |= 1u << index;
             }
         }
@@ -398,15 +427,16 @@ namespace Physara::Renderer
         });
         for (std::size_t first = 0; first < ordered.size();)
         {
-            // 只有同一组 View 消费的连续区间才共用一个生产 Pass, 任一路被裁剪时仍可独立判断活性.
             const auto &head = *ordered[first].source;
+            const bool cold = head.page->usage == GraphUsage::ShaderRead && !head.page->initialized;
             auto end = head.offset + head.payload.size();
             auto last = first + 1;
             for (; last < ordered.size(); ++last)
             {
+                // 已初始化的页只合并同消费条件下的实际脏区间. 冷表的完整绑定需要一次填满.
                 const auto &next = ordered[last];
-                if (next.source->page != head.page || next.consumers != ordered[first].consumers ||
-                    next.source->offset != end)
+                if (next.source->page != head.page ||
+                    (!cold && (next.consumers != ordered[first].consumers || next.source->offset != end)))
                 {
                     break;
                 }
@@ -414,7 +444,20 @@ namespace Physara::Renderer
             }
 
             std::span<const std::byte> bytes = head.payload;
-            if (last != first + 1)
+            auto offset = head.offset;
+            if (cold)
+            {
+                // 每个已选行直接写到初始化载荷, 间隙实写零. 同页只登记一次生产和接受.
+                offset = 0;
+                auto &image = frame.uploads.merged.emplace_back(head.buffer->GetDesc().byteSize);
+                for (const auto &part : std::span(ordered).subspan(first, last - first))
+                {
+                    const auto &source = *part.source;
+                    std::ranges::copy(source.payload, image.begin() + source.offset);
+                }
+                bytes = image;
+            }
+            else if (last != first + 1)
             {
                 // 合并载荷留在封存批中, Graph 的回调直到执行结束都借用此区段.
                 auto &merged = frame.uploads.merged.emplace_back(0);
@@ -426,9 +469,14 @@ namespace Physara::Renderer
                 bytes = merged;
             }
             auto &version = resources.BufferVersion(graph, head.buffer, head.page, false);
-            version = TakeGraph(AddBufferUpload(graph, version, bytes, uploads, head.offset));
+            version = TakeGraph(AddBufferUpload(graph, version, bytes, uploads, offset,
+                                                cold ? &head.page->initializationRecorded : nullptr));
             const auto pass = uploads.back().pass;
             uploads.back().source = GraphUploadSource::ForwardStatic;
+            if (cold)
+            {
+                tableWrites.emplace_back(head.page, pass);
+            }
             for (auto part : std::span(ordered).subspan(first, last - first))
             {
                 storageWrites[part.source->revision.get()].push_back(pass);
@@ -441,7 +489,8 @@ namespace Physara::Renderer
     static SceneGraphResources DeclareUploads(RenderGraph &graph, Detail::ForwardFrameStorage &frame,
                                                const std::array<bool, ForwardViewCount> &selected,
                                                std::vector<GraphUpload> &uploads,
-                                               std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites)
+                                               std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites,
+                                               std::vector<std::pair<Detail::BufferPage *, PassId>> &tableWrites)
     {
         const auto &batch = frame.uploads;
         SceneGraphResources resources;
@@ -507,22 +556,22 @@ namespace Physara::Renderer
             const auto first = uploads.size();
             auto &version = resources.BufferVersion(graph, upload.buffer, upload.page, false);
             version = TakeGraph(AddBufferUpload(graph, version, upload.payload, uploads, upload.offset));
-            record(upload.revision.get(), first, upload.viewConstant ? GraphUploadSource::ForwardView :
-                                                                      GraphUploadSource::ForwardStatic);
+            record(upload.revision.get(), first, upload.source);
         }
-        DeclarePageUploads(graph, resources, frame, selected, uploads, storageWrites);
+        DeclarePageUploads(graph, resources, frame, selected, uploads, storageWrites, tableWrites);
         return resources;
     }
 
-    /// @brief 本 Pass 的几何权限与已准备绘制值. 原生指针借用 ForwardFrame 保有的对象至执行结束.
-    struct GraphDraw
+    /// @brief 本 Pass 的共享页, 原生批次状态及精确参数区间. 借用的集合由 ForwardFrame 保活.
+    struct GraphBatch
     {
         BufferAccess vertices;
         BufferAccess indices;
-        RHI::BindingSet *object;
+        BufferAccess arguments;
+        RHI::BindingSet *renderables;
         RHI::BindingSet *material;
         RHI::GraphicsPipeline *pipeline;
-        std::uint32_t indexCount;
+        std::uint32_t commandCount;
     };
 
     /// @brief 一个几何 Pass 的图像矩形, View 集合与 Draw 顺序.
@@ -537,13 +586,13 @@ namespace Physara::Renderer
         std::optional<TextureAccess> dfg;
         std::optional<TextureAccess> reflection;
         RHI::Sampler *environmentSampler = nullptr;
-        std::vector<GraphDraw> draws;
+        std::vector<GraphBatch> batches;
     };
 
     /// @brief 同一 Pass 按资源及范围去重, 同页上不同几何或材质区间仍各自保留.
     struct RasterReads
     {
-        std::map<std::tuple<std::uint32_t, std::uint64_t, std::uint64_t, GraphUsage>, BufferAccess> buffers;
+        std::map<std::tuple<std::uint32_t, std::uint64_t, std::uint64_t, GraphUsage>, BufferUse> buffers;
         std::map<std::uint32_t, TextureAccess> textures;
     };
 
@@ -568,11 +617,12 @@ namespace Physara::Renderer
             return raster;
         }
         const auto readBuffer = [&](const RHI::BufferHandle &handle, GraphUsage usage, RHI::BufferRange range,
-                                    const Detail::BufferPage *page)
+                                    const Detail::BufferPage *page,
+                                    std::optional<RHI::BufferRange> indexedBinding = std::nullopt)
         {
             BufferAccess access{versions.BufferVersion(graph, handle, page, true), range, usage};
             reads.buffers.try_emplace(std::tuple{access.resource.identity.index, range.byteOffset, range.byteSize,
-                                                 usage}, access);
+                                                 usage}, BufferUse{access, std::nullopt, indexedBinding});
             return access;
         };
         const auto buffer = [&](const RHI::BufferHandle &handle, GraphUsage usage)
@@ -582,6 +632,15 @@ namespace Physara::Renderer
         const auto slice = [&](const Detail::PageSlice &storage)
         {
             return readBuffer(storage.page->buffer, storage.page->usage, storage.range, storage.page.get());
+        };
+        const auto table = [&](const Detail::PageSlice &storage)
+        {
+            // 冷页依赖同图整页生产. 暖页仍绑定整页, 只有实际实例索引的行带来增量依赖.
+            const auto &page = storage.page;
+            const RHI::BufferRange binding{0, page->buffer->GetDesc().byteSize};
+            const auto range = page->initialized ? storage.range : binding;
+            static_cast<void>(readBuffer(page->buffer, GraphUsage::ShaderRead, range, page.get(),
+                                        page->initialized ? std::optional{binding} : std::nullopt));
         };
         static_cast<void>(buffer(frame.view->buffer, GraphUsage::ConstantBuffer));
         raster.view = frame.view->binding.Get();
@@ -610,12 +669,21 @@ namespace Physara::Renderer
                 raster.environment = buffer(environment.lightingConstants->buffer, GraphUsage::ConstantBuffer);
             }
         }
-        raster.draws.reserve(frame.draws.size());
+        // 同一批的实例可以选取不同对象行和材质行. 逐表面登记这些行及几何区间, 重复的读由 readBuffer 合并.
         for (const auto &draw : frame.draws)
         {
+            static_cast<void>(slice(draw.geometry->vertices));
+            static_cast<void>(slice(draw.geometry->indices));
+            table(draw.object->storage);
+            table(frame.materialRows[draw.material]->storage);
+        }
+        constexpr auto commandBytes = sizeof(RHI::DrawIndexedIndirectArguments);
+        raster.batches.reserve(frame.batches.size());
+        for (const auto &batch : frame.batches)
+        {
+            const auto &draw = frame.draws[batch.firstDraw];
             const auto &material = *frame.materialRows[draw.material];
-            static_cast<void>(buffer(draw.object->buffer, GraphUsage::ConstantBuffer));
-            static_cast<void>(slice(material.storage));
+            static_cast<void>(buffer(frame.instanceBlocks[batch.instanceBlock]->buffer, GraphUsage::ShaderRead));
             const auto slots = depthOnly ? 1 : material.textures.size();
             for (std::size_t i = 0; i < slots; ++i)
             {
@@ -625,9 +693,11 @@ namespace Physara::Renderer
                     TextureAccess{version, {.firstMip = product.sampling.baseMipLevel,
                         .mipCount = product.sampling.numMipLevels}, GraphUsage::Sampled});
             }
-            raster.draws.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices),
-                draw.object->binding.Get(),
-                material.binding.Get(), (depthOnly ? draw.depthPipeline : draw.pipeline).Get(), draw.geometry->indexCount});
+            const auto arguments = readBuffer(frame.indirect->buffer, GraphUsage::IndirectArgument,
+                {batch.firstCommand * commandBytes, batch.commandCount * commandBytes}, nullptr);
+            raster.batches.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices), arguments,
+                batch.renderables.Get(), material.binding->Get(),
+                (depthOnly ? draw.depthPipeline : draw.pipeline).Get(), batch.commandCount});
         }
         return raster;
     }
@@ -642,43 +712,50 @@ namespace Physara::Renderer
             // BindingSet 已将失败记入本 Pass. 停止录制, 由执行器返回该原因.
             return std::nullopt;
         }
-        for (const auto &draw : raster.draws)
+        for (const auto &batch : raster.batches)
         {
-            auto *vertices = resources.Resolve(draw.vertices.resource, draw.vertices.usage, draw.vertices.range);
-            auto *indices = resources.Resolve(draw.indices.resource, draw.indices.usage, draw.indices.range);
-            if (!vertices || !indices)
+            auto *vertices = resources.Resolve(batch.vertices.resource, batch.vertices.usage, batch.vertices.range);
+            auto *indices = resources.Resolve(batch.indices.resource, batch.indices.usage, batch.indices.range);
+            auto *arguments = resources.Resolve(batch.arguments.resource, batch.arguments.usage, batch.arguments.range);
+            if (!vertices || !indices || !arguments)
             {
                 return std::nullopt;
             }
-            RHI::GraphicsState state;
-            state.SetFramebuffer(resources.Framebuffer()).SetPipeline(draw.pipeline).SetViewport(raster.viewport)
-                .AddBindingSet(raster.view).AddBindingSet(draw.object).AddBindingSet(draw.material)
-                .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices).SetOffset(draw.vertices.range.byteOffset))
+            RHI::GraphicsState state{};
+            // firstIndex 和 baseVertex 已含各自的页内起点. 这里按页基准绑定, 仅命令参数另取字节偏移.
+            state.SetFramebuffer(resources.Framebuffer()).SetPipeline(batch.pipeline).SetViewport(raster.viewport)
+                .AddBindingSet(raster.view).AddBindingSet(batch.renderables).AddBindingSet(batch.material)
+                .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices).SetOffset(0))
                 .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT)
-                    .SetOffset(static_cast<std::uint32_t>(draw.indices.range.byteOffset)));
+                    .SetOffset(0)).SetIndirectParams(arguments);
             if (lights)
             {
                 state.AddBindingSet(lights);
             }
             commands.SetGraphicsState(state);
-            commands.DrawIndexed(RHI::DrawArguments().SetVertexCount(draw.indexCount).SetInstanceCount(1));
+            commands.DrawIndexedIndirect(static_cast<std::uint32_t>(batch.arguments.range.byteOffset),
+                                          batch.commandCount);
         }
         return std::nullopt;
     }
 
     /// @brief 深度和颜色共享 Draw 顺序及声明规则. 读前置深度时使用只读附件, 从而确定 WAW/RAW 关系.
-    static void AddGeometryPass(RenderGraph &graph, SceneGraphResources &versions,
+    static PassId AddGeometryPass(RenderGraph &graph, SceneGraphResources &versions,
         const Detail::ForwardFrameData &frame, TextureId &depth, TextureId *color, bool readOnlyDepth)
     {
         RasterReads reads;
         auto raster = RasterInputs(graph, versions, frame, !color, reads);
-        static_cast<void>(TakeGraph(graph.AddPass<SceneRaster>(color ? "Forward ShadeOpaque" : "Forward PrepareSurface",
+        return TakeGraph(graph.AddPass<SceneRaster>(color ? "Forward ShadeOpaque" : "Forward PrepareSurface",
             [&](PassBuilder &builder, auto &data)
             {
                 data = std::move(raster);
-                for (const auto &[index, access] : reads.buffers)
+                for (const auto &[index, use] : reads.buffers)
                 {
-                    if (!builder.Read(access.resource, access.usage, access.range))
+                    const auto &access = use.access;
+                    const bool declared = use.indexedBinding ?
+                        builder.ReadIndexedRows(access.resource, access.range, *use.indexedBinding) :
+                        builder.Read(access.resource, access.usage, access.range);
+                    if (!declared)
                     {
                         return false;
                     }
@@ -751,24 +828,25 @@ namespace Physara::Renderer
                 }
                 static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(items).first(count)));
                 return std::nullopt;
-            })));
+            }));
     }
 
     /// @brief 只有请求真实早期深度的下游才新增几何 Pass.
-    static void PrepareSurface(RenderGraph &graph, SceneGraphResources &resources,
+    static PassId PrepareSurface(RenderGraph &graph, SceneGraphResources &resources,
                                const Detail::ForwardFrameData &frame, TextureId &depth)
     {
         if (frame.needs.earlyDepth)
         {
-            AddGeometryPass(graph, resources, frame, depth, nullptr, false);
+            return AddGeometryPass(graph, resources, frame, depth, nullptr, false);
         }
+        return {};
     }
 
     /// @brief 按准备的路径同时产生颜色和深度, 或读取早期深度并只写颜色.
-    static void ShadeOpaque(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
+    static PassId ShadeOpaque(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
                             TextureId &depth, TextureId &color)
     {
-        AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth);
+        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth);
     }
 
     /// @brief 天空读取本图的一个完整基础 cube, 加载不透明工作色后只填其未覆盖 RGB.
@@ -836,8 +914,8 @@ namespace Physara::Renderer
             .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
         output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = WorkingFormat, .debugName = "Forward linear working color", .isRenderTarget = true}));
-        PrepareSurface(graph, versions, frame, output.depth);
-        ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
+        output.depthPass = PrepareSurface(graph, versions, frame, output.depth);
+        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
         AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();
@@ -876,7 +954,7 @@ namespace Physara::Renderer
             }
         }
         // 生产版本只建立一次. 逐路声明读取时沿用同一映射, 因而存活的任一路都能保住共享上传.
-        auto versions = DeclareUploads(graph, *m_Data, selected, uploads, output.m_StorageWrites);
+        auto versions = DeclareUploads(graph, *m_Data, selected, uploads, output.m_StorageWrites, output.m_TableWrites);
         for (std::size_t index = 0; index < selected.size(); ++index)
         {
             if (selected[index])
@@ -897,6 +975,13 @@ namespace Physara::Renderer
         if (IsLivePass(plan, output.m_LutWrite))
         {
             m_Data->views[output.m_LutView].display.Confirm();
+        }
+        for (const auto &[page, write] : output.m_TableWrites)
+        {
+            if (IsLivePass(plan, write))
+            {
+                page->initialized = true;
+            }
         }
         // 一代几何须同时确认顶点和索引, 一个 cube 须确认所有面和 mip.
         // 材质行与其引用的纹理分别拥有写入记录, 各自依据本图的存活 Pass 取得确认.

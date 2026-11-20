@@ -73,13 +73,6 @@ namespace Physara::RHI::OpenGL
         Unsupported("DrawIndirect");
     }
 
-    void OpenGLCommandList::DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount)
-    {
-        static_cast<void>(offsetBytes);
-        static_cast<void>(drawCount);
-        Unsupported("DrawIndexedIndirect");
-    }
-
     void OpenGLCommandList::DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,
                                                      uint32_t maxDrawCount)
     {

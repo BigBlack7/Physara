@@ -1,16 +1,31 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 对本次直接 Draw 参数及可知数据范围做边界检查, 即时发出原生命令, 不保存重放记录.
+/// @brief 校验直接或间接 Draw 的可知范围, 共用图形准备后即时发出原生命令.
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
+#include <type_traits>
 
 #include "InputLayout.hpp"
 #include "Pipeline.hpp"
 
 namespace Physara::RHI::OpenGL
 {
+    static constexpr GLenum Topologies[] = {
+        GL_POINTS,         GL_LINES,        GL_LINE_STRIP,          GL_TRIANGLES,
+        GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN, GL_TRIANGLES_ADJACENCY, GL_TRIANGLE_STRIP_ADJACENCY};
+
+    // 公开记录即 GL 的紧排 indexed 参数 ABI. CPU 调用方以字节定位记录, GPU 解释五个字段.
+    static_assert(sizeof(DrawIndexedIndirectArguments) == 20 &&
+                  offsetof(DrawIndexedIndirectArguments, indexCount) == 0 &&
+                  offsetof(DrawIndexedIndirectArguments, instanceCount) == 4 &&
+                  offsetof(DrawIndexedIndirectArguments, startIndexLocation) == 8 &&
+                  offsetof(DrawIndexedIndirectArguments, baseVertexLocation) == 12 &&
+                  offsetof(DrawIndexedIndirectArguments, startInstanceLocation) == 16 &&
+                  std::is_same_v<decltype(DrawIndexedIndirectArguments::baseVertexLocation), std::int32_t>);
+
     void OpenGLCommandList::Draw(const DrawArguments &args)
     {
         DrawDirect(args, false);
@@ -30,15 +45,12 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        const auto &state = packet->graphics;
-        const auto *pipeline = static_cast<OpenGLGraphicsPipeline *>(state.pipeline);
-        if (!packet->graphicsSet || !packet->viewportSet ||
-            (pipeline->GetDesc().renderState.rasterState.scissorEnable && !packet->scissorSet) ||
-            (indexed && !state.indexBuffer.buffer))
+        const auto *pipeline = DrawPipeline(indexed, operation);
+        if (!pipeline)
         {
-            m_Device->Report(operation, "InvalidState: graphics, viewport/scissor or index binding missing");
             return;
         }
+        const auto &state = packet->graphics;
         if (args.vertexCount > std::uint32_t(std::numeric_limits<GLsizei>::max()) ||
             args.instanceCount > std::uint32_t(std::numeric_limits<GLsizei>::max()) ||
             args.startVertexLocation > std::uint32_t(std::numeric_limits<GLint>::max()))
@@ -98,23 +110,10 @@ namespace Physara::RHI::OpenGL
                 }
             }
         }
-        // 上传/clear/copy 可能改变用途或 native 状态, 即使没有再次 SetGraphicsState 也要重新满足它们.
-        if (!CheckDrawConstants(state, *pipeline, operation) || !GraphicsUses(state, *pipeline, operation) ||
-            !m_Device->BeginNative(operation))
+        if (!PrepareDraw(*pipeline, operation))
         {
             return;
         }
-        // 状态就绪后才为实际 Draw 检查附件写入历史. SetGraphicsState 或绑定缓存命中不会推进该进度.
-        if (!PrepareDepthSampling(state, *pipeline))
-        {
-            return;
-        }
-        ApplyGraphics(state, *pipeline);
-        // 同一状态下连续写入也可选中不同版本. 每次实际 Draw 都把当前物理区段交给绑定缓存.
-        ApplyDrawConstants(state, *pipeline);
-        constexpr GLenum Topologies[] = {
-            GL_POINTS,         GL_LINES,        GL_LINE_STRIP,          GL_TRIANGLES,
-            GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN, GL_TRIANGLES_ADJACENCY, GL_TRIANGLE_STRIP_ADJACENCY};
         const auto topology = Topologies[unsigned(pipeline->GetDesc().primType)];
         // 首个可能发出的 Draw 前登记工作; 后续诊断失败也不能撤销前缀或提前释放其依赖.
         packet->issuedWork = true;
@@ -133,14 +132,111 @@ namespace Physara::RHI::OpenGL
             glDrawArraysInstancedBaseInstance(topology, GLint(args.startVertexLocation), GLsizei(args.vertexCount),
                                               GLsizei(args.instanceCount), args.startInstanceLocation);
         }
+        FinishDraw(*pipeline, operation);
+    }
+
+    void OpenGLCommandList::DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount)
+    {
+        constexpr auto operation = "DrawIndexedIndirect";
+        auto *packet = Recording(operation);
+        if (!packet)
+        {
+            return;
+        }
+        const auto *pipeline = DrawPipeline(true, operation);
+        if (!pipeline)
+        {
+            return;
+        }
+        const auto &state = packet->graphics;
+        auto *parameters = static_cast<OpenGLBuffer *>(state.indirectParams);
+        if (!parameters)
+        {
+            m_Device->Report(operation, "InvalidState: indirect argument binding missing");
+            return;
+        }
+        // GL 的 firstIndex 从 element Buffer 起点计, 无法叠加独立的索引绑定偏移.
+        if (state.indexBuffer.offset != 0)
+        {
+            m_Device->Report(operation, "Unsupported: indexed indirect requires zero index binding byte offset");
+            return;
+        }
+        const auto bytes = std::uint64_t(drawCount) * sizeof(DrawIndexedIndirectArguments);
+        const auto capacity = parameters->GetDesc().byteSize;
+        if (offsetBytes % sizeof(std::uint32_t) != 0 || drawCount > std::uint32_t(std::numeric_limits<GLsizei>::max()) ||
+            offsetBytes > capacity || bytes > capacity - offsetBytes)
+        {
+            m_Device->Report(operation, "InvalidArgument: indirect count, alignment or byte interval",
+                             parameters->GetDesc().debugName.c_str());
+            return;
+        }
+        if (drawCount == 0)
+        {
+            return;
+        }
+        // 参数内容对 CPU 不透明. GraphManaged 仍核对本次可知的完整参数区间, 几何范围由生产者保证.
+        if (!UseBuffer(*parameters, ResourceStates::IndirectArgument, operation, BufferRange{offsetBytes, bytes}) ||
+            !PrepareDraw(*pipeline, operation))
+        {
+            return;
+        }
+        m_Device->m_ContextState.ApplyIndirectBuffer(parameters->Name());
+        const auto topology = Topologies[unsigned(pipeline->GetDesc().primType)];
+        const auto indexType = state.indexBuffer.format == Format::R16_UINT ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+        // 绑定参数 Buffer 后, GL 的指针形参解释为字节偏移. MDI 的 stride=0 选择连续的 20 字节记录.
+        const auto *offset = reinterpret_cast<const void *>(std::uintptr_t(offsetBytes));
+        packet->issuedWork = true;
+        ++m_Device->m_CommandCounts.draws;
+        if (drawCount == 1)
+        {
+            glDrawElementsIndirect(topology, indexType, offset);
+        }
+        else
+        {
+            glMultiDrawElementsIndirect(topology, indexType, offset, GLsizei(drawCount), 0);
+        }
+        FinishDraw(*pipeline, operation);
+    }
+
+    const OpenGLGraphicsPipeline *OpenGLCommandList::DrawPipeline(bool indexed, const char *operation)
+    {
+        const auto &packet = *m_Packet;
+        const auto &state = packet.graphics;
+        const auto *pipeline = static_cast<OpenGLGraphicsPipeline *>(state.pipeline);
+        if (!packet.graphicsSet || !packet.viewportSet ||
+            (pipeline->GetDesc().renderState.rasterState.scissorEnable && !packet.scissorSet) ||
+            (indexed && !state.indexBuffer.buffer))
+        {
+            m_Device->Report(operation, "InvalidState: graphics, viewport/scissor or index binding missing");
+            return nullptr;
+        }
+        return pipeline;
+    }
+
+    bool OpenGLCommandList::PrepareDraw(const OpenGLGraphicsPipeline &pipeline, const char *operation)
+    {
+        const auto &state = m_Packet->graphics;
+        // 上传, clear 或 copy 可改变用途及缓存. 同一图形状态也需要选择最近写好的常量版本.
+        if (!CheckDrawConstants(state, pipeline, operation) || !GraphicsUses(state, pipeline, operation) ||
+            !m_Device->BeginNative(operation) || !PrepareDepthSampling(state, pipeline))
+        {
+            return false;
+        }
+        ApplyGraphics(state, pipeline);
+        ApplyDrawConstants(state, pipeline);
+        return true;
+    }
+
+    void OpenGLCommandList::FinishDraw(const OpenGLGraphicsPipeline &pipeline, const char *operation)
+    {
         if (!m_Device->CheckNative(operation))
         {
-            packet->invalid = true;
+            m_Packet->invalid = true;
             m_Device->m_ContextState.Invalidate();
             return;
         }
-        const auto &attachment = state.framebuffer->GetDesc().depthAttachment;
-        const auto &depth = pipeline->GetDesc().renderState.depthStencilState;
+        const auto &attachment = m_Packet->graphics.framebuffer->GetDesc().depthAttachment;
+        const auto &depth = pipeline.GetDesc().renderState.depthStencilState;
         // Draw 成功且允许深度写时, 按底层 mip 标记可能修改的深度内容. 同格式采样读取深度分量.
         if (attachment.texture && depth.depthTestEnable && depth.depthWriteEnable)
         {

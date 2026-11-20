@@ -60,24 +60,29 @@ namespace Physara::Renderer
         BufferId buffer;
         std::span<const std::byte> bytes;
         RHI::BufferRange range;
+        bool *recorded;
     };
 
     // 将物理页内的绝对区间同时交给声明和延迟回调, Draw 可沿写版本追溯实际被初始化的字节.
     GraphResult<BufferId> AddBufferUpload(RenderGraph &graph, BufferId target,
-        std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads, std::uint64_t offset)
+        std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads, std::uint64_t offset, bool *recorded)
     {
         BufferId written;
         const RHI::BufferRange range(offset, bytes.size());
         auto pass = graph.AddPass<BufferUploadData>("Buffer upload", [&](PassBuilder &builder, auto &data)
         {
             written = builder.Write(target, GraphUsage::CopyDestination, range);
-            data = {written, bytes, range};
+            data = {written, bytes, range, recorded};
             return written.IsValid();
         }, +[](PassResources &resources, const BufferUploadData &data, RHI::CommandList &commands) noexcept
             -> GraphFailure
         {
             if (auto *buffer = resources.Resolve(data.buffer, GraphUsage::CopyDestination, data.range))
             {
+                if (data.recorded)
+                {
+                    *data.recorded = true;
+                }
                 commands.WriteBuffer(buffer, data.bytes.data(), data.bytes.size(), data.range.byteOffset);
             }
             return std::nullopt;

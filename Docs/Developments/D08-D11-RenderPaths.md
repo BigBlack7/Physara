@@ -40,9 +40,11 @@
 
 **职责位置：** Renderer/Draw、RHI/OpenGL Graphics。**前置：** [D08-T02](#d08-t02)。**架构依据：** [5.6](../Architecture.md#draws)、[7.6](../Architecture.md#command-execution)。
 
-- [ ] 以完整兼容 key 排序/分组不透明 Draw，稳定处理 hash 碰撞、ID 宽度溢出、不同纹理/sampler 和几何页。
-- [ ] 生成实例表及 indexed indirect 参数，按能力实现基础 profile 所需 indirect/MDI；不以 bindless 假设跨材质无限合批。
-- [ ] 验证非零 firstInstance/baseVertex、大材质数、实例索引和结果等价；同步记录 Draw、bind、上传与批次数。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-20-complete-draw-batching/tasks.md#final-verification)
+
+- [x] 以完整兼容 key 排序/分组不透明 Draw，稳定处理 hash 碰撞、ID 宽度溢出、不同纹理/sampler 和几何页。
+- [x] 生成实例表及 indexed indirect 参数，按能力实现基础 profile 所需 indirect/MDI；不以 bindless 假设跨材质无限合批。
+- [x] 验证非零 firstInstance/baseVertex、大材质数、实例索引和结果等价；同步记录 Draw、bind、上传与批次数。
 
 **完成条件：** 批处理保持像素与索引语义，execute 不反射、编译或创建临时 Pipeline。
 

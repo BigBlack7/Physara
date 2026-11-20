@@ -25,8 +25,8 @@
 
 /// @file
 /// @brief 列表调用协议, 状态/绑定输入检查与一次底层委托, 包装 claim 不表示原生命令成功.
-/// GL 的直接绘制消费底层已接受状态. 闭合列表可供宿主短借, 原生包检查和完成由后端负责.
-/// 其余 API 沿用上游图形和 push constants 快照.
+/// GL 的直接及固定数量 indexed indirect 绘制消费底层录制的图形状态. 闭合列表可供宿主短借.
+/// 原生包检查与完成由后端负责. 其余 API 沿用上游图形和 push constants 快照.
 
 #include "Common/Misc.hpp"
 #include "Utils.hpp"
@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <sstream>
 #include <utility>
 
@@ -890,25 +891,9 @@ namespace Physara::RHI::Validation
         m_CommandList->SetPushConstants(data, byteSize);
     }
 
-    // 验证 recording, Pipeline/framebuffer, 绑定和顶点/索引输入后委托, 不在 Validation 复制原生状态缓存.
+    // 公开输入通过预检后才委托. 普通录制的预检拒绝保留原状态, 图内拒绝须撤销旧候选的绘制资格.
     void CommandListWrapper::SetGraphicsState(const GraphicsState &state)
     {
-        if (state.shadingRateState.enabled && Profile::RejectOpenGL(m_Device))
-        {
-            return;
-        }
-        if (state.pipeline && Profile::RejectGraphicsPipeline(m_Device, state.pipeline->GetDesc()))
-        {
-            return;
-        }
-        for (auto *bindings : state.bindings)
-        {
-            if (Profile::RejectBindingSet(m_Device, bindings))
-            {
-                return;
-            }
-        }
-
         if (!RequireOpenState())
         {
             return;
@@ -919,65 +904,113 @@ namespace Physara::RHI::Validation
             return;
         }
 
+        if (!ValidateGraphicsStateInputs(state))
+        {
+            if (m_GraphRecording != 0)
+            {
+                // ClearState 清理逻辑绑定和原生缓存的已知性. 图授权, tracker 和前缀引用仍归当前录制包.
+                ResetCommandState();
+                m_CommandList->ClearState();
+            }
+            return;
+        }
+
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->SetGraphicsState(state);
+            return;
+        }
+
+        // 其余 API 保留上游包装的图形/push 调用协议和索引范围快照.
+        EvaluatePushConstantSize(state.pipeline->GetDesc().bindingLayouts);
+        m_CommandList->SetGraphicsState(state);
+
+        m_GraphicsStateSet = true;
+        m_ComputeStateSet = false;
+        m_MeshletStateSet = false;
+        m_RayTracingStateSet = false;
+        m_PushConstantsSet = false;
+        m_CurrentGraphicsState = state;
+    }
+
+    bool CommandListWrapper::ValidateGraphicsStateInputs(const GraphicsState &state) const
+    try
+    {
+        // OpenGL 的排除项在检查不需要的 payload 前拒绝.
+        if ((state.shadingRateState.enabled || state.indirectCountBuffer) && Profile::RejectOpenGL(m_Device))
+        {
+            return false;
+        }
         if (!state.pipeline || !state.framebuffer)
         {
             Error("InvalidArgument: graphics pipeline/framebuffer is null");
-            return;
+            return false;
         }
         const auto &pipelineDesc = state.pipeline->GetDesc();
+        if (Profile::RejectGraphicsPipeline(m_Device, pipelineDesc))
+        {
+            return false;
+        }
+        for (auto *bindings : state.bindings)
+        {
+            if (Profile::RejectBindingSet(m_Device, bindings))
+            {
+                return false;
+            }
+        }
         if (!pipelineDesc.VS || pipelineDesc.primType > PrimitiveType::PatchList)
         {
             Error("InvalidArgument: invalid graphics pipeline description");
-            return;
+            return false;
         }
         if (!m_Device->ValidateShaderType(ShaderType::Vertex, pipelineDesc.VS->GetDesc(), "SetGraphicsState") ||
             !m_Device->ValidateRenderState(pipelineDesc.renderState, state.pipeline->GetFramebufferInfo()))
         {
-            return;
+            return false;
         }
         for (const auto &attachment : state.framebuffer->GetDesc().colorAttachments)
         {
             if (!Input::CheckTextureRange(m_Device, attachment.texture, attachment.subresources, true))
             {
-                return;
+                return false;
             }
         }
         if (state.framebuffer->GetDesc().depthAttachment.texture &&
             !Input::CheckTextureRange(m_Device, state.framebuffer->GetDesc().depthAttachment.texture,
                                       state.framebuffer->GetDesc().depthAttachment.subresources, true))
         {
-            return;
+            return false;
         }
         for (const auto &vb : state.vertexBuffers)
         {
             if (!Input::CheckBufferRange(m_Device, vb.buffer, vb.offset, 0))
             {
-                return;
+                return false;
             }
         }
         if (state.indexBuffer.buffer)
         {
             if (!Input::CheckBufferRange(m_Device, state.indexBuffer.buffer, state.indexBuffer.offset, 0))
             {
-                return;
+                return false;
             }
             if ((state.indexBuffer.format != Format::R16_UINT && state.indexBuffer.format != Format::R32_UINT) ||
                 state.indexBuffer.offset % (state.indexBuffer.format == Format::R16_UINT ? 2u : 4u) != 0)
             {
                 Error("InvalidArgument: index buffer format/offset is invalid");
-                return;
+                return false;
             }
         }
         for (auto *buffer : {state.indirectParams, state.indirectCountBuffer})
         {
             if (buffer && !Input::CheckBufferDesc(m_Device, buffer->GetDesc()))
             {
-                return;
+                return false;
             }
             if (buffer && !buffer->GetDesc().isDrawIndirectArgs)
             {
                 Error("InvalidArgument: invalid indirect argument/count buffer");
-                return;
+                return false;
             }
         }
         // 在有符号/浮点边界检查 viewport 与 scissor, 先拒绝非有限区间和无法表示的宽高.
@@ -991,7 +1024,7 @@ namespace Physara::RHI::Validation
                 double(viewport.maxY) - viewport.minY > std::numeric_limits<float>::max())
             {
                 Error("InvalidArgument: invalid viewport interval");
-                return;
+                return false;
             }
         }
         for (const auto &rect : state.viewport.scissorRects)
@@ -1002,24 +1035,12 @@ namespace Physara::RHI::Validation
                 height > std::numeric_limits<int>::max())
             {
                 Error("InvalidArgument: scissor extent is not representable");
-                return;
+                return false;
             }
         }
         bool anyErrors = false;
         std::stringstream ss;
         ss << "setGraphicsState: " << std::endl;
-
-        if (!state.pipeline)
-        {
-            ss << "pipeline is NULL." << std::endl;
-            anyErrors = true;
-        }
-
-        if (!state.framebuffer)
-        {
-            ss << "framebuffer is NULL." << std::endl;
-            anyErrors = true;
-        }
 
         if (state.indexBuffer.buffer && !state.indexBuffer.buffer->GetDesc().isIndexBuffer)
         {
@@ -1032,12 +1053,7 @@ namespace Physara::RHI::Validation
         {
             const VertexBufferBinding &vb = state.vertexBuffers[index];
 
-            if (!vb.buffer)
-            {
-                ss << "Vertex buffer at index " << index << " is NULL." << std::endl;
-                anyErrors = true;
-            }
-            else if (!vb.buffer->GetDesc().isVertexBuffer)
+            if (!vb.buffer->GetDesc().isVertexBuffer)
             {
                 ss << "Buffer '" << Utils::DebugNameToString(vb.buffer->GetDesc().debugName)
                    << "' bound to vertex buffer slot " << index
@@ -1054,23 +1070,15 @@ namespace Physara::RHI::Validation
             }
         }
 
-        if (state.indirectParams && !state.indirectParams->GetDesc().isDrawIndirectArgs)
-        {
-            ss << "Cannot use buffer '" << Utils::DebugNameToString(state.indirectParams->GetDesc().debugName)
-               << "' as a DrawIndirect argument buffer because it does not have the isDrawIndirectArgs flag set."
-               << std::endl;
-            anyErrors = true;
-        }
-
         if (anyErrors)
         {
             Error(ss.str());
-            return;
+            return false;
         }
 
-        if (!ValidateBindingSetsAgainstLayouts(state.pipeline->GetDesc().bindingLayouts, state.bindings))
+        if (!ValidateBindingSetsAgainstLayouts(pipelineDesc.bindingLayouts, state.bindings))
         {
-            return;
+            return false;
         }
 
         if (state.framebuffer->GetFramebufferInfo() != state.pipeline->GetFramebufferInfo())
@@ -1078,34 +1086,18 @@ namespace Physara::RHI::Validation
             ss << "The framebuffer used in the draw call does not match the framebuffer used to create the pipeline."
                << std::endl
                << "Formats and sample counts of the framebuffers must match." << std::endl;
-            anyErrors = true;
-        }
-
-        if (anyErrors)
-        {
             Error(ss.str());
-            return;
+            return false;
         }
 
-        // GL 的 void 设置可能因活动范围, profile 或 CPU 准备失败而保留旧状态.
-        // 由实际 owning recording 统一保存和消费图形状态, 不在包装层发布未经确认的第二份快照.
-        if (Profile::IsOpenGL(m_Device))
-        {
-            m_CommandList->SetGraphicsState(state);
-            return;
-        }
-
-        // 其余 API 保留上游包装的图形/push 调用协议和索引范围快照.
-        EvaluatePushConstantSize(state.pipeline->GetDesc().bindingLayouts);
-
-        m_CommandList->SetGraphicsState(state);
-
-        m_GraphicsStateSet = true;
-        m_ComputeStateSet = false;
-        m_MeshletStateSet = false;
-        m_RayTracingStateSet = false;
-        m_PushConstantsSet = false;
-        m_CurrentGraphicsState = state;
+        return true;
+    }
+    catch (const std::bad_alloc &)
+    {
+        // 预检尚未委托候选. 用无分配诊断交回拒绝, 图内调用方随后撤销旧绘制状态.
+        Report(m_MessageCallback, MessageSeverity::Error,
+               "SetGraphicsState: CPU allocation failed during public graphics preflight");
+        return false;
     }
 
     void CommandListWrapper::Draw(const DrawArguments &args)
@@ -1256,10 +1248,6 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount)
     {
-        if (Profile::RejectOpenGL(m_Device))
-        {
-            return;
-        }
         if (!RequireOpenState())
         {
             return;
@@ -1267,6 +1255,13 @@ namespace Physara::RHI::Validation
 
         if (!RequireType(CommandQueue::Graphics, "drawIndexedIndirect"))
         {
+            return;
+        }
+
+        // GL 录制拥有生效的 IB 格式和参数 Buffer. 由它在此次消费前检查偏移, 记录数及图权限.
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->DrawIndexedIndirect(offsetBytes, drawCount);
             return;
         }
 

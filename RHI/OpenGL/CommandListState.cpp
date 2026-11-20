@@ -73,11 +73,16 @@ namespace Physara::RHI::OpenGL
         return native;
     }
 
-    // 只允许已实现命令的用途; keepInitialState 的合法恢复 metadata 不代表执行该能力.
-    static bool TransferStateSupported(ResourceStates state, ResourceStates initial, bool keepInitial) noexcept
+    // 只要请求含间接参数位, 资源就须是带参数标志的 Buffer. 列表关闭另由 tracker 恢复初态.
+    static bool TransferStateSupported(ResourceStates state, ResourceStates initial, bool keepInitial,
+                                       bool indirectArgs = false) noexcept
     {
+        if (!indirectArgs && (state & ResourceStates::IndirectArgument) != ResourceStates::Unknown)
+        {
+            return false;
+        }
         const auto reads = ResourceStates::ConstantBuffer | ResourceStates::VertexBuffer | ResourceStates::IndexBuffer |
-                           ResourceStates::ShaderResource | ResourceStates::DepthRead;
+                           ResourceStates::IndirectArgument | ResourceStates::ShaderResource | ResourceStates::DepthRead;
         return state == ResourceStates::Common || state == ResourceStates::CopyDest ||
                state == ResourceStates::CopySource || state == ResourceStates::RenderTarget ||
                state == ResourceStates::DepthWrite ||
@@ -139,10 +144,11 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState))
+        if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState,
+                                    native->m_Desc.isDrawIndirectArgs))
         {
             packet->invalid = true;
-            m_Device->Report(operation, "Unsupported: transfer state");
+            m_Device->Report(operation, "Unsupported: buffer state or resource role");
             return;
         }
         if (initial)
@@ -193,7 +199,7 @@ namespace Physara::RHI::OpenGL
         if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState))
         {
             packet->invalid = true;
-            m_Device->Report(operation, "Unsupported: transfer state");
+            m_Device->Report(operation, "Unsupported: texture state or resource role");
             return;
         }
         if (initial)
@@ -283,7 +289,8 @@ namespace Physara::RHI::OpenGL
     }
 
     bool OpenGLCommandList::CheckGraphBufferUse(const OpenGLBuffer &buffer, ResourceStates state,
-                                               const char *operation, std::optional<BufferRange> range)
+                                               const char *operation, std::optional<BufferRange> range,
+                                               bool structuredBinding)
     {
         if (m_Packet->useMode != UseMode::GraphManaged)
         {
@@ -298,6 +305,11 @@ namespace Physara::RHI::OpenGL
             }
             // 无范围表示只在绑定阶段识别角色. 实际 Draw 或传输可确定的范围须由同用途的一条声明覆盖.
             if (!range)
+            {
+                return true;
+            }
+            // 结构化表的索引由图的生产者证明. 单独授权的绑定必须匹配范围, 不扩大行访问权限.
+            if (structuredBinding && use.indexedBinding == range)
             {
                 return true;
             }
@@ -318,10 +330,10 @@ namespace Physara::RHI::OpenGL
     }
 
     bool OpenGLCommandList::UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation,
-                                      std::optional<BufferRange> range)
+                                      std::optional<BufferRange> range, bool structuredBinding)
     {
         // 带用途的精确权限独立于整对象 tracker 状态, 防止不同字节区间互相授权.
-        if (!CheckGraphBufferUse(buffer, state, operation, range))
+        if (!CheckGraphBufferUse(buffer, state, operation, range, structuredBinding))
         {
             return false;
         }

@@ -1,0 +1,43 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Reuse prepared storage by effective asset version
+
+静态 GPU 准备 SHALL 消费本帧固定的模型、Primitive 及图像版本。兼容布局的同模型同版本几何 SHALL 共享已就绪存储。不同几何 SHALL 可分配在同一兼容顶点页或索引页的不同区间，Draw SHALL 以对应的起点、长度和索引解释消费。图像的嵌入或外置身份、内容版本、颜色/数据解释、可访问的 mip 与有效采样参数 SHALL 得到保留。纹理视图及其绑定 SHALL 按有效格式、维度、子资源范围与采样解释复用。
+
+静态对象与有效材质 SHALL 通过独立行及预解析的范围绑定交付，实例中的表索引 SHALL 选取保持其版本的对应行。同源未覆盖值可共享，实例覆盖的改变只产生该实例所需的更新。兼容的纹理视图和 sampler 可共用绑定，数值字段仍由各有效材质行提供。进入 Pass 的表绑定范围 SHALL 由已接受内容或本图实际生产完整定义，页容量及冷初始化 SHALL 纳入现有驻留和上传预算。只变更相机或预览模式时，已驻留且仍适用的静态记录 SHALL 复用。
+
+已准备且仍有效的静态对象、有效材质和灯数据 SHALL 跨安全槽使用与临时 arena 重置复用其编码。局部字段修改 SHALL 仅使依赖该字段的编码失效。灯行的有效值、可见索引及其组织方式 SHALL 决定各 View 灯表的重用，场景内其它内容的版本变化 SHALL 保持未受影响的灯表有效。View 常量 SHALL 独立对应本轮相机、设置和实际光照输入。新增可见内容、失效布局或资源退休后重新就绪时 SHALL 按实际需要准备对应数据。环境的固定源及烘焙身份保持匹配时，系统 SHALL 使用仍有效的所需环境产品，旋转、强度和曝光的变化只更新查询输入。
+
+已经完整初始化的表页 SHALL 按实际索引的行建立增量读取和上传依赖。对同一物理页的完整结构化绑定 SHALL 保持已初始化的范围合同，增量行只有随实际读取保活并执行的写入才能获得接受确认。
+
+#### Scenario: Reuse a mesh across two instances and isolate an override
+
+- **WHEN** 两个实例使用同版模型及兼容几何，随后修改一个实例的材质因子或外置纹理，另一帧只改变相机
+- **THEN** 兼容几何继续复用，修改只影响该实例实际取样的值，另一实例及固定源保持原值，仍适用的静态存储无需重新上传
+
+#### Scenario: Sample a shared image under distinct interpretations
+
+- **WHEN** 同一个固定图像在一个槽作为基色，另一个槽作为线性数据，且两槽声明不同 sampler
+- **THEN** 采样结果分别遵循颜色解码和线性数据合同，各槽采用自己的寻址和过滤，引用同一源像素不会合并两种解释
+
+#### Scenario: Keep static encodings independent of unrelated changes
+
+- **WHEN** 三个槽已完成暖机，冻结场景跨槽轮转并重置临时 arena，然后在可见集合保持一致的条件下只改一个 View 的曝光，随后只改一项实例材质
+- **THEN** 同版静态数据在冻结和曝光轮次的重新编码及静态上传计数为零，新曝光随对应 View 常量生效，材质编辑只更新涉及的静态数据，未受影响的对象、灯和有效材质继续复用
+
+#### Scenario: Draw different primitives from shared pages
+
+- **WHEN** 两个不同的 Primitive 使用兼容顶点布局与索引宽度，在有余量的同组页中占用可区分的区间，后分配的区间起点非零
+- **THEN** 图以同一页身份追溯各自范围，绘制从正确的区间取得各自顶点和索引，暖机后两份范围都能直接复用
+
+#### Scenario: Retain indexed rows while another view prepares a new generation
+
+- **WHEN** 两个 View 消费同一固定表页的不同实例块，随后一个实例的有效材质改动，旧场景仍在途
+- **THEN** 各路实例索引都解释为所绑定表中的实际行，共享页的初始化只有一份实际生产者。新候选引用正确的新行，未受影响的行继续复用，旧实例和旧行保有至真实完成
+
+#### Scenario: Delay updated rows until a view actually reads them
+
+- **WHEN** 一个存活 View 绑定已初始化的表页，只有被裁剪 View 索引同页中的两条待写行，之后该 View 参与正常绘制
+- **THEN** 本图裁剪这两条待写行的增量上传，后继正常绘制补齐实际读取的行并得到正确的对象与材质。两路实际共用的行只需一次生产

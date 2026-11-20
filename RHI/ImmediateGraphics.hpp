@@ -4,6 +4,7 @@
 /// @brief 即时 Graphics 列表提供的录制互操作. 图借用现有物理包并接管显式用途, 调用方持有录制和提交职责.
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -33,6 +34,7 @@ namespace Physara::RHI
         Buffer *buffer;
         BufferRange range;
         ResourceStates state;
+        std::optional<BufferRange> indexedBinding; ///< 仅限匹配的结构化 SRV 绑定, 不授权传输或其它额外访问.
     };
 
     /// @brief 底层接管协议. 状态修改和提交只经一次成功接管的 GraphRecording 到达.

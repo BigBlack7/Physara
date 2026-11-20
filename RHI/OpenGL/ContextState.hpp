@@ -64,6 +64,8 @@ namespace Physara::RHI::OpenGL
         void ApplyVertexBuffer(GLuint slot, GLuint name, GLintptr offset, GLsizei stride, GLuint divisor) noexcept;
         /// @brief 更新唯一 VAO 的 IB, 零解绑使用已绑定 VAO 的 core 入口, 不更改格式或 Draw offset.
         void ApplyIndexBuffer(GLuint name) noexcept;
+        /// @brief 绑定本次 Draw 的参数缓冲. 该绑定属于 context, 不属于 VAO.
+        void ApplyIndirectBuffer(GLuint name) noexcept;
         /// @brief 应用已经由 Pipeline/候选状态验证的普通固定状态及实际目标编码.
         void ApplyRenderState(const RenderState &state, const FramebufferInfo &info, const Color &blendColor,
                               std::uint8_t stencilRef) noexcept;
@@ -129,11 +131,13 @@ namespace Physara::RHI::OpenGL
         GLuint m_Program = 0;
         GLuint m_Framebuffer = 0;
         GLuint m_IndexBuffer = 0;
+        GLuint m_IndirectBuffer = 0;
         bool m_ProgramKnown = false;
         bool m_PointSize = false;
         bool m_FramebufferKnown = false;
         bool m_InputKnown = false;
         bool m_IndexKnown = false;
+        bool m_IndirectKnown = false;
         bool m_VertexArrayKnown = false;
         bool m_RenderKnown = false;
         bool m_ViewportKnown = false;

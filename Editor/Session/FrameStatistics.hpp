@@ -71,13 +71,14 @@ namespace Physara::Editor
         Renderer::SceneExtractionStatistics extraction;
         Renderer::ForwardEncodingCounts encodings;
         std::array<ViewCullingStatistics, Renderer::ForwardViewCount> views;
-        ForwardUploadStatistics staticUploads, viewUploads;
-        /// 封存前两路合计的原始需求. staticUploads 和 viewUploads 只计最终计划中的存活写 Pass.
+        /// 三项合计本图所有存活 View 的 Forward 写入. drawUploads 包含实例块和间接参数, 单位为笔和字节.
+        ForwardUploadStatistics staticUploads, viewUploads, drawUploads;
+        /// 封存前两路合计的原始需求. 各来源的写入只计最终计划中的存活写 Pass.
         ForwardUploadStatistics uploadDemand;
         FrameArenaStatistics payload, graph;
     };
 
-    /// @brief CPU 区间, 原生计数与存活 Pass 数属于整图. forward 的 Draw 和灯数属于 source.view.
+    /// @brief CPU 区间, 原生计数与存活 Pass 数属于整图. forward 的表面, 灯及两个几何 Pass 的计数属于 source.view.
     /// 两路都接受时选主视口为 source, 仅附加路接受时选该路. 每路裁剪与接受情况在 preparation.views 中.
     /// 仅尝试了窗口交换时才有交换耗时.
     struct SceneFrameStatistics

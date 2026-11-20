@@ -65,11 +65,14 @@ namespace Physara::Renderer
         TextureId depth;
         TextureId displayColor;
         ForwardWorkingSource source;
+        PassId depthPass;
+        PassId colorPass;
     };
 
     namespace Detail
     {
         struct Allocation;
+        struct BufferPage;
         struct ForwardFrameStorage;
         struct ForwardDevice;
     }
@@ -82,15 +85,25 @@ namespace Physara::Renderer
     private:
         friend class ForwardFrame;
         std::map<Detail::Allocation *, std::vector<PassId>> m_StorageWrites;
+        std::vector<std::pair<Detail::BufferPage *, PassId>> m_TableWrites;
         PassId m_LutWrite;
         std::size_t m_LutView{};
     };
 
-    /// @brief 准备值的实际绘制项和提交给本 View 的灯表行.
+    /// @brief 一个存活几何 Pass 发出的批次数与它们消费的间接参数记录数.
+    struct ForwardPassWork
+    {
+        std::size_t batches{};
+        std::size_t records{};
+    };
+
+    /// @brief View 工作集与各存活几何 Pass 的执行口径. 表面数不随 Pass 重复计.
     struct ForwardWorkCounts
     {
         std::size_t draws{};
         std::size_t lights{};
+        ForwardPassWork depth;
+        ForwardPassWork color;
     };
 
     /// @brief 真正执行的对象、材质和世界灯行编码, 包括未产出可绘项的准备工作.
@@ -110,7 +123,8 @@ namespace Physara::Renderer
         std::size_t materials{};
         std::size_t environment{};
         std::size_t geometryPages{}, geometryPageBytes{}, geometryUsedBytes{}, geometryRetiringBytes{};
-        std::size_t largestGeometryGap{}, materialPageBytes{}, textureBytes{}, environmentBytes{}, samplerEntries{};
+        std::size_t largestGeometryGap{}, objectPageBytes{}, materialPageBytes{};
+        std::size_t textureBytes{}, environmentBytes{}, samplerEntries{};
         std::uint64_t materialRequests{}, materialHits{}, materialGeneration{};
     };
 
@@ -123,7 +137,7 @@ namespace Physara::Renderer
         ForwardFrame(const ForwardFrame &) = delete;
         ForwardFrame &operator=(const ForwardFrame &) = delete;
 
-        /// @brief 同槽安全取得时释放上轮 Draw 和活动绑定, 保留可重用的 View 行及该槽的普通灯缓冲.
+        /// @brief 同槽安全取得时释放上轮 Draw 和活动绑定. View 常量, 普通灯表以及各路批次数据可供下轮复用.
         void Reset() noexcept;
         /// @brief 借用本轮被跳过项的有界摘要, 下次 Reset/Prepare 后失效; 空值表示无局部降级.
         [[nodiscard]] const std::optional<Core::BoundedText> &Degradation(std::size_t index = 0) const noexcept;
@@ -133,6 +147,10 @@ namespace Physara::Renderer
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
         /// @brief 返回本槽已准备的几何绘制项和活动灯表行数. 同一项供深度及颜色 Pass 消费时仍只计一次.
         [[nodiscard]] ForwardWorkCounts WorkCounts(std::size_t index = 0) const noexcept;
+        /// @brief 表面和灯按该 View 计一次, 批次和参数记录分别计入存活的深度与颜色 Pass.
+        /// @pre output 属于本槽 index 对应的 View, plan 来自完整执行且已接受的同一张图.
+        [[nodiscard]] ForwardWorkCounts ExecutedWorkCounts(std::size_t index, const ForwardOutput &output,
+                                                           const CompiledGraphPlan &plan) const noexcept;
         /// @brief 汇总自本槽 Reset 起两路实际执行的编码. 命中已编码的共享行时计数保持原值.
         [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
         /// @brief 封存前拥有的写入需求, 包含之后可能不进入存活计划的写入.

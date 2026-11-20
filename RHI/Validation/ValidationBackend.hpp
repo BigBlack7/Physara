@@ -308,6 +308,9 @@ namespace Physara::RHI::Validation
         bool RequireExecuteState(std::source_location location = std::source_location::current()) const;
         /// @brief 根据队列能力层级拒绝不适合当前列表的命令.
         bool RequireType(CommandQueue queueType, const char *operation) const;
+        /// @brief 在委托前核对候选的必需对象, 缓冲角色, 绑定布局和附件兼容性.
+        /// @return false 表示已报告输入错误或预检临时存储分配失败. 生效状态仍由持有录制的一方管理.
+        [[nodiscard]] bool ValidateGraphicsStateInputs(const GraphicsState &state) const;
         /// @brief 借出包装所持列表. 调用方负责维持包装的持有与当前录制身份.
         CommandList *GetUnderlyingCommandList() const
         {
@@ -366,7 +369,7 @@ namespace Physara::RHI::Validation
                                           Physara::RHI::Format format) override;
         void SetSamplerFeedbackTextureState(SamplerFeedbackTexture *texture, ResourceStates stateBits) override;
 
-        /// @brief GL 先按 profile 拒绝; 其余 API 验证当前 Pipeline 所需的完整 push constants 载荷后委托.
+        /// @brief 核对公共录制与数据前提. GL 由实际录制检查当前 Pipeline 的 push 范围, 其余 API 使用包装快照.
         void SetPushConstants(const void *data, size_t byteSize) override;
 
         /// @brief 公共候选预检后委托一次; GL 不将 void 委托视为候选生效, 不保存第二份图形快照.
@@ -374,9 +377,11 @@ namespace Physara::RHI::Validation
         /// @brief 验证录制/队列后发起直接绘制; GL 的有效状态与索引范围校验交给实际 recording.
         void Draw(const DrawArguments &args) override;
         void DrawIndexed(const DrawArguments &args) override;
-        /// @brief 间接绘制在 GL 上先按 profile 拒绝, 其余 API 使用上游快照校验参数及索引前提.
+        /// @brief GL 拒绝非索引间接绘制. 其余 API 使用上游快照校验参数.
         void DrawIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
+        /// @brief 固定数量的 GL indexed indirect 由实际录制核对当前参数缓冲, 索引绑定及请求的记录范围.
         void DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
+        /// @brief GL 拒绝计数缓冲方式. 其余 API 另检查计数缓冲和最大记录数.
         void DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,
                                       uint32_t maxDrawCount) override;
 

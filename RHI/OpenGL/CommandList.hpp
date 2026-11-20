@@ -82,7 +82,7 @@ namespace Physara::RHI::OpenGL
                                           Physara::RHI::Format format) override;
         void SetSamplerFeedbackTextureState(SamplerFeedbackTexture *texture, ResourceStates stateBits) override;
         void SetPushConstants(const void *data, size_t byteSize) override;
-        /// @brief 预检同设备的完整候选, 先保活再应用. 图内候选预检失败时撤销旧候选的绘制资格.
+        /// @brief 预检同设备的完整候选, 先保活再应用. 图内在准备新候选前撤销绘制资格, 成功发布后才恢复.
         /// @note 资源保活失败发生在候选发布前. 跟踪或原生错误使录制失效, 已发前缀仍按原包退休.
         void SetGraphicsState(const GraphicsState &state) override;
         /// @brief 即时消费当前用途和状态, indexed 的 startVertexLocation 只作为一次 baseVertex.
@@ -90,6 +90,9 @@ namespace Physara::RHI::OpenGL
         void Draw(const DrawArguments &args) override;
         void DrawIndexed(const DrawArguments &args) override;
         void DrawIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
+        /// @brief 从当前 indirectParams 的 4 字节对齐偏移读取 drawCount 条紧排 indexed 记录.
+        /// @pre 录制已建立图形状态和起点为 0 的 R16/R32 索引绑定. 生产者保证记录内的几何与实例地址有效.
+        /// @note 合法零条调用直接返回. 非空范围按本次录制模式核对用途后即时发出一次原生调用.
         void DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
         void DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,
                                       uint32_t maxDrawCount) override;
@@ -179,15 +182,17 @@ namespace Physara::RHI::OpenGL
         /// @brief 已验证的原生复合对象按实际依赖展开一次, 返回稳定账目; nullptr 表示准备失败.
         [[nodiscard]] InternalOwnership *RetainResource(Resource *resource);
         /// @brief 自动模式请求状态. 图模式核对已提交范围, 无 range 时只检查该 Buffer 能否绑定到指定角色.
+        /// @param structuredBinding 核对结构化 SRV 的原生绑定时为 true, 允许匹配本 Pass 另行声明的表绑定范围.
         [[nodiscard]] bool UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation,
-                                     std::optional<BufferRange> range = std::nullopt);
+                                     std::optional<BufferRange> range = std::nullopt, bool structuredBinding = false);
         /// @brief 纹理消费按已解析的底层 mip/layer 与实际分量核对授权, 与跟踪粒度独立.
         [[nodiscard]] bool UseTexture(OpenGLTexture &texture, TextureSubresourceSet range, TextureAspect aspects,
                                       ResourceStates state, const char *operation,
                                       ResourceStates access = ResourceStates::Unknown);
         /// @brief Draw 计算出的精确区间沿用传输和绑定的 GraphManaged 授权规则.
         [[nodiscard]] bool CheckGraphBufferUse(const OpenGLBuffer &buffer, ResourceStates state,
-                                               const char *operation, std::optional<BufferRange> range);
+                                               const char *operation, std::optional<BufferRange> range,
+                                               bool structuredBinding = false);
         /// @brief 本 profile 没有 Shader 写生产者, 有序访问满足的依赖在此唯一消费.
         [[nodiscard]] bool ConsumeBarriers();
         /// @brief 在实际联合采样的 Draw 前, 由同一发射路径满足重叠的先前附件写.
@@ -224,6 +229,12 @@ namespace Physara::RHI::OpenGL
         void WriteVolatile(OpenGLBuffer &buffer, const void *data, std::size_t size);
         /// @brief 验证本次参数/可知数据范围, 恢复实际用途与缓存后发出一个直接 Draw.
         void DrawDirect(const DrawArguments &args, bool indexed);
+        /// @brief 从当前有效 recording 取得可用于本次 Draw 的管线, 缺少必要状态时报告失败.
+        [[nodiscard]] const OpenGLGraphicsPipeline *DrawPipeline(bool indexed, const char *operation);
+        /// @brief 直接与间接 Draw 共用的实际用途, 附件依赖和动态常量准备.
+        [[nodiscard]] bool PrepareDraw(const OpenGLGraphicsPipeline &pipeline, const char *operation);
+        /// @brief 核对发出的 Draw, 成功时登记实际深度写入, 否则保留已发包并使其失效.
+        void FinishDraw(const OpenGLGraphicsPipeline &pipeline, const char *operation);
         /// @brief 保留完整公共命令表的失败出口, 不解引用专有 payload 或发出替代 GPU 工作.
         void Unsupported(const char *operation);
         RefCountPtr<OpenGLDevice> m_Device;

@@ -15,7 +15,7 @@
 #include <Asset/StaticTangents.hpp>
 
 /// @file
-/// @brief 使用 PreparedView 构造可直接录制的静态 Draw. 本阶段仅分配对象并拥有待写字节.
+/// @brief 从 PreparedView 解析静态表面, 排序后构造间接批次及拥有型待写字节.
 /// 收齐可绘材质后选择环境角色和颜色管线, 灯表计数, 观察量及曝光取自同轮 View.
 
 namespace Physara::Renderer::Detail
@@ -26,7 +26,7 @@ namespace Physara::Renderer::Detail
         return {scene.index, scene.generation, entity.index, entity.generation};
     }
 
-    /// @brief 生成布局中的矩阵列支持显式 std140 打包. 检查 double 到 GPU float 的窄化.
+    /// @brief 按生成接口的列布局写入矩阵. 任一 double 分量超出有限 float 范围时返回 false.
     template <typename Columns>
     static bool StoreMatrix(Columns &output, const glm::dmat4 &matrix) noexcept
     {
@@ -122,7 +122,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 依次表示可复用的 GPU 行, 尚待分配的 CPU 编码, 或该图元的静态拒绝原因.
-    using ObjectPreparation = std::variant<std::shared_ptr<ConstantRow>, StaticAbi::ForwardObject, std::string_view>;
+    using ObjectPreparation = std::variant<std::shared_ptr<ObjectStorage>, StaticAbi::ForwardObject, std::string_view>;
 
     /// @brief 在转换矩阵前查已编码行. 冷行先留 CPU 值, 几何可绘后才创建缓冲.
     static ObjectPreparation ResolveObject(const ForwardDevice &device, const ObjectRowKey &key,
@@ -244,6 +244,38 @@ namespace Physara::Renderer::Detail
         return result;
     }
 
+    /// @brief 按表页与完整采样集合共用预解析绑定. 每个纹理代固定拥有一个实际视图和采样范围.
+    static void PrepareMaterialBinding(ForwardDevice &device, MaterialRow &row)
+    {
+        for (std::size_t i = 0; i < row.textures.size(); ++i)
+        {
+            row.sampling[2 * i] = reinterpret_cast<std::uintptr_t>(row.textures[i].get());
+            row.sampling[2 * i + 1] = reinterpret_cast<std::uintptr_t>(row.samplers[i].Get());
+        }
+        auto &cached = device.materialBindings[{row.storage.page->ordinal, row.sampling}];
+        row.binding = cached.lock();
+        if (row.binding)
+        {
+            return;
+        }
+        // 集合绑定整张材质页. 即使实例的数值行不同, 页和采样组合相同时也可共用该集合.
+        RHI::BindingSetDesc bindings;
+        bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(MaterialTableSlot, row.storage.page->buffer.Get()));
+        for (std::uint32_t i = 0; i < row.textures.size(); ++i)
+        {
+            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(i, row.textures[i]->texture.Get())
+                .SetSubresources(row.textures[i]->sampling));
+            bindings.AddItem(RHI::BindingSetItem::Sampler(i, row.samplers[i].Get()));
+        }
+        auto binding = device.device.CreateBindingSet(bindings, device.programs.layouts[2].Get());
+        if (!binding)
+        {
+            Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward material table binding");
+        }
+        row.binding = std::make_shared<RHI::BindingSetHandle>(std::move(binding));
+        cached = row.binding;
+    }
+
     /// @brief 准备新覆盖代或补齐缓存行未获接受的纹理. 相同字段及绑定沿用原存储.
     static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, ForwardFrameData &frame,
         const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
@@ -281,34 +313,18 @@ namespace Physara::Renderer::Detail
                 return entry.resident;
             }
         }
-        constexpr auto rowBytes = RHI::ConstantBufferOffsetSizeAlignment;
-        static_assert(sizeof(values) <= rowBytes);
-        // 部分 UBO 绑定同时受公共 256-byte 范围和设备 offset 对齐约束.
-        const auto alignment = std::lcm<std::size_t>(rowBytes, device.uniformAlignment);
+        constexpr auto rowBytes = sizeof(StaticAbi::ForwardMaterial);
         device.Reserve(rowBytes, true);
         auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
-        device.AllocateSlice(row->storage, *row, GraphUsage::ConstantBuffer, 0, rowBytes, alignment);
-        RHI::BindingSetDesc bindings;
-        bindings.AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->storage.page->buffer.Get(), row->storage.range));
-        for (std::uint32_t i = 0; i < row->textures.size(); ++i)
-        {
-            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(i, row->textures[i]->texture.Get())
-                .SetSubresources(row->textures[i]->sampling));
-            bindings.AddItem(RHI::BindingSetItem::Sampler(i, row->samplers[i].Get()));
-        }
-        row->binding = device.device.CreateBindingSet(bindings, device.programs.layouts[2].Get());
-        if (!row->binding)
-        {
-            Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare effective material binding");
-        }
+        device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
+                             rowBytes, rowBytes, StaticAbi::MaterialRowsCapacity);
+        row->index = static_cast<std::size_t>(row->storage.range.byteOffset / rowBytes);
+        PrepareMaterialBinding(device, *row);
         device.Use(*row);
-        // 绑定和图写都覆盖完整的对齐行. 末尾补零后, 图声明的范围与实际复制字节一致.
-        std::array<std::byte, rowBytes> payload{};
-        std::ranges::copy(std::as_bytes(std::span(&values, 1)), payload.begin());
-        uploads.Add(row, row->storage, payload);
+        uploads.Add(row, row->storage, std::as_bytes(std::span(&values, 1)));
         if (const auto previous = device.materials.find(key); previous != device.materials.end())
         {
             previous->second.resident->storage.Retire();
@@ -389,7 +405,9 @@ namespace Physara::Renderer::Detail
         auto geometry = std::make_shared<GeometryRef>(device.capacity, vertexBytes + indexBytes.size(), true);
         geometry->key = key;
         geometry->indexCount = static_cast<std::uint32_t>(primitive.indices.size());
-        device.AllocateSlice(geometry->vertices, *geometry, GraphUsage::VertexBuffer, attributes, vertexBytes, 4);
+        // 共享顶点绑定取页起点, 页内区间须能换算成整数 baseVertex.
+        device.AllocateSlice(geometry->vertices, *geometry, GraphUsage::VertexBuffer, attributes, vertexBytes,
+                             layout.stride);
         device.AllocateSlice(geometry->indices, *geometry, GraphUsage::IndexBuffer, 0, indexBytes.size(),
                              sizeof(std::uint32_t));
         std::vector<std::byte> packed(vertexBytes);
@@ -397,10 +415,10 @@ namespace Physara::Renderer::Detail
         const auto &vertices = geometry->vertices;
         const auto &indices = geometry->indices;
         // 两项写入共用几何代, 各自携带目的页偏移. 确认时须同时找到顶点和索引的生产 Pass.
-        uploads.buffers.push_back({geometry, vertices.page->buffer, std::move(packed), false,
-                                   vertices.range.byteOffset, vertices.page.get()});
-        uploads.buffers.push_back({geometry, indices.page->buffer, {indexBytes.begin(), indexBytes.end()}, false,
-                                   indices.range.byteOffset, indices.page.get()});
+        uploads.buffers.push_back({geometry, vertices.page->buffer, std::move(packed),
+                                   GraphUploadSource::ForwardStatic, vertices.range.byteOffset, vertices.page.get()});
+        uploads.buffers.push_back({geometry, indices.page->buffer, {indexBytes.begin(), indexBytes.end()},
+                                   GraphUploadSource::ForwardStatic, indices.range.byteOffset, indices.page.get()});
         device.Use(*geometry);
         if (const auto previous = device.geometry.find(key); previous != device.geometry.end())
         {
@@ -495,7 +513,8 @@ namespace Physara::Renderer::Detail
             // 先撤销已上传资格. 图未接受或上传准备失败时保留 false, 本槽安全复用后仍会重试该行.
             frame.view->accepted = false;
             frame.viewValues = value;
-            frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)), true);
+            frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)),
+                              GraphUploadSource::ForwardView);
         }
     }
 
@@ -578,8 +597,8 @@ namespace Physara::Renderer::Detail
             DescribeSkipped(frame, model, ref, error->View());
             return;
         }
-        std::shared_ptr<ConstantRow> instance;
-        if (auto *resident = std::get_if<std::shared_ptr<ConstantRow>>(&objectCandidate))
+        std::shared_ptr<ObjectStorage> instance;
+        if (auto *resident = std::get_if<std::shared_ptr<ObjectStorage>>(&objectCandidate))
         {
             instance = std::move(*resident);
             device.Use(*instance);
@@ -587,8 +606,16 @@ namespace Physara::Renderer::Detail
         else
         {
             const auto &encoded = std::get<StaticAbi::ForwardObject>(objectCandidate);
-            instance = CreateConstantRow(device, sizeof(encoded), 1);
-            frame.uploads.Add(instance, instance->buffer, std::as_bytes(std::span(&encoded, 1)));
+            device.Reserve(sizeof(encoded), true);
+            instance = std::make_shared<ObjectStorage>(device.capacity, sizeof(encoded), true);
+            device.AllocateSlice(instance->storage, *instance, GraphUsage::ShaderRead,
+                std::uint8_t(TableLayout::Objects), sizeof(encoded), sizeof(encoded), StaticAbi::ObjectRowsCapacity);
+            device.Use(*instance);
+            frame.uploads.Add(instance, instance->storage, std::as_bytes(std::span(&encoded, 1)));
+            if (const auto previous = device.objects.find(objectKey); previous != device.objects.end())
+            {
+                previous->second.resident->storage.Retire();
+            }
             device.objects.insert_or_assign(objectKey, ObjectRow{object.transformRevision, instance});
         }
         if (texturesReady)
@@ -620,9 +647,164 @@ namespace Physara::Renderer::Detail
         {
             z += matrix[4 * i + 2] * (bounds.minimum[i] * 0.5 + bounds.maximum[i] * 0.5);
         }
+        if (!std::isfinite(z))
+        {
+            Reject(ViewSettingReason::ScenePreparationFailed, "Forward sort depth is not finite");
+        }
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
             slot->second, {}, {}, PipelineKey(attributes, mirror, doubleSided, phase),
             -z, index, attributes, mirror, doubleSided});
+    }
+
+    /// @brief 给实际采样集合编号用于排序. 相同冻结输入以首次可见顺序编号, 资源地址只参与相等查找.
+    static void SortDraws(ForwardFrameData &frame)
+    {
+        std::map<SamplingKey, std::size_t> groups;
+        std::vector<std::size_t> samplingOrder;
+        samplingOrder.reserve(frame.materialRows.size());
+        for (const auto &row : frame.materialRows)
+        {
+            samplingOrder.push_back(groups.try_emplace(row->sampling, groups.size()).first->second);
+        }
+        const auto order = [&](const DrawRecord &draw)
+        {
+            return std::tie(draw.pipelineKey, samplingOrder[draw.material], draw.geometry->vertices.page->ordinal,
+                            draw.geometry->indices.page->ordinal, draw.viewDepth, draw.source);
+        };
+        std::ranges::sort(frame.draws, [&](const DrawRecord &a, const DrawRecord &b)
+        {
+            return order(a) < order(b);
+        });
+    }
+
+    /// @brief 比较同一 View 和实例块内仍可能变化的状态. 两个 Pipeline 含布局和光栅状态,
+    /// 材质集合含表页和采样组合. 同一顶点页固定布局和步长, 本路径的索引页固定为 R32.
+    static bool SameBatch(const ForwardFrameData &frame, const DrawRecord &a, const DrawRecord &b) noexcept
+    {
+        return a.pipeline == b.pipeline && a.depthPipeline == b.depthPipeline &&
+               a.geometry->vertices.page == b.geometry->vertices.page &&
+               a.geometry->indices.page == b.geometry->indices.page &&
+               a.object->storage.page == b.object->storage.page &&
+               frame.materialRows[a.material]->binding == frame.materialRows[b.material]->binding;
+    }
+
+    /// @brief 将已验证的页区间换算为元素单位. 首实例是当前绑定块内的行号.
+    [[nodiscard]] static RHI::DrawIndexedIndirectArguments EncodeCommand(const GeometryRef &geometry,
+        std::uint32_t instance, std::uint32_t count)
+    {
+        const auto stride = StaticVertexLayout(geometry.vertices.page->layout).stride;
+        const auto vertexOffset = geometry.vertices.range.byteOffset;
+        const auto indexOffset = geometry.indices.range.byteOffset;
+        const auto baseVertex = vertexOffset / stride;
+        const auto firstIndex = indexOffset / sizeof(std::uint32_t);
+        if (vertexOffset % stride != 0 || indexOffset % sizeof(std::uint32_t) != 0 ||
+            baseVertex > std::uint64_t(std::numeric_limits<std::int32_t>::max()) ||
+            firstIndex > std::numeric_limits<std::uint32_t>::max())
+        {
+            Reject(ViewSettingReason::SceneResidencyLimit, "Forward indirect geometry offsets are not representable");
+        }
+        return {geometry.indexCount, count, static_cast<std::uint32_t>(firstIndex),
+                static_cast<std::int32_t>(baseVertex), instance};
+    }
+
+    /// @brief 在当前安全 View 槽复用等形缓冲. 已接受且字节相同的版本可直接导入后继图.
+    static void PrepareDrawBuffer(ForwardDevice &device, ForwardFrameData &frame,
+        std::shared_ptr<DrawBuffer> &storage, GraphUsage usage, std::span<const std::byte> values,
+        std::uint32_t stride = 0)
+    {
+        if (storage && (storage->capacity != device.capacity || storage->bytes != values.size()))
+        {
+            storage.reset();
+        }
+        if (!storage)
+        {
+            device.Reserve(values.size());
+            auto next = std::make_shared<DrawBuffer>(device.capacity, values.size());
+            next->buffer = AllocateBuffer(device.device, usage, values.size(), stride);
+            storage = std::move(next);
+        }
+        device.Use(*storage);
+        if (!storage->accepted || !std::ranges::equal(values, storage->contents))
+        {
+            storage->accepted = false;
+            frame.uploads.Add(storage, storage->buffer, values, GraphUploadSource::ForwardDraw);
+            storage->contents.assign(values.begin(), values.end());
+        }
+    }
+
+    /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
+    /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
+    static void PackBatches(ForwardDevice &device, ForwardFrameData &frame)
+    {
+        constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
+        using Argument = RHI::DrawIndexedIndirectArguments;
+        std::vector<Argument> arguments;
+        const auto drawCount = frame.draws.size();
+        const auto blockCount = (drawCount - 1) / blockCapacity + 1;
+        frame.instanceBlocks.resize(blockCount);
+        std::array<StaticAbi::DrawInstanceData, blockCapacity> instances{};
+        for (std::size_t block = 0; block < blockCount; ++block)
+        {
+            const auto first = block * blockCapacity;
+            const auto count = std::min(blockCapacity, drawCount - first);
+            const auto draws = std::span(frame.draws).subspan(first, count);
+            for (std::size_t i = 0; i < draws.size(); ++i)
+            {
+                const auto &draw = draws[i];
+                const auto objectRow = draw.object->storage.range.byteOffset / sizeof(StaticAbi::ForwardObject);
+                const auto materialRow = frame.materialRows[draw.material]->index;
+                assert(objectRow < StaticAbi::ObjectRowsCapacity && materialRow < StaticAbi::MaterialRowsCapacity);
+                instances[i] = {static_cast<std::uint32_t>(objectRow), static_cast<std::uint32_t>(materialRow)};
+            }
+            // Shader 绑定整个定长块. 末块的尾部也随载荷定义, 只有前 count 行可被命令索引.
+            std::fill(instances.begin() + count, instances.end(), StaticAbi::DrawInstanceData{});
+            auto &storage = frame.instanceBlocks[block];
+            PrepareDrawBuffer(device, frame, storage, GraphUsage::ShaderRead, std::as_bytes(std::span(instances)),
+                              sizeof(StaticAbi::DrawInstanceData));
+            std::map<std::uint64_t, RHI::BindingSetHandle> sets;
+            for (std::size_t begin = 0; begin < draws.size();)
+            {
+                const auto &head = draws[begin];
+                const auto &objects = *head.object->storage.page;
+                auto &renderables = sets[objects.ordinal];
+                if (!renderables)
+                {
+                    RHI::BindingSetDesc bindings;
+                    bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(0, objects.buffer.Get()));
+                    bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(1, storage->buffer.Get()));
+                    renderables = device.device.CreateBindingSet(bindings, device.programs.layouts[1].Get());
+                    if (!renderables)
+                    {
+                        Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward instance binding");
+                    }
+                }
+                const auto firstCommand = static_cast<std::uint32_t>(arguments.size());
+                auto current = begin;
+                // 相邻的同段几何扩展 instanceCount. 换几何时追加记录, 直到需要切换绑定或 Pipeline.
+                do
+                {
+                    const auto &geometry = draws[current].geometry;
+                    auto end = current + 1;
+                    while (end < draws.size() && draws[end].geometry == geometry &&
+                           SameBatch(frame, head, draws[end]))
+                    {
+                        ++end;
+                    }
+                    if (arguments.size() == ForwardBufferLimit / sizeof(Argument))
+                    {
+                        Reject(ViewSettingReason::SceneUploadLimit, "Forward indirect arguments exceed the buffer limit");
+                    }
+                    arguments.push_back(EncodeCommand(*geometry, static_cast<std::uint32_t>(current),
+                                                     static_cast<std::uint32_t>(end - current)));
+                    current = end;
+                } while (current < draws.size() && SameBatch(frame, head, draws[current]));
+                frame.batches.push_back({first + begin, block, firstCommand,
+                    static_cast<std::uint32_t>(arguments.size()) - firstCommand, renderables});
+                begin = current;
+            }
+        }
+        PrepareDrawBuffer(device, frame, frame.indirect, GraphUsage::IndirectArgument,
+                          std::as_bytes(std::span(arguments)));
     }
 
     void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
@@ -662,11 +844,7 @@ namespace Physara::Renderer::Detail
         const bool usesLighting = litDraws && (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
         PrepareLightTable(device, frame, view, usesLighting);
         PrepareViewRow(device, frame, view, mode, usesLighting);
-        // 两种深度组合使用同一顺序, 相等深度下保留相同的绘制优先级.
-        std::ranges::sort(frame.draws, [](const DrawRecord &a, const DrawRecord &b)
-        {
-            return std::tie(a.pipelineKey, a.material, a.geometry->key, a.viewDepth, a.source) <
-                   std::tie(b.pipelineKey, b.material, b.geometry->key, b.viewDepth, b.source);
-        });
+        SortDraws(frame);
+        PackBatches(device, frame);
     }
 }

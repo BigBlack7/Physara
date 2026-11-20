@@ -8,9 +8,9 @@
 
 namespace Physara::Renderer
 {
-    /// @brief 写入用途供统计归类. View 常量随观察条件计算, 静态行和灯表按驻留数据记账.
-    /// Other 包含 UI 与诊断写入. 三类都参与同一次设备容量检查.
-    enum class GraphUploadSource : std::uint8_t { Other, ForwardStatic, ForwardView };
+    /// @brief 上传账单按数据来源分类. ForwardDraw 合计各路实例块和间接参数, ForwardView 包含观察及显示常量.
+    /// 静态行和灯表记入 ForwardStatic. UI 与诊断使用 Other. 所有存活写入共用一次设备准入.
+    enum class GraphUploadSource : std::uint8_t { Other, ForwardStatic, ForwardView, ForwardDraw };
 
     /// @brief 一次实际 Write 的大小和所属 Pass, 用于按编译顺序核算共享上传池.
     struct GraphUpload
@@ -37,12 +37,13 @@ namespace Physara::Renderer
         RenderGraph &graph, TextureId target, std::span<const std::byte> pixels, std::size_t rowPitch,
         std::vector<GraphUpload> &uploads, std::uint32_t mip = 0, std::uint32_t layer = 0, bool *recorded = nullptr);
     /// @brief 写入指定偏移处的实际字节区间, 后续消费者须声明所读的有效范围.
+    /// @param recorded 可选的拥有者标记, 执行尝试写入时锁存, 与完整图的接受状态独立.
     /// @param offset 从物理 Buffer 起点计的字节偏移, 导入页子区间时也使用同一坐标.
     /// @pre bytes 非空, 位于 target 的允许范围内, 底层字节在图执行结束前保持地址及内容稳定.
     /// @note 同一 Pass 对应一次 WriteBuffer. 几何缓冲的剩余容量不属于本次已初始化内容.
     [[nodiscard]] GraphResult<BufferId> AddBufferUpload(
         RenderGraph &graph, BufferId target, std::span<const std::byte> bytes, std::vector<GraphUpload> &uploads,
-        std::uint64_t offset = 0);
+        std::uint64_t offset = 0, bool *recorded = nullptr);
     /// @brief 只从同图代的存活计划判断生产者, 不将声明成功当成执行成功.
     [[nodiscard]] bool IsLivePass(const CompiledGraphPlan &plan, PassId pass) noexcept;
     /// @brief 在成功执行的导出中查找精确版本. 返回借用句柄, 调用者按接受回执决定是否持久保存.

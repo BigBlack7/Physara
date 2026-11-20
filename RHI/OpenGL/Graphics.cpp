@@ -53,7 +53,8 @@ namespace Physara::RHI::OpenGL
             {
                 const auto use = binding.type == ResourceType::ConstantBuffer ? ResourceStates::ConstantBuffer
                                                                               : ShaderReads(entry.stages);
-                if (!UseBuffer(*static_cast<OpenGLBuffer *>(binding.resource), use, operation, binding.range))
+                if (!UseBuffer(*static_cast<OpenGLBuffer *>(binding.resource), use, operation, binding.range,
+                               binding.type == ResourceType::StructuredBuffer_SRV))
                 {
                     return false;
                 }

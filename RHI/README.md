@@ -11,14 +11,14 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | 当前入口 | 支持和边界 |
 |---|---|
 | Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 有限离屏直接绘制不代表稳定图像/呈现阶段出口 |
-| Buffer | 普通 immutable storage 保留 raw/structured 和 vertex/index/constant 描述. volatile 常量使用有界 coherent backing, `GetDesc` 返回逻辑大小和版本数. 列表支持普通 byte copy 与受检区间写, volatile 从 offset 0 写有效前缀. 公共 Map/readback、UInt clear 及 typed/virtual/shared/RT profile 仍拒绝 |
+| Buffer | 普通 immutable storage 保留 raw/structured、vertex/index/constant 和 indirect 参数用途. volatile 常量使用有界 coherent backing, `GetDesc` 返回逻辑大小和版本数. 列表支持普通 byte copy 与受检区间写, volatile 从 offset 0 写有效前缀. 公共 Map/readback、UInt clear 及 typed/virtual/shared/RT profile 仍拒绝 |
 | Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建. 公共格式 flags 表示 2D 基线, 包括按驱动实际查询公布的 ReadOnlyDepthSampling. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
 | Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, GraphicsBaselineV1 的 VS/FS 子集; 创建不编译 GLSL. 原始输入存储可在返回后释放 |
 | BindingLayout/Set | 常规逻辑布局保留 set/b/t/s, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通及 volatile UBO、push 声明、只读定长 record SSBO、浮点二维视图、同格式深度采样视图及完整六面的颜色 cube 视图. Draw 消费独立 Sampler 并核对活动 IR 和视图维度, cube 线性采样按真实目标能力准备并支持跨面过滤. 整数格式可按实际能力用于存储、附件及传输. descriptor 数组、typed/raw、image/UAV 仍拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
-| CommandList | 61 项 override 完整. Graphics/immediate 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态和直接 Draw/DrawIndexed/实例. 活动 volatile 常量使用本 recording 最近的有效区间, push 由有效状态设置后的 `SetPushConstants` 写入. 其他未交付命令按原有入口报告 Unsupported |
+| CommandList | 61 项 override 完整. Graphics/immediate 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态、直接 Draw/DrawIndexed/实例及固定数量 indexed indirect/MDI. 活动 volatile 常量使用本 recording 最近的有效区间, push 由有效状态设置后的 `SetPushConstants` 写入. 其他未交付命令按原有入口报告 Unsupported |
 | 即时录制互操作 | ImmediateGraphics.hpp 的 GraphRecording 借用经 Validation 和后端确认的当前录制, 负责状态准备和提交. GraphManaged 的普通列表核对已授权的用途、字节区间和纹理分量; Automatic 由 RHI 入口推导. 两种模式共用 tracker 与后端发射 |
 | 附件分量 | RHI.hpp 的 FramebufferAttachment 增加可选 aspects, 默认使用视图格式的全部分量. OpenGL 按选中分量挂载 packed depth/stencil, 预检 FBO 完整性及 Pipeline 需要的分量 |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 不重放上传、clear/copy、Draw 或时间戳. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
@@ -42,7 +42,7 @@ ContextState 统一拥有 unpack、Program/FBO、ranges、采样对、VAO 输入
 
 GL 的有效图形快照与本次 IB 范围检查统一由 owning recording 保存/消费; Validation 不把 void 设置委托当作候选生效, 其他 API 保留上游快照规则. 基线没有第二颜色输出, 准备阶段拒绝活动双源 blend 因子; inactive 因子按关闭 blend、附件类型/分量、Min/Max 和写 mask 判定, 原生使用无害值. 缓存包含颜色格式, 切换附件格式时重新应用实际使用的通路. 只读深度拒绝测试和写入均启用的组合, 不因关闭测试时未使用的 write flag 拒绝合法颜色 Pass; stencil 写入仍检查.
 
-完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, 不改变 clip origin; depth-only/stencil-only 保留另一 aspect. copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序只在后端适配, viewport/scissor 不额外翻转; Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. staging/resolve、1D/3D clear/copy、Buffer UInt clear、MSAA 执行、多 viewport、indirect、Compute/UAV 仍明确拒绝.
+完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, 不改变 clip origin; depth-only/stencil-only 保留另一 aspect. copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序只在后端适配, viewport/scissor 不额外翻转; Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. 固定数量 indirect 读取紧排的 20 字节参数, 索引绑定偏移须为 0. staging/resolve、1D/3D clear/copy、Buffer UInt clear、MSAA 执行、多 viewport、非索引 indirect、indirect count、Compute/UAV 仍明确拒绝.
 
 默认保活的 Pipeline、集合、Framebuffer 及其实际子引用接入同一包 lease; 内部复合边只记一次, 真正外部 owner 继续阻止破坏性关闭. trackLiveness=false 时调用方负责集合及其依赖到完成前的寿命. 包/辅助缓存不形成增长的资源组合表, native 删除前解除旧绑定. worker 最终释放列表只交接 orphan, owner 完成收集或受控退出后才销毁. 有限绘制记录随 [D03-T03](../Docs/Developments/D03-D05-FramePipeline.md#d03-t03) 引用, 查询/完整在途检查见 [D03-T04 change](../openspec/changes/archive/2026-11-08-establish-opengl-submission-retirement/tasks.md); 各自状态不代替 T05 稳定图像或 Runtime Renderer.
 

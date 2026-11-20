@@ -92,10 +92,10 @@ namespace Physara::RHI::OpenGL
         {
             return fail("InterfaceMismatch: framebuffer formats/sampleCount/sampleQuality");
         }
-        if (state.shadingRateState.enabled || state.indirectParams || state.indirectCountBuffer ||
+        if (state.shadingRateState.enabled || state.indirectCountBuffer ||
             state.viewport.viewports.size() > 1 || state.viewport.scissorRects.size() > 1)
         {
-            return fail("Unsupported: indirect, shading-rate or multiple viewport execution");
+            return fail("Unsupported: indirect count, shading-rate or multiple viewport execution");
         }
         for (const auto &viewport : state.viewport.viewports)
         {
@@ -155,6 +155,15 @@ namespace Physara::RHI::OpenGL
                 state.indexBuffer.offset % (format == Format::R16_UINT ? 2 : 4) != 0)
             {
                 return fail("InvalidArgument: index buffer role, format or byte offset");
+            }
+        }
+        if (state.indirectParams)
+        {
+            // 设置阶段只确定参数 Buffer 的身份与角色. 实际读取的字节范围由每次 DrawIndexedIndirect 给出.
+            const auto *buffer = BufferFor(state.indirectParams, "SetGraphicsState");
+            if (!buffer || !buffer->GetDesc().isDrawIndirectArgs)
+            {
+                return fail("InvalidArgument: indirect argument buffer role or owner");
             }
         }
         const auto &depth = desc.renderState.depthStencilState;
@@ -262,15 +271,15 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
+        // 图内新候选必须重新取得绘制资格. 任何准备失败都只保留真实前缀及其引用.
+        if (m_Packet->useMode == UseMode::GraphManaged)
+        {
+            m_Packet->graphicsSet = false;
+        }
         OpenGLGraphicsPipeline *pipeline = nullptr;
         OpenGLFramebuffer *framebuffer = nullptr;
         if (!ValidateGraphicsState(state, pipeline, framebuffer))
         {
-            // 图内拒绝的候选不能让随后的 Draw 沿用同 Pass 中的旧图形状态.
-            if (m_Packet->useMode == UseMode::GraphManaged)
-            {
-                m_Packet->graphicsSet = false;
-            }
             return;
         }
         if (!RetainResource(pipeline) || !RetainResource(framebuffer))
@@ -292,7 +301,8 @@ namespace Physara::RHI::OpenGL
                 return;
             }
         }
-        if (state.indexBuffer.buffer && !RetainResource(state.indexBuffer.buffer))
+        if ((state.indexBuffer.buffer && !RetainResource(state.indexBuffer.buffer)) ||
+            (state.indirectParams && !RetainResource(state.indirectParams)))
         {
             return;
         }

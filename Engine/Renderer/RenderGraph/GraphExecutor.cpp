@@ -376,10 +376,12 @@ namespace Physara::Renderer::Detail
             }
             else
             {
-                const auto &access = std::get<BufferUse>(planned.declaration).access;
+                const auto &buffer = std::get<BufferUse>(planned.declaration);
+                const auto &access = buffer.access;
                 auto *object = Buffer(access.resource);
                 uses.Add(*object, *planned.state);
-                buffers.push_back({object, access.range, *planned.state});
+                // 行范围随本 Pass 授权. 结构化表另携带布局要求的绑定范围, 供后端核对预建集合.
+                buffers.push_back({object, access.range, *planned.state, buffer.indexedBinding});
             }
         }
         return uses.Commit(m_Recording, m_Diagnostics, m_Stage, m_CurrentPass, textures, buffers);

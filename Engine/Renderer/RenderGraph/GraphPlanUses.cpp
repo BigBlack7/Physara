@@ -186,6 +186,7 @@ namespace Physara::Renderer::Detail
         case GraphUsage::ShaderRead: return {"ShaderRead", ResourceStates::ShaderResource};
         case GraphUsage::VertexBuffer: return {"VertexBuffer", ResourceStates::VertexBuffer};
         case GraphUsage::IndexBuffer: return {"IndexBuffer", ResourceStates::IndexBuffer};
+        case GraphUsage::IndirectArgument: return {"IndirectArgument", ResourceStates::IndirectArgument};
         case GraphUsage::ConstantBuffer: return {"ConstantBuffer", ResourceStates::ConstantBuffer};
         case GraphUsage::CopySource: return {"CopySource", ResourceStates::CopySource};
         case GraphUsage::CopyDestination: return {"CopyDestination", ResourceStates::CopyDest};
@@ -419,7 +420,9 @@ namespace Physara::Renderer::Detail
                 const auto &access = buffer.access;
                 const auto &desc = graph.Buffers()[access.resource.identity.index].desc;
                 const auto location = LocateResource(access.resource, desc.debugName);
-                if (!SupportsBufferUse(desc, access.range, access.usage, options.buffers))
+                // 行寻址可落在绑定对齐粒度以内. 只在实际绑定区间上核对设备对齐与大小.
+                const auto bindingRange = buffer.indexedBinding.value_or(access.range);
+                if (!SupportsBufferUse(desc, bindingRange, access.usage, options.buffers))
                 {
                     return CompileError(GraphErrorCode::UnsupportedCapability, "Unsupported buffer binding range",
                                         location, &pass);

@@ -44,7 +44,7 @@
     },
     {
       "name": "ForwardObject",
-      "layout": "std140",
+      "layout": "std430",
       "fields": [
         { "name": "worldFromLocal", "type": "float4x4" },
         { "name": "normalFromLocal", "type": "float4x4" },
@@ -57,7 +57,7 @@
     },
     {
       "name": "ForwardMaterial",
-      "layout": "std140",
+      "layout": "std430",
       "fields": [
         { "name": "baseColor", "type": "float4" },
         { "name": "emissive", "type": "float4" },
@@ -69,12 +69,21 @@
         { "name": "masked", "type": "uint32" },
         { "name": "unlit", "type": "uint32" }
       ]
+    },
+    {
+      "name": "DrawInstanceData",
+      "layout": "std430",
+      "fields": [
+        { "name": "objectRow", "type": "uint32" },
+        { "name": "materialRow", "type": "uint32" }
+      ]
     }
   ],
   "resources": [
     { "name": "perView", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["vertex", "fragment"], "block": "ForwardView" },
-    { "name": "perObject", "kind": "constant-buffer", "set": 1, "slot": 0, "stages": ["vertex"], "block": "ForwardObject" },
-    { "name": "material", "kind": "constant-buffer", "set": 2, "slot": 0, "stages": ["vertex", "fragment"], "block": "ForwardMaterial" },
+    { "name": "objectRows", "kind": "structured-buffer", "set": 1, "slot": 0, "stages": ["vertex"], "block": "ForwardObject", "capacity": 512 },
+    { "name": "drawInstances", "kind": "structured-buffer", "set": 1, "slot": 1, "stages": ["vertex"], "block": "DrawInstanceData", "capacity": 512 },
+    { "name": "materialRows", "kind": "structured-buffer", "set": 2, "slot": 5, "stages": ["vertex", "fragment"], "block": "ForwardMaterial", "capacity": 512 },
     { "name": "baseColorImage", "kind": "texture2d", "set": 2, "slot": 0, "stages": ["fragment"] },
     { "name": "baseColorSampler", "kind": "sampler", "set": 2, "slot": 0, "stages": ["fragment"] },
     { "name": "metallicRoughnessImage", "kind": "texture2d", "set": 2, "slot": 1, "stages": ["fragment"] },
@@ -106,6 +115,7 @@
     { "stage": "vertex", "direction": "out", "name": "vLightingAnchor", "location": 5, "type": "float3", "interpolation": "flat" },
     { "stage": "vertex", "direction": "out", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
     { "stage": "vertex", "direction": "out", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
+    { "stage": "vertex", "direction": "out", "name": "vMaterialRow", "location": 8, "type": "uint32", "interpolation": "flat" },
     { "stage": "fragment", "direction": "in", "name": "vColor", "location": 0, "type": "float4" },
     { "stage": "fragment", "direction": "in", "name": "vUv0", "location": 1, "type": "float2" },
     { "stage": "fragment", "direction": "in", "name": "vUv1", "location": 2, "type": "float2" },
@@ -114,6 +124,7 @@
     { "stage": "fragment", "direction": "in", "name": "vLightingAnchor", "location": 5, "type": "float3", "interpolation": "flat" },
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
+    { "stage": "fragment", "direction": "in", "name": "vMaterialRow", "location": 8, "type": "uint32", "interpolation": "flat" },
     { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
   ]
 }

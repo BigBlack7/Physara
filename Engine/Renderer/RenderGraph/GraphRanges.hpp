@@ -30,12 +30,13 @@ namespace Physara::Renderer::Detail
         return aspect == TextureAspect::Color || aspect == TextureAspect::Depth;
     }
 
-    /// @brief 检查不同普通用途的合并值. 首发允许图形只读组合及同对象的 CopySource 与 CopyDest.
+    /// @brief 检查同一物理追踪单元的用途组合. 各只读位可以并存, Pass 授权仍逐个用途和范围核对.
+    /// 复制操作还允许同一追踪单元的 CopySource 和 CopyDest 并存.
     inline bool SupportsCombinedState(RHI::ResourceStates state) noexcept
     {
         using RHI::ResourceStates;
         const auto reads = ResourceStates::ConstantBuffer | ResourceStates::VertexBuffer | ResourceStates::IndexBuffer |
-                           ResourceStates::ShaderResource | ResourceStates::DepthRead;
+                           ResourceStates::IndirectArgument | ResourceStates::ShaderResource | ResourceStates::DepthRead;
         return (state & ~reads) == ResourceStates::Unknown || state == (ResourceStates::CopySource | ResourceStates::CopyDest);
     }
 

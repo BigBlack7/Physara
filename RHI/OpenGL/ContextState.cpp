@@ -26,7 +26,8 @@ namespace Physara::RHI::OpenGL
             !glFrontFace || !glCullFace || !glProvokingVertex || !glPolygonOffsetClamp || !glClearNamedFramebufferfv ||
             !glClearNamedFramebufferiv || !glClearNamedFramebufferuiv || !glClearNamedFramebufferfi ||
             !glCopyImageSubData || !glBlitNamedFramebuffer || !glNamedFramebufferDrawBuffer ||
-            !glDrawArraysInstancedBaseInstance || !glDrawElementsInstancedBaseVertexBaseInstance)
+            !glDrawArraysInstancedBaseInstance || !glDrawElementsInstancedBaseVertexBaseInstance ||
+            !glDrawElementsIndirect || !glMultiDrawElementsIndirect)
         {
             device.Report("CreateDevice.Graphics", "Unsupported: required graphics execution entry missing");
             return false;
@@ -68,6 +69,7 @@ namespace Physara::RHI::OpenGL
         // 只撤销已知性, 保留名称以便真正删除前仍能解除原生引用; 不查询或保存外部 GL 状态.
         // 累计值跨缓存失效保留, 下一次实际重绑由各 Apply 入口计入.
         m_Known = false;
+        m_IndirectKnown = false;
         m_QueryReadKnown = false;
         m_SeamlessCubeKnown = false;
         m_ProgramKnown = m_FramebufferKnown = m_InputKnown = m_IndexKnown = m_VertexArrayKnown = false;
@@ -137,6 +139,13 @@ namespace Physara::RHI::OpenGL
                 ++m_BindingCount;
             }
             m_TextureUnits[index] = {};
+        }
+        if (m_IndirectBuffer != 0)
+        {
+            // 参数绑定属于 context. 单独解除它, 才能让已退休的参数缓冲脱离此绑定点.
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+            ++m_BindingCount;
+            m_IndirectBuffer = 0;
         }
         glUseProgram(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -303,6 +312,17 @@ namespace Physara::RHI::OpenGL
         }
         m_IndexBuffer = name;
         m_IndexKnown = true;
+    }
+
+    void ContextState::ApplyIndirectBuffer(GLuint name) noexcept
+    {
+        if (!m_IndirectKnown || m_IndirectBuffer != name)
+        {
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, name);
+            ++m_BindingCount;
+            m_IndirectBuffer = name;
+            m_IndirectKnown = true;
+        }
     }
 
     void ContextState::ApplyUnpack(GLuint buffer) noexcept

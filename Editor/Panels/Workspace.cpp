@@ -150,15 +150,17 @@ namespace Physara::Editor::Detail
                             view.visiblePrimitives, view.primitiveCandidates, view.visibleLights, view.lightCandidates);
             }
         }
-        ImGui::Text("Forward uploads: static %zu / %zu B, view %zu / %zu B",
+        ImGui::Text("Graph Forward uploads: static %zu / %zu B, view data %zu / %zu B",
                     data.staticUploads.writes, data.staticUploads.bytes, data.viewUploads.writes, data.viewUploads.bytes);
+        ImGui::Text("Graph Forward instance and command uploads: %zu writes / %zu B",
+                    data.drawUploads.writes, data.drawUploads.bytes);
         ImGui::Text("Payload arena: peak %zu of %zu B / %zu growths",
                     data.payload.highWater, data.payload.capacity, data.payload.growths);
         ImGui::Text("Graph arena: peak %zu of %zu B / %zu growths",
                     data.graph.highWater, data.graph.capacity, data.graph.growths);
     }
 
-    /// @brief 展示最近一次场景提交. 单路的绘制项由 source 标识, 两路的裁剪及接受情况从 preparation 读取.
+    /// @brief 展示最近一次场景提交. 表面, 批次和参数记录取自 source.view, 原生调用数还包括同图 UI 等消费者.
     /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
     {
@@ -193,13 +195,16 @@ namespace Physara::Editor::Detail
         {
             ImGui::TextUnformatted("Window exchange skipped");
         }
-        ImGui::Text("Draw items %zu / lights %zu / live passes %zu", frame.forward.draws, frame.forward.lights,
-                    frame.livePasses);
-        ImGui::Text("Native draws %llu / binds %llu / barriers %llu",
+        ImGui::Text("View surfaces %zu / lights %zu", frame.forward.draws, frame.forward.lights);
+        ImGui::Text("Depth: %zu batches / %zu records. Color: %zu batches / %zu records",
+                    frame.forward.depth.batches, frame.forward.depth.records,
+                    frame.forward.color.batches, frame.forward.color.records);
+        ImGui::Text("Graph: %zu passes / %llu native draws / %llu binds / %llu barriers",
+                    frame.livePasses,
                     static_cast<unsigned long long>(frame.native.draws),
                     static_cast<unsigned long long>(frame.native.bindings),
                     static_cast<unsigned long long>(frame.native.barriers));
-        ImGui::Text("Native uploads %llu / %llu bytes", static_cast<unsigned long long>(frame.native.uploads),
+        ImGui::Text("Graph native uploads %llu / %llu bytes", static_cast<unsigned long long>(frame.native.uploads),
                     static_cast<unsigned long long>(frame.native.uploadBytes));
         ImGui::Text("Forward cache: geometry %zu / textures %zu / materials %zu / environment %zu",
                     frame.residency.geometry, frame.residency.textures, frame.residency.materials,
@@ -209,8 +214,9 @@ namespace Physara::Editor::Detail
         ImGui::Text("Geometry: %zu pages, %zu used / %zu free B, %zu retiring / largest gap %zu B",
                     resident.geometryPages, resident.geometryUsedBytes, resident.geometryPageBytes -
                     resident.geometryUsedBytes, resident.geometryRetiringBytes, resident.largestGeometryGap);
-        ImGui::Text("Material pages %zu B / binding hits %llu of %llu / generation %llu",
-                    resident.materialPageBytes, static_cast<unsigned long long>(resident.materialHits),
+        ImGui::Text("Object pages %zu B / material pages %zu B / material hits %llu of %llu / generation %llu",
+                    resident.objectPageBytes, resident.materialPageBytes,
+                    static_cast<unsigned long long>(resident.materialHits),
                     static_cast<unsigned long long>(resident.materialRequests),
                     static_cast<unsigned long long>(resident.materialGeneration));
         ImGui::Text("Texture %zu B / Environment %zu B / samplers %zu",

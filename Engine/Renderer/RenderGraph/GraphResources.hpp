@@ -67,6 +67,7 @@ namespace Physara::Renderer
         ShaderRead,
         VertexBuffer,
         IndexBuffer,
+        IndirectArgument, ///< 从参数 Buffer 消费命令记录. 声明的偏移和长度均为字节, 独立于顶点和索引用途.
         ConstantBuffer,
         CopySource,
         CopyDestination,
@@ -177,7 +178,15 @@ namespace Physara::Renderer
     };
 
     using TextureUse = ResourceUse<TextureAccess, TextureWrite>;
-    using BufferUse = ResourceUse<BufferAccess, BufferWrite>;
+    /// @brief 跟踪实际字节访问. 已初始化的索引表可额外授权严格匹配的 SSBO 绑定范围.
+    struct BufferUse
+    {
+        using AccessType = BufferAccess;
+        BufferAccess access;
+        std::optional<BufferWrite> write;
+        std::optional<RHI::BufferRange> indexedBinding; ///< 只授权绑定, 不扩大 access 的内容依赖或查询范围.
+    };
+
     using PassUse = std::variant<TextureUse, BufferUse>;
 
     /// @brief 最后一个 Pass 之后的外部消费, 保留所需的逻辑版本和精确范围.

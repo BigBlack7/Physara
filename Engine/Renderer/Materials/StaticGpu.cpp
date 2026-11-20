@@ -47,8 +47,8 @@ namespace Physara::Renderer::Detail
     }
 
     BufferPage::BufferPage(std::shared_ptr<ResidencyCapacity> quota, RHI::BufferHandle storage, GraphUsage use,
-                           std::uint8_t layoutKey)
-        : capacity(std::move(quota)), buffer(std::move(storage)), usage(use), layout(layoutKey),
+                           std::uint8_t layoutKey, std::uint64_t sequence)
+        : capacity(std::move(quota)), buffer(std::move(storage)), usage(use), layout(layoutKey), ordinal(sequence),
           largestGap(static_cast<std::size_t>(buffer->GetDesc().byteSize))
     {
         capacity->bytes += buffer->GetDesc().byteSize;
@@ -178,18 +178,25 @@ namespace Physara::Renderer::Detail
     }
 
     void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                          std::span<const std::byte> source, bool viewConstant)
+                          std::span<const std::byte> payload, GraphUploadSource source)
     {
-        ReserveWrites(source.size(), 1);
-        buffers.push_back({revision, buffer, {source.begin(), source.end()}, viewConstant});
+        ReserveWrites(payload.size(), 1);
+        buffers.push_back({revision, buffer, {payload.begin(), payload.end()}, source});
     }
 
     void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
                           std::span<const std::byte> source)
     {
         assert(slice.range.byteSize == source.size());
+        if (slice.page->usage == GraphUsage::ShaderRead && !slice.page->initialized &&
+            std::ranges::find(coldTables, slice.page) == coldTables.end())
+        {
+            // 构图将所有使用的冷行合入一次完整页写入. 即使零填充也计入真实字节需求.
+            ReserveWrites(slice.page->buffer->GetDesc().byteSize, 1);
+            coldTables.push_back(slice.page);
+        }
         ReserveWrites(source.size(), 1);
-        buffers.push_back({revision, slice.page->buffer, {source.begin(), source.end()}, false,
+        buffers.push_back({revision, slice.page->buffer, {source.begin(), source.end()}, GraphUploadSource::ForwardStatic,
                            slice.range.byteOffset, slice.page.get()});
     }
 
@@ -199,6 +206,7 @@ namespace Physara::Renderer::Detail
         textures.clear();
         environmentTextures.clear();
         merged.clear();
+        coldTables.clear();
         bytes = writes = 0;
         sealed = false;
     }
@@ -418,6 +426,7 @@ namespace Physara::Renderer::Detail
             Reject(ViewSettingReason::SceneResidencyLimit, "Forward preparation identity exhausted");
         }
         frameBegin = stamp;
+        std::erase_if(materialBindings, [](const auto &entry) { return entry.second.expired(); });
     }
 
     void ForwardDevice::ObserveGeometry(const SceneFrame &scene)
@@ -516,6 +525,7 @@ namespace Physara::Renderer::Detail
         };
         // 材质拥有纹理依赖, 先释放它才能识别真正空闲的图像. 留在槽中的代始终占用额度.
         std::erase_if(materials, [&](const auto &pair) { return idle(pair.second.resident); });
+        std::erase_if(materialBindings, [](const auto &entry) { return entry.second.expired(); });
         std::erase_if(objects, [&](const auto &pair) { return idle(pair.second.resident); });
         std::erase_if(geometry, [&](const auto &pair) { return idle(pair.second); });
         std::erase_if(textures, [&](const auto &pair) { return idle(pair.second); });
@@ -550,14 +560,17 @@ namespace Physara::Renderer::Detail
     }
 
     void ForwardDevice::AllocateSlice(PageSlice &slice, const Allocation &owner, GraphUsage usage,
-                                      std::uint8_t layout, std::size_t bytes, std::size_t alignment)
+                                      std::uint8_t layout, std::size_t bytes, std::size_t alignment,
+                                      std::size_t tableRows)
     {
         assert(!slice.page && bytes != 0 && alignment != 0);
         const auto tryPages = [&]
         {
             for (const auto &page : pages)
             {
-                if (page->usage != usage || page->layout != layout)
+                // 已尝试整页写入却未获确认时, 旧前缀可能仍在使用这张表. 新代从其它页申请.
+                if (page->usage != usage || page->layout != layout ||
+                    (page->initializationRecorded && !page->initialized))
                 {
                     continue;
                 }
@@ -577,31 +590,42 @@ namespace Physara::Renderer::Detail
         // 新页通常按用途的基准粒度增长. 额度紧张时允许缩到实际余量, 仍须能容纳完整申请.
         const std::size_t minimum = usage == GraphUsage::VertexBuffer ? 4 * 1024 * 1024 :
                                     usage == GraphUsage::IndexBuffer ? 1024 * 1024 : 64 * 1024;
-        if (bytes > ResidentBytes - capacity->bytes)
+        assert(tableRows == 0 || (usage == GraphUsage::ShaderRead && tableRows <= ForwardBufferLimit / bytes));
+        const auto required = tableRows ? bytes * tableRows : bytes;
+        if (required > ResidentBytes - capacity->bytes)
         {
             EvictUnused();
             if (tryPages())
             {
                 return;
             }
-            if (bytes > ResidentBytes - capacity->bytes)
+            if (required > ResidentBytes - capacity->bytes)
             {
                 RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward page bytes pending",
-                               bytes, capacity->bytes, ResidentBytes);
+                               required, capacity->bytes, ResidentBytes);
             }
         }
-        const auto storage = std::min(std::max(bytes, minimum), ResidentBytes - capacity->bytes);
-        auto page = std::make_shared<BufferPage>(capacity, AllocateBuffer(device, usage, storage), usage, layout);
+        // 表绑定从字节 0 开始, 页容量取 ABI 行数乘步长. 几何页的容量按用途与设备余量确定.
+        const auto storage = tableRows ? required :
+            std::min(std::max(bytes, minimum), ResidentBytes - capacity->bytes);
+        if (!Core::AdvanceGeneration(pageOrdinal))
+        {
+            Reject(ViewSettingReason::SceneResidencyLimit, "Forward page identity exhausted");
+        }
+        const auto stride = tableRows ? static_cast<std::uint32_t>(bytes) : 0u;
+        auto page = std::make_shared<BufferPage>(capacity, AllocateBuffer(device, usage, storage, stride),
+                                                 usage, layout, pageOrdinal);
         pages.push_back(page);
         slice.range = page->Claim(owner, bytes, alignment).value();
         slice.page = std::move(page);
     }
 
-    RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size)
+    RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size, std::uint32_t stride)
     {
-        const RHI::BufferDesc desc{.byteSize = size, .debugName = "Forward static buffer",
+        const RHI::BufferDesc desc{.byteSize = size, .structStride = stride, .debugName = "Forward buffer",
             .isVertexBuffer = usage == GraphUsage::VertexBuffer, .isIndexBuffer = usage == GraphUsage::IndexBuffer,
             .isConstantBuffer = usage == GraphUsage::ConstantBuffer,
+            .isDrawIndirectArgs = usage == GraphUsage::IndirectArgument,
             .initialState = BufferBoundary, .keepInitialState = true};
         auto buffer = device.CreateBuffer(desc);
         if (!buffer)

@@ -321,7 +321,7 @@ namespace Physara::Runtime
                 view.scene.lights.size(), view.lights.size()};
     }
 
-    /// @brief 按已完成的存活写入区分场景行与 View 数据, 并读取两份 arena 的累计峰值.
+    /// @brief 按来源区分实际执行的场景行, View 和批次写入, 并读取两份 arena 的累计峰值.
     static void CompletePreparationStatistics(Editor::ScenePreparationStatistics &statistics, const FrameSlot &slot,
         const FrameDeclaration &declared, const CompiledGraphPlan &plan, bool main, bool offscreen) noexcept
     {
@@ -333,10 +333,17 @@ namespace Physara::Runtime
             {
                 continue;
             }
-            auto &counts = upload.source == GraphUploadSource::ForwardStatic ? statistics.staticUploads :
-                                                                              statistics.viewUploads;
-            ++counts.writes;
-            counts.bytes += upload.bytes;
+            auto *counts = &statistics.viewUploads;
+            if (upload.source == GraphUploadSource::ForwardStatic)
+            {
+                counts = &statistics.staticUploads;
+            }
+            else if (upload.source == GraphUploadSource::ForwardDraw)
+            {
+                counts = &statistics.drawUploads;
+            }
+            ++counts->writes;
+            counts->bytes += upload.bytes;
         }
         statistics.payload = {slot.arena.Capacity(), slot.arena.HighWater(), slot.arena.GrowthCount()};
         statistics.graph = {slot.graphArena.Capacity(), slot.graphArena.HighWater(), slot.graphArena.GrowthCount()};
@@ -522,10 +529,11 @@ namespace Physara::Runtime
             measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, measured.Id(), last.contentRevision,
                 last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display};
             const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
+            // 上传账单汇总整张正常图. 几何工作量只取所选出口, 用其深度和颜色 Pass 的存活性分别计数.
             CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
                                           measuredOffscreen);
             measurements.statistics.Publish({*measuredSource, measurements.cpu, native, host.ReadUploadStorage(),
-                slot.forward.WorkCounts(index),
+                slot.forward.ExecutedWorkCounts(index, *declared.scene->views[index], plan),
                 measurements.residency, plan.passes.size(), result.swapped,
                 result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state,
                 measurements.preparation});

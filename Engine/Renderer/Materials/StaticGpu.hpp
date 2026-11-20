@@ -84,7 +84,7 @@ namespace Physara::Renderer::Detail
         };
 
         BufferPage(std::shared_ptr<ResidencyCapacity> quota, RHI::BufferHandle storage, GraphUsage use,
-                   std::uint8_t layout);
+                   std::uint8_t layout, std::uint64_t ordinal);
         ~BufferPage();
         /// @brief 从首个满足对齐的空洞分配连续字节. 容量不足时返回空值, 原有租用保持有效.
         [[nodiscard]] std::optional<RHI::BufferRange> Claim(const Allocation &owner, std::size_t size,
@@ -98,6 +98,9 @@ namespace Physara::Renderer::Detail
         RHI::BufferHandle buffer;
         GraphUsage usage;
         std::uint8_t layout;
+        std::uint64_t ordinal; ///< 页分配顺序, 作为本设备稳定的排序身份.
+        bool initialized = false; ///< 正常图已定义整张表页的字节. 各行逻辑内容另由其 Allocation 确认.
+        bool initializationRecorded = false; ///< 曾录制冷初始化且无接受回执时, 新代使用独立页.
         std::vector<Occupied> occupied = std::vector<Occupied>(0);
         std::size_t usedBytes = 0;
         std::size_t retiringBytes = 0;
@@ -154,12 +157,19 @@ namespace Physara::Renderer::Detail
         std::array<EnvironmentTexel, 9> sh{};
     };
 
-    /// @brief 一个普通 UBO 及其布局匹配的集合. 对象行换代, per-view 行只在安全槽内重写.
+    /// @brief 一个普通 UBO 及其布局匹配的集合. per-view 行只在安全槽内重写.
     struct ConstantRow final : Allocation
     {
         using Allocation::Allocation;
         RHI::BufferHandle buffer;
         RHI::BindingSetHandle binding;
+    };
+
+    /// @brief 固定对象版本租用只读对象表中的一行.
+    struct ObjectStorage final : Allocation
+    {
+        using Allocation::Allocation;
+        PageSlice storage;
     };
 
     /// @brief 一行灯字节的源身份和数据代, 独立于当前提取数组中的索引.
@@ -186,7 +196,7 @@ namespace Physara::Renderer::Detail
     struct ObjectRow
     {
         std::uint64_t transformRevision;
-        std::shared_ptr<ConstantRow> resident;
+        std::shared_ptr<ObjectStorage> resident;
     };
 
     /// @brief 有效材质对几何和光栅状态的要求, 命中时无需重新解析全部纹理槽.
@@ -197,6 +207,10 @@ namespace Physara::Renderer::Detail
         bool doubleSided{};
     };
 
+    /// @brief 保活期间唯一的视图及 sampler 组合. 仅用于查找相等组合, 不是绘制排序值.
+    using SamplingKey = std::array<std::uintptr_t, 2 * Scene::MaterialSlotCount>;
+    using MaterialBinding = std::shared_ptr<const RHI::BindingSetHandle>;
+
     /// @brief GPU 材质行与预解析集合. 缺席槽绑定共享白图, Shader 仍由有效 slot 判定是否采样.
     struct MaterialRow final : Allocation
     {
@@ -204,7 +218,9 @@ namespace Physara::Renderer::Detail
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
         std::array<RHI::SamplerHandle, Scene::MaterialSlotCount> samplers;
         PageSlice storage;
-        RHI::BindingSetHandle binding;
+        SamplingKey sampling;
+        MaterialBinding binding;
+        std::size_t index; ///< 此驻留表页中的逻辑行下标.
         StaticAbi::ForwardMaterial values{};
     };
 
@@ -230,9 +246,9 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<Allocation> revision;
         RHI::BufferHandle buffer;
         std::vector<std::byte> payload;
-        bool viewConstant = false;
+        GraphUploadSource source = GraphUploadSource::ForwardStatic;
         std::uint64_t offset = 0;
-        const BufferPage *page = nullptr; ///< 非空时由 revision 的区间强引用保活.
+        BufferPage *page = nullptr; ///< 非空时由 revision 的区间强引用保活.
     };
 
     /// @brief levels 按 mip 0 起的完整紧密 RGBA8 层级排列, 同一次接受确认整条链.
@@ -260,6 +276,7 @@ namespace Physara::Renderer::Detail
         std::vector<TextureUpload> textures;
         std::vector<EnvironmentUpload> environmentTextures;
         std::vector<std::vector<std::byte>> merged;
+        std::vector<std::shared_ptr<const BufferPage>> coldTables; ///< 同一冷页的真实上传只预留一次.
         std::size_t bytes = 0;
         std::size_t writes = 0;
         bool sealed = false;
@@ -270,7 +287,7 @@ namespace Physara::Renderer::Detail
         [[nodiscard]] bool HasMaterialTexture(const ResidentTexture &texture) const noexcept;
         /// @brief 保有目标及所属代, 复制 source 全部字节. 调用返回后不再借用源区段.
         void Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                 std::span<const std::byte> source, bool viewConstant = false);
+                 std::span<const std::byte> payload, GraphUploadSource source = GraphUploadSource::ForwardStatic);
         /// @brief 复制恰好覆盖 slice 的字节, 保留页内偏移和所属代供构图合并及逐代确认.
         void Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
                  std::span<const std::byte> source);
@@ -284,12 +301,25 @@ namespace Physara::Renderer::Detail
     enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl };
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
     inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
+    inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
 
-    /// @brief 索引及资源范围来自固定几何代; material 是本槽的有效 GPU 材质行索引.
+    /// @brief 明确区分同为 ShaderRead 的对象和材质页, 两者记录步长由生成接口决定.
+    enum class TableLayout : std::uint8_t { Objects, Materials };
+
+    /// @brief 安全 View 槽可复用的只读实例块或间接参数. CPU 内容对应最后一次登记的上传版本.
+    struct DrawBuffer final : Allocation
+    {
+        using Allocation::Allocation;
+        RHI::BufferHandle buffer;
+        std::vector<std::byte> contents;
+    };
+
+    /// @brief 一个可见表面的有序绘制输入. 几何和对象保有其固定代, material 索引本 View 的 materialRows.
+    /// PackBatches 从选中的 MaterialRow::index 取得 Shader 所需的页内行号.
     struct DrawRecord
     {
         std::shared_ptr<GeometryRef> geometry;
-        std::shared_ptr<ConstantRow> object;
+        std::shared_ptr<ObjectStorage> object;
         std::size_t material;
         RHI::GraphicsPipelineHandle pipeline;
         RHI::GraphicsPipelineHandle depthPipeline;
@@ -299,6 +329,16 @@ namespace Physara::Renderer::Detail
         std::uint8_t attributes;
         bool mirrored;
         bool doubleSided;
+    };
+
+    /// @brief 相邻兼容状态的一次 indexed indirect 调用, 使用本 View 的实例块及参数区段.
+    struct DrawBatch
+    {
+        std::size_t firstDraw; ///< 代表完整批次状态的有序表面下标.
+        std::size_t instanceBlock;
+        std::uint32_t firstCommand; ///< 参数缓冲中的记录下标.
+        std::uint32_t commandCount;
+        RHI::BindingSetHandle renderables;
     };
 
     /// @brief 本轮着色与天空所需的实际驻留产品, 保有期覆盖帧槽在途工作.
@@ -316,7 +356,7 @@ namespace Physara::Renderer::Detail
         std::optional<RenderedEnvironment> applied;
     };
 
-    /// @brief 同槽本轮的只读 Draw, 绑定和上传. view/viewValues 和普通灯表跨安全复用保留.
+    /// @brief 同槽本轮的只读 Draw, 绑定和上传. View 常量, 普通灯表, 实例块和间接缓冲留待此槽安全后复用.
     /// Reset 解除本次 Draw, 材质, 活动灯表和显示引用. 下次准备替换 HDR 来源和表面需求.
     /// @note 图回调借用这里保有的 RHI 对象; graph 析构后才可释放载荷, 同槽完成后才可重置 Draw.
     struct ForwardFrameData
@@ -333,6 +373,9 @@ namespace Physara::Renderer::Detail
         EnvironmentFrame environment;
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
+        std::vector<DrawBatch> batches;
+        std::vector<std::shared_ptr<DrawBuffer>> instanceBlocks; ///< 每块从行 0 起索引, 长度固定为生成接口的容量.
+        std::shared_ptr<DrawBuffer> indirect; ///< 本 View 各批次的参数按顺序紧排, 跨块延续记录下标.
         UploadBatch &uploads;
         PostProcess::DisplayFrame display;
         std::optional<Core::BoundedText> degradation;
@@ -396,7 +439,7 @@ namespace Physara::Renderer::Detail
         void Reserve(std::size_t bytes, bool paged = false);
         /// @brief 从兼容页中借出一个新代的区间. 失败由已有准备边界回收未发布区间.
         void AllocateSlice(PageSlice &slice, const Allocation &owner, GraphUsage usage, std::uint8_t layout,
-                           std::size_t bytes, std::size_t alignment);
+                           std::size_t bytes, std::size_t alignment, std::size_t tableRows = 0);
         /// @brief 只删除缓存独占且本轮未使用的代. 帧槽保有的引用阻止在途代被提前扣账.
         void EvictUnused() noexcept;
 
@@ -413,6 +456,7 @@ namespace Physara::Renderer::Detail
         std::uint64_t materialRequests = 0;
         std::uint64_t materialHits = 0;
         std::uint64_t materialGeneration = 0;
+        std::uint64_t pageOrdinal = 0;
         std::vector<std::shared_ptr<BufferPage>> pages = std::vector<std::shared_ptr<BufferPage>>(0);
         std::map<GeometryKey, std::shared_ptr<GeometryRef>> geometry;
         Scene::SceneId geometryScene;
@@ -422,6 +466,7 @@ namespace Physara::Renderer::Detail
         std::map<TextureKey, std::shared_ptr<ResidentTexture>> textures;
         std::map<ObjectRowKey, ObjectRow> objects;
         std::map<MaterialKey, MaterialEntry> materials;
+        std::map<std::pair<std::uint64_t, SamplingKey>, std::weak_ptr<const RHI::BindingSetHandle>> materialBindings;
         std::map<SamplerKey, RHI::SamplerHandle> samplers;
         std::shared_ptr<ResidentTexture> white;
         std::shared_ptr<LightTable> emptyLights; ///< 初始化后只读, 供诊断、零灯及全 Unlit 工作集使用.
@@ -441,9 +486,10 @@ namespace Physara::Renderer::Detail
     /// @brief 把已验证的属性位与光栅组合映射到固定 96 项表, 不截断或哈希状态.
     [[nodiscard]] std::uint32_t PipelineKey(std::uint8_t layout, bool mirrored, bool doubleSided,
                                            SurfacePhase phase) noexcept;
-    /// @brief 分配 Common 进出的普通缓冲, usage 只取顶点, 索引或常量; 内容尚未初始化.
-    [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size);
-    /// @brief 创建并记账 view/object UBO 及对应集合, 字节由调用者追加到上传包.
+    /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
+    [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
+                                                   std::uint32_t stride = 0);
+    /// @brief 创建并记账 View UBO 及对应集合, 字节由调用者追加到上传包.
     [[nodiscard]] std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
                                                                   std::size_t set);
     /// @brief 为有 Draw 的颜色 Pass 选择普通灯表或共享零表, 将匹配的表留在 frame.activeLights.

@@ -38,6 +38,7 @@ namespace Physara::Renderer
             return desc.structStride != 0 || desc.canHaveRawViews || desc.canHaveTypedViews;
         case GraphUsage::VertexBuffer: return desc.isVertexBuffer;
         case GraphUsage::IndexBuffer: return desc.isIndexBuffer;
+        case GraphUsage::IndirectArgument: return desc.isDrawIndirectArgs;
         case GraphUsage::ConstantBuffer: return desc.isConstantBuffer;
         case GraphUsage::CopySource: return true;
         default: return false;
@@ -233,6 +234,17 @@ namespace Physara::Renderer
 
     bool PassBuilder::Read(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> requested)
     {
+        return ReadBuffer(id, usage, requested, std::nullopt);
+    }
+
+    bool PassBuilder::ReadIndexedRows(BufferId id, RHI::BufferRange rows, RHI::BufferRange binding)
+    {
+        return ReadBuffer(id, GraphUsage::ShaderRead, rows, binding);
+    }
+
+    bool PassBuilder::ReadBuffer(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> requested,
+                                  std::optional<RHI::BufferRange> indexedBinding)
+    {
         const auto range = Validate<BufferId, RHI::BufferRange, BufferDeclaration, BufferUse>(
             id, requested, m_Graph.m_Buffers);
         if (!range)
@@ -244,11 +256,27 @@ namespace Physara::Renderer
         {
             return Fail(GraphErrorCode::InvalidUsage, resource.desc.debugName, id.version, "Invalid buffer read usage");
         }
+        if (indexedBinding)
+        {
+            const auto stride = resource.desc.structStride;
+            if (stride == 0 || !Contains(resource.range, *indexedBinding) || !Contains(*indexedBinding, *range) ||
+                (range->byteOffset - indexedBinding->byteOffset) % stride != 0 || range->byteSize % stride != 0)
+            {
+                return Fail(GraphErrorCode::InvalidRange, resource.desc.debugName, id.version,
+                            "Indexed rows require a containing structured buffer binding");
+            }
+            const std::optional<std::vector<RHI::BufferRange>> wholeBinding;
+            if (!Detail::ContainsInitialContent(resource, *indexedBinding, wholeBinding))
+            {
+                return Fail(GraphErrorCode::UndefinedContent, resource.desc.debugName, id.version,
+                            "Indexed buffer binding requires initialized import contents");
+            }
+        }
         if (!RequireContent<BufferUse>(id, *range, resource))
         {
             return false;
         }
-        m_Uses.emplace_back(BufferUse{{id, *range, usage}, std::nullopt});
+        m_Uses.emplace_back(BufferUse{{id, *range, usage}, std::nullopt, indexedBinding});
         return true;
     }
 
@@ -353,7 +381,7 @@ namespace Physara::Renderer
             return {};
         }
         const BufferId next{id.identity, id.version + 1};
-        m_Uses.emplace_back(BufferUse{{next, *range, usage}, BufferWrite{id}});
+        m_Uses.emplace_back(BufferUse{{next, *range, usage}, BufferWrite{id}, std::nullopt});
         return next;
     }
 
