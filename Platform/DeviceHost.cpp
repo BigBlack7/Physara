@@ -503,6 +503,18 @@ namespace Physara::Platform
         return RHI::OpenGL::QueryCubeFormatSupport(GetDevice() ? m_State->rawDevice.Get() : nullptr, format, maxEdge);
     }
 
+    bool DeviceHost::SupportsDirectCompute() const noexcept
+    {
+        return RHI::OpenGL::SupportsDirectCompute(GetDevice() ? m_State->rawDevice.Get() : nullptr);
+    }
+
+    RHI::FormatSupport DeviceHost::QueryStorageImageFormatSupport(RHI::Format format,
+        RHI::TextureDimension dimension, std::uint32_t &maxLayers) const noexcept
+    {
+        return RHI::OpenGL::QueryStorageImageFormatSupport(GetDevice() ? m_State->rawDevice.Get() : nullptr,
+                                                          format, dimension, maxLayers);
+    }
+
     bool RhiErrorScope::IsClear() const noexcept
     {
         // 同步回调在命令返回前更新计数和 Fatal 锁存. 这里只读取原子事实, 不借此发布其它数据.

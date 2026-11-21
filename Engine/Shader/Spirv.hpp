@@ -14,6 +14,6 @@ namespace Physara::Shader
     void ValidateSpirv(std::span<const std::uint32_t> words);
     /// @brief 验证最终模块的 profile 与 ABI, 全部成功后才替换活动反射.
     void ReflectModule(ShaderModule &module, const InterfaceSchema &schema);
-    /// @brief 核对 VS/FS 活动 IO 衔接与同一 set/binding 的跨阶段资源一致性.
-    void CheckProgramInterfaces(const std::vector<ShaderModule> &modules);
+    /// @brief 计算包要求单 CS, 图形包要求 VS/FS 并校验两阶段的活动 IO 和共享逻辑绑定.
+    void CheckProgramInterfaces(const std::vector<ShaderModule> &modules, std::string_view profile);
 }

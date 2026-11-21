@@ -1,7 +1,7 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 使用单一 Common tracker 处理有序传输/附件与只读图形用途, 缓存命中不替代依赖.
+/// @brief 在 Common tracker 中准备公共状态, 并把图授权与实际访问匹配到 Buffer 字节或纹理子资源.
 
 #include <algorithm>
 #include <new>
@@ -75,11 +75,15 @@ namespace Physara::RHI::OpenGL
 
     // 只要请求含间接参数位, 资源就须是带参数标志的 Buffer. 列表关闭另由 tracker 恢复初态.
     static bool TransferStateSupported(ResourceStates state, ResourceStates initial, bool keepInitial,
-                                       bool indirectArgs = false) noexcept
+                                       bool indirectArgs, bool unordered) noexcept
     {
         if (!indirectArgs && (state & ResourceStates::IndirectArgument) != ResourceStates::Unknown)
         {
             return false;
+        }
+        if ((state & ResourceStates::UnorderedAccess) != ResourceStates::Unknown)
+        {
+            return unordered && state == ResourceStates::UnorderedAccess;
         }
         const auto reads = ResourceStates::ConstantBuffer | ResourceStates::VertexBuffer | ResourceStates::IndexBuffer |
                            ResourceStates::IndirectArgument | ResourceStates::ShaderResource | ResourceStates::DepthRead;
@@ -145,7 +149,7 @@ namespace Physara::RHI::OpenGL
             return;
         }
         if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState,
-                                    native->m_Desc.isDrawIndirectArgs))
+                                    native->m_Desc.isDrawIndirectArgs, native->m_Desc.canHaveUAVs))
         {
             packet->invalid = true;
             m_Device->Report(operation, "Unsupported: buffer state or resource role");
@@ -196,7 +200,7 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState))
+        if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState, false, native->m_Desc.isUAV))
         {
             packet->invalid = true;
             m_Device->Report(operation, "Unsupported: texture state or resource role");
@@ -282,15 +286,32 @@ namespace Physara::RHI::OpenGL
             m_Packet->invalid = true;
             return false;
         }
-        // 本 profile 的实际写仅有 coherent transfer/attachment, Shader 资源只读.
-        // GL 有序命令已满足这些域的可见性, 不从恢复 metadata 臆造 Shader 写或发全域 memory barrier.
+        // 此处只提交公共用途. 实际 native consumer 另按精确范围和指令域建立依赖.
         m_Packet->tracker.ClearBarriers();
         return true;
     }
 
+    // 先匹配物理 Buffer, 公共状态和 storage 方向. 精确字节范围由具体访问另行核对.
+    static bool MatchesBufferUse(const GraphBufferUse &use, const OpenGLBuffer &buffer,
+                                 ResourceStates state, StorageAccess storage) noexcept
+    {
+        return use.buffer == &buffer && (use.state & state) == state && CoversStorageAccess(use.storage, storage);
+    }
+
+    // 图中两个范围均为非空半开区间. 按声明中剩余的字节数判断覆盖, 避免起点加长度溢出.
+    static bool CoversBufferRange(BufferRange declared, BufferRange requested) noexcept
+    {
+        if (requested.byteOffset < declared.byteOffset)
+        {
+            return false;
+        }
+        const auto offset = requested.byteOffset - declared.byteOffset;
+        return offset < declared.byteSize && requested.byteSize <= declared.byteSize - offset;
+    }
+
     bool OpenGLCommandList::CheckGraphBufferUse(const OpenGLBuffer &buffer, ResourceStates state,
                                                const char *operation, std::optional<BufferRange> range,
-                                               bool structuredBinding)
+                                               bool structuredBinding, StorageAccess storage)
     {
         if (m_Packet->useMode != UseMode::GraphManaged)
         {
@@ -299,26 +320,10 @@ namespace Physara::RHI::OpenGL
         const auto &uses = m_Packet->graphUses.buffers;
         const bool allowed = std::ranges::any_of(uses, [&](const GraphBufferUse &use)
         {
-            if (use.buffer != &buffer || (use.state & state) != state)
-            {
-                return false;
-            }
-            // 无范围表示只在绑定阶段识别角色. 实际 Draw 或传输可确定的范围须由同用途的一条声明覆盖.
-            if (!range)
-            {
-                return true;
-            }
-            // 结构化表的索引由图的生产者证明. 单独授权的绑定必须匹配范围, 不扩大行访问权限.
-            if (structuredBinding && use.indexedBinding == range)
-            {
-                return true;
-            }
-            if (range->byteOffset < use.range.byteOffset)
-            {
-                return false;
-            }
-            const auto offset = range->byteOffset - use.range.byteOffset;
-            return offset < use.range.byteSize && range->byteSize <= use.range.byteSize - offset;
+            // 无范围仅识别角色. 表绑定须精确匹配已声明的 indexedBinding, 实际读取仍受声明行范围限制.
+            return MatchesBufferUse(use, buffer, state, storage) &&
+                   (!range || (structuredBinding && use.indexedBinding == range) ||
+                    CoversBufferRange(use.range, *range));
         });
         if (!allowed)
         {
@@ -330,10 +335,11 @@ namespace Physara::RHI::OpenGL
     }
 
     bool OpenGLCommandList::UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation,
-                                      std::optional<BufferRange> range, bool structuredBinding)
+                                      std::optional<BufferRange> range, bool structuredBinding, StorageAccess storage,
+                                      GLbitfield domain, bool replaces)
     {
         // 带用途的精确权限独立于整对象 tracker 状态, 防止不同字节区间互相授权.
-        if (!CheckGraphBufferUse(buffer, state, operation, range, structuredBinding))
+        if (!CheckGraphBufferUse(buffer, state, operation, range, structuredBinding, storage))
         {
             return false;
         }
@@ -354,11 +360,44 @@ namespace Physara::RHI::OpenGL
             m_Packet->invalid = true;
             m_Device->Report(operation, "InvalidState: required buffer use and committed dependencies missing");
         }
-        return ready;
+        if (!ready || domain == 0 || buffer.m_ShaderAccess.empty())
+        {
+            return ready;
+        }
+        const auto record = [&](BufferRange bytes)
+        {
+            return AddNativeAccess({.buffer = &buffer, .bytes = bytes, .domain = domain,
+                                    .shaderWrite = CoversStorageAccess(storage, StorageAccess::Write),
+                                    .replaces = replaces}, operation);
+        };
+        if (structuredBinding && range && m_Packet->useMode == UseMode::GraphManaged)
+        {
+            const auto &uses = m_Packet->graphUses.buffers;
+            // 有声明覆盖整次实际绑定时登记该绑定. 仅凭 indexedBinding 取得许可时须回到匹配的各个行范围.
+            const bool wholeRange = std::ranges::any_of(uses, [&](const GraphBufferUse &use)
+            {
+                return MatchesBufferUse(use, buffer, state, storage) && CoversBufferRange(use.range, *range);
+            });
+            if (!wholeRange)
+            {
+                // 前面的授权已验证绑定身份. 收集同一 SRV 的每个声明行, 不把整个绑定登记成 Shader 读取.
+                for (const auto &use : uses)
+                {
+                    if (MatchesBufferUse(use, buffer, state, storage) &&
+                        use.indexedBinding == range && !record(use.range))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+        return record(range.value_or(BufferRange{0, buffer.GetDesc().byteSize}));
     }
 
     bool OpenGLCommandList::UseTexture(OpenGLTexture &texture, TextureSubresourceSet range, TextureAspect aspects,
-                                       ResourceStates state, const char *operation, ResourceStates access)
+                                       ResourceStates state, const char *operation, ResourceStates access, StorageAccess storage,
+                                       GLbitfield domain, bool replaces)
     {
         // 在整个 view 或传输范围逐 mip/layer 核对 tracker 状态和当前批次覆盖.
         if (m_Packet->useMode == UseMode::Automatic)
@@ -389,6 +428,7 @@ namespace Physara::RHI::OpenGL
                     {
                         const auto &requested = use.range;
                         if (use.texture == &texture && (use.state & required) == required &&
+                            CoversStorageAccess(use.storage, storage) &&
                             layer >= requested.baseArraySlice &&
                             layer - requested.baseArraySlice < requested.numArraySlices &&
                             mip >= requested.baseMipLevel && mip - requested.baseMipLevel < requested.numMipLevels)
@@ -405,6 +445,9 @@ namespace Physara::RHI::OpenGL
             m_Packet->invalid = true;
             m_Device->Report(operation, "InvalidState: required texture use and committed dependencies missing");
         }
-        return ready;
+        return ready && (domain == 0 || texture.m_ShaderAccess.empty() ||
+            AddNativeAccess({.texture = &texture, .subresources = resolved, .domain = domain,
+                             .shaderWrite = CoversStorageAccess(storage, StorageAccess::Write),
+                             .replaces = replaces}, operation));
     }
 }

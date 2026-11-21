@@ -16,6 +16,11 @@ namespace Physara::RHI::OpenGL
     OpenGLBuffer::OpenGLBuffer(OpenGLDevice *device, const BufferDesc &desc)
         : m_Device(device), m_Desc(desc), m_Deletion(std::make_unique<NativeDeletion>(NativeKind::Buffer))
     {
+        // 只有允许 Shader 写入的存储需要分域同步记录, 初始整段没有已发访问.
+        if (desc.canHaveUAVs)
+        {
+            m_ShaderAccess.push_back({0, desc.byteSize, {}});
+        }
     }
 
     OpenGLBuffer::~OpenGLBuffer()
@@ -33,6 +38,7 @@ namespace Physara::RHI::OpenGL
         if (desc.byteSize == 0 || desc.byteSize > std::uint64_t(std::numeric_limits<GLsizeiptr>::max()) ||
             (desc.structStride != 0 && (desc.structStride > desc.byteSize || desc.byteSize % desc.structStride != 0)) ||
             (desc.canHaveRawViews && desc.byteSize % 4 != 0) ||
+            (desc.canHaveUAVs && (desc.structStride == 0 || !m_Caps.shader.compute)) ||
             !ValidInitialState(desc.initialState, desc.keepInitialState))
         {
             Report("CreateBuffer", "InvalidArgument: size, layout or initial state", desc.debugName.c_str());

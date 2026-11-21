@@ -159,6 +159,8 @@ namespace Physara::RHI::OpenGL
             m_Device->Report(operation, "InvalidState: no valid owning recording");
             return nullptr;
         }
+        // accesses 只属于一次待执行命令. 前一次成功命令的历史已经写回资源, 被拒绝的候选直接丢弃.
+        packet->accesses.clear();
         return packet;
     }
 
@@ -174,7 +176,7 @@ namespace Physara::RHI::OpenGL
 
     std::uint64_t OpenGLCommandList::BeginGraphManaged(Device &device) noexcept
     {
-        // 错误线程在读取包状态前拒绝. 只有确认为当前 owner 的有效 Automatic 包才清空图形状态.
+        // 在有效 owning context 的 Automatic 录制上接管. 成功后图形和计算都须重新设置候选.
         if (&device != m_Device.Get() || std::this_thread::get_id() != m_Device->m_OwnerThread ||
             !m_Device->RequireContext("BeginGraphManaged"))
         {
@@ -208,7 +210,7 @@ namespace Physara::RHI::OpenGL
         packet->useMode = UseMode::Automatic;
         if (!executionSucceeded)
         {
-            // 有序图形和传输由 GL 命令顺序保证. 丢弃未提交的依赖条目, 保留包内状态和已发前缀.
+            // 丢弃本图未提交的公共用途, 已发命令的访问留在物理存储上, 包继续持有前缀依赖.
             packet->tracker.ClearBarriers();
         }
         return m_Device->RequireContext("EndGraphManaged") && !packet->invalid && !packet->tracker.HasErrors();
@@ -259,19 +261,37 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLCommandList::ClearState()
     {
-        // 取消逻辑可绘制条件并使 native 事实未知, 资源用途和已发前缀的 lease 继续属于同一包.
+        // ClearState 同时撤销 Draw 和 Dispatch 资格. 已发访问与其 lease 继续有效.
         if (Recording("ClearState") != nullptr)
         {
             ResetGraphicsState();
         }
     }
 
+    void OpenGLCommandList::RevokeGraphPipelineState() noexcept
+    {
+        if (std::this_thread::get_id() == m_Device->m_OwnerThread)
+        {
+            if (const auto *packet = OwningRecording(); packet && packet->useMode == UseMode::GraphManaged)
+            {
+                ResetPipelineState();
+            }
+        }
+    }
+
+    void OpenGLCommandList::ResetPipelineState() noexcept
+    {
+        // push 绑定依附当前候选. volatile 前缀与已设置的 viewport/scissor 属于本次 recording.
+        m_Packet->graphicsSet = false;
+        m_Packet->computeSet = false;
+        m_Packet->compute = {};
+        m_Packet->push = {};
+    }
+
     void OpenGLCommandList::ResetGraphicsState() noexcept
     {
-        // push 依附这次图形状态. volatile 前缀依附 recording, 下次设置状态后仍可解析它.
+        ResetPipelineState();
         m_Packet->graphics = {};
-        m_Packet->graphicsSet = false;
-        m_Packet->push = {};
         m_Packet->viewportSet = false;
         m_Packet->scissorSet = false;
         m_Device->m_ContextState.Invalidate();

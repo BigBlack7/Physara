@@ -114,6 +114,23 @@ namespace Physara::RHI::OpenGL
                     }
                 }
             }
+            else if (auto *compute = dynamic_cast<OpenGLComputePipeline *>(resource))
+            {
+                // CS 的 Program 通过自己的 Pipeline 持有 Shader 和布局, 同图形 Pipeline 一起进入包的退休计数.
+                owners = &compute->m_InternalOwners;
+                const auto &desc = compute->GetDesc();
+                if (!add(desc.CS))
+                {
+                    return nullptr;
+                }
+                for (const auto &bindingLayout : desc.bindingLayouts)
+                {
+                    if (!add(bindingLayout))
+                    {
+                        return nullptr;
+                    }
+                }
+            }
             // 所有入口及复合子对象已由创建/候选边界确认实际实现, 不再重复解析描述.
             assert(owners != nullptr);
             if (m_Packet->resources.size() == UploadItemLimit)

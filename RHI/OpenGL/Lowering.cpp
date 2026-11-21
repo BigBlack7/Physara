@@ -85,6 +85,20 @@ namespace Physara::RHI::OpenGL
             // canonical push 块没有 descriptor 地址. 两个阶段用同一保留键取块名及物理绑定点.
             lowerBlock(block, GraphicsPushConstantKey);
         }
+        // image 拥有独立的 GL 单元空间. 用同一逻辑键选取计划位置并命名, 供链接后回查.
+        for (const auto &image : resources.storage_images)
+        {
+            const ShaderBindingKey key{compiler.get_decoration(image.id, spv::DecorationDescriptorSet),
+                                       compiler.get_decoration(image.id, spv::DecorationBinding)};
+            const auto entry =
+                std::ranges::find_if(plan.resources, [&](const auto &item) { return item.resource.key == key; });
+            if (entry != plan.resources.end())
+            {
+                compiler.set_decoration(image.id, spv::DecorationBinding, entry->unit);
+                compiler.unset_decoration(image.id, spv::DecorationDescriptorSet);
+                compiler.set_name(image.id, BlockName(key));
+            }
+        }
         const auto dummy = compiler.build_dummy_sampler_for_combined_images();
         compiler.set_enabled_interface_variables(compiler.get_active_interface_variables());
         compiler.build_combined_image_samplers();

@@ -111,7 +111,10 @@ namespace Physara::Renderer::Detail
             (desc.isShaderResource && !(support->formatSupport & FormatSupport::ShaderLoad)) ||
             (desc.isRenderTarget && !(support->formatSupport & target)) ||
             desc.width > support->maxWidth || desc.height > support->maxHeight || desc.depth > support->maxDepth ||
-            desc.arraySize > support->maxLayers || desc.isUAV || desc.isVirtual || desc.isTiled ||
+            desc.arraySize > support->maxLayers || desc.isVirtual || desc.isTiled ||
+            (desc.isUAV && (desc.sampleCount != 1 ||
+                          (desc.dimension != TextureDimension::Texture2D && desc.dimension != TextureDimension::Texture2DArray) ||
+                          (support->formatSupport & FormatSupport::ShaderUavStore) == 0)) ||
             desc.isShadingRateSurface || desc.sharedResourceFlags != RHI::SharedResourceFlags::None)
         {
             return CompileError(GraphErrorCode::UnsupportedCapability, "Unsupported texture format, sample or storage",
@@ -136,6 +139,7 @@ namespace Physara::Renderer::Detail
         }
         if (desc.byteSize > options.buffers.maxBytes || desc.cpuAccess != RHI::CpuAccessMode::None ||
             desc.isVolatile || desc.isVirtual || desc.canHaveTypedViews || desc.format != RHI::Format::UNKNOWN ||
+            (desc.canHaveUAVs && (!options.buffers.structuredUav || desc.structStride == 0)) ||
             desc.sharedResourceFlags != RHI::SharedResourceFlags::None ||
             desc.isAccelStructBuildInput || desc.isAccelStructStorage || desc.isShaderBindingTable)
         {
@@ -153,9 +157,10 @@ namespace Physara::Renderer::Detail
         {
             return alignment != 0 && range.byteOffset % alignment == 0 && range.byteSize <= bytes;
         };
-        if (usage == GraphUsage::ShaderRead)
+        if (usage == GraphUsage::ShaderRead || IsStorageUsage(usage))
         {
-            return desc.structStride != 0 && range.byteOffset % desc.structStride == 0 &&
+            return (!IsStorageUsage(usage) || (support.structuredUav && desc.canHaveUAVs)) &&
+                   desc.structStride != 0 && range.byteOffset % desc.structStride == 0 &&
                    range.byteSize % desc.structStride == 0 &&
                    fits(support.structuredOffsetAlignment, support.maxStructuredBytes);
         }
@@ -184,6 +189,9 @@ namespace Physara::Renderer::Detail
         case GraphUsage::Sampled:
             return {"Sampled", SampledState(aspect)};
         case GraphUsage::ShaderRead: return {"ShaderRead", ResourceStates::ShaderResource};
+        case GraphUsage::StorageRead: return {"StorageRead", ResourceStates::UnorderedAccess};
+        case GraphUsage::StorageWrite: return {"StorageWrite", ResourceStates::UnorderedAccess};
+        case GraphUsage::StorageReadWrite: return {"StorageReadWrite", ResourceStates::UnorderedAccess};
         case GraphUsage::VertexBuffer: return {"VertexBuffer", ResourceStates::VertexBuffer};
         case GraphUsage::IndexBuffer: return {"IndexBuffer", ResourceStates::IndexBuffer};
         case GraphUsage::IndirectArgument: return {"IndirectArgument", ResourceStates::IndirectArgument};
@@ -282,6 +290,18 @@ namespace Physara::Renderer::Detail
         switch (use.access.usage)
         {
         case GraphUsage::Sampled: return SupportsSampledView(use.access.range, support);
+        case GraphUsage::StorageRead:
+        case GraphUsage::StorageWrite:
+        case GraphUsage::StorageReadWrite:
+        {
+            // 能力行属于原存储目标. 每个 image 绑定选择一个 mip, 方向决定必须具备的 load/store 能力.
+            const auto usage = use.access.usage;
+            const auto required = usage == GraphUsage::StorageRead ? FormatSupport::ShaderUavLoad :
+                (usage == GraphUsage::StorageWrite ? FormatSupport::ShaderUavStore :
+                                                   FormatSupport::ShaderUavLoad | FormatSupport::ShaderUavStore);
+            return use.access.range.mipCount == 1 && use.access.range.aspect == TextureAspect::Color &&
+                   (support.formatSupport & required) == required;
+        }
         case GraphUsage::CopySource: return support.copySource;
         case GraphUsage::CopyDestination: return support.copyDestination;
         case GraphUsage::ColorAttachment: return bool(support.formatSupport & FormatSupport::RenderTarget);

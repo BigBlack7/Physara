@@ -77,7 +77,12 @@ function(physara_add_shader_interface name schema)
     get_filename_component(schema "${schema}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(outputRoot "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>/${name}")
     set(outputs)
-    foreach(file IN ITEMS Data.hpp Bindings.hpp Vertex.glsl Fragment.glsl Expected.json Manifest.json)
+    # 计算接口以 COMPUTE 登记额外生成文件. 包和生成头消费者共用同一条接口生成规则.
+    set(interfaceFiles Data.hpp Bindings.hpp Vertex.glsl Fragment.glsl Expected.json Manifest.json)
+    if(ARGC EQUAL 3 AND ARGV2 STREQUAL "COMPUTE")
+        list(APPEND interfaceFiles Compute.glsl)
+    endif()
+    foreach(file IN LISTS interfaceFiles)
         list(APPEND outputs "${outputRoot}/${file}")
     endforeach()
     add_custom_command(

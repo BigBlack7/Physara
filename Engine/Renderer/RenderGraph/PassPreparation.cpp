@@ -61,6 +61,49 @@ namespace Physara::Renderer
         return item;
     }
 
+    std::optional<RHI::BindingSetItem> PassPreparation::StorageImage(
+        std::uint32_t slot, TextureId id, GraphUsage usage, std::optional<TextureRange> range,
+        RHI::TextureDimension dimension)
+    {
+        if (!IsStorageUsage(usage))
+        {
+            m_Resources.Fail(GraphErrorCode::InvalidUsage, "CreateBindingSet", {},
+                             "Image binding requires a storage declaration", id.version);
+            return std::nullopt;
+        }
+        TextureRange resolved;
+        auto *texture = m_Resources.ResolveTexture(id, usage, range, &resolved);
+        if (!texture)
+        {
+            return std::nullopt;
+        }
+        // 条目携带原存储坐标. 范围内的读写权限另随图声明提交, 执行时再与活动 Shader 对照.
+        const auto item = RHI::BindingSetItem::Texture_UAV(slot, texture, texture->GetDesc().format,
+                                                           Detail::RhiSubresources(resolved), dimension);
+        m_Authorized.push_back(item);
+        return item;
+    }
+
+    std::optional<RHI::BindingSetItem> PassPreparation::StorageBuffer(
+        std::uint32_t slot, BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range)
+    {
+        if (!IsStorageUsage(usage))
+        {
+            m_Resources.Fail(GraphErrorCode::InvalidUsage, "CreateBindingSet", {},
+                             "Structured UAV binding requires a storage declaration", id.version);
+            return std::nullopt;
+        }
+        RHI::BufferRange resolved;
+        auto *buffer = m_Resources.ResolveBuffer(id, usage, range, &resolved);
+        if (!buffer)
+        {
+            return std::nullopt;
+        }
+        const auto item = RHI::BindingSetItem::StructuredBuffer_UAV(slot, buffer, RHI::Format::UNKNOWN, resolved);
+        m_Authorized.push_back(item);
+        return item;
+    }
+
     std::optional<std::size_t> PassPreparation::CreateBindingSet(
         RHI::BindingLayout &layout, std::span<const RHI::BindingSetItem> items)
     {

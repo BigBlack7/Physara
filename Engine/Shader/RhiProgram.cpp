@@ -39,13 +39,17 @@ namespace Physara::Shader
                                       std::string_view expectedFragmentSource) noexcept
     {
         return GuardBuild<RhiProgram>([&]() -> Result<RhiProgram> {
-            // 文件完整性, profile, ABI 与双阶段一致性先由包边界确认, 失败时尚未创建 RHI 对象.
+            // ReadPackage 重建包内声明和最终反射. 创建任何阶段前再核对调用方要求的图形 profile.
             auto loaded = ReadPackage(path, expectedAbiHash);
             if (const auto *failure = std::get_if<Failure>(&loaded))
             {
                 return *failure;
             }
             const auto &package = std::get<ShaderPackage>(loaded);
+            if (package.profile != GraphicsProfile)
+            {
+                return MakeFailure(ErrorCode::UnsupportedProfile, "The consumer requires a graphics Shader package.");
+            }
             // ReadPackage 已验证图形包按 VS、FS 排列. 先核对包内阶段, 再交给 RHI 工厂.
             if (!expectedFragmentSource.empty() && package.modules[1].sourcePath != expectedFragmentSource)
             {
@@ -80,6 +84,34 @@ namespace Physara::Shader
                 (module.stage == Stage::Vertex ? result.vertex : result.fragment) = std::move(shader);
             }
             return result;
+        });
+    }
+    Result<RhiComputeProgram> LoadRhiComputeProgram(RHI::Device &device, const std::filesystem::path &path,
+                                                     std::string_view expectedAbiHash) noexcept
+    {
+        return GuardBuild<RhiComputeProgram>([&]() -> Result<RhiComputeProgram> {
+            auto loaded = ReadPackage(path, expectedAbiHash);
+            if (const auto *failure = std::get_if<Failure>(&loaded))
+            {
+                return *failure;
+            }
+            const auto &package = std::get<ShaderPackage>(loaded);
+            if (package.profile != ComputeProfile)
+            {
+                return MakeFailure(ErrorCode::UnsupportedProfile, "The consumer requires a compute Shader package.");
+            }
+            // 单阶段形状和 localSize 已由包读取器核对. 设备在本次调用期间取得字节码, 返回值携带 CS 和包身份.
+            const auto &module = package.modules.front();
+            RHI::ShaderDesc desc;
+            desc.shaderType = RHI::ShaderType::Compute;
+            desc.entryName = module.entry;
+            desc.debugName = module.sourcePath;
+            auto shader = device.CreateShader(desc, module.words.data(), module.words.size() * sizeof(std::uint32_t));
+            if (!shader)
+            {
+                return MakeFailure(ErrorCode::CompilationFailed, "RHI Compute Shader creation failed.");
+            }
+            return RhiComputeProgram{std::move(shader), module.localSize, package.abiHash, package.contentHash};
         });
     }
 } // namespace Physara::Shader

@@ -4,6 +4,7 @@
 /// @brief Runtime 的一次窗口帧编排. 正常候选, 安全 UI 和取消共享同一图及宿主提交链.
 /// Main 只调度安全帧槽, 输入和退出; Renderer/Editor 继续拥有渲染声明和 UI 请求.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -13,6 +14,7 @@
 #include <Core/FrameArena.hpp>
 #include <DeviceHost.hpp>
 #include <Renderer/Paths/Forward.hpp>
+#include <Renderer/RenderGraph/GraphCompiler.hpp>
 #include <Session/EditorSession.hpp>
 
 #include "FrameStatistics.hpp"
@@ -20,6 +22,24 @@
 namespace Physara::Runtime
 {
     inline constexpr std::size_t FrameSlotCount = Platform::MaxPresentationSlots;
+
+    /// @brief 保存本次帧候选的图编译能力和预算. Options 引用的格式表及边界状态表只在本对象存活期间有效.
+    class EditorGraphProfile final
+    {
+    public:
+        /// @pre 在就绪宿主的 owner 线程构造. sceneViews 为本次候选的场景视图数, 有场景时才追加结构化 UAV 和数组 image 能力.
+        EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic);
+        EditorGraphProfile(const EditorGraphProfile &) = delete;
+        EditorGraphProfile &operator=(const EditorGraphProfile &) = delete;
+
+        [[nodiscard]] const Renderer::GraphCompileOptions &Options() const noexcept { return m_Options; }
+
+    private:
+        // 基础 2D 四项、cube 一项、额外 2D 两项和 storage 2DArray 四项.
+        std::array<Renderer::GraphTextureSupport, 11> m_Textures{};
+        std::array<RHI::ResourceStates, 2> m_States{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
+        Renderer::GraphCompileOptions m_Options;
+    };
 
     /// @brief 同槽 Ready 后才可复用的 CPU 载荷, 图存储和最近提交记账.
     /// @note Platform 拥有 Event 和目标代. 本值只保存 Runtime 的存储与预算, 不自行判定 GPU 完成.

@@ -12,9 +12,24 @@
 
 namespace Physara::RHI::OpenGL
 {
+    void SetStorageImageFilters(GLuint name, Format format) noexcept
+    {
+        // image 单元使用纹理对象自身的过滤参数. 整数格式需要 nearest, 视图的参数也独立于原存储.
+        if (GetFormatInfo(format).kind == FormatKind::Integer)
+        {
+            glTextureParameteri(name, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTextureParameteri(name, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+    }
+
     OpenGLTexture::OpenGLTexture(OpenGLDevice *device, const TextureDesc &desc)
         : m_Device(device), m_Desc(desc), m_Deletion(std::make_unique<NativeDeletion>(NativeKind::Texture))
     {
+        // image 视图共享原存储. mip 和数组层各自记录实际访问, 对普通纹理省去这份表.
+        if (desc.isUAV)
+        {
+            m_ShaderAccess.resize(std::size_t(desc.mipLevels) * desc.arraySize);
+        }
         // 联合采样需同时具备两种实际用途. 逐 mip 历史随底层存储保留, 新建对象的各 mip 初始无写入记录.
         if (desc.isRenderTarget && desc.isShaderResource &&
             (device->GetFormatCaps(desc.format, desc.dimension).support & FormatSupport::ReadOnlyDepthSampling) !=
@@ -103,7 +118,8 @@ namespace Physara::RHI::OpenGL
         const auto required = depthFormat ? FormatSupport::DepthStencil : FormatSupport::RenderTarget;
         if (!(caps.support & FormatSupport::Texture) ||
             (desc.isShaderResource && !(caps.support & FormatSupport::ShaderLoad)) ||
-            (desc.isRenderTarget && !(caps.support & required)) || desc.isUAV || desc.isVirtual || desc.isTiled ||
+            (desc.isRenderTarget && !(caps.support & required)) ||
+            (desc.isUAV && (caps.support & FormatSupport::ShaderUavStore) == 0) || desc.isVirtual || desc.isTiled ||
             desc.isShadingRateSurface || desc.sharedResourceFlags != SharedResourceFlags::None)
         {
             Report("CreateTexture", "Unsupported: format, target or texture usage", desc.debugName.c_str());
@@ -176,6 +192,10 @@ namespace Physara::RHI::OpenGL
                     mapping[index] = swizzles[std::size_t(components[index])];
                 }
                 glTextureParameteriv(name, GL_TEXTURE_SWIZZLE_RGBA, mapping);
+                if (desc.isUAV)
+                {
+                    SetStorageImageFilters(name, desc.format);
+                }
                 if (!CheckNative("CreateTexture.Components", name, desc.debugName.c_str()))
                 {
                     return nullptr;

@@ -53,9 +53,11 @@
 
 **职责位置：** RHI/OpenGL。**前置：** [D08-T02](#d08-t02)。**架构依据：** [7.6](../Architecture.md#command-execution)、[7.5](../Architecture.md#barriers)、[7.7](../Architecture.md#capabilities)。
 
-- [ ] 实现 Renderer 后续需要的 ComputePipeline/dispatch、SSBO/image 与图内计算接口，校验资源布局和工作组/访问 limits。
-- [ ] 验证同资源多种消费域的写入/可见版本与未完成 Shader 读访问，覆盖 compute→texture、indirect、buffer update、copy、连续写读及读→后续写，不用单个 pending bool 掩盖 WAR。
-- [ ] 扩充 storage 格式/usage、subresource/range、dispatch 边界和 unsupported 正反用例，更新 capability 事实表。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-21-enable-opengl-compute-synchronization/tasks.md#final-verification)
+
+- [x] 实现 Renderer 后续需要的 ComputePipeline/dispatch、SSBO/image 与图内计算接口，校验资源布局和工作组/访问 limits。
+- [x] 验证同资源多种消费域的写入/可见版本与未完成 Shader 读访问，覆盖 compute→texture、indirect、buffer update、copy、连续写读及读→后续写，不用单个 pending bool 掩盖 WAR。
+- [x] 扩充 storage 格式/usage、subresource/range、dispatch 边界和 unsupported 正反用例，更新 capability 事实表。
 
 **完成条件：** 后续计算 Pass 可由公共 RHI 表达，正确性不依赖全局重 barrier 或全设备等待。
 

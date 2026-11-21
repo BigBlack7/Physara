@@ -268,6 +268,7 @@ namespace Physara::RHI::Validation
         void RequestGraphBuffer(Buffer &buffer, ResourceStates state) override;
         void CommitGraphUses(std::span<const GraphTextureUse> textures, std::span<const GraphBufferUse> buffers) override;
         void RevokeGraphUses() noexcept override;
+        void RevokeGraphPipelineState() noexcept override;
 
         ImmediateGraphicsRecording *m_GraphRecorder = nullptr; ///< 指向 m_CommandList 内的接口, 接管有效期间借用.
 

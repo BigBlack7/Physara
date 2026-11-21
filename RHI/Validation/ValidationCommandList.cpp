@@ -25,7 +25,7 @@
 
 /// @file
 /// @brief 列表调用协议, 状态/绑定输入检查与一次底层委托, 包装 claim 不表示原生命令成功.
-/// GL 的直接及固定数量 indexed indirect 绘制消费底层录制的图形状态. 闭合列表可供宿主短借.
+/// GL 的 Draw 和 Dispatch 由底层物理包确认当前执行状态. 闭合列表可供宿主短借.
 /// 原生包检查与完成由后端负责. 其余 API 沿用上游图形和 push constants 快照.
 
 #include "Common/Misc.hpp"
@@ -124,6 +124,12 @@ namespace Physara::RHI::Validation
     void CommandListWrapper::RevokeGraphUses() noexcept
     {
         m_GraphRecorder->RevokeGraphUses();
+    }
+
+    void CommandListWrapper::RevokeGraphPipelineState() noexcept
+    {
+        ResetCommandState();
+        m_GraphRecorder->RevokeGraphPipelineState();
     }
 
     CommandListWrapper::~CommandListWrapper()
@@ -891,7 +897,7 @@ namespace Physara::RHI::Validation
         m_CommandList->SetPushConstants(data, byteSize);
     }
 
-    // 公开输入通过预检后才委托. 普通录制的预检拒绝保留原状态, 图内拒绝须撤销旧候选的绘制资格.
+    // 普通录制在预检拒绝时保留原状态. 图内拒绝须撤销 Draw 和 Dispatch 资格, 保留已设置的动态区域.
     void CommandListWrapper::SetGraphicsState(const GraphicsState &state)
     {
         if (!RequireOpenState())
@@ -908,9 +914,8 @@ namespace Physara::RHI::Validation
         {
             if (m_GraphRecording != 0)
             {
-                // ClearState 清理逻辑绑定和原生缓存的已知性. 图授权, tracker 和前缀引用仍归当前录制包.
-                ResetCommandState();
-                m_CommandList->ClearState();
+                // 公开预检拒绝后也撤销旧候选, 动态区域和图授权仍归当前录制.
+                RevokeGraphPipelineState();
             }
             return;
         }
@@ -1356,9 +1361,46 @@ namespace Physara::RHI::Validation
         m_CommandList->DrawIndexedIndirectCount(paramOffsetBytes, countOffsetBytes, maxDrawCount);
     }
 
-    // 校验计算 Pipeline, 绑定和间接输入, 设置后重新要求其 push constants.
+    // GL 在包装层预检公开候选, 真实设备持有被接受的状态及 push 数据. 其他 API 沿用本层快照.
     void CommandListWrapper::SetComputeState(const ComputeState &state)
     {
+        if (Profile::IsOpenGL(m_Device))
+        {
+            if (!RequireOpenState() || !RequireType(CommandQueue::Compute, "SetComputeState"))
+            {
+                return;
+            }
+            bool valid = false;
+            try
+            {
+                if (!state.pipeline || !state.pipeline->GetDesc().CS || state.indirectParams)
+                {
+                    Error("InvalidArgument: compute state requires a pipeline and direct dispatch bindings");
+                }
+                else
+                {
+                    const auto &desc = state.pipeline->GetDesc();
+                    valid = !Profile::RejectComputePipeline(m_Device, desc) &&
+                        m_Device->ValidateShaderType(ShaderType::Compute, desc.CS->GetDesc(), "SetComputeState") &&
+                        ValidateBindingSetsAgainstLayouts(desc.bindingLayouts, state.bindings);
+                }
+            }
+            catch (const std::bad_alloc &)
+            {
+                Report(m_MessageCallback, MessageSeverity::Error,
+                               "SetComputeState: CPU allocation failed during candidate preflight");
+            }
+            if (valid)
+            {
+                m_CommandList->SetComputeState(state);
+            }
+            else if (m_GraphRecording != 0)
+            {
+                // 底层未收到新候选, 只撤销旧 Draw/Dispatch 资格和 push.
+                RevokeGraphPipelineState();
+            }
+            return;
+        }
         if (state.pipeline && Profile::RejectComputePipeline(m_Device, state.pipeline->GetDesc()))
         {
             return;
@@ -1457,6 +1499,11 @@ namespace Physara::RHI::Validation
             return;
         }
 
+        if (Profile::IsOpenGL(m_Device))
+        {
+            m_CommandList->Dispatch(groupsX, groupsY, groupsZ);
+            return;
+        }
         if (!m_ComputeStateSet)
         {
             Error("Compute state is not set before a dispatch call.\n"
@@ -1474,6 +1521,10 @@ namespace Physara::RHI::Validation
 
     void CommandListWrapper::DispatchIndirect(uint32_t offsetBytes)
     {
+        if (Profile::RejectOpenGL(m_Device))
+        {
+            return;
+        }
         if (!RequireOpenState())
         {
             return;

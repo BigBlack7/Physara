@@ -1,8 +1,8 @@
 # Shader 声明与编译合同
 
-此目录用于存放正式业务的版本化 JSON 声明, 作为数据、资源与 stage IO 的权威来源. 当前尚无业务 Shader 输入, 此处只保留格式说明. 开发验证的 schema、程序请求及 GLSL 样例归类存放在 build 下, 不作为正式声明交付. 生成文件只进入 binary tree, 业务代码不另写同一份 C++/GLSL binding 或布局.
+此目录用于存放正式业务的版本化 JSON 声明, 作为数据、资源与 stage IO 的权威来源. 开发验证的 schema、程序请求及 GLSL 样例归类存放在 build 下, 不作为正式声明交付. 生成文件只进入 binary tree, 业务代码不另写同一份 C++/GLSL binding 或布局.
 
-接口 version 1 的根字段为 version、name、blocks、resources、io. 名称以 ASCII 标识符表达, interface/block 用 PascalCase, 字段和资源用 camelCase. 拒绝重复 key/身份、未知字段、C++ 保留名、固定 glslang 词法器的全部关键字/保留词汇(包括扩展词汇)及生成名称冲突. 字段前缀 physara 保留给 padding. 共享 JSON 字节入口拒绝原始 NUL, 转义仍按 JSON 解码, 不能以 NUL 前的合法前缀忽略后缀.
+接口 version 1 的根字段为 version、name、blocks、resources、io. Compute 接口从同一声明的 `localSize` 生成三个正整数工作组轴, `io` 为空且每项仅使用 compute 可见性. 名称以 ASCII 标识符表达, interface/block 用 PascalCase, 字段和资源用 camelCase. 拒绝重复 key/身份、未知字段、C++ 保留名、固定 glslang 词法器的全部关键字/保留词汇(包括扩展词汇)及生成名称冲突. 字段前缀 physara 保留给 padding. 共享 JSON 字节入口拒绝原始 NUL, 转义仍按 JSON 解码, 不能以 NUL 前的合法前缀忽略后缀.
 
 | 声明 | 字段与含义 |
 |---|---|
@@ -10,23 +10,25 @@
 | field | name、type、可选正整数 array; 缺省为非数组, array=1 仍是数组 |
 | resource | name、kind、set、slot、非空 stages; buffer 必须引用 block |
 | structured-buffer | 另需正整数 capacity, 表达固定 record 数量, 不是 descriptor 数组 |
+| structured-uav | 固定 record capacity, std430, access 为 read、write 或 read-write |
+| image2d / image2d-array | storage image, format 为 r32f、r32ui、rgba8 或 rgba16f, access 与结构化 UAV 相同 |
 | stage IO | stage、direction (in/out)、name、location、type、可选 interpolation (默认 smooth) |
 
 type 支持 float32/int32/uint32、float/int/uint 的 2/3/4 分量向量和 float2x2/float3x3/float4x4 列主序矩阵. 不支持嵌套 record、bool、16/64 位数、运行期数组、descriptor 数组或矩阵/数组 IO. 整数 interstage IO 必须 flat. IO location 为 0..31, interpolation 仅适用于 VS 输出和 FS 输入, 可为 smooth/flat/noperspective. VS 输入和 FS 输出只接受缺省或 smooth, 活动反射按最终 IR 装饰记录, 不复制不适用的限定.
 
 std140/std430 分别计算 offset、实际字段 extent、矩阵列 stride、数组 stride 和 block 分配大小. 例如 std140 单 float 的 extent=4、分配大小=16; vec3 后的 float 可位于 offset=12; 标量数组在 std140 的 stride=16、std430 的 stride=4. CPU 头用固定宽度类型、显式 padding/stride 和 static_assert 表达这些量, 不假定宿主向量/矩阵类型与 GPU 一致.
 
-set=0/1/2/3 分别为 PerView/PerRenderable/PerMaterial/PerPass, slot=0..127. kind 为 constant-buffer (std140)、structured-buffer (readonly/std430)、texture2d、texturecube、sampler. 实际 canonical binding 从公开 RHI::VulkanBindingOffsets 推导, 不另建可修改 offset 配置. b/t/s 同号合法, structured-buffer 与两种独立浮点采样图像共用 t 类别, 同 set/binding 不能重复. 生成 RHI 描述显式采用 descriptor-set 模式, 集合 visibility 是各项声明 visibility 的并集. 二维与单 cube 的维度进入 ABI 和 IR 活动反射, 两者均使用普通 Texture SRV.
+set=0/1/2/3 分别为 PerView/PerRenderable/PerMaterial/PerPass, slot=0..127. kind 为 constant-buffer (std140)、structured-buffer (readonly/std430)、texture2d、texturecube、sampler. 实际 canonical binding 从公开 RHI::VulkanBindingOffsets 推导, 不另建可修改 offset 配置. b/t/s/u 同号合法, storage 绑定使用 u 类别, structured-buffer 与两种独立浮点采样图像共用 t 类别, 同 set/binding 不能重复. 生成 RHI 描述显式采用 descriptor-set 模式, 集合 visibility 是各项声明 visibility 的并集. 二维与单 cube 的维度进入 ABI 和 IR 活动反射, 两者均使用普通 Texture SRV.
 
-每个接口输出 Data.hpp、Bindings.hpp、Vertex.glsl、Fragment.glsl、Expected.json、Manifest.json. CPU 数据头只需标准库, 绑定头另需公开 RHI. Manifest 最后发布并含全部 artifact 摘要; 编译前逐份校验, 缺失/修改/混合代会失败. 不变内容不重写. 单个输出目录必须串行只有一个写入者; 多文件生成失败可留下新旧文件, 但不能被原 manifest 认作完整新代, 修复后重新 generate.
+每个接口输出 Data.hpp、Bindings.hpp、Vertex.glsl、Fragment.glsl、Expected.json、Manifest.json. Compute 接口另生成 Compute.glsl, 包的 IR 核对工作组、image 格式/维度与 storage 访问方向. CPU 数据头只需标准库, 绑定头另需公开 RHI. Manifest 最后发布并含全部 artifact 摘要; 编译前逐份校验, 缺失/修改/混合代会失败. 不变内容不重写. 单个输出目录必须串行只有一个写入者; 多文件生成失败可留下新旧文件, 但不能被原 manifest 认作完整新代, 修复后重新 generate.
 
-## 程序与 GraphicsBaselineV1
+## 程序与声明的 profile
 
-程序根字段为 version=1、name、interface、profile、stages、defines. interface 必须等于所选生成目录的接口名. stages 必须恰好一个 vertex 和一个 fragment, source 相对 Source 根, entry 固定 main. defines 是有限离散声明: name、allowed (1..8 个不同的 0..16 整数)、value (必须属于 allowed), 最多 64 项. 不接受任意编译 flags 或自动枚举连续参数.
+程序根字段为 version=1、name、interface、profile、stages、defines. interface 必须等于所选生成目录的接口名. GraphicsBaselineV1 要求 vertex 和 fragment 各一个, ComputeBaselineV1 要求一个 compute. source 相对 Source 根, entry 固定 main. defines 是有限离散声明: name、allowed (1..8 个不同的 0..16 整数)、value (必须属于 allowed), 最多 64 项. 不接受任意编译 flags 或自动枚举连续参数.
 
-GraphicsBaselineV1 固定 Vulkan GLSL 450 core -> Vulkan 1.1 / SPIR-V 1.3. 不自动分配 binding/location, 不做源文本 patch 或 optimizer 重写, Debug/Release 的 Shader 语义选项相同. 仅接入 glslang、SPIRV-Tools validator 与 SPIRV-Cross core; 输出必须先通过 validator, 再从最终 IR 核对字段/资源/IO、活动子集及 FS 对 VS 的兼容性.
+两个 profile 均固定 Vulkan GLSL 450 core -> Vulkan 1.1 / SPIR-V 1.3. 不自动分配 binding/location, 不做源文本 patch 或 optimizer 重写, Debug/Release 的 Shader 语义选项相同. 仅接入 glslang、SPIRV-Tools validator 与 SPIRV-Cross core; 输出必须先通过 validator, 再从最终 IR 核对字段/资源/IO、活动子集及 FS 对 VS 的兼容性.
 
-不支持 compute、写 storage、push constant、descriptor indexing、subpass input、combined sampler 声明、specialization constant 或未知扩展. 源扩展白名单允许 GL_GOOGLE_include_directive 与 GL_EXT_samplerless_texture_functions 的 enable/require; 后者只提供无逻辑 Sampler 的 texture-only fetch 源写法, 不改变 IR/包版本或数据/绑定 ABI. IR 不接受扩展, capability 仍限 Shader/Matrix. 活动 VS builtin 限 Position/PointSize/VertexIndex/InstanceIndex, FS 限 FragCoord/PointCoord/FrontFacing/FragDepth, execution mode 限 FS OriginUpperLeft/DepthReplacing. 这些是 CPU 编译 profile, 实际 GL 准备范围与验收另见 [RHI](../../../RHI/README.md#opengl-原生消费边界), 编译成功不能作为 Draw 或像素证据.
+GraphicsBaselineV1 保持只读 storage. ComputeBaselineV1 支持固定 local size、structured UAV 和有明确格式的 storage image. 包 profile 拒绝 push constant、descriptor indexing、subpass input、combined sampler 声明、specialization constant 及未知扩展. 源扩展白名单允许 GL_GOOGLE_include_directive 与 GL_EXT_samplerless_texture_functions 的 enable/require; 后者只提供无逻辑 Sampler 的 texture-only fetch 源写法, 不改变 IR/包版本或数据/绑定 ABI. IR 拒绝扩展. Compute 的限定 image 格式可声明 StorageImageExtendedFormats, 基础 capability 为 Shader/Matrix. 活动 VS builtin 限 Position/PointSize/VertexIndex/InstanceIndex, FS 限 FragCoord/PointCoord/FrontFacing/FragDepth, execution mode 限 FS OriginUpperLeft/DepthReplacing. 这些是 CPU 编译 profile, 实际 GL 准备范围与验收另见 [RHI](../../../RHI/README.md#opengl-原生消费边界), 编译成功不能作为 Draw 或像素证据.
 
 include 只有两个唯一且互不重叠的虚拟根:
 

@@ -48,6 +48,20 @@ namespace Physara::RHI::OpenGL
         }
     };
 
+    class OpenGLTexture;
+
+    /// @brief 一个确定的 native 消费及其底层范围, 访问域独立于公开状态.
+    struct NativeAccess
+    {
+        OpenGLBuffer *buffer = nullptr;
+        OpenGLTexture *texture = nullptr;
+        BufferRange bytes;
+        TextureSubresourceSet subresources;
+        GLbitfield domain = 0;
+        bool shaderWrite = false;
+        bool replaces = false;
+    };
+
     /// @brief 持有 tracker, 资源 lease 和映射 chunk 的稳定物理包, 寿命跨逻辑列表与 GPU 完成.
     /// @note 无逻辑列表强引用; orphaned 交接后只由 owner 处理, 避免内部寿命环.
     /// Timer 结果与包完成分别推进, 销毁 tracker/lease 前先按 recording 身份收拢关联查询.
@@ -65,13 +79,17 @@ namespace Physara::RHI::OpenGL
         bool invalid = false;
         UseMode useMode = UseMode::Automatic;
         GraphUseBatch graphUses;
-        // 图形快照中的指针只借用, 默认由 resources 保活; trackLiveness=false 的集合归调用方保活.
+        // 暂存当前候选命令的访问, 下个命令开始时清空. 跨命令的已发历史属于 Buffer/Texture.
+        std::vector<NativeAccess> accesses = std::vector<NativeAccess>(0);
+        // 两类状态快照均借用对象. 包保活 Pipeline 和启用 trackLiveness 的集合, 其余集合由调用方保活到完成.
         // 区域标记只记录本 recording 的显式输入, 不从跨 recording 的 native 缓存推定已设置.
         GraphicsState graphics;
         bool graphicsSet = false;
+        ComputeState compute;
+        bool computeSet = false;
         bool viewportSet = false;
         bool scissorSet = false;
-        // push 只借用本包 chunk 中最近一次设置的区段, 重设图形状态即结束这次借用.
+        // push 借用本包 chunk 的最近一次设置区段. 切换或重设可执行状态后须重新提供数据.
         UploadSlice push;
         /// @brief 本物理包占用的一槽 volatile backing. 资源 lease 保证退休时仍可归还该槽.
         struct VolatileLease
@@ -92,6 +110,7 @@ namespace Physara::RHI::OpenGL
     {
         GLsync sync = nullptr;
         std::uint64_t submissionId = 0;
+        std::uint64_t accessEpoch = 0;
         std::array<UploadWorkPacket *, UploadPacketLimit> packets{};
         std::size_t count = 0;
     };

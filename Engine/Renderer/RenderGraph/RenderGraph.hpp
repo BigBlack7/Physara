@@ -131,7 +131,8 @@ namespace Physara::Renderer
 
         /// @brief 从当前版本写入, 返回本次 setup 内可引用的新版本. 纹理写的内容由 ops 说明.
         /// @note 候选版本随 Pass 一起发布, AddPass 失败后不得使用候选身份.
-        /// @note Buffer 的 CopyDestination 声明定义完整字节区间. 区间外仍来自前一版本.
+        /// @note Buffer 的 CopyDestination 和 StorageWrite 完整定义声明区间. StorageReadWrite 先读取该区间的旧内容.
+        /// 纹理的 StorageWrite 使用 Discard 和完整覆盖, StorageReadWrite 使用 Load. 读改写绑定通过返回的新版本查询.
         [[nodiscard]] TextureId Write(TextureId id, GraphUsage usage, const TextureWriteOps &ops,
                                       std::optional<TextureRange> range = std::nullopt);
         [[nodiscard]] BufferId Write(BufferId id, GraphUsage usage,

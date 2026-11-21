@@ -23,7 +23,7 @@
 #pragma once
 
 /// @file
-/// @brief 基线图形/传输的逻辑即时列表, 借用 Device 稳定物理包, 不保存调用方 CPU 源或命令重放记录.
+/// @brief 图形, 计算和传输共用 Graphics 即时列表, 录制时借用物理包并把命令交给当前 context.
 
 #include <optional>
 
@@ -35,6 +35,8 @@ namespace Physara::RHI::OpenGL
 {
     class OpenGLGraphicsPipeline;
     struct PlannedResource;
+    struct PipelineBindingPlan;
+    class OpenGLComputePipeline;
     struct NativeBinding;
     /// @brief 单写者即时列表, GL 在 recording 调用时发出, Execute 只接受提交而不重放.
     /// @note 物理包归 Device, 未提交列表的 worker 最终析构只交接 orphan, 不执行 GL.
@@ -49,7 +51,7 @@ namespace Physara::RHI::OpenGL
         /// @brief 结束逻辑录制并保留待提交包, 未配对 Timer 使该包失效, 不自动补结束点.
         /// @note 可用 context 上的故障 Close 仍释放 claim; context 已不可用时由列表 Release 交接退出.
         void Close() override;
-        /// @brief 清空逻辑图形状态并失效唯一原生缓存, 保留 tracker 和已经发出工作的引用.
+        /// @brief 撤销 Draw 和 Dispatch 候选并失效原生缓存. 已发工作及其资源保活随当前包继续推进.
         void ClearState() override;
         /// @brief 完整清除合法二维选层, 忽略当前 scissor/mask, float 与 UInt 入口各自核对数值类型.
         void ClearTextureFloat(Texture *t, TextureSubresourceSet subresources, const Color &clearColor) override;
@@ -96,7 +98,11 @@ namespace Physara::RHI::OpenGL
         void DrawIndexedIndirect(uint32_t offsetBytes, uint32_t drawCount) override;
         void DrawIndexedIndirectCount(uint32_t paramOffsetBytes, uint32_t countOffsetBytes,
                                       uint32_t maxDrawCount) override;
+        /// @brief 在当前录制中建立单 CS 候选并替换图形执行资格. 该调用只准备绑定和保活.
+        /// @note 图内先撤销旧候选. 开启 trackLiveness 的集合由包保活, 关闭时由调用方保留至完成.
         void SetComputeState(const ComputeState &state) override;
+        /// @brief 在设备逐轴上限内即时调度工作组. 有效非空调度在发出前核对动态常量, 实际用途和范围.
+        /// @note 任一轴为零且其余参数合法时直接返回. 组内尺寸由 Pipeline 的 CS 固定.
         void Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override;
         void DispatchIndirect(uint32_t offsetBytes) override;
         void SetMeshletState(const MeshletState &state) override;
@@ -126,23 +132,24 @@ namespace Physara::RHI::OpenGL
         void EndTimerQuery(TimerQuery *query) override;
         void BeginMarker(const char *name) override;
         void EndMarker() override;
-        /// @brief 选择由命令推导或调用方显式提供图形/传输用途, 两者共用 tracker 与 CommitBarriers.
+        /// @brief 选择命令推导或调用方显式准备资源用途. 两种模式共用 tracker 和实际消费的屏障路径.
         void SetEnableAutomaticBarriers(bool enable) override;
         /// @brief 按布局可见阶段请求集合资源的用途, 不绑定资源或隐式 Commit; 集合只在本调用期间借用.
         void SetResourceStatesForBindingSet(BindingSet *bindingSet) override;
+        /// @brief 调整 tracker 的 UAV 请求策略. 已知重叠的原生访问仍按实际读写和后继域同步. 两个重载同义.
         void SetEnableUavBarriersForTexture(Texture *texture, bool enableBarriers) override;
         void SetEnableUavBarriersForBuffer(Buffer *buffer, bool enableBarriers) override;
         /// @brief 声明资源已知前态, Buffer 重载同义; 保活 extension 后交由单份 Common tracker 管理.
         void BeginTrackingTextureState(Texture *texture, TextureSubresourceSet subresources,
                                        ResourceStates stateBits) override;
         void BeginTrackingBufferState(Buffer *buffer, ResourceStates stateBits) override;
-        /// @brief 请求已实现的图形/传输用途, Buffer 重载同义, 显式模式须在实际消费前 Commit.
+        /// @brief 为纹理或整 Buffer 请求后继用途. 显式模式须在使用前提交待决状态.
         void SetTextureState(Texture *texture, TextureSubresourceSet subresources, ResourceStates stateBits) override;
         void SetBufferState(Buffer *buffer, ResourceStates stateBits) override;
         void SetAccelStructState(RT::AccelStruct *as, ResourceStates stateBits) override;
         void SetPermanentTextureState(Texture *texture, ResourceStates stateBits) override;
         void SetPermanentBufferState(Buffer *buffer, ResourceStates stateBits) override;
-        /// @brief 由同一权威消费有序 transfer/附件与只读 Shader 依赖, 不扩展 Shader 写入能力.
+        /// @brief 提交公共 tracker 的待决用途. 后继实际命令按其访问范围和原生域决定所需的 GL 屏障.
         void CommitBarriers() override;
         ResourceStates GetTextureSubresourceState(Texture *texture, ArraySlice arraySlice, MipLevel mipLevel) override;
         ResourceStates GetBufferState(Buffer *buffer) override;
@@ -161,6 +168,7 @@ namespace Physara::RHI::OpenGL
         void RequestGraphBuffer(Buffer &buffer, ResourceStates state) override;
         void CommitGraphUses(std::span<const GraphTextureUse> textures, std::span<const GraphBufferUse> buffers) override;
         void RevokeGraphUses() noexcept override;
+        void RevokeGraphPipelineState() noexcept override;
         /// @brief 只借出本列表拥有的有效 recording, 同时检查 context, claim 和 sticky tracker 错误.
         [[nodiscard]] UploadWorkPacket *Recording(const char *operation);
         /// @brief 在用途来源匹配时准许修改 tracker. 普通列表在 GraphManaged 只消费授权.
@@ -171,7 +179,9 @@ namespace Physara::RHI::OpenGL
                                     bool initial, bool graphRequest);
         /// @brief 串行 owner 上借用本列表当前持有的物理录制, 含已失效但仍须收拢的包.
         [[nodiscard]] UploadWorkPacket *OwningRecording() const noexcept;
-        /// @brief 只清理逻辑图形状态和缓存. 保留状态跟踪和已发命令.
+        /// @brief 撤销两类执行资格和 push, 保留本次录制建立的 viewport/scissor.
+        void ResetPipelineState() noexcept;
+        /// @brief 清除两类执行候选, push 和图形动态状态, 并使原生缓存失效. 已发命令仍由包持有.
         void ResetGraphicsState() noexcept;
         /// @brief 核对实际实现和 Device 归属, 不以接口类型相同推定原生对象可用.
         [[nodiscard]] OpenGLBuffer *BufferFor(Buffer *buffer, const char *operation);
@@ -184,16 +194,28 @@ namespace Physara::RHI::OpenGL
         /// @brief 自动模式请求状态. 图模式核对已提交范围, 无 range 时只检查该 Buffer 能否绑定到指定角色.
         /// @param structuredBinding 核对结构化 SRV 的原生绑定时为 true, 允许匹配本 Pass 另行声明的表绑定范围.
         [[nodiscard]] bool UseBuffer(OpenGLBuffer &buffer, ResourceStates state, const char *operation,
-                                     std::optional<BufferRange> range = std::nullopt, bool structuredBinding = false);
+                                     std::optional<BufferRange> range = std::nullopt, bool structuredBinding = false,
+                                     StorageAccess storage = StorageAccess::None, GLbitfield domain = 0,
+                                     bool replaces = false);
         /// @brief 纹理消费按已解析的底层 mip/layer 与实际分量核对授权, 与跟踪粒度独立.
         [[nodiscard]] bool UseTexture(OpenGLTexture &texture, TextureSubresourceSet range, TextureAspect aspects,
                                       ResourceStates state, const char *operation,
-                                      ResourceStates access = ResourceStates::Unknown);
+                                      ResourceStates access = ResourceStates::Unknown,
+                                      StorageAccess storage = StorageAccess::None, GLbitfield domain = 0,
+                                      bool replaces = false);
         /// @brief Draw 计算出的精确区间沿用传输和绑定的 GraphManaged 授权规则.
         [[nodiscard]] bool CheckGraphBufferUse(const OpenGLBuffer &buffer, ResourceStates state,
                                                const char *operation, std::optional<BufferRange> range,
-                                               bool structuredBinding = false);
-        /// @brief 本 profile 没有 Shader 写生产者, 有序访问满足的依赖在此唯一消费.
+                                               bool structuredBinding = false, StorageAccess storage = StorageAccess::None);
+        /// @brief 预留实际访问的范围历史, 合并待满足的原生消费域. 命令仍未发出.
+        [[nodiscard]] bool PrepareNativeAccesses(const char *operation);
+        /// @brief 向当前命令暂存一个带单一 GL 域位的实际范围. 准备存储失败时报告并返回 false.
+        [[nodiscard]] bool AddNativeAccess(NativeAccess access, const char *operation);
+        /// @brief 发布已发原生命令的访问, 在本调用中不再分配存储.
+        void RecordNativeAccesses() noexcept;
+        /// @brief 一次 FBO clear 成功后登记已经完全覆盖的层和 mip. 其它子资源保留其写入历史.
+        void RecordClearedSubresource(OpenGLTexture &texture, std::uint32_t layer, std::uint32_t mip) noexcept;
+        /// @brief 提交公共 tracker 的用途. 实际命令依赖由 PrepareNativeAccesses 处理.
         [[nodiscard]] bool ConsumeBarriers();
         /// @brief 在实际联合采样的 Draw 前, 由同一发射路径满足重叠的先前附件写.
         [[nodiscard]] bool PrepareDepthSampling(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
@@ -214,17 +236,23 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] bool ValidateGraphicsState(const GraphicsState &state, OpenGLGraphicsPipeline *&pipeline,
                                                  OpenGLFramebuffer *&framebuffer);
         /// @brief 由候选验证和不可变计划保证该逻辑项存在, 不在 Draw 重新解析布局/反射.
-        [[nodiscard]] const NativeBinding &BindingFor(const GraphicsState &state, const PlannedResource &entry) const;
+        [[nodiscard]] const NativeBinding &BindingFor(const BindingSetVector &bindings, const PlannedResource &entry) const;
         /// @brief 按当前计划和具体附件核对图形用途; 显式用途不满足或 tracker 错误时使 recording 失效.
         [[nodiscard]] bool GraphicsUses(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
-                                        const char *operation);
+                                        const char *operation, bool executed = false);
         /// @brief 调用方已满足用途及 BeginNative, 本函数只通过唯一 ContextState 应用绑定/普通状态.
         void ApplyGraphics(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
-        /// @brief 在真实 Draw 前验证本 recording 中最近写入覆盖活动动态块.
-        [[nodiscard]] bool CheckDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
+        /// @brief 在 Draw 或 Dispatch 前核对当前 push 区段和本 recording 的 volatile 常量版本.
+        [[nodiscard]] bool CheckConstants(const BindingSetVector &bindings, const PipelineBindingPlan &plan,
                                               const char *operation) const;
-        /// @brief 按本次 Draw 选出的版本刷新动态 UBO range. 调用前已通过 CheckDrawConstants.
-        void ApplyDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline);
+        /// @brief 按本次执行选出的版本刷新动态 UBO range. 调用前已通过 CheckConstants.
+        void ApplyConstants(const BindingSetVector &bindings, const PipelineBindingPlan &plan);
+        /// @brief 按当前 Program 计划应用普通缓冲范围, 存储图像及组合采样单元. 动态常量另按版本绑定.
+        void ApplyProgramBindings(const BindingSetVector &bindings, const PipelineBindingPlan &plan);
+        /// @brief 为本次调度逐项核对活动范围及图授权, 收集需要发射原生依赖的访问.
+        [[nodiscard]] bool ComputeUses(const BindingSetVector &bindings, const PipelineBindingPlan &plan);
+        /// @brief 验证计算候选的集合身份, 活动块布局和同存储别名. 失败时尚未发出调度.
+        [[nodiscard]] bool ValidateComputeBindings(const ComputeState &state, const OpenGLComputePipeline &pipeline);
         /// @brief 占用一个可写版本并复制逻辑前缀. 槽耗尽时报告原因, 先前已写版本继续由包持有.
         void WriteVolatile(OpenGLBuffer &buffer, const void *data, std::size_t size);
         /// @brief 验证本次参数/可知数据范围, 恢复实际用途与缓存后发出一个直接 Draw.

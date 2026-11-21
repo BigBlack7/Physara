@@ -38,6 +38,16 @@ namespace Physara::Renderer
         [[nodiscard]] std::optional<RHI::BindingSetItem> ReadBuffer(
             std::uint32_t slot, BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range = std::nullopt);
 
+        /// @brief 按当前 Pass 的版本, 存储用途及范围生成一个 mip 的 image 条目.
+        /// @param dimension 视图目标须匹配活动 Shader. 省略时沿用存储目标, 数组的单层可显式选择 Texture2D.
+        [[nodiscard]] std::optional<RHI::BindingSetItem> StorageImage(
+            std::uint32_t slot, TextureId id, GraphUsage usage, std::optional<TextureRange> range = std::nullopt,
+            RHI::TextureDimension dimension = RHI::TextureDimension::Unknown);
+        /// @brief 为声明版本内的字节范围生成结构化 UAV 条目. 读改写使用 Write 返回的版本.
+        /// @note 两种 storage 准备入口在权限拒绝时返回空并留下首错, 成功的条目可交给当前 Pass 的 CreateBindingSet.
+        [[nodiscard]] std::optional<RHI::BindingSetItem> StorageBuffer(
+            std::uint32_t slot, BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> range = std::nullopt);
+
         /// @brief 用本次准备生成的资源条目及调用方的 Sampler 建立普通绑定集.
         /// @note 布局和条目在调用期间借用, RHI 校验同设备归属和条目匹配后建立对象引用.
         /// @return 供 PassResources::BindingSet 使用的索引. 条目或设备创建被拒绝时记录准备失败并返回空.

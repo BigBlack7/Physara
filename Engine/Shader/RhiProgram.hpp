@@ -45,4 +45,18 @@ namespace Physara::Shader
                                                     std::string_view expectedAbiHash,
                                                     std::optional<ExpectedActiveResources> expectedActive = {},
                                                     std::string_view expectedFragmentSource = {}) noexcept;
+    /// @brief 完整计算模块与所验证的包身份, 阶段对象由调用方持有.
+    struct RhiComputeProgram
+    {
+        RHI::ShaderHandle compute;
+        std::array<std::uint32_t, 3> localSize{};
+        std::string abiHash;
+        std::string contentHash;
+    };
+
+    /// @brief 验证单阶段 Compute 包的 ABI 和 profile 后创建设备 Shader.
+    /// @return 拥有 CS, 固定工作组尺寸及包身份的结果. 读取或创建失败时返回 Failure.
+    /// @pre 在设备允许创建 Shader 的线程及 context 调用.
+    [[nodiscard]] Result<RhiComputeProgram> LoadRhiComputeProgram(RHI::Device &device,
+        const std::filesystem::path &path, std::string_view expectedAbiHash) noexcept;
 } // namespace Physara::Shader

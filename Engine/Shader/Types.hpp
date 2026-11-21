@@ -3,8 +3,10 @@
 /// @file
 /// @brief Shader 的 CPU 值合同, 包拥有字节码, 反射和源映射, 不依赖图形设备.
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -36,20 +38,35 @@ namespace Physara::Shader
     /// @brief 成功值与失败互斥, Failure 自持有界文本, 报告 OOM 无需再次分配正文.
     template <typename T> using Result = std::variant<T, Failure>;
 
+    inline constexpr std::string_view GraphicsProfile = "GraphicsBaselineV1";
+    inline constexpr std::string_view ComputeProfile = "ComputeBaselineV1";
+
     enum class Stage : std::uint8_t
     {
         Vertex,
-        Fragment
+        Fragment,
+        Compute
     };
 
-    /// @brief 接口和包反射保留采样维度. 两种纹理共用 RHI 的 Texture_SRV 槽类别.
+    /// @brief 逻辑资源类别保留采样和存储图像的维度, 结构化只读槽 t 与存储槽 u 独立编号.
     enum class ResourceKind : std::uint8_t
     {
         ConstantBuffer,
         StructuredBuffer,
         Texture2D,
         Sampler,
-        TextureCube
+        TextureCube,
+        StructuredUav,
+        Image2D,
+        Image2DArray
+    };
+
+    /// @brief 存储绑定的访问权限, 由声明生成并与最终 IR 比较.
+    enum class StorageAccess : std::uint8_t
+    {
+        Read,
+        Write,
+        ReadWrite
     };
 
     /// @brief 字段的规范布局, offset/extent/stride 均为字节, type 使用版本 1 规范类型名.
@@ -78,7 +95,7 @@ namespace Physara::Shader
     };
 
     /// @brief 活动资源信息, 逻辑 set/slot 与 canonical binding 同时保留, binding 不等同 GL 原生单元.
-    /// @note recordStride/capacity 仅表达固定只读 record 数组, 其他资源为零; buffer 仅对缓冲资源有效.
+    /// @note recordStride/capacity 仅表达固定 record 数组, 其他资源为零; buffer 仅对缓冲资源有效.
     struct ResourceReflection
     {
         std::string name;
@@ -89,6 +106,8 @@ namespace Physara::Shader
         std::uint32_t recordStrideBytes = 0;
         std::uint32_t capacity = 0;
         BufferLayout buffer;
+        StorageAccess access = StorageAccess::Read;
+        std::string imageFormat; ///< GLSL sized image 格式, 仅用于存储图像.
     };
 
     /// @brief 用户 IO 的 location, 规范类型与最终 IR 插值, 不包含内建变量.
@@ -100,7 +119,7 @@ namespace Physara::Shader
         std::uint32_t location = 0;
     };
 
-    /// @brief 完整资源声明, 可包含入口未使用的资源; stageMask 的 bit 0/1 表示 Vertex/Fragment.
+    /// @brief 完整资源声明, 可包含入口未使用的资源; stageMask 的 bit 0/1/2 表示 Vertex/Fragment/Compute.
     struct ResourceDeclaration
     {
         ResourceReflection resource;
@@ -123,6 +142,7 @@ namespace Physara::Shader
         std::vector<BufferLayout> blocks;
         std::vector<ResourceDeclaration> bindings;
         std::vector<StageIoDeclaration> io;
+        std::array<std::uint32_t, 3> localSize{}; ///< 仅 Compute 接口声明三个固定轴.
     };
 
     /// @brief 受控逻辑路径与原文件字节摘要, 不含机器绝对路径, 用于可重建内容身份.
@@ -153,6 +173,7 @@ namespace Physara::Shader
         std::vector<ResourceReflection> resources;
         std::vector<IoReflection> inputs;
         std::vector<IoReflection> outputs;
+        std::array<std::uint32_t, 3> localSize{};
     };
 
     /// @brief 与编译环境寿命独立的 CPU 包, ABI 标识完整声明及布局, contentHash 标识完整构建输入.

@@ -75,8 +75,12 @@ namespace Physara::RHI::OpenGL
                 m_Device->Report(operation, "InvalidArgument: index byte interval exceeds buffer");
                 return;
             }
-            if (!CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(state.indexBuffer.buffer),
-                                     ResourceStates::IndexBuffer, operation, BufferRange{indexOffset, size}))
+            auto &indexBuffer = *static_cast<OpenGLBuffer *>(state.indexBuffer.buffer);
+            const BufferRange covered{indexOffset, size};
+            if (!CheckGraphBufferUse(indexBuffer, ResourceStates::IndexBuffer, operation, covered) ||
+                (!indexBuffer.m_ShaderAccess.empty() &&
+                 !AddNativeAccess({.buffer = &indexBuffer, .bytes = covered, .domain = GL_ELEMENT_ARRAY_BARRIER_BIT},
+                                  operation)))
             {
                 return;
             }
@@ -103,8 +107,13 @@ namespace Physara::RHI::OpenGL
                     return;
                 }
                 const BufferRange covered{found->offset + firstByte, lastByte - firstByte + attribute.byteSize};
-                if (!CheckGraphBufferUse(*static_cast<OpenGLBuffer *>(found->buffer),
-                                         ResourceStates::VertexBuffer, operation, covered))
+                auto &buffer = *static_cast<OpenGLBuffer *>(found->buffer);
+                // 索引驱动的顶点地址留在 GPU, 同步覆盖从该 VB 绑定起点至末尾的可达字节.
+                if (!CheckGraphBufferUse(buffer, ResourceStates::VertexBuffer, operation, covered) ||
+                    (!buffer.m_ShaderAccess.empty() &&
+                     !AddNativeAccess({.buffer = &buffer,
+                         .bytes = knownRange ? covered : BufferRange{found->offset, available},
+                         .domain = GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT}, operation)))
                 {
                     return;
                 }
@@ -175,8 +184,38 @@ namespace Physara::RHI::OpenGL
             return;
         }
         // 参数内容对 CPU 不透明. GraphManaged 仍核对本次可知的完整参数区间, 几何范围由生产者保证.
-        if (!UseBuffer(*parameters, ResourceStates::IndirectArgument, operation, BufferRange{offsetBytes, bytes}) ||
-            !PrepareDraw(*pipeline, operation))
+        auto &indexBuffer = *static_cast<OpenGLBuffer *>(state.indexBuffer.buffer);
+        if (!UseBuffer(*parameters, ResourceStates::IndirectArgument, operation, BufferRange{offsetBytes, bytes},
+                       false, StorageAccess::None, GL_COMMAND_BARRIER_BIT) ||
+            (!indexBuffer.m_ShaderAccess.empty() &&
+             !AddNativeAccess({.buffer = &indexBuffer, .bytes = {0, indexBuffer.GetDesc().byteSize},
+                               .domain = GL_ELEMENT_ARRAY_BARRIER_BIT}, operation)))
+        {
+            return;
+        }
+        if (const auto *input = static_cast<OpenGLInputLayout *>(pipeline->GetDesc().inputLayout.Get()))
+        {
+            std::array<bool, MaxVertexAttributes> used{};
+            for (const auto &attribute : input->Inputs())
+            {
+                if (used[attribute.bufferIndex])
+                {
+                    continue;
+                }
+                used[attribute.bufferIndex] = true;
+                const auto binding =
+                    std::ranges::find(state.vertexBuffers, attribute.bufferIndex, &VertexBufferBinding::slot);
+                auto &buffer = *static_cast<OpenGLBuffer *>(binding->buffer);
+                const auto count = buffer.GetDesc().byteSize - binding->offset;
+                if (!buffer.m_ShaderAccess.empty() && count != 0 &&
+                    !AddNativeAccess({.buffer = &buffer, .bytes = {binding->offset, count},
+                                     .domain = GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT}, operation))
+                {
+                    return;
+                }
+            }
+        }
+        if (!PrepareDraw(*pipeline, operation))
         {
             return;
         }
@@ -217,13 +256,13 @@ namespace Physara::RHI::OpenGL
     {
         const auto &state = m_Packet->graphics;
         // 上传, clear 或 copy 可改变用途及缓存. 同一图形状态也需要选择最近写好的常量版本.
-        if (!CheckDrawConstants(state, pipeline, operation) || !GraphicsUses(state, pipeline, operation) ||
-            !m_Device->BeginNative(operation) || !PrepareDepthSampling(state, pipeline))
+        if (!CheckConstants(state.bindings, pipeline.Plan(), operation) || !GraphicsUses(state, pipeline, operation, true) ||
+            !m_Device->BeginNative(operation) || !PrepareNativeAccesses(operation) || !PrepareDepthSampling(state, pipeline))
         {
             return false;
         }
         ApplyGraphics(state, pipeline);
-        ApplyDrawConstants(state, pipeline);
+        ApplyConstants(state.bindings, pipeline.Plan());
         return true;
     }
 
@@ -235,6 +274,7 @@ namespace Physara::RHI::OpenGL
             m_Device->m_ContextState.Invalidate();
             return;
         }
+        RecordNativeAccesses();
         const auto &attachment = m_Packet->graphics.framebuffer->GetDesc().depthAttachment;
         const auto &depth = pipeline.GetDesc().renderState.depthStencilState;
         // Draw 成功且允许深度写时, 按底层 mip 标记可能修改的深度内容. 同格式采样读取深度分量.

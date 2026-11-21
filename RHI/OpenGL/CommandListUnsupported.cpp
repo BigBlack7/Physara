@@ -6,7 +6,7 @@
 namespace Physara::RHI::OpenGL
 {
     // 以下同组薄入口只保留完整公共方法表, 共用 Unsupported 的 context/诊断合同.
-    // 图形 push 的录制见 CommandListUpload.cpp, Begin/EndTimerQuery 的配对见 CommandListQueries.cpp.
+    // 直接 Dispatch 见 CommandListCompute.cpp, 动态常量见 CommandListUpload.cpp, 计时查询见 CommandListQueries.cpp.
     void OpenGLCommandList::CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
                                         const TextureSlice &srcSlice)
     {
@@ -80,20 +80,6 @@ namespace Physara::RHI::OpenGL
         static_cast<void>(countOffsetBytes);
         static_cast<void>(maxDrawCount);
         Unsupported("DrawIndexedIndirectCount");
-    }
-
-    void OpenGLCommandList::SetComputeState(const ComputeState &state)
-    {
-        static_cast<void>(state);
-        Unsupported("SetComputeState");
-    }
-
-    void OpenGLCommandList::Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ)
-    {
-        static_cast<void>(groupsX);
-        static_cast<void>(groupsY);
-        static_cast<void>(groupsZ);
-        Unsupported("Dispatch");
     }
 
     void OpenGLCommandList::DispatchIndirect(uint32_t offsetBytes)
@@ -219,20 +205,6 @@ namespace Physara::RHI::OpenGL
     void OpenGLCommandList::EndMarker()
     {
         Unsupported("EndMarker");
-    }
-
-    void OpenGLCommandList::SetEnableUavBarriersForTexture(Texture *texture, bool enableBarriers)
-    {
-        static_cast<void>(texture);
-        static_cast<void>(enableBarriers);
-        Unsupported("SetEnableUavBarriersForTexture");
-    }
-
-    void OpenGLCommandList::SetEnableUavBarriersForBuffer(Buffer *buffer, bool enableBarriers)
-    {
-        static_cast<void>(buffer);
-        static_cast<void>(enableBarriers);
-        Unsupported("SetEnableUavBarriersForBuffer");
     }
 
     void OpenGLCommandList::SetAccelStructState(RT::AccelStruct *as, ResourceStates stateBits)

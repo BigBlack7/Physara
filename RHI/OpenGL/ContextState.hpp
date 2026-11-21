@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief context 的唯一原生绑定/固定状态缓存, 不代替逻辑 Graphics 状态, 用途 tracker 或 GPU 完成.
+/// @brief 拥有 context 的原生绑定和固定状态缓存. 图形或计算候选由录制持有, 资源依赖由实际命令建立.
 
 #include <array>
 #include <cstdint>
@@ -33,7 +33,7 @@ namespace Physara::RHI::OpenGL
     {
     public:
         /// @brief count 构造让 MSVC Debug proxy 的可传播分配失败进入 Device 工厂边界.
-        ContextState() : m_UniformRanges(0), m_StorageRanges(0), m_TextureUnits(0)
+        ContextState() : m_UniformRanges(0), m_StorageRanges(0), m_TextureUnits(0), m_Images(0)
         {
         }
         /// @brief 预留实际 limits 对应缓存并创建唯一 VAO/清除 FBO, 失败由 Device 工厂回收.
@@ -55,8 +55,11 @@ namespace Physara::RHI::OpenGL
         void ApplyFramebuffer(GLuint framebuffer) noexcept;
         /// @brief 绑定已验证的 UBO/SSBO 字节范围, unit 来自本 Pipeline 计划, 不持有对应 wrapper.
         void ApplyBufferRange(bool storage, GLuint unit, GLuint name, GLintptr offset, GLsizeiptr size) noexcept;
-        /// @brief 独立比较同一物理单元的 texture 与 sampler, 任一端改变都更新实际组合.
-        /// @param dimension 已解析 SRV 的目标. 首次使用 cube 或缓存失效后按需建立 context 级跨面过滤.
+        /// @brief 把已解析的存储视图绑定到 image 单元. 相同名称也须比较按层方式, 访问方向和 sized format.
+        /// @param layered 为 true 时 Shader 寻址所选数组层, 为 false 时只寻址该视图的单层.
+        /// @note 选取非零 mip 或部分层时, 集合已建立重编号的视图. 原生 level/layer 固定从 0 开始.
+        void ApplyImage(GLuint unit, GLuint name, bool layered, GLenum access, GLenum format) noexcept;
+        /// @brief 独立比较同一采样单元的 texture 和 sampler. 首次应用 cube 视图或缓存失效后建立跨面过滤.
         void ApplyTexture(GLuint unit, GLuint texture, GLuint sampler, TextureDimension dimension) noexcept;
         /// @brief 绑定唯一 core VAO 并设置完整属性启用/格式计划, 空布局也取得合法 VAO.
         void ApplyInput(const OpenGLInputLayout *layout) noexcept;
@@ -124,6 +127,15 @@ namespace Physara::RHI::OpenGL
         std::vector<BufferRangeState> m_UniformRanges;
         std::vector<BufferRangeState> m_StorageRanges;
         std::vector<TextureUnitState> m_TextureUnits;
+        struct ImageUnitState
+        {
+            GLuint name = 0;
+            bool layered = false;
+            GLenum access = GL_READ_ONLY;
+            GLenum format = GL_R8;
+            bool known = false;
+        };
+        std::vector<ImageUnitState> m_Images;
         std::array<AttributeState, MaxVertexAttributes> m_Attributes{};
         std::array<VertexBindingState, MaxVertexAttributes> m_VertexBindings{};
         GLuint m_VertexArray = 0;

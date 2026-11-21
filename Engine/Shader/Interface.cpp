@@ -104,7 +104,7 @@ namespace Physara::Shader
         }
         for (const auto &binding : schema.bindings)
         {
-            if (binding.resource.kind == ResourceKind::StructuredBuffer)
+            if (IsStructured(binding.resource.kind))
             {
                 auto name = binding.resource.name;
                 name.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(name.front())));
@@ -126,6 +126,11 @@ namespace Physara::Shader
             return "ConstantBuffer";
         case ResourceKind::StructuredBuffer:
             return "StructuredBuffer_SRV";
+        case ResourceKind::StructuredUav:
+            return "StructuredBuffer_UAV";
+        case ResourceKind::Image2D:
+        case ResourceKind::Image2DArray:
+            return "Texture_UAV";
         case ResourceKind::Texture2D:
         case ResourceKind::TextureCube:
             return "Texture_SRV";
@@ -161,6 +166,10 @@ namespace Physara::Shader
             if (visibility == 1)
             {
                 output << "::Physara::RHI::ShaderType::Vertex";
+            }
+            else if (visibility == 4)
+            {
+                output << "::Physara::RHI::ShaderType::Compute";
             }
             else if (visibility == 2)
             {
@@ -200,11 +209,28 @@ namespace Physara::Shader
         }
     }
 
-    // 先输出 record 类型, 再按阶段筛选资源与 IO; 插值限定只出现在 VS 输出/FS 输入边.
+    // 生成与声明权限一致的 GLSL 限定词. 双向存储保留 GLSL 默认的读写资格.
+    static std::string_view GlslAccess(StorageAccess access) noexcept
+    {
+        switch (access)
+        {
+        case StorageAccess::Read: return "readonly ";
+        case StorageAccess::Write: return "writeonly ";
+        case StorageAccess::ReadWrite: return "";
+        }
+        return "";
+    }
+
+    // 按阶段输出工作组尺寸, 记录类型和可见资源. 插值限定只适用于图形阶段之间的接口.
     static std::string GenerateGlsl(const InterfaceSchema &schema, Stage stage)
     {
         std::ostringstream output;
         output << "// 自动生成的 canonical Vulkan GLSL 接口, 算法由薄入口与共享函数实现.\n";
+        if (stage == Stage::Compute)
+        {
+            output << "layout(local_size_x = " << schema.localSize[0] << ", local_size_y = " << schema.localSize[1]
+                   << ", local_size_z = " << schema.localSize[2] << ") in;\n";
+        }
         for (const auto &block : schema.blocks)
         {
             if (block.layout == "std430")
@@ -230,12 +256,20 @@ namespace Physara::Shader
                 output << ") uniform " << type << " " << resource.name << ";\n";
                 continue;
             }
+            if (IsStorageImage(resource.kind))
+            {
+                output << ", " << resource.imageFormat << ") " << GlslAccess(resource.access) << "uniform "
+                       << (resource.imageFormat == "r32ui" ? "u" : "")
+                       << (resource.kind == ResourceKind::Image2DArray ? "image2DArray " : "image2D ")
+                       << resource.name << ";\n";
+                continue;
+            }
             auto blockName = resource.name;
             blockName.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(blockName.front())));
             output << ", " << resource.buffer.layout << ") ";
-            if (resource.kind == ResourceKind::StructuredBuffer)
+            if (IsStructured(resource.kind))
             {
-                output << "readonly buffer " << blockName << "Block\n{\n    " << resource.buffer.name << " records["
+                output << GlslAccess(resource.access) << "buffer " << blockName << "Block\n{\n    " << resource.buffer.name << " records["
                        << resource.capacity << "];\n";
             }
             else
@@ -278,12 +312,16 @@ namespace Physara::Shader
                                     {"abiHash", schema.abiHash},
                                     {"blocks", schema.blocks},
                                     {"bindings", bindings}};
-                const std::map<std::string, std::string> artifacts{
+                std::map<std::string, std::string> artifacts{
                     {"Data.hpp", GenerateDataHeader(schema)},
                     {"Bindings.hpp", GenerateBindingHeader(schema)},
                     {"Vertex.glsl", GenerateGlsl(schema, Stage::Vertex)},
                     {"Fragment.glsl", GenerateGlsl(schema, Stage::Fragment)},
                     {"Expected.json", expected.dump(2) + "\n"}};
+                if (schema.localSize[0] != 0)
+                {
+                    artifacts.emplace("Compute.glsl", GenerateGlsl(schema, Stage::Compute));
+                }
                 Json hashes = Json::object();
                 GeneratedInterface result{schema.name, schema.abiHash, {}};
                 // 每份内容先完成计算. 文件逐一替换后最后发布 manifest, 旧 manifest 的摘要会拒绝混合代.

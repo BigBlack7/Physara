@@ -26,30 +26,37 @@ namespace Physara::Shader
         std::string entry;
     };
 
-    // 程序声明的纯值模型, 阶段排序固定为 VS/FS, defines 使用有序映射保证身份稳定.
+    // 程序声明固定图形的 VS/FS 顺序或计算的单 CS, defines 按名称排序以稳定构建身份.
     struct Program
     {
         std::string name;
         std::string interfaceName;
+        std::string profile;
         std::vector<ProgramStage> stages;
         std::map<std::string, std::uint32_t> defines;
     };
 
-    // 拒绝超 profile 的阶段/入口与未声明 define 值, 将合法请求归一为固定两阶段.
+    // 按请求的 profile 校验阶段组合及 main 入口, 并拒绝不受支持的 define 值.
     static Program ParseProgram(const Json &json)
     {
         CheckFields(json, {"version", "name", "interface", "profile", "stages", "defines"}, "/program");
-        if (UInt(json.at("version"), 1, "/program/version") != 1 || json.at("profile") != "GraphicsBaselineV1")
+        if (UInt(json.at("version"), 1, "/program/version") != 1)
         {
             throw BuildError(ErrorCode::UnsupportedProfile, "/program/version or profile is unsupported.");
         }
         Program program;
+        program.profile = json.at("profile").get<std::string>();
+        const bool compute = program.profile == ComputeProfile;
+        if (!compute && program.profile != GraphicsProfile)
+        {
+            throw BuildError(ErrorCode::UnsupportedProfile, "/program/profile is unsupported.");
+        }
         program.name = Identifier(json.at("name"), "/program/name");
         program.interfaceName = Identifier(json.at("interface"), "/program/interface");
         const auto &stages = json.at("stages");
-        if (!stages.is_array() || stages.size() != 2)
+        if (!stages.is_array() || stages.size() != (compute ? 1u : 2u))
         {
-            throw BuildError(ErrorCode::UnsupportedProfile, "/program/stages requires one VS and one FS.");
+            throw BuildError(ErrorCode::UnsupportedProfile, "/program/stages has the wrong size for the requested profile.");
         }
         for (const auto &stage : stages)
         {
@@ -62,9 +69,10 @@ namespace Physara::Shader
             }
         }
         std::ranges::sort(program.stages, {}, &ProgramStage::stage);
-        if (program.stages[0].stage != Stage::Vertex || program.stages[1].stage != Stage::Fragment)
+        if (compute ? program.stages.front().stage != Stage::Compute :
+                      (program.stages[0].stage != Stage::Vertex || program.stages[1].stage != Stage::Fragment))
         {
-            throw BuildError(ErrorCode::InvalidInput, "/program/stages contains duplicate stages.");
+            throw BuildError(ErrorCode::InvalidInput, "/program/stages does not match the requested profile.");
         }
         const auto &defines = json.at("defines");
         if (!defines.is_array() || defines.size() > 64)
@@ -107,7 +115,7 @@ namespace Physara::Shader
         std::size_t bytes = 0;
     };
 
-    // 按 manifest 验证五个产物, 再独立推导 Expected 中的布局与 ABI, 拒绝不完整或混合代.
+    // 图形接口核对五份产物, 计算接口还核对 Compute.glsl. 再从 Expected 独立推导布局和 ABI.
     static InterfaceInput ReadInterface(const std::filesystem::path &root, const Program &program)
     {
         // 先按 manifest 核对每份产物的字节. 读到 Expected.json 时再从其中的声明重算布局和 ABI.
@@ -119,18 +127,21 @@ namespace Physara::Shader
         {
             throw BuildError(ErrorCode::InterfaceMismatch, "Interface manifest version/name mismatch.");
         }
-        constexpr std::array Names{"Data.hpp", "Bindings.hpp", "Vertex.glsl", "Fragment.glsl", "Expected.json"};
+        constexpr std::array Names{"Data.hpp", "Bindings.hpp", "Vertex.glsl", "Fragment.glsl", "Expected.json",
+                                   "Compute.glsl"};
         const auto &artifacts = manifest.at("artifacts");
-        if (!artifacts.is_object() || artifacts.size() != Names.size())
+        const bool compute = program.profile == ComputeProfile;
+        const auto names = std::span(Names).first(Names.size() - (compute ? 0u : 1u));
+        if (!artifacts.is_object() || artifacts.size() != names.size())
         {
-            throw BuildError(ErrorCode::InterfaceMismatch, "Interface manifest must describe all five artifacts.");
+            throw BuildError(ErrorCode::InterfaceMismatch, "Interface manifest does not match the requested profile.");
         }
         InterfaceInput input;
         input.files.push_back(manifestPath);
         input.bytes = manifestText.size();
         input.identity = {
             {"manifest", HashText(manifestText)}, {"schema", manifest.at("schemaHash")}, {"artifacts", artifacts}};
-        for (const auto *name : Names)
+        for (const auto *name : names)
         {
             const auto path = CanonicalInputPath(root / name);
             const auto text = ReadText(path, MaxPackageBytes);
@@ -168,6 +179,10 @@ namespace Physara::Shader
                 }
             }
         }
+        if ((input.schema.localSize[0] != 0) != compute)
+        {
+            throw BuildError(ErrorCode::InterfaceMismatch, "Interface workgroup declaration does not match the profile.");
+        }
         return input;
     }
 
@@ -203,7 +218,7 @@ namespace Physara::Shader
                 const auto interfaceInput = ReadInterface(interfaceRoot, program);
                 SourceGraph graph(request.sourceRoot, interfaceRoot);
                 std::array<const SourceFile *, 2> sources{};
-                for (std::size_t index = 0; index < sources.size(); ++index)
+                for (std::size_t index = 0; index < program.stages.size(); ++index)
                 {
                     try
                     {
@@ -254,25 +269,26 @@ namespace Physara::Shader
                 {
                     preamble += "#define " + name + " " + std::to_string(value) + "\n";
                 }
-                constexpr std::array Languages{EShLangVertex, EShLangFragment};
+                constexpr std::array Languages{EShLangVertex, EShLangFragment, EShLangCompute};
                 // 名称/长度数组与源内容一起活到 parse/link/生成全部结束. program 先于 shader 析构.
                 std::array<std::unique_ptr<glslang::TShader>, 2> shaders;
                 std::array<const char *, 2> texts{};
                 std::array<const char *, 2> names{};
                 std::array<int, 2> lengths{};
                 const auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-                for (std::size_t index = 0; index < shaders.size(); ++index)
+                for (std::size_t index = 0; index < program.stages.size(); ++index)
                 {
                     const auto text = sources[index]->GetCompilerText();
                     texts[index] = text.data();
                     names[index] = sources[index]->logicalPath.c_str();
                     lengths[index] = static_cast<int>(text.size());
+                    const auto language = Languages[static_cast<std::size_t>(program.stages[index].stage)];
                     auto &shader = shaders[index];
-                    shader = std::make_unique<glslang::TShader>(Languages[index]);
+                    shader = std::make_unique<glslang::TShader>(language);
                     shader->setStringsWithLengthsAndNames(&texts[index], &lengths[index], &names[index], 1);
                     shader->setPreamble(preamble.c_str());
                     shader->setEntryPoint("main");
-                    shader->setEnvInput(glslang::EShSourceGlsl, Languages[index], glslang::EShClientVulkan, 450);
+                    shader->setEnvInput(glslang::EShSourceGlsl, language, glslang::EShClientVulkan, 450);
                     shader->setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
                     shader->setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
                     if (!shader->parse(GetDefaultResources(), 450, ECoreProfile, false, false, messages, graph))
@@ -282,21 +298,21 @@ namespace Physara::Shader
                                                            shader->getInfoLog(), graph));
                     }
                 }
-                // 两阶段先链接, 再分别从链接后的中间表示生成 words. 反射和包发布共用这份最终字节码.
+                // 各阶段先进入同一程序链接. 从链接后的中间表示生成最终字节码, 供反射及包发布共用.
                 glslang::TProgram linked;
-                for (const auto &shader : shaders)
+                for (std::size_t index = 0; index < program.stages.size(); ++index)
                 {
-                    linked.addShader(shader.get());
+                    linked.addShader(shaders[index].get());
                 }
                 if (!linked.link(messages))
                 {
                     throw BuildError(ErrorCode::CompilationFailed,
-                                     CompileDiagnostic(program.name, "VS/FS link", linked.getInfoLog(), graph));
+                                     CompileDiagnostic(program.name, "link", linked.getInfoLog(), graph));
                 }
                 // 链接后的 IR 是反射与包载荷的共同来源, 不对另一次重编译的结果做旁路核对.
                 BuildOutput output;
                 auto &package = output.package;
-                package.profile = "GraphicsBaselineV1";
+                package.profile = program.profile;
                 package.abiHash = interfaceInput.schema.abiHash;
                 package.declaration = SnapshotInterface(interfaceInput.schema);
                 const Json options{
@@ -307,7 +323,7 @@ namespace Physara::Shader
                     {"configuration", BuildConfiguration},
                     {"options", options},
                     {"hostFlags", CompilerFlagHash}}.dump());
-                for (std::size_t index = 0; index < sources.size(); ++index)
+                for (std::size_t index = 0; index < program.stages.size(); ++index)
                 {
                     ShaderModule module;
                     module.stage = program.stages[index].stage;
@@ -319,7 +335,8 @@ namespace Physara::Shader
                     spirvOptions.stripDebugInfo = false;
                     spirvOptions.validate = false;
                     spv::SpvBuildLogger logger;
-                    glslang::GlslangToSpv(*linked.getIntermediate(Languages[index]), module.words, &logger,
+                    const auto language = Languages[static_cast<std::size_t>(module.stage)];
+                    glslang::GlslangToSpv(*linked.getIntermediate(language), module.words, &logger,
                                           &spirvOptions);
                     const auto messagesText = logger.getAllMessages();
                     if (!messagesText.empty())
@@ -338,7 +355,7 @@ namespace Physara::Shader
                     }
                     package.modules.push_back(std::move(module));
                 }
-                CheckProgramInterfaces(package.modules);
+                CheckProgramInterfaces(package.modules, package.profile);
                 // 包内只存逻辑身份, depfile 单独保存本机路径; 静态图包含未活动分支以保守触发重建.
                 output.fileDependencies = interfaceInput.files;
                 for (auto &file : output.fileDependencies)

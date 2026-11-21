@@ -201,15 +201,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    ComputePipelineHandle OpenGLDevice::CreateComputePipeline(const ComputePipelineDesc &)
-    {
-        if (RequireContext("CreateComputePipeline"))
-        {
-            Report("CreateComputePipeline", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
     MeshletPipelineHandle OpenGLDevice::CreateMeshletPipeline(const MeshletPipelineDesc &, FramebufferInfo const &)
     {
         if (RequireContext("CreateMeshletPipeline"))

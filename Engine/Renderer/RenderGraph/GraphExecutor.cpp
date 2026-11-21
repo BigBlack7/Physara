@@ -354,6 +354,18 @@ namespace Physara::Renderer::Detail
         return std::nullopt;
     }
 
+    // 读和写都请求同一个 UAV 状态. 保留各声明的方向, 供录制在实际 Dispatch 前核对活动绑定.
+    static RHI::StorageAccess StorageDirection(GraphUsage usage) noexcept
+    {
+        switch (usage)
+        {
+        case GraphUsage::StorageRead: return RHI::StorageAccess::Read;
+        case GraphUsage::StorageWrite: return RHI::StorageAccess::Write;
+        case GraphUsage::StorageReadWrite: return RHI::StorageAccess::ReadWrite;
+        default: return RHI::StorageAccess::None;
+        }
+    }
+
     GraphFailure GraphExecutor::PrepareOrdinaryUses(const PlannedGraphPass &pass)
     {
         // 跟踪状态按物理单元合并. 授权保留每条原始用途和范围, 深度采样位也与附件读取权限分开登记.
@@ -372,7 +384,8 @@ namespace Physara::Renderer::Detail
                 auto *object = Texture(access.resource);
                 uses.Add(*object, access.range, *planned.state);
                 const auto state = access.usage == GraphUsage::Sampled ? ResourceStates::ShaderResource : *planned.state;
-                textures.push_back({object, RhiSubresources(access.range), access.range.aspect, state});
+                textures.push_back({object, RhiSubresources(access.range), access.range.aspect, state,
+                                    StorageDirection(access.usage)});
             }
             else
             {
@@ -381,7 +394,8 @@ namespace Physara::Renderer::Detail
                 auto *object = Buffer(access.resource);
                 uses.Add(*object, *planned.state);
                 // 行范围随本 Pass 授权. 结构化表另携带布局要求的绑定范围, 供后端核对预建集合.
-                buffers.push_back({object, access.range, *planned.state, buffer.indexedBinding});
+                buffers.push_back({object, access.range, *planned.state, buffer.indexedBinding,
+                                   StorageDirection(access.usage)});
             }
         }
         return uses.Commit(m_Recording, m_Diagnostics, m_Stage, m_CurrentPass, textures, buffers);

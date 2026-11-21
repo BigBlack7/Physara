@@ -201,7 +201,7 @@ namespace Physara::RHI::OpenGL
         MemoryRequirements GetBufferMemoryRequirements(Buffer *buffer) override;
         bool BindBufferMemory(Buffer *buffer, Heap *heap, uint64_t offset) override;
         BufferHandle CreateHandleForNativeBuffer(ObjectType objectType, Object buffer, const BufferDesc &desc) override;
-        /// @brief 复制 canonical VS/FS 字节并解析入口反射, 失败返回空, 不在此编译 GL Shader.
+        /// @brief 复制 canonical VS, FS 或 CS 字节并解析入口反射. 解析失败返回空, 原生编译在 Pipeline 准备时执行.
         ShaderHandle CreateShader(const ShaderDesc &d, const void *binary, size_t binarySize) override;
         ShaderHandle CreateShaderSpecialization(Shader *baseShader, const ShaderSpecialization *constants,
                                                 uint32_t numConstants) override;
@@ -239,6 +239,7 @@ namespace Physara::RHI::OpenGL
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc,
                                                       FramebufferInfo const &fbinfo) override;
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc, Framebuffer *fb) override;
+        /// @brief 验证本设备的单个 CS, 逻辑布局和工作组上限. 原生 Program 成功链接并核对绑定后才发布.
         ComputePipelineHandle CreateComputePipeline(const ComputePipelineDesc &desc) override;
         MeshletPipelineHandle CreateMeshletPipeline(const MeshletPipelineDesc &desc,
                                                     FramebufferInfo const &fbinfo) override;
@@ -247,7 +248,7 @@ namespace Physara::RHI::OpenGL
         /// @brief 保存常规逻辑布局, 不占用 GL 单元; 非基线类别/数组/可见阶段明确失败.
         BindingLayoutHandle CreateBindingLayout(const BindingLayoutDesc &desc) override;
         BindingLayoutHandle CreateBindlessLayout(const BindlessLayoutDesc &desc) override;
-        /// @brief 全量预检后物化自有二维视图并发布集合, 集合强持有布局/资源, 不改全局绑定.
+        /// @brief 预检完整集合再物化所需的采样或存储视图. 发布的集合拥有布局, 底层资源及自建视图.
         BindingSetHandle CreateBindingSet(const BindingSetDesc &desc, BindingLayout *layout) override;
         DescriptorTableHandle CreateDescriptorTable(BindingLayout *layout) override;
         void ResizeDescriptorTable(DescriptorTable *descriptorTable, uint32_t newSize,
@@ -353,7 +354,10 @@ namespace Physara::RHI::OpenGL
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
-        // Draw, 上传和屏障由 owner 在发出命令处累计. GraphicsCounts 另从 context 缓存取得实际绑定数.
+        // 同一 context 的已发访问, 已完成访问和各消费域可见的 Shader 写分别计数. 这些进度跨录制沿用.
+        std::uint64_t m_AccessEpoch = 0;
+        std::uint64_t m_CompletedAccessEpoch = 0;
+        std::array<std::uint64_t, 32> m_VisibleAccessEpoch{};
         GraphicsOperationCounts m_CommandCounts;
         std::unique_ptr<NativeDeletion> m_DummySampler;
         bool m_WorkFailed = false;
@@ -363,14 +367,33 @@ namespace Physara::RHI::OpenGL
 
     /// @brief 查询限制和每 target 的格式/样本集合, 再验证必需的 2D 基线.
     [[nodiscard]] bool BuildCaps(OpenGLDevice &device, DeviceCaps &caps);
-    /// @brief 核对图形准备所需入口并查询 VS/FS 与原生全局限额.
+    /// @brief 查询各 Shader 阶段和原生全局限额, 并从计算入口及工作组限制建立设备快照.
     [[nodiscard]] bool BuildShaderCaps(OpenGLDevice &device, ShaderCaps &caps);
     /// @brief 按 RHI 维度取得原生 target, Unknown 或非法值返回零.
     [[nodiscard]] GLenum TextureTarget(TextureDimension dimension) noexcept;
+    /// @brief 设置整数 storage image 的完整性所需过滤参数, 供原存储与新建 image view 共用.
+    void SetStorageImageFilters(GLuint name, Format format) noexcept;
     /// @brief 检查普通状态元数据与 keepInitialState 的一致性, 不推导 texel 初始化或命令支持.
     [[nodiscard]] bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept;
     /// @brief 取得已支持颜色上传的 external format/type, 不支持时输出参数不变.
     [[nodiscard]] bool GetUploadFormat(Format format, GLenum &externalFormat, GLenum &externalType) noexcept;
+
+    /// @brief 用于判断 Shader 写的分域可见性和后继写的执行顺序, 由 owner context 更新.
+    /// @note Buffer 紧缩后 shaderWrite 可以是保留相同待同步域的等价序号. 两项均为零表示这两类依赖均已满足.
+    struct ShaderAccessStamp
+    {
+        std::uint64_t shaderWrite = 0;
+        std::uint64_t lastAccess = 0;
+        bool operator==(const ShaderAccessStamp &) const = default;
+    };
+
+    /// @brief 同一 storage 内连续且共享历史的半开区间.
+    struct BufferAccessSpan
+    {
+        std::uint64_t first;
+        std::uint64_t end;
+        ShaderAccessStamp stamp;
+    };
 
     /// @brief 不可变 Buffer 存储的 CPU wrapper, 自持描述并强持有 Device, 发布后析构仅交接删除节点.
     /// @note 以下资源 wrapper 的原生创建/收集限 owning/current, CPU 引用可跨线程释放.
@@ -405,6 +428,8 @@ namespace Physara::RHI::OpenGL
         InternalOwnership m_InternalOwners;
         BufferDesc m_Desc;
         BufferStateExtension m_State{m_Desc};
+        // UAV Buffer 的半开字节区间覆盖整个分配. 每个区间记录最近的 Shader 写与最近一次实际访问.
+        std::vector<BufferAccessSpan> m_ShaderAccess = std::vector<BufferAccessSpan>(0);
         std::unique_ptr<NativeDeletion> m_Deletion;
         // 每个版本记录其物理包身份, 由同一 owner 录制并退休. 零表示可用, 包内索引零合法.
         std::vector<std::uint64_t> m_Versions = std::vector<std::uint64_t>(0);
@@ -452,6 +477,8 @@ namespace Physara::RHI::OpenGL
         InternalOwnership m_InternalOwners;
         TextureDesc m_Desc;
         TextureStateExtension m_State{m_Desc};
+        // UAV 图像以原存储的 layer * mipLevels + mip 索引. 所有视图的访问都落回这份历史.
+        std::vector<ShaderAccessStamp> m_ShaderAccess = std::vector<ShaderAccessStamp>(0);
         std::unique_ptr<std::uint64_t[]> m_DepthWrites; ///< 可联合采样的 2D 存储才按 mip 分配深度写入历史.
         std::unique_ptr<NativeDeletion> m_Deletion;
         bool m_Published = false;

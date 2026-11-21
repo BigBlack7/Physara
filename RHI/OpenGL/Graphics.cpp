@@ -1,7 +1,7 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 消费当前不可变绑定计划与实际图形用途, 将预解析资源/格式交给唯一 context 缓存.
+/// @brief 确定 Draw 的附件和输入用途. Draw 与 Dispatch 共用按 Program 计划应用绑定及选择动态常量的路径.
 
 #include <algorithm>
 #include <cassert>
@@ -33,13 +33,13 @@ namespace Physara::RHI::OpenGL
     }
 
     bool OpenGLCommandList::GraphicsUses(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
-                                         const char *operation)
+                                         const char *operation, bool executed)
     {
         const auto &depth = state.framebuffer->GetDesc().depthAttachment;
         // Shader 读取按活动计划请求, 然后处理顶点/索引与附件, 不从 native 缓存命中推断用途.
         for (const auto &entry : pipeline.Plan().resources)
         {
-            const auto &binding = BindingFor(state, entry);
+            const auto &binding = BindingFor(state.bindings, entry);
             if (binding.type == ResourceType::VolatileConstantBuffer)
             {
                 // 版本范围由本包拥有的 host 写建立. 图权限仍用公开 Buffer 的逻辑范围.
@@ -54,7 +54,9 @@ namespace Physara::RHI::OpenGL
                 const auto use = binding.type == ResourceType::ConstantBuffer ? ResourceStates::ConstantBuffer
                                                                               : ShaderReads(entry.stages);
                 if (!UseBuffer(*static_cast<OpenGLBuffer *>(binding.resource), use, operation, binding.range,
-                               binding.type == ResourceType::StructuredBuffer_SRV))
+                               binding.type == ResourceType::StructuredBuffer_SRV, StorageAccess::None,
+                               executed ? (binding.type == ResourceType::ConstantBuffer ? GL_UNIFORM_BARRIER_BIT :
+                                                                                         GL_SHADER_STORAGE_BARRIER_BIT) : 0))
                 {
                     return false;
                 }
@@ -66,7 +68,7 @@ namespace Physara::RHI::OpenGL
                 const auto usesDepth = GetFormatInfo(texture.GetDesc().format).hasDepth;
                 const auto aspect = usesDepth ? TextureAspect::Depth : TextureAspect::Color;
                 if (!UseTexture(texture, binding.subresources, aspect, TextureReads(texture, shaderReads),
-                                operation, shaderReads))
+                                operation, shaderReads, StorageAccess::None, executed ? GL_TEXTURE_FETCH_BARRIER_BIT : 0))
                 {
                     return false;
                 }
@@ -99,7 +101,8 @@ namespace Physara::RHI::OpenGL
         for (const auto &attachment : state.framebuffer->GetDesc().colorAttachments)
         {
             if (!UseTexture(*static_cast<OpenGLTexture *>(attachment.texture), attachment.subresources,
-                            TextureAspect::Color, ResourceStates::RenderTarget, operation))
+                            TextureAspect::Color, ResourceStates::RenderTarget, operation, ResourceStates::Unknown,
+                            StorageAccess::None, executed ? GL_FRAMEBUFFER_BARRIER_BIT : 0))
             {
                 return false;
             }
@@ -110,7 +113,7 @@ namespace Physara::RHI::OpenGL
             auto use = ResourceStates::DepthRead;
             for (const auto &entry : pipeline.Plan().resources)
             {
-                const auto &binding = BindingFor(state, entry);
+                const auto &binding = BindingFor(state.bindings, entry);
                 if (SamplesAttachment(binding, depth))
                 {
                     use = use | ShaderReads(entry.stages);
@@ -161,24 +164,39 @@ namespace Physara::RHI::OpenGL
         }
         context.ApplyIndexBuffer(
             state.indexBuffer.buffer ? static_cast<OpenGLBuffer *>(state.indexBuffer.buffer)->Name() : 0);
-        for (const auto &entry : pipeline.Plan().resources)
+        ApplyProgramBindings(state.bindings, pipeline.Plan());
+    }
+
+    void OpenGLCommandList::ApplyProgramBindings(const BindingSetVector &bindings, const PipelineBindingPlan &plan)
+    {
+        auto &context = m_Device->m_ContextState;
+        for (const auto &entry : plan.resources)
         {
-            const auto &binding = BindingFor(state, entry);
-            if (binding.type == ResourceType::ConstantBuffer || binding.type == ResourceType::StructuredBuffer_SRV)
+            const auto &binding = BindingFor(bindings, entry);
+            if (binding.type == ResourceType::ConstantBuffer || binding.type == ResourceType::StructuredBuffer_SRV ||
+                binding.type == ResourceType::StructuredBuffer_UAV)
             {
-                context.ApplyBufferRange(binding.type == ResourceType::StructuredBuffer_SRV, entry.unit, binding.name,
+                context.ApplyBufferRange(binding.type != ResourceType::ConstantBuffer, entry.unit, binding.name,
                                          GLintptr(binding.range.byteOffset), GLsizeiptr(binding.range.byteSize));
+            }
+            else if (binding.type == ResourceType::Texture_UAV)
+            {
+                const auto access = entry.resource.access;
+                const GLenum native = access == StorageAccess::Read ? GL_READ_ONLY :
+                                      (access == StorageAccess::Write ? GL_WRITE_ONLY : GL_READ_WRITE);
+                context.ApplyImage(entry.unit, binding.name, binding.dimension == TextureDimension::Texture2DArray,
+                                   native, binding.imageInternalFormat);
             }
         }
         // pair 的两端可来自不同集合, 不能把 texture 的逻辑 slot 当作 sampler 或原生单元.
         const auto find = [&](ShaderBindingKey key) -> const NativeBinding &
         {
-            const auto entry = std::ranges::find(pipeline.Plan().resources, key,
+            const auto entry = std::ranges::find(plan.resources, key,
                                                  [](const auto &resource) { return resource.resource.key; });
-            assert(entry != pipeline.Plan().resources.end());
-            return BindingFor(state, *entry);
+            assert(entry != plan.resources.end());
+            return BindingFor(bindings, *entry);
         };
-        for (const auto &pair : pipeline.Plan().pairs)
+        for (const auto &pair : plan.pairs)
         {
             const auto &texture = find(pair.pair.texture);
             const auto sampler = pair.pair.dummy ? m_Device->m_DummySampler->name : find(pair.pair.sampler).name;
@@ -211,35 +229,36 @@ namespace Physara::RHI::OpenGL
             {
                 return;
             }
-            if (binding.type == ResourceType::Texture_SRV)
+            if (binding.type == ResourceType::Texture_SRV || binding.type == ResourceType::Texture_UAV)
             {
                 auto *texture = static_cast<OpenGLTexture *>(binding.resource);
-                m_Packet->tracker.RequireTextureState(&texture->m_State, binding.subresources,
-                                                      TextureReads(*texture, shaderState));
+                const auto use = binding.type == ResourceType::Texture_UAV ? ResourceStates::UnorderedAccess :
+                                                                             TextureReads(*texture, shaderState);
+                m_Packet->tracker.RequireTextureState(&texture->m_State, binding.subresources, use);
             }
             else
             {
                 auto *buffer = static_cast<OpenGLBuffer *>(binding.resource);
-                m_Packet->tracker.RequireBufferState(&buffer->m_State, binding.type == ResourceType::ConstantBuffer
-                                                                           ? ResourceStates::ConstantBuffer
-                                                                           : shaderState);
+                const auto use = binding.type == ResourceType::ConstantBuffer ? ResourceStates::ConstantBuffer :
+                    (binding.type == ResourceType::StructuredBuffer_UAV ? ResourceStates::UnorderedAccess : shaderState);
+                m_Packet->tracker.RequireBufferState(&buffer->m_State, use);
             }
         }
     }
 
-    bool OpenGLCommandList::CheckDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline,
+    bool OpenGLCommandList::CheckConstants(const BindingSetVector &bindings, const PipelineBindingPlan &plan,
                                                const char *operation) const
     {
-        for (const auto &entry : pipeline.Plan().resources)
+        for (const auto &entry : plan.resources)
         {
             if (entry.bindingType == ResourceType::PushConstants && !m_Packet->push.buffer)
             {
-                m_Device->Report(operation, "InvalidState: push constants missing for current graphics state");
+                m_Device->Report(operation, "InvalidState: push constants missing for current pipeline");
                 return false;
             }
             if (entry.bindingType == ResourceType::VolatileConstantBuffer)
             {
-                const auto &binding = BindingFor(state, entry);
+                const auto &binding = BindingFor(bindings, entry);
                 const auto &buffer = *static_cast<OpenGLBuffer *>(binding.resource);
                 // 成员有效字节须落在本次写入前缀内. 原生绑定另计块尾对齐, 整段须落在同一版本槽内.
                 if (buffer.m_LatestRecording != m_Packet->recordingId || buffer.m_ValidPrefix < entry.resource.extent ||
@@ -254,10 +273,10 @@ namespace Physara::RHI::OpenGL
         return true;
     }
 
-    void OpenGLCommandList::ApplyDrawConstants(const GraphicsState &state, const OpenGLGraphicsPipeline &pipeline)
+    void OpenGLCommandList::ApplyConstants(const BindingSetVector &bindings, const PipelineBindingPlan &plan)
     {
         auto &context = m_Device->m_ContextState;
-        for (const auto &entry : pipeline.Plan().resources)
+        for (const auto &entry : plan.resources)
         {
             if (entry.bindingType == ResourceType::PushConstants)
             {
@@ -266,7 +285,7 @@ namespace Physara::RHI::OpenGL
             }
             else if (entry.bindingType == ResourceType::VolatileConstantBuffer)
             {
-                const auto &buffer = *static_cast<OpenGLBuffer *>(BindingFor(state, entry).resource);
+                const auto &buffer = *static_cast<OpenGLBuffer *>(BindingFor(bindings, entry).resource);
                 const auto offset = buffer.m_LatestVersion * buffer.m_VersionStride;
                 context.ApplyBufferRange(false, entry.unit, buffer.Name(), GLintptr(offset), entry.nativeExtent);
             }

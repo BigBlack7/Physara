@@ -61,10 +61,10 @@ namespace Physara::RHI::OpenGL
                  depth.backFaceStencil.depthFailOp != StencilOp::Keep || depth.backFaceStencil.passOp != StencilOp::Keep));
     }
 
-    const NativeBinding &OpenGLCommandList::BindingFor(const GraphicsState &state, const PlannedResource &entry) const
+    const NativeBinding &OpenGLCommandList::BindingFor(const BindingSetVector &bindings, const PlannedResource &entry) const
     {
         // 候选边界已证明布局身份和完整 type/slot 集合, 此处只按当前 Pipeline 的计划定位记录.
-        const auto *set = static_cast<const OpenGLBindingSet *>(state.bindings[entry.layoutIndex]);
+        const auto *set = static_cast<const OpenGLBindingSet *>(bindings[entry.layoutIndex]);
         const auto found =
             std::ranges::find_if(set->Bindings(), [&](const auto &binding)
                                  { return binding.type == entry.bindingType && binding.slot == entry.slot; });
@@ -182,7 +182,7 @@ namespace Physara::RHI::OpenGL
         for (const auto &entry : pipeline->Plan().resources)
         {
             // 活动范围与写附件 feedback 属于本次组合, 不能从独立 Set 创建成功推断.
-            const auto &binding = BindingFor(state, entry);
+            const auto &binding = BindingFor(state.bindings, entry);
             if (entry.resource.type == ResourceType::ConstantBuffer ||
                 entry.resource.type == ResourceType::StructuredBuffer_SRV)
             {
@@ -241,7 +241,7 @@ namespace Physara::RHI::OpenGL
         const auto *texture = static_cast<const OpenGLTexture *>(depth.texture);
         for (const auto &entry : pipeline.Plan().resources)
         {
-            const auto &binding = BindingFor(state, entry);
+            const auto &binding = BindingFor(state.bindings, entry);
             if (SamplesAttachment(binding, depth))
             {
                 // 同一物理 mip 可能在更早的列表写过. 状态请求和新 view 沿用实际深度写入进度.
@@ -271,10 +271,10 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        // 图内新候选必须重新取得绘制资格. 任何准备失败都只保留真实前缀及其引用.
+        // 图内先撤销两类候选的执行资格. 准备失败时已发命令及其资源引用仍随包退休.
         if (m_Packet->useMode == UseMode::GraphManaged)
         {
-            m_Packet->graphicsSet = false;
+            ResetPipelineState();
         }
         OpenGLGraphicsPipeline *pipeline = nullptr;
         OpenGLFramebuffer *framebuffer = nullptr;
@@ -331,6 +331,7 @@ namespace Physara::RHI::OpenGL
         m_Packet->graphics = candidate;
         m_Packet->push = {};
         m_Packet->graphicsSet = true;
+        m_Packet->computeSet = false;
         m_Packet->viewportSet = !candidate.viewport.viewports.empty();
         m_Packet->scissorSet = !candidate.viewport.scissorRects.empty();
     }

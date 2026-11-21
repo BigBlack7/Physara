@@ -66,7 +66,7 @@ namespace Physara::RHI::OpenGL
                 if (item.type == ResourceType::PushConstants)
                 {
                     // push 在整条 Pipeline 上只有一个逻辑声明. 到活动反射匹配它时才分配物理 UBO 位置.
-                    RequirePreparation(!pushLayout, "InvalidArgument: more than one graphics push layout");
+                    RequirePreparation(!pushLayout, "InvalidArgument: more than one pipeline push constant layout");
                     pushLayout = static_cast<std::uint32_t>(index);
                     pushSlot = item.slot;
                     result.pushBytes = result.pushBackingBytes = item.size;
@@ -76,7 +76,8 @@ namespace Physara::RHI::OpenGL
         for (const auto *shader : shaders)
         {
             // 资源 key 的相等与 stage 的贡献分别记录, 避免共享绑定点掩盖 combined 超限.
-            const auto stage = shader->GetDesc().shaderType == ShaderType::Vertex ? 0u : 1u;
+            const auto shaderType = shader->GetDesc().shaderType;
+            const auto stage = shaderType == ShaderType::Vertex ? 0u : (shaderType == ShaderType::Pixel ? 1u : 2u);
             const auto bit = 1u << stage;
             for (const auto &resource : shader->Resources())
             {
@@ -113,10 +114,13 @@ namespace Physara::RHI::OpenGL
                     {
                         continue;
                     }
+                    // 只读 SSBO 的 IR 也可能来自只读 u 槽. 以布局的 canonical binding 核对地址, 保留匹配到的实际类别.
                     const auto item = std::ranges::find_if(layout.bindings, [&](const auto &entry) {
                         const bool matchingType = entry.type == resource.type ||
                             (resource.type == ResourceType::ConstantBuffer &&
-                             entry.type == ResourceType::VolatileConstantBuffer);
+                             entry.type == ResourceType::VolatileConstantBuffer) ||
+                            (shaderType == ShaderType::Compute && resource.type == ResourceType::StructuredBuffer_SRV &&
+                             entry.type == ResourceType::StructuredBuffer_UAV);
                         return matchingType && CanonicalBinding(layout, entry) == resource.key.binding;
                     });
                     RequirePreparation(item != layout.bindings.end() &&
@@ -147,11 +151,18 @@ namespace Physara::RHI::OpenGL
         std::ranges::sort(result.pairs, {}, &PlannedPair::pair);
         std::uint32_t ubo = 0;
         std::uint32_t ssbo = 0;
+        std::uint32_t images = 0;
         for (auto &entry : result.resources)
         {
             const bool constant = entry.resource.type == ResourceType::ConstantBuffer ||
                                   entry.resource.type == ResourceType::PushConstants;
-            if (!constant && entry.resource.type != ResourceType::StructuredBuffer_SRV)
+            if (entry.resource.type == ResourceType::Texture_UAV)
+            {
+                entry.unit = images++;
+                continue;
+            }
+            if (!constant && entry.resource.type != ResourceType::StructuredBuffer_SRV &&
+                entry.resource.type != ResourceType::StructuredBuffer_UAV)
             {
                 continue;
             }
@@ -159,7 +170,7 @@ namespace Physara::RHI::OpenGL
             entry.nativeExtent = entry.resource.extent;
             Limit((constant ? "UBO block bytes" : "SSBO block bytes"), entry.resource.extent,
                   constant ? caps.uniformBlockBytes : caps.storageBlockBytes);
-            for (std::uint32_t stage = 0; stage < 2; ++stage)
+            for (std::uint32_t stage = 0; stage < result.uniformCounts.size(); ++stage)
             {
                 if ((entry.stages & (1u << stage)) != 0)
                 {
@@ -179,7 +190,7 @@ namespace Physara::RHI::OpenGL
             RequirePreparation(has(entry.pair.texture, ResourceType::Texture_SRV) &&
                                    (entry.pair.dummy || has(entry.pair.sampler, ResourceType::Sampler)),
                                "InterfaceMismatch: sampling pair resource" + KeyText(entry.pair.texture));
-            for (std::uint32_t stage = 0; stage < 2; ++stage)
+            for (std::uint32_t stage = 0; stage < result.uniformCounts.size(); ++stage)
             {
                 if ((entry.stages & (1u << stage)) != 0)
                 {
@@ -191,17 +202,22 @@ namespace Physara::RHI::OpenGL
         Limit("UBO binding points", ubo, caps.uniformBindings);
         Limit("SSBO binding points", ssbo, caps.storageBindings);
         Limit("texture unit indices", result.pairs.size(), caps.combinedTextureUnits);
-        for (std::uint32_t stage = 0; stage < 2; ++stage)
+        Limit("image unit indices", images, caps.imageUnits);
+        Limit("compute images", images, caps.computeImages);
+        Limit("combined images", images, caps.combinedImages);
+        Limit("compute shader output resources", std::uint64_t(images) + result.storageCounts[2],
+              caps.combinedOutputs);
+        for (std::uint32_t stage = 0; stage < result.uniformCounts.size(); ++stage)
         {
-            Limit(stage == 0 ? "VS UBO" : "FS UBO", result.uniformCounts[stage], caps.uniformBlocks[stage]);
-            Limit(stage == 0 ? "VS SSBO" : "FS SSBO", result.storageCounts[stage], caps.storageBlocks[stage]);
-            Limit(stage == 0 ? "VS textures" : "FS textures", result.textureCounts[stage], caps.textureUnits[stage]);
+            Limit(stage == 0 ? "VS UBO" : (stage == 1 ? "FS UBO" : "CS UBO"), result.uniformCounts[stage], caps.uniformBlocks[stage]);
+            Limit(stage == 0 ? "VS SSBO" : (stage == 1 ? "FS SSBO" : "CS SSBO"), result.storageCounts[stage], caps.storageBlocks[stage]);
+            Limit(stage == 0 ? "VS textures" : (stage == 1 ? "FS textures" : "CS textures"), result.textureCounts[stage], caps.textureUnits[stage]);
         }
-        Limit("combined UBO", std::uint64_t(result.uniformCounts[0]) + result.uniformCounts[1],
+        Limit("combined UBO", std::uint64_t(result.uniformCounts[0]) + result.uniformCounts[1] + result.uniformCounts[2],
               caps.combinedUniformBlocks);
-        Limit("combined SSBO", std::uint64_t(result.storageCounts[0]) + result.storageCounts[1],
+        Limit("combined SSBO", std::uint64_t(result.storageCounts[0]) + result.storageCounts[1] + result.storageCounts[2],
               caps.combinedStorageBlocks);
-        Limit("combined textures", std::uint64_t(result.textureCounts[0]) + result.textureCounts[1],
+        Limit("combined textures", std::uint64_t(result.textureCounts[0]) + result.textureCounts[1] + result.textureCounts[2],
               caps.combinedTextureUnits);
         return result;
     }

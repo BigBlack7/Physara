@@ -1,7 +1,7 @@
 #include "Bindings.hpp"
 
 /// @file
-/// @brief 核对逻辑布局和整组绑定输入, 再建立独立的采样视图与资源引用.
+/// @brief 由逻辑布局与调用方条目建立不可变集合. 保存原存储的区间和引用, 需要重编号时创建独立视图.
 /// 创建过程保留 context 的活动绑定. Pipeline 另外解释 slot 到原生单元的映射.
 
 #include <algorithm>
@@ -28,6 +28,10 @@ namespace Physara::RHI::OpenGL
         case ResourceType::Texture_SRV:
             offset = desc.bindingOffsets.shaderResource;
             break;
+        case ResourceType::StructuredBuffer_UAV:
+        case ResourceType::Texture_UAV:
+            offset = desc.bindingOffsets.unorderedAccess;
+            break;
         case ResourceType::Sampler:
             offset = desc.bindingOffsets.sampler;
             break;
@@ -48,7 +52,8 @@ namespace Physara::RHI::OpenGL
         }
         try
         {
-            const auto allowed = ShaderType::Vertex | ShaderType::Pixel;
+            const auto allowed = ShaderType::Vertex | ShaderType::Pixel |
+                (m_Caps.shader.compute ? ShaderType::Compute : ShaderType::None);
             RequirePreparation(desc.visibility != ShaderType::None && (desc.visibility & ~allowed) == ShaderType::None,
                                "Unsupported: binding visibility");
             RequirePreparation(desc.registerSpace < 4 && (desc.registerSpaceIsDescriptorSet || desc.registerSpace == 0),
@@ -70,6 +75,9 @@ namespace Physara::RHI::OpenGL
                 RequirePreparation(item.type != ResourceType::VolatileConstantBuffer ||
                                        ++volatileCount <= MaxVolatileConstantBuffersPerLayout,
                                    "InvalidArgument: too many volatile constants in one layout");
+                RequirePreparation((item.type != ResourceType::StructuredBuffer_UAV &&
+                                    item.type != ResourceType::Texture_UAV) || desc.visibility == ShaderType::Compute,
+                                   "Unsupported: storage binding requires compute-only layout visibility");
                 RequirePreparation(bindings.insert(CanonicalBinding(desc, item)).second,
                                    "InvalidArgument: colliding canonical layout bindings");
             }
@@ -121,6 +129,8 @@ namespace Physara::RHI::OpenGL
         const auto &desc = buffer.GetDesc();
         const bool isVolatile = item.type == ResourceType::VolatileConstantBuffer;
         const bool constant = isVolatile || item.type == ResourceType::ConstantBuffer;
+        RequirePreparation(item.type != ResourceType::StructuredBuffer_UAV || desc.canHaveUAVs,
+                           "InvalidArgument: buffer missing structured UAV role");
         RequirePreparation(desc.isVolatile == isVolatile && (constant ? desc.isConstantBuffer : desc.structStride > 0),
                            "InvalidArgument: buffer binding usage");
         const auto offset = item.range.byteOffset;
@@ -242,8 +252,43 @@ namespace Physara::RHI::OpenGL
         return result;
     }
 
-    // 先准备完整 owner 并解析全部输入, 再物化采样 view, 最后发布不可变集合.
-    // 中途失败只撤销本次未发布集合; 资源实际可用于哪个 Shader block 仍由图形候选组合边界确认.
+    // image 只选一个 mip. 二维视图取一个实际层, 数组视图可覆盖一段连续层.
+    // 选区需要新视图时, 原生 image 绑定从该视图的 level/layer 0 寻址.
+    static SamplingView InspectImage(OpenGLDevice &device, const BindingSetItem &item)
+    {
+        auto *texture = dynamic_cast<OpenGLTexture *>(item.resourceHandle);
+        RequirePreparation(texture && texture->Owner() == &device, "InvalidResource: foreign image binding");
+        const auto &desc = texture->GetDesc();
+        const auto dimension = item.dimension == TextureDimension::Unknown ? desc.dimension : item.dimension;
+        const bool array = dimension == TextureDimension::Texture2DArray;
+        auto range = item.subresources;
+        RequirePreparation(desc.isUAV && (desc.dimension == TextureDimension::Texture2D ||
+                           desc.dimension == TextureDimension::Texture2DArray) &&
+                           (array ? desc.dimension == dimension : dimension == TextureDimension::Texture2D) &&
+                           (item.format == Format::UNKNOWN || item.format == desc.format) &&
+                           range.baseMipLevel < desc.mipLevels && range.baseArraySlice < desc.arraySize,
+                           "InvalidArgument: storage image role, format, dimension or base range");
+        if (range.numArraySlices == TextureSubresourceSet::AllArraySlices)
+        {
+            range.numArraySlices = desc.arraySize - range.baseArraySlice;
+        }
+        if (range.numMipLevels == TextureSubresourceSet::AllMipLevels)
+        {
+            range.numMipLevels = desc.mipLevels - range.baseMipLevel;
+        }
+        RequirePreparation(range.numMipLevels == 1 && range.numArraySlices > 0 &&
+                               range.numArraySlices <= desc.arraySize - range.baseArraySlice &&
+                               (array || range.numArraySlices == 1),
+                           "InvalidArgument: storage image needs one mip and an exact layer span");
+        const auto &caps = device.GetFormatCaps(desc.format, dimension);
+        RequirePreparation((caps.support & (FormatSupport::ShaderUavLoad | FormatSupport::ShaderUavStore)) != 0,
+                           "Unsupported: storage image view capability");
+        return {texture, dimension, caps.internalFormat, range, {},
+                dimension == desc.dimension && range.baseMipLevel == 0 && range.baseArraySlice == 0 &&
+                range.numArraySlices == desc.arraySize};
+    }
+
+    // 先由未发布的集合持有布局和资源, 再为需要重编号的条目物化原生视图. 中途返回由本地 owner 回收前缀.
     BindingSetHandle OpenGLDevice::CreateBindingSet(const BindingSetDesc &desc, BindingLayout *layout)
     {
         if (!RequireContext("CreateBindingSet"))
@@ -277,14 +322,23 @@ namespace Physara::RHI::OpenGL
                 record.resource = item.resourceHandle;
                 if (item.type == ResourceType::PushConstants)
                 {
-                    // 集合只携带布局占位和字节数. 每次图形状态设置后由命令提供实际数据.
+                    // 集合只保存 push 占位和大小, 当前 Draw 或 Dispatch 的数据来自最近一次被接受的状态设置后的写入.
                     RequirePreparation(item.range.byteOffset == 0 && item.range.byteSize == found->size,
                                        "InvalidArgument: push constant set size");
                     record.range = item.range;
                 }
-                else if (item.type == ResourceType::Texture_SRV)
+                else if (item.type == ResourceType::Texture_SRV || item.type == ResourceType::Texture_UAV)
                 {
-                    views[index] = InspectTexture(*this, item, *nativeLayout->GetDesc());
+                    if (item.type == ResourceType::Texture_UAV)
+                    {
+                        views[index] = InspectImage(*this, item);
+                        record.imageFormat = views[index].texture->GetDesc().format;
+                        record.imageInternalFormat = views[index].format;
+                    }
+                    else
+                    {
+                        views[index] = InspectTexture(*this, item, *nativeLayout->GetDesc());
+                    }
                     // 保存 storage 空间中的实际范围, view 的 mip/layer 重编号不能用于用途或 feedback 判断.
                     record.dimension = views[index].dimension;
                     record.subresources = views[index].range;
@@ -333,7 +387,14 @@ namespace Physara::RHI::OpenGL
                 glTextureView(name, TextureTarget(view.dimension), view.texture->Name(), view.format,
                               view.range.baseMipLevel, view.range.numMipLevels, view.range.baseArraySlice,
                               view.range.numArraySlices);
-                glTextureParameteriv(name, GL_TEXTURE_SWIZZLE_RGBA, view.swizzle.data());
+                if (set->m_Bindings[index].type == ResourceType::Texture_SRV)
+                {
+                    glTextureParameteriv(name, GL_TEXTURE_SWIZZLE_RGBA, view.swizzle.data());
+                }
+                else
+                {
+                    SetStorageImageFilters(name, set->m_Bindings[index].imageFormat);
+                }
                 if (!CheckNative("CreateBindingSet.View", name))
                 {
                     return nullptr;

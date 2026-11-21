@@ -33,6 +33,7 @@ namespace Physara::Shader
         std::vector<BufferLayout> blocks;
         std::vector<BindingSchema> bindings;
         std::vector<IoSchema> io;
+        std::array<std::uint32_t, 3> localSize{};
     };
 
     /// @brief 将规范类型名解码为 CPU/GLSL 形状, 不支持的名字抛 BuildError.
@@ -46,6 +47,25 @@ namespace Physara::Shader
     [[nodiscard]] std::string_view StageName(Stage stage) noexcept;
     [[nodiscard]] ResourceKind ParseResourceKind(std::string_view name);
     [[nodiscard]] std::string_view ResourceKindName(ResourceKind kind) noexcept;
+    /// @brief 判断是否使用定长记录布局, 存储图像形状或逻辑 u 类别, 供生成和反射共用.
+    [[nodiscard]] constexpr bool IsStructured(ResourceKind kind) noexcept
+    {
+        return kind == ResourceKind::StructuredBuffer || kind == ResourceKind::StructuredUav;
+    }
+    [[nodiscard]] constexpr bool IsStorageImage(ResourceKind kind) noexcept
+    {
+        return kind == ResourceKind::Image2D || kind == ResourceKind::Image2DArray;
+    }
+    [[nodiscard]] constexpr bool IsUnordered(ResourceKind kind) noexcept
+    {
+        return kind == ResourceKind::StructuredUav || IsStorageImage(kind);
+    }
+    /// @brief 解析存储方向和有限的 GLSL image 格式. 未识别的声明在构建边界报错.
+    [[nodiscard]] StorageAccess ParseStorageAccess(std::string_view name);
+    [[nodiscard]] std::string_view StorageAccessName(StorageAccess access) noexcept;
+    [[nodiscard]] std::string ParseStorageFormat(const Json &value);
+    /// @brief 读取 Compute 的三个正整数组内尺寸. 设备的分轴及总 invocation 上限在 Pipeline 准备时核对.
+    [[nodiscard]] std::array<std::uint32_t, 3> ParseLocalSize(const Json &value);
     /// @brief 校验声明, 生成名称和语义身份冲突, 排序集合并推导完整 ABI.
     [[nodiscard]] InterfaceSchema ParseInterfaceSchema(const Json &document);
     /// @brief 借出指定块, 未声明名字抛 BuildError; 引用不跨 schema 修改或销毁.

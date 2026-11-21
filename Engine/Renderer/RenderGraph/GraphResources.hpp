@@ -58,7 +58,7 @@ namespace Physara::Renderer
     };
 
     /// @brief Graph 的访问用途, 同时作为 Pass 查询的匹配键.
-    /// 写版本和内容读写由对应的 Use 记录表达.
+    /// StorageRead 消费已定义版本, StorageWrite 完整覆盖声明范围, StorageReadWrite 读取旧版本并产出新版本.
     /// @note 首发的普通纹理复制对 packed depth/stencil 使用两个 aspect.
     /// typed clear 可按 aspect 选择, 由编译计划单独调度.
     enum class GraphUsage : std::uint8_t
@@ -73,8 +73,18 @@ namespace Physara::Renderer
         CopyDestination,
         ColorAttachment,
         DepthStencilAttachment,
-        DepthStencilRead
+        DepthStencilRead,
+        StorageRead,
+        StorageWrite,
+        StorageReadWrite
     };
+
+    /// @brief Storage 的方向同时约束读写版本和实际绑定的授权, 公共 RHI 状态使用同一 UAV 位.
+    [[nodiscard]] constexpr bool IsStorageUsage(GraphUsage usage) noexcept
+    {
+        return usage == GraphUsage::StorageRead || usage == GraphUsage::StorageWrite ||
+               usage == GraphUsage::StorageReadWrite;
+    }
 
     /// @brief 写入前对范围内内容的处理. Load 保留并依赖旧内容, Clear 初始化, Discard 放弃旧值.
     enum class LoadOp : std::uint8_t
@@ -168,7 +178,7 @@ namespace Physara::Renderer
 
     /// @brief 无 write 表示读. 写的 access 指向新版本, Load 通过 previous 引用旧内容.
     /// 纹理的写范围以外也继承前一版本. 旧内容是否被此写读取由 ops 决定.
-    /// Buffer 写入完整定义它声明的字节区间, 区间外继承旧内容.
+    /// Buffer 的读改写保留 previous 的输入依赖, 完整覆写直接定义声明的字节区间.
     template <typename Access, typename Write>
     struct ResourceUse
     {

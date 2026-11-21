@@ -25,12 +25,14 @@ add_library(PhysaraRHIOpenGL STATIC
     InputLayout.hpp
     InputLayout.cpp
     Pipeline.cpp
-    # 即时列表按候选组合, 依赖保活, Draw 和传输拆分; 资源用途仍共用一份 Common tracker.
+    # Draw, Dispatch 和传输共用一个即时列表. CommandListState 接受公共用途, ShaderAccess 按实际访问发射同步.
     CommandList.hpp
     CommandList.cpp
     CommandListState.cpp
+    ShaderAccess.cpp
     CommandListOwnership.cpp
     CommandListGraphics.cpp
+    CommandListCompute.cpp
     Graphics.cpp
     CommandListDraw.cpp
     CommandListUpload.cpp

@@ -116,6 +116,25 @@ namespace Physara::RHI::OpenGL
         result.internalFormat = mapping.internalFormat;
         result.viewClass = viewClass;
         result.support = FormatSupport::Texture;
+        // 仅将有限 storage profile 与此 target 的实际 image 能力相交. 读与写的查询结果分别记录.
+        if (glDispatchCompute && glMemoryBarrier && glBindImageTexture && glGetIntegeri_v &&
+            (dimension == TextureDimension::Texture2D || dimension == TextureDimension::Texture2DArray) &&
+            (mapping.format == Format::R32_FLOAT || mapping.format == Format::R32_UINT ||
+             mapping.format == Format::RGBA8_UNORM || mapping.format == Format::RGBA16_FLOAT))
+        {
+            if (query(GL_SHADER_IMAGE_LOAD) == GL_FULL_SUPPORT)
+            {
+                result.support = result.support | FormatSupport::ShaderUavLoad;
+            }
+            if (query(GL_SHADER_IMAGE_STORE) == GL_FULL_SUPPORT)
+            {
+                result.support = result.support | FormatSupport::ShaderUavStore;
+            }
+            if (!device.CheckNative("CreateDevice.ImageFormats"))
+            {
+                return false;
+            }
+        }
         if (renderable == GL_FULL_SUPPORT)
         {
             if (color == GL_TRUE)

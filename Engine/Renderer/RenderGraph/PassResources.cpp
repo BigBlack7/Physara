@@ -23,6 +23,7 @@ namespace Physara::Renderer
         switch (usage)
         {
         case GraphUsage::Sampled: return desc.isShaderResource;
+        case GraphUsage::StorageRead: return desc.isUAV && aspect == TextureAspect::Color;
         case GraphUsage::CopySource: return true;
         case GraphUsage::DepthStencilRead: return desc.isRenderTarget && aspect != TextureAspect::Color;
         default: return false;
@@ -36,6 +37,7 @@ namespace Physara::Renderer
         {
         case GraphUsage::ShaderRead:
             return desc.structStride != 0 || desc.canHaveRawViews || desc.canHaveTypedViews;
+        case GraphUsage::StorageRead: return desc.canHaveUAVs && desc.structStride != 0;
         case GraphUsage::VertexBuffer: return desc.isVertexBuffer;
         case GraphUsage::IndexBuffer: return desc.isIndexBuffer;
         case GraphUsage::IndirectArgument: return desc.isDrawIndirectArgs;
@@ -45,13 +47,19 @@ namespace Physara::Renderer
         }
     }
 
-    // 核对附件角色和清除值类型. CopyDestination 的 Load 表达保留式区域更新.
+    // 附件和传输按 load/store 解释保留或清除. storage 写另核对是否需要旧内容以及覆写范围.
     static bool AllowsWrite(const RHI::TextureDesc &desc, TextureAspect aspect, GraphUsage usage,
                             const TextureWriteOps &ops) noexcept
     {
         const bool color = aspect == TextureAspect::Color;
         switch (usage)
         {
+        case GraphUsage::StorageWrite:
+        case GraphUsage::StorageReadWrite:
+            return color && desc.isUAV && ops.store == StoreOp::Store &&
+                   ops.load == (usage == GraphUsage::StorageWrite ? LoadOp::Discard : LoadOp::Load) &&
+                   (usage == GraphUsage::StorageReadWrite || ops.coverage == WriteCoverage::Full) &&
+                   ops.coverage <= WriteCoverage::Full && std::holds_alternative<std::monostate>(ops.clearValue);
         case GraphUsage::ColorAttachment:
             if (!desc.isRenderTarget || !color)
             {
@@ -355,7 +363,7 @@ namespace Physara::Renderer
         return next;
     }
 
-    // Buffer 的 CopyDestination 约定写满请求区间, 因此不要求该区间的旧内容有效.
+    // 只许从最新版本派生 Buffer 写. 完整写定义请求区间, 读改写须先证明整个区间的旧内容有效.
     BufferId PassBuilder::Write(BufferId id, GraphUsage usage, std::optional<RHI::BufferRange> requested)
     {
         const auto range = Validate<BufferId, RHI::BufferRange, BufferDeclaration, BufferUse>(
@@ -365,7 +373,9 @@ namespace Physara::Renderer
             return {};
         }
         const auto &resource = m_Graph.m_Buffers[id.identity.index];
-        if (usage != GraphUsage::CopyDestination)
+        if (usage != GraphUsage::CopyDestination &&
+            ((usage != GraphUsage::StorageWrite && usage != GraphUsage::StorageReadWrite) ||
+             !resource.desc.canHaveUAVs || resource.desc.structStride == 0))
         {
             Fail(GraphErrorCode::InvalidUsage, resource.desc.debugName, id.version, "Invalid buffer write usage");
             return {};
@@ -378,6 +388,10 @@ namespace Physara::Renderer
         if (id.version == RenderGraph::MaxIndex)
         {
             Fail(GraphErrorCode::OutOfStorage, resource.desc.debugName, id.version, "Buffer version space exhausted");
+            return {};
+        }
+        if (usage == GraphUsage::StorageReadWrite && !RequireContent<BufferUse>(id, *range, resource))
+        {
             return {};
         }
         const BufferId next{id.identity, id.version + 1};

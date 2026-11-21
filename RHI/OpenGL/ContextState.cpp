@@ -37,6 +37,7 @@ namespace Physara::RHI::OpenGL
         m_UniformRanges.resize(std::size_t(caps.uniformBindings));
         m_StorageRanges.resize(std::size_t(caps.storageBindings));
         m_TextureUnits.resize(std::size_t(caps.combinedTextureUnits));
+        m_Images.resize(std::size_t(caps.imageUnits));
         glCreateVertexArrays(1, &m_VertexArray);
         glCreateFramebuffers(1, &m_ClearFramebuffer);
         return device.CheckNative("CreateDevice.Graphics") && m_VertexArray != 0 && m_ClearFramebuffer != 0;
@@ -81,6 +82,10 @@ namespace Physara::RHI::OpenGL
         for (auto &range : m_StorageRanges)
         {
             range.known = false;
+        }
+        for (auto &image : m_Images)
+        {
+            image.known = false;
         }
         for (auto &unit : m_TextureUnits)
         {
@@ -139,6 +144,16 @@ namespace Physara::RHI::OpenGL
                 ++m_BindingCount;
             }
             m_TextureUnits[index] = {};
+        }
+        // image 单元也持有原生对象绑定. 删除或关闭前解除引用, 下次使用由 Pipeline 计划重新建立.
+        for (GLuint index = 0; index < m_Images.size(); ++index)
+        {
+            if (m_Images[index].name != 0)
+            {
+                glBindImageTexture(index, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8);
+                ++m_BindingCount;
+                m_Images[index] = {};
+            }
         }
         if (m_IndirectBuffer != 0)
         {
@@ -210,6 +225,18 @@ namespace Physara::RHI::OpenGL
             ++m_BindingCount;
         }
         current = {name, offset, size, true};
+    }
+
+    void ContextState::ApplyImage(GLuint unit, GLuint name, bool layered, GLenum access, GLenum format) noexcept
+    {
+        auto &state = m_Images[unit];
+        if (!state.known || state.name != name || state.layered != layered ||
+            state.access != access || state.format != format)
+        {
+            glBindImageTexture(unit, name, 0, layered ? GL_TRUE : GL_FALSE, 0, access, format);
+            ++m_BindingCount;
+            state = {name, layered, access, format, true};
+        }
     }
 
     void ContextState::ApplyTexture(GLuint unit, GLuint texture, GLuint sampler, TextureDimension dimension) noexcept

@@ -491,6 +491,32 @@ namespace Physara::RHI::OpenGL
         return native->GetFormatCaps(format, TextureDimension::TextureCube).support;
     }
 
+    bool SupportsDirectCompute(Device *device) noexcept
+    {
+        const auto *native = dynamic_cast<const OpenGLDevice *>(device);
+        return native && native->GetCaps().shader.compute;
+    }
+
+    FormatSupport QueryStorageImageFormatSupport(Device *device, Format format, TextureDimension dimension,
+                                                 std::uint32_t &maxLayers) noexcept
+    {
+        maxLayers = 0;
+        const auto *native = dynamic_cast<const OpenGLDevice *>(device);
+        if (!native || !native->GetCaps().shader.compute ||
+            (dimension != TextureDimension::Texture2D && dimension != TextureDimension::Texture2DArray))
+        {
+            return FormatSupport::None;
+        }
+        const auto support = native->GetFormatCaps(format, dimension).support;
+        if (!(support & (FormatSupport::ShaderUavLoad | FormatSupport::ShaderUavStore)))
+        {
+            return FormatSupport::None;
+        }
+        maxLayers = dimension == TextureDimension::Texture2D ? 1u :
+            static_cast<std::uint32_t>(native->GetCaps().maxArrayLayers);
+        return support;
+    }
+
     bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept
     {
         // 与通用 GL profile 一致保留普通状态元数据, 不把它解释为当前已交付的执行能力.

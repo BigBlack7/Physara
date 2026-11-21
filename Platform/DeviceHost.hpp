@@ -271,6 +271,12 @@ namespace Physara::Platform
         /// @brief 在 owner/Ready 状态读取 cube 目标的实测采样能力和面宽上限.
         /// @return 无有效设备时返回 None 并清零 maxEdge. 可用时面宽为设备上限, 格式用途单独判断.
         [[nodiscard]] RHI::FormatSupport QueryCubeFormatSupport(RHI::Format format, std::uint32_t &maxEdge) const noexcept;
+        /// @brief 在 owner/Ready 状态读取直接 Dispatch 能力, 用于图的结构化 UAV profile.
+        [[nodiscard]] bool SupportsDirectCompute() const noexcept;
+        /// @brief 读取单样本 2D 或 2DArray 目标的格式能力和层数上限, 保留各自的 image load/store 位.
+        /// @return 未取得就绪设备或目标没有存储用途时返回 None 并将 maxLayers 置零.
+        [[nodiscard]] RHI::FormatSupport QueryStorageImageFormatSupport(RHI::Format format,
+            RHI::TextureDimension dimension, std::uint32_t &maxLayers) const noexcept;
         /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;

@@ -60,12 +60,22 @@ namespace Physara::Shader
         {
             return Stage::Fragment;
         }
+        if (name == "compute")
+        {
+            return Stage::Compute;
+        }
         throw BuildError(ErrorCode::UnsupportedProfile, "Unsupported stage: " + std::string(name));
     }
 
     std::string_view StageName(Stage stage) noexcept
     {
-        return stage == Stage::Vertex ? "vertex" : "fragment";
+        switch (stage)
+        {
+        case Stage::Vertex: return "vertex";
+        case Stage::Fragment: return "fragment";
+        case Stage::Compute: return "compute";
+        }
+        return "invalid";
     }
 
     ResourceKind ParseResourceKind(std::string_view name)
@@ -90,6 +100,18 @@ namespace Physara::Shader
         {
             return ResourceKind::Sampler;
         }
+        if (name == "structured-uav")
+        {
+            return ResourceKind::StructuredUav;
+        }
+        if (name == "image2d")
+        {
+            return ResourceKind::Image2D;
+        }
+        if (name == "image2d-array")
+        {
+            return ResourceKind::Image2DArray;
+        }
         throw BuildError(ErrorCode::UnsupportedProfile, "Unsupported resource: " + std::string(name));
     }
 
@@ -107,8 +129,70 @@ namespace Physara::Shader
             return "texturecube";
         case ResourceKind::Sampler:
             return "sampler";
+        case ResourceKind::StructuredUav:
+            return "structured-uav";
+        case ResourceKind::Image2D:
+            return "image2d";
+        case ResourceKind::Image2DArray:
+            return "image2d-array";
         }
         return "invalid";
+    }
+
+    StorageAccess ParseStorageAccess(std::string_view name)
+    {
+        if (name == "read")
+        {
+            return StorageAccess::Read;
+        }
+        if (name == "write")
+        {
+            return StorageAccess::Write;
+        }
+        if (name == "read-write")
+        {
+            return StorageAccess::ReadWrite;
+        }
+        throw BuildError(ErrorCode::InvalidInput, "Unsupported storage access.");
+    }
+
+    std::string_view StorageAccessName(StorageAccess access) noexcept
+    {
+        switch (access)
+        {
+        case StorageAccess::Read: return "read";
+        case StorageAccess::Write: return "write";
+        case StorageAccess::ReadWrite: return "read-write";
+        }
+        return "invalid";
+    }
+
+    std::string ParseStorageFormat(const Json &value)
+    {
+        auto format = value.get<std::string>();
+        if (format != "r32f" && format != "r32ui" && format != "rgba8" && format != "rgba16f")
+        {
+            throw BuildError(ErrorCode::UnsupportedProfile, "Unsupported storage image format.");
+        }
+        return format;
+    }
+
+    std::array<std::uint32_t, 3> ParseLocalSize(const Json &value)
+    {
+        if (!value.is_array() || value.size() != 3)
+        {
+            throw BuildError(ErrorCode::InvalidInput, "localSize requires three positive axes.");
+        }
+        std::array<std::uint32_t, 3> size{};
+        for (std::size_t axis = 0; axis < size.size(); ++axis)
+        {
+            size[axis] = UInt(value.at(axis), UINT32_MAX, "localSize");
+            if (size[axis] == 0)
+            {
+                throw BuildError(ErrorCode::InvalidInput, "localSize axes must be positive.");
+            }
+        }
+        return size;
     }
 
     std::uint32_t CanonicalBinding(ResourceKind kind, std::uint32_t slot)
@@ -116,7 +200,8 @@ namespace Physara::Shader
         const RHI::VulkanBindingOffsets offsets;
         const auto offset = kind == ResourceKind::ConstantBuffer
                                 ? offsets.constantBuffer
-                                : (kind == ResourceKind::Sampler ? offsets.sampler : offsets.shaderResource);
+                                : (kind == ResourceKind::Sampler ? offsets.sampler :
+                                   (IsUnordered(kind) ? offsets.unorderedAccess : offsets.shaderResource));
         const auto value = std::uint64_t(offset) + slot;
         if (slot > 127 || value > 511)
         {
@@ -235,10 +320,10 @@ namespace Physara::Shader
         return *block;
     }
 
-    // 核对资源种类与块布局, 推导 canonical binding, 固定只读 record 数组还需容量预算.
+    // 从类别及可见阶段推导逻辑槽并核对布局. 固定记录数组按容量和 stride 计预算, image 单独校验格式与方向.
     static BindingSchema ParseBinding(const Json &json, const InterfaceSchema &schema)
     {
-        CheckFields(json, {"name", "kind", "set", "slot", "block", "capacity", "stages"}, "/resources");
+        CheckFields(json, {"name", "kind", "set", "slot", "block", "capacity", "stages", "access", "format"}, "/resources");
         BindingSchema binding;
         auto &resource = binding.resource;
         resource.name = Identifier(json.at("name"), "/resources/name");
@@ -263,13 +348,36 @@ namespace Physara::Shader
             }
             binding.stageMask |= mask;
         }
+        constexpr auto ComputeMask = 1u << static_cast<unsigned>(Stage::Compute);
+        if ((schema.localSize[0] != 0 && binding.stageMask != ComputeMask) ||
+            (schema.localSize[0] == 0 && (binding.stageMask & ComputeMask) != 0) ||
+            (IsUnordered(resource.kind) && binding.stageMask != ComputeMask))
+        {
+            throw BuildError(ErrorCode::InvalidInput, "Resource visibility does not match the interface profile.");
+        }
+        if (IsUnordered(resource.kind))
+        {
+            resource.access = ParseStorageAccess(json.at("access").get<std::string>());
+        }
+        else if (json.contains("access"))
+        {
+            throw BuildError(ErrorCode::InvalidInput, "Only storage resources declare access.");
+        }
+        if (IsStorageImage(resource.kind))
+        {
+            resource.imageFormat = ParseStorageFormat(json.at("format"));
+        }
+        else if (json.contains("format"))
+        {
+            throw BuildError(ErrorCode::InvalidInput, "Only storage images declare a format.");
+        }
         resource.binding = CanonicalBinding(resource.kind, resource.slot);
         const bool buffer =
-            resource.kind == ResourceKind::ConstantBuffer || resource.kind == ResourceKind::StructuredBuffer;
+            resource.kind == ResourceKind::ConstantBuffer || IsStructured(resource.kind);
         if (buffer)
         {
             resource.buffer = FindBlock(schema, json.at("block").get<std::string>());
-            const bool structured = resource.kind == ResourceKind::StructuredBuffer;
+            const bool structured = IsStructured(resource.kind);
             if (resource.buffer.layout != (structured ? "std430" : "std140"))
             {
                 throw BuildError(ErrorCode::InvalidInput, "Resource/block layout mismatch: " + resource.name);
@@ -303,6 +411,10 @@ namespace Physara::Shader
         CheckFields(json, {"stage", "direction", "name", "location", "type", "interpolation"}, "/io");
         IoSchema io;
         io.stage = ParseStage(json.at("stage").get<std::string>());
+        if (io.stage == Stage::Compute)
+        {
+            throw BuildError(ErrorCode::InvalidInput, "Compute interfaces have no user stage IO.");
+        }
         const auto direction = json.at("direction").get<std::string>();
         if (direction != "in" && direction != "out")
         {
@@ -336,12 +448,20 @@ namespace Physara::Shader
 
     InterfaceSchema ParseInterfaceSchema(const Json &document)
     {
-        CheckFields(document, {"version", "name", "blocks", "resources", "io"}, "/");
+        CheckFields(document, {"version", "name", "blocks", "resources", "io", "localSize"}, "/");
         if (UInt(document.at("version"), 1, "/version") != 1)
         {
             throw BuildError(ErrorCode::InvalidInput, "Unsupported interface version.");
         }
         InterfaceSchema schema;
+        if (document.contains("localSize"))
+        {
+            schema.localSize = ParseLocalSize(document.at("localSize"));
+            if (!document.at("io").empty())
+            {
+                throw BuildError(ErrorCode::InvalidInput, "Compute interfaces have no user stage IO.");
+            }
+        }
         schema.name = Identifier(document.at("name"), "/name");
         if (schema.name.front() < 'A' || schema.name.front() > 'Z')
         {
@@ -389,13 +509,13 @@ namespace Physara::Shader
         {
             auto name = binding.resource.name;
             name.front() = static_cast<char>(name.front() - 'a' + 'A');
-            if (binding.resource.kind == ResourceKind::StructuredBuffer &&
+            if (IsStructured(binding.resource.kind) &&
                 (!generatedNames.insert(name + "Capacity").second || !generatedNames.insert(name + "Data").second))
             {
                 throw BuildError(ErrorCode::InvalidInput, "Generated record name conflicts: " + name);
             }
             if ((binding.resource.kind == ResourceKind::ConstantBuffer ||
-                 binding.resource.kind == ResourceKind::StructuredBuffer) &&
+                 IsStructured(binding.resource.kind)) &&
                 !glslTypes.insert(name + "Block").second)
             {
                 throw BuildError(ErrorCode::InvalidInput, "Generated GLSL block name conflicts: " + name);
@@ -433,7 +553,7 @@ namespace Physara::Shader
     }
     InterfaceDeclaration SnapshotInterface(const InterfaceSchema &schema)
     {
-        return {schema.name, schema.blocks, schema.bindings, schema.io};
+        return {schema.name, schema.blocks, schema.bindings, schema.io, schema.localSize};
     }
 
     Json DeclarationSchema(const InterfaceDeclaration &declaration)
@@ -456,7 +576,7 @@ namespace Physara::Shader
         Json resources = Json::array();
         for (const auto &binding : declaration.bindings)
         {
-            if (binding.stageMask == 0 || binding.stageMask > 3)
+            if (binding.stageMask == 0 || (binding.stageMask > 4))
             {
                 throw BuildError(ErrorCode::InvalidInput, "Interface snapshot has invalid stage visibility.");
             }
@@ -470,18 +590,30 @@ namespace Physara::Shader
             {
                 stages.push_back("fragment");
             }
+            if ((binding.stageMask & 4u) != 0)
+            {
+                stages.push_back("compute");
+            }
             Json value{{"name", resource.name},
                        {"kind", ResourceKindName(resource.kind)},
                        {"set", resource.set},
                        {"slot", resource.slot},
                        {"stages", stages}};
-            if (resource.kind == ResourceKind::ConstantBuffer || resource.kind == ResourceKind::StructuredBuffer)
+            if (resource.kind == ResourceKind::ConstantBuffer || IsStructured(resource.kind))
             {
                 value["block"] = resource.buffer.name;
             }
-            if (resource.kind == ResourceKind::StructuredBuffer)
+            if (IsStructured(resource.kind))
             {
                 value["capacity"] = resource.capacity;
+            }
+            if (IsUnordered(resource.kind))
+            {
+                value["access"] = StorageAccessName(resource.access);
+            }
+            if (IsStorageImage(resource.kind))
+            {
+                value["format"] = resource.imageFormat;
             }
             resources.push_back(std::move(value));
         }
@@ -504,8 +636,13 @@ namespace Physara::Shader
             }
             ioValues.push_back(std::move(value));
         }
-        return {
+        Json schema{
             {"version", 1}, {"name", declaration.name}, {"blocks", blocks}, {"resources", resources}, {"io", ioValues}};
+        if (declaration.localSize[0] != 0)
+        {
+            schema["localSize"] = declaration.localSize;
+        }
+        return schema;
     }
 
     std::string ComputeInterfaceAbi(const InterfaceDeclaration &declaration)
@@ -522,13 +659,17 @@ namespace Physara::Shader
             ioValues.push_back({{"stage", StageName(io.stage)}, {"input", io.input}, {"value", io.value}});
         }
         const RHI::VulkanBindingOffsets offsets;
-        return HashText(Json{
+        Json identity{
             {"version", 1},
             {"name", declaration.name},
             {"blocks", declaration.blocks},
             {"bindings", bindings},
             {"io", ioValues},
-            {"offsets", {offsets.shaderResource, offsets.sampler, offsets.constantBuffer, offsets.unorderedAccess}}}
-                            .dump());
+            {"offsets", {offsets.shaderResource, offsets.sampler, offsets.constantBuffer, offsets.unorderedAccess}}};
+        if (declaration.localSize[0] != 0)
+        {
+            identity["localSize"] = declaration.localSize;
+        }
+        return HashText(identity.dump());
     }
 }

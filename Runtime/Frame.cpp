@@ -77,59 +77,77 @@ namespace Physara::Runtime
         static_cast<void>(diagnostics.Write(Core::Severity::Info, message.View()));
     }
 
-    /// @brief 本候选的能力存储, options 的 span 只借用到当前编译返回.
-    struct EditorGraphProfile
+    EditorGraphProfile::EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews,
+                                           bool diagnostic)
     {
-        std::array<GraphTextureSupport, 5> textures;
-        std::array<RHI::ResourceStates, 2> states{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
-        GraphCompileOptions options;
-
-        // 基础 UI 使用二维格式. 场景图另取 SSBO 范围和 RGBA32F cube 的目标能力,
-        // 供编译器核对灯表及采样子资源. 后续上传准入只计算留在执行计划中的写入.
-        // options 的借用依赖本对象地址稳定, 因此在 TryFrame 的同一局部作用域内构造并消费.
-        explicit EditorGraphProfile(Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic)
+        const bool scene = sceneViews != 0;
+        const auto info = host.GetInfo();
+        constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
+                                     RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
+        auto count = scene ? formats.size() : 2;
+        for (std::size_t index = 0; index < count; ++index)
         {
-            const bool scene = sceneViews != 0;
-            const auto info = host.GetInfo();
-            constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
-                                         RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
-            auto count = scene ? formats.size() : 2;
-            for (std::size_t index = 0; index < count; ++index)
+            m_Textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
+                .sampleCount = 1, .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
+                .maxDepth = 1, .maxLayers = 1,
+                .formatSupport = host.GetDevice()->QueryFormatSupport(formats[index]),
+                .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
+                .presentation = formats[index] == RHI::Format::SRGBA8_UNORM};
+            if (host.HasFatalGraphicsError())
             {
-                textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
-                    .sampleCount = 1, .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
-                    .maxDepth = 1, .maxLayers = 1,
-                    .formatSupport = host.GetDevice()->QueryFormatSupport(formats[index]),
-                    .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
-                    .presentation = formats[index] == RHI::Format::SRGBA8_UNORM};
-                if (host.HasFatalGraphicsError())
-                {
-                    return;
-                }
+                return;
             }
-            if (scene)
-            {
-                std::uint32_t maxEdge = 0;
-                constexpr auto format = RHI::Format::RGBA32_FLOAT;
-                const auto support = host.QueryCubeFormatSupport(format, maxEdge);
-                if ((support & RHI::FormatSupport::ShaderSample) != 0)
-                {
-                    textures[count++] = {.format = format, .dimension = RHI::TextureDimension::TextureCube,
-                        .sampleCount = 1, .maxWidth = maxEdge, .maxHeight = maxEdge, .maxDepth = 1, .maxLayers = 6,
-                        .formatSupport = support, .copySource = true, .copyDestination = true, .maxSampledLayers = 6};
-                }
-            }
-            options = {.textures = std::span(textures).first(count),
-                .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
-                            .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
-                            .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
-                            .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
-                            .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0},
-                .textureBoundaryStates = states, .bufferBoundaryStates = states, .maxColorAttachments = 1,
-                .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
-                    ((!scene || diagnostic) ? DiagnosticUploadBudget : 0)};
         }
-    };
+        if (scene)
+        {
+            std::uint32_t maxEdge = 0;
+            constexpr auto format = RHI::Format::RGBA32_FLOAT;
+            const auto support = host.QueryCubeFormatSupport(format, maxEdge);
+            if ((support & RHI::FormatSupport::ShaderSample) != 0)
+            {
+                m_Textures[count++] = {.format = format, .dimension = RHI::TextureDimension::TextureCube,
+                    .sampleCount = 1, .maxWidth = maxEdge, .maxHeight = maxEdge, .maxDepth = 1, .maxLayers = 6,
+                    .formatSupport = support, .copySource = true, .copyDestination = true, .maxSampledLayers = 6};
+            }
+        }
+        const bool structuredUav = scene && host.SupportsDirectCompute();
+        if (structuredUav)
+        {
+            const auto addStorage = [&](RHI::Format format, RHI::TextureDimension dimension)
+            {
+                std::uint32_t maxLayers = 0;
+                const auto support = host.QueryStorageImageFormatSupport(format, dimension, maxLayers);
+                if ((support & RHI::FormatSupport::ShaderUavStore) != RHI::FormatSupport::None)
+                {
+                    // 逐 target 记录同一设备观察到的能力. 允许创建 storage 的目标才进入场景编译表.
+                    m_Textures[count++] = {.format = format, .dimension = dimension, .sampleCount = 1,
+                        .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
+                        .maxDepth = 1, .maxLayers = maxLayers, .formatSupport = support,
+                        .copySource = true, .copyDestination = true,
+                        .clear = bool(support & RHI::FormatSupport::RenderTarget),
+                        .maxSampledLayers = (support & RHI::FormatSupport::ShaderSample) != RHI::FormatSupport::None ? 1u : 0u};
+                }
+            };
+            // RGBA8 和 RGBA16F 的 2D 行已有实际格式位, 补充其它二维格式及数组目标.
+            addStorage(RHI::Format::R32_FLOAT, RHI::TextureDimension::Texture2D);
+            addStorage(RHI::Format::R32_UINT, RHI::TextureDimension::Texture2D);
+            for (const auto format : {RHI::Format::R32_FLOAT, RHI::Format::R32_UINT,
+                                      RHI::Format::RGBA8_UNORM, RHI::Format::RGBA16_FLOAT})
+            {
+                addStorage(format, RHI::TextureDimension::Texture2DArray);
+            }
+        }
+        m_Options = {.textures = std::span(m_Textures).first(count),
+            .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
+                        .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
+                        .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
+                        .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
+                        .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
+                        .structuredUav = structuredUav},
+            .textureBoundaryStates = m_States, .bufferBoundaryStates = m_States, .maxColorAttachments = 1,
+            .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
+                ((!scene || diagnostic) ? DiagnosticUploadBudget : 0)};
+    }
 
     /// @brief 一次尝试只返回一种动作. 开放列表前的图拒绝或视口准入失败可重建; 录制后的失败不追加安全图.
     enum class AttemptStatus { Succeeded, RebuildWithoutViewport, UploadPending, GraphRejected, Cancelled, Stopped };
@@ -625,7 +643,7 @@ namespace Physara::Runtime
                               Core::BoundedText("Cannot prepare graph capabilities"));
             }
             const auto compileStart = CpuClock::now();
-            auto compiled = CompileRenderGraph(graph, profile.options);
+            auto compiled = CompileRenderGraph(graph, profile.Options());
             measurements.cpu.graphCompile = SecondsSince(compileStart);
             if (const auto *error = std::get_if<GraphError>(&compiled))
             {

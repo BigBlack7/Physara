@@ -77,6 +77,15 @@ namespace Physara::RHI::OpenGL
     [[nodiscard]] FormatSupport QueryCubeFormatSupport(Device *device, Format format,
                                                         std::uint32_t &maxEdge) noexcept;
 
+    /// @brief 读取 Graphics 即时列表上的直接计算能力, 使用原生设备已查询的入口.
+    [[nodiscard]] bool SupportsDirectCompute(Device *device) noexcept;
+
+    /// @brief 读取单样本 2D 或 2DArray storage image 的实际目标能力和层数上限.
+    /// @return 不支持目标或无 storage 能力时返回 None 并清零 maxLayers. 不重新查询 GL.
+    [[nodiscard]] FormatSupport QueryStorageImageFormatSupport(Device *device, Format format,
+                                                                TextureDimension dimension,
+                                                                std::uint32_t &maxLayers) noexcept;
+
     /// @brief 新包上传的容量预检结果. Pending 表示等待物理录制包槽或映射容量释放后可重试.
     enum class UploadAdmission : std::uint8_t
     {

@@ -18,7 +18,7 @@ namespace Physara::Shader
         if (words.size() < 5 || words.size() > MaxPackageBytes / 4 || words[0] != 0x07230203 ||
             words[1] != 0x00010300 || words[4] != 0)
         {
-            throw BuildError(ErrorCode::ValidationFailed, "Invalid GraphicsBaselineV1 SPIR-V header/size/version.");
+            throw BuildError(ErrorCode::ValidationFailed, "Invalid canonical SPIR-V header/size/version.");
         }
         spvtools::SpirvTools validator(SPV_ENV_VULKAN_1_1);
         Core::BoundedText diagnostic;
@@ -131,9 +131,45 @@ namespace Physara::Shader
                 compiler.has_member_decoration(block.self, index, spv::DecorationRowMajor))
             {
                 throw BuildError(ErrorCode::UnsupportedProfile,
-                                 "IR field type/array/matrix is outside GraphicsBaselineV1.");
+                                 "IR field type/array/matrix is outside the selected profile.");
             }
         }
+    }
+
+    // 以 decorations 核对访问合同, 没有单向证明时视为读写.
+    static StorageAccess ReflectAccess(const spirv_cross::Bitset &flags)
+    {
+        const bool noWrite = flags.get(spv::DecorationNonWritable);
+        const bool noRead = flags.get(spv::DecorationNonReadable);
+        RequireInterface(!(noRead && noWrite), "Conflicting storage access decorations.");
+        return noWrite ? StorageAccess::Read : (noRead ? StorageAccess::Write : StorageAccess::ReadWrite);
+    }
+
+    // 从 IR 的像素标量类型和显式格式确定 image 的规范拼写, 层类型另由 arrayed 位表达.
+    static std::string_view StorageImageFormat(const spirv_cross::Compiler &compiler,
+                                               const spirv_cross::SPIRType &type)
+    {
+        using spirv_cross::SPIRType;
+        const auto &scalar = compiler.get_type(type.image.type);
+        if (type.image.dim == spv::Dim2D && !type.image.ms && !type.image.depth && type.image.sampled == 2 &&
+            scalar.width == 32)
+        {
+            if (type.image.format == spv::ImageFormatR32ui && scalar.basetype == SPIRType::UInt)
+            {
+                return "r32ui";
+            }
+            if (scalar.basetype == SPIRType::Float)
+            {
+                switch (type.image.format)
+                {
+                case spv::ImageFormatR32f: return "r32f";
+                case spv::ImageFormatRgba8: return "rgba8";
+                case spv::ImageFormatRgba16f: return "rgba16f";
+                default: break;
+                }
+            }
+        }
+        throw BuildError(ErrorCode::UnsupportedProfile, "Unsupported storage image format or shape.");
     }
 
     // 先检查模块 capability, 执行模式和资源类别, 排除基线之外的扩展与数据访问形状.
@@ -141,9 +177,10 @@ namespace Physara::Shader
     {
         for (const auto capability : compiler.get_declared_capabilities())
         {
-            if (capability != spv::CapabilityShader && capability != spv::CapabilityMatrix)
+            if (capability != spv::CapabilityShader && capability != spv::CapabilityMatrix &&
+                !(stage == Stage::Compute && capability == spv::CapabilityStorageImageExtendedFormats))
             {
-                throw BuildError(ErrorCode::UnsupportedProfile, "SPIR-V capability is outside GraphicsBaselineV1.");
+                throw BuildError(ErrorCode::UnsupportedProfile, "SPIR-V capability is outside the selected profile.");
             }
         }
         if (!compiler.get_declared_extensions().empty() || !compiler.get_specialization_constants().empty())
@@ -154,25 +191,28 @@ namespace Physara::Shader
         compiler.get_execution_mode_bitset().for_each_bit(
             [stage](std::uint32_t mode)
             {
-                if (stage != Stage::Fragment ||
-                    (mode != spv::ExecutionModeOriginUpperLeft && mode != spv::ExecutionModeDepthReplacing))
+                const bool fragment = stage == Stage::Fragment &&
+                    (mode == spv::ExecutionModeOriginUpperLeft || mode == spv::ExecutionModeDepthReplacing);
+                const bool compute = stage == Stage::Compute && mode == spv::ExecutionModeLocalSize;
+                if (!fragment && !compute)
                 {
                     throw BuildError(ErrorCode::UnsupportedProfile,
-                                     "SPIR-V execution mode is outside GraphicsBaselineV1.");
+                                     "SPIR-V execution mode is outside the selected profile.");
                 }
             });
         const auto all = compiler.get_shader_resources();
-        if (!all.subpass_inputs.empty() || !all.storage_images.empty() || !all.sampled_images.empty() ||
+        if (!all.subpass_inputs.empty() || (stage != Stage::Compute && !all.storage_images.empty()) ||
+            !all.sampled_images.empty() ||
             !all.atomic_counters.empty() || !all.acceleration_structures.empty() || !all.gl_plain_uniforms.empty() ||
             !all.tensors.empty() || !all.push_constant_buffers.empty() || !all.shader_record_buffers.empty())
         {
-            throw BuildError(ErrorCode::UnsupportedProfile, "SPIR-V resource class is outside GraphicsBaselineV1.");
+            throw BuildError(ErrorCode::UnsupportedProfile, "SPIR-V resource class is outside the selected profile.");
         }
         for (const auto &buffer : all.storage_buffers)
         {
-            if (!compiler.get_buffer_block_flags(buffer.id).get(spv::DecorationNonWritable))
+            if (stage != Stage::Compute && ReflectAccess(compiler.get_buffer_block_flags(buffer.id)) != StorageAccess::Read)
             {
-                throw BuildError(ErrorCode::UnsupportedProfile, "GraphicsBaselineV1 storage buffers must be readonly.");
+                throw BuildError(ErrorCode::UnsupportedProfile, "Storage buffers must be readonly in the graphics profile.");
             }
             const auto &block = compiler.get_type(buffer.base_type_id);
             if (block.member_types.size() != 1 || compiler.get_declared_struct_size(block) > MaxBlockBytes)
@@ -192,14 +232,14 @@ namespace Physara::Shader
         {
             CheckDataBlockProfile(compiler, compiler.get_type(buffer.base_type_id));
         }
-        for (const auto &items : {all.uniform_buffers, all.storage_buffers, all.separate_images, all.separate_samplers})
+        for (const auto &items : {all.uniform_buffers, all.storage_buffers, all.separate_images, all.separate_samplers, all.storage_images})
         {
             for (const auto &resource : items)
             {
                 if (!compiler.get_type(resource.type_id).array.empty())
                 {
                     throw BuildError(ErrorCode::UnsupportedProfile,
-                                     "Descriptor arrays are outside GraphicsBaselineV1.");
+                                     "Descriptor arrays are outside the selected profile.");
                 }
             }
         }
@@ -211,8 +251,12 @@ namespace Physara::Shader
                 type.image.sampled != 1 || compiler.get_type(type.image.type).basetype != spirv_cross::SPIRType::Float)
             {
                 throw BuildError(ErrorCode::UnsupportedProfile,
-                                 "GraphicsBaselineV1 requires a separate non-array float texture2D or textureCube.");
+                                 "The selected profile requires a separate non-array float texture2D or textureCube.");
             }
+        }
+        for (const auto &image : all.storage_images)
+        {
+            (void)StorageImageFormat(compiler, compiler.get_type(image.type_id));
         }
         compiler.update_active_builtins();
         for (const auto &resources : {all.builtin_inputs, all.builtin_outputs})
@@ -225,14 +269,18 @@ namespace Physara::Shader
                     continue;
                 }
                 const auto builtin = resource.builtin;
-                const bool allowed = stage == Stage::Vertex
+                const bool compute = stage == Stage::Compute &&
+                    (builtin == spv::BuiltInNumWorkgroups || builtin == spv::BuiltInWorkgroupSize ||
+                     builtin == spv::BuiltInWorkgroupId || builtin == spv::BuiltInLocalInvocationId ||
+                     builtin == spv::BuiltInGlobalInvocationId || builtin == spv::BuiltInLocalInvocationIndex);
+                const bool allowed = stage == Stage::Compute ? compute : stage == Stage::Vertex
                                          ? (builtin == spv::BuiltInPosition || builtin == spv::BuiltInPointSize ||
                                             builtin == spv::BuiltInVertexIndex || builtin == spv::BuiltInInstanceIndex)
                                          : (builtin == spv::BuiltInFragCoord || builtin == spv::BuiltInPointCoord ||
                                             builtin == spv::BuiltInFrontFacing || builtin == spv::BuiltInFragDepth);
                 if (!allowed)
                 {
-                    throw BuildError(ErrorCode::UnsupportedProfile, "Active builtin is outside GraphicsBaselineV1.");
+                    throw BuildError(ErrorCode::UnsupportedProfile, "Active builtin is outside the selected profile.");
                 }
             }
         }
@@ -276,14 +324,17 @@ namespace Physara::Shader
                          "IR resource name mismatch: expected=" + expected.name +
                              ", actual=" + compiler.get_name(actual.id));
         const auto &variable = compiler.get_type(actual.type_id);
-        RequireInterface(variable.array.empty(), "Descriptor arrays are outside GraphicsBaselineV1.");
+        RequireInterface(variable.array.empty(), "Descriptor arrays are outside the selected profile.");
         auto result = expected;
         if (kind == ResourceKind::ConstantBuffer)
         {
             result.buffer = ReflectBuffer(compiler, compiler.get_type(actual.base_type_id), expected.buffer);
         }
-        else if (kind == ResourceKind::StructuredBuffer)
+        else if (IsStructured(kind))
         {
+            const auto access = ReflectAccess(compiler.get_buffer_block_flags(actual.id));
+            RequireInterface(access == expected.access, "IR buffer access mismatch: " + expected.name);
+            result.access = access;
             const auto &block = compiler.get_type(actual.base_type_id);
             RequireInterface(block.member_types.size() == 1 && compiler.type_struct_member_offset(block, 0) == 0,
                              "IR structured buffer requires one record array at offset 0.");
@@ -294,6 +345,13 @@ namespace Physara::Shader
             result.recordStrideBytes = compiler.type_struct_member_array_stride(block, 0);
             RequireInterface(result.recordStrideBytes == expected.recordStrideBytes, "IR record stride mismatch.");
             result.buffer = ReflectBuffer(compiler, records, expected.buffer);
+        }
+        else if (IsStorageImage(kind))
+        {
+            result.imageFormat = StorageImageFormat(compiler, variable);
+            result.access = ReflectAccess(compiler.get_decoration_bitset(actual.id));
+            RequireInterface(result.imageFormat == expected.imageFormat && result.access == expected.access,
+                             "IR storage image format/access mismatch: " + expected.name);
         }
         else if (kind == ResourceKind::Sampler)
         {
@@ -344,11 +402,14 @@ namespace Physara::Shader
     }
 
     void ReflectModule(ShaderModule &module, const InterfaceSchema &schema)
+    try
     {
         ValidateSpirv(module.words);
         spirv_cross::Compiler compiler(module.words);
         const auto entries = compiler.get_entry_points_and_stages();
-        const auto model = module.stage == Stage::Vertex ? spv::ExecutionModelVertex : spv::ExecutionModelFragment;
+        constexpr spv::ExecutionModel Models[]{spv::ExecutionModelVertex, spv::ExecutionModelFragment,
+                                               spv::ExecutionModelGLCompute};
+        const auto model = Models[static_cast<unsigned>(module.stage)];
         RequireInterface(module.entry == "main" && entries.size() == 1 && entries[0].name == module.entry &&
                              entries[0].execution_model == model,
                          "IR entry point/stage mismatch.");
@@ -366,7 +427,33 @@ namespace Physara::Shader
             }
         };
         append(active.uniform_buffers, ResourceKind::ConstantBuffer);
-        append(active.storage_buffers, ResourceKind::StructuredBuffer);
+        // readonly 本身不能区分 t 和 u 槽. 先从 canonical binding 取逻辑类别, 再核对方向和记录布局.
+        for (const auto &buffer : active.storage_buffers)
+        {
+            const auto binding = compiler.get_decoration(buffer.id, spv::DecorationBinding);
+            const auto kind = binding >= CanonicalBinding(ResourceKind::StructuredUav, 0) &&
+                binding <= CanonicalBinding(ResourceKind::StructuredUav, 127) ? ResourceKind::StructuredUav :
+                                                                                ResourceKind::StructuredBuffer;
+            resources.push_back(ReflectResource(compiler, buffer, kind, schema, module.stage));
+        }
+        for (const auto &image : active.storage_images)
+        {
+            const auto kind = compiler.get_type(image.type_id).image.arrayed ? ResourceKind::Image2DArray :
+                                                                               ResourceKind::Image2D;
+            resources.push_back(ReflectResource(compiler, image, kind, schema, module.stage));
+        }
+        std::array<std::uint32_t, 3> localSize{};
+        if (module.stage == Stage::Compute)
+        {
+            RequireInterface(compiler.get_execution_mode_bitset().get(spv::ExecutionModeLocalSize),
+                             "Compute requires a fixed local size.");
+            for (std::uint32_t axis = 0; axis < localSize.size(); ++axis)
+            {
+                localSize[axis] = compiler.get_execution_mode_argument(spv::ExecutionModeLocalSize, axis);
+            }
+            RequireInterface(localSize[0] != 0 && localSize == schema.localSize,
+                             "IR workgroup size does not match the interface.");
+        }
         // Profile 已验证两种独立图像类型. 从实际 IR 区分维度, 不从请求的 schema 推断.
         for (const auto &image : active.separate_images)
         {
@@ -392,10 +479,24 @@ namespace Physara::Shader
         module.resources = std::move(resources);
         module.inputs = std::move(inputs);
         module.outputs = std::move(outputs);
+        module.localSize = localSize;
+    }
+    catch (const BuildError &error)
+    {
+        const auto profile = module.stage == Stage::Compute ? ComputeProfile : GraphicsProfile;
+        throw BuildError(error.GetFailure().code,
+                         std::string(profile) + " / " + std::string(StageName(module.stage)) + ": " + error.what());
     }
 
-    void CheckProgramInterfaces(const std::vector<ShaderModule> &modules)
+    void CheckProgramInterfaces(const std::vector<ShaderModule> &modules, std::string_view profile)
     {
+        if (profile == ComputeProfile)
+        {
+            RequireInterface(modules.size() == 1 && modules.front().stage == Stage::Compute,
+                             "ComputeBaselineV1 requires one compute stage.");
+            return;
+        }
+        RequireInterface(profile == GraphicsProfile, "Unsupported Shader package profile.");
         RequireInterface(modules.size() == 2 && modules[0].stage == Stage::Vertex &&
                              modules[1].stage == Stage::Fragment,
                          "GraphicsBaselineV1 requires one VS and one FS.");

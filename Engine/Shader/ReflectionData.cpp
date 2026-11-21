@@ -90,22 +90,43 @@ namespace Physara::Shader
                 {"set", value.set},
                 {"slot", value.slot},
                 {"binding", value.binding}};
-        if (value.kind == ResourceKind::ConstantBuffer || value.kind == ResourceKind::StructuredBuffer)
+        if (value.kind == ResourceKind::ConstantBuffer || IsStructured(value.kind))
         {
             json["buffer"] = value.buffer;
         }
-        if (value.kind == ResourceKind::StructuredBuffer)
+        if (IsStructured(value.kind))
         {
             json["capacity"] = value.capacity;
             json["recordStride"] = value.recordStrideBytes;
+        }
+        // 方向和 sized format 只随相应存储类别编码, 使既有图形声明保有原序列化形式.
+        if (IsUnordered(value.kind))
+        {
+            json["access"] = StorageAccessName(value.access);
+        }
+        if (IsStorageImage(value.kind))
+        {
+            json["format"] = value.imageFormat;
         }
     }
 
     void from_json(const Json &json, ResourceReflection &value)
     {
-        CheckFields(json, {"name", "kind", "set", "slot", "binding", "buffer", "capacity", "recordStride"}, "resource");
+        CheckFields(json, {"name", "kind", "set", "slot", "binding", "buffer", "capacity", "recordStride", "access", "format"}, "resource");
         value.name = Identifier(json.at("name"), "resource/name");
         value.kind = ParseResourceKind(json.at("kind").get<std::string>());
+        if (json.contains("access") != IsUnordered(value.kind) || json.contains("format") != IsStorageImage(value.kind))
+        {
+            throw BuildError(ErrorCode::CorruptPackage, "Invalid storage reflection fields.");
+        }
+        if (IsUnordered(value.kind))
+        {
+            value.access = ParseStorageAccess(json.at("access").get<std::string>());
+        }
+        if (IsStorageImage(value.kind))
+        {
+            value.imageFormat = ParseStorageFormat(json.at("format"));
+        }
         value.set = UInt(json.at("set"), 3, "resource/set");
         value.slot = UInt(json.at("slot"), 127, "resource/slot");
         value.binding = UInt(json.at("binding"), 511, "resource/binding");
@@ -113,7 +134,7 @@ namespace Physara::Shader
         {
             throw BuildError(ErrorCode::CorruptPackage, "Reflected logical/canonical binding mismatch.");
         }
-        if (value.kind == ResourceKind::ConstantBuffer || value.kind == ResourceKind::StructuredBuffer)
+        if (value.kind == ResourceKind::ConstantBuffer || IsStructured(value.kind))
         {
             value.buffer = json.at("buffer").get<BufferLayout>();
             if (value.buffer.layout != (value.kind == ResourceKind::ConstantBuffer ? "std140" : "std430"))
@@ -125,7 +146,7 @@ namespace Physara::Shader
         {
             throw BuildError(ErrorCode::CorruptPackage, "Non-buffer resource contains a buffer layout.");
         }
-        if (value.kind == ResourceKind::StructuredBuffer)
+        if (IsStructured(value.kind))
         {
             value.capacity = UInt(json.at("capacity"), MaxBlockBytes, "resource/capacity");
             value.recordStrideBytes = UInt(json.at("recordStride"), MaxBlockBytes, "resource/recordStride");

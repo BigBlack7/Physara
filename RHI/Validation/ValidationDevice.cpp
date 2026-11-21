@@ -139,7 +139,8 @@ namespace Physara::RHI::Validation
                     required = required | (format.kind == FormatKind::DepthStencil ? FormatSupport::DepthStencil
                                                                                    : FormatSupport::RenderTarget);
                 }
-                if (desc.isUAV)
+                // 公共格式查询描述 2D 基线. GL 的 image 能力由后端按实际存储目标核对.
+                if (desc.isUAV && !Profile::IsOpenGL(device))
                 {
                     required = required | FormatSupport::ShaderUavStore;
                 }
@@ -2558,10 +2559,32 @@ namespace Physara::RHI::Validation
                 return false;
             }
             const auto &textureDesc = texture->GetDesc();
-            if (!Input::CheckViewFormat(m_Device, textureDesc, binding.format,
-                                        binding.type == ResourceType::Texture_UAV ? FormatSupport::ShaderUavStore
-                                                                                  : FormatSupport::Texture,
-                                        location))
+            const bool openGLImage = Profile::IsOpenGL(m_Device) && binding.type == ResourceType::Texture_UAV;
+            if (openGLImage)
+            {
+                // 公共范围检查接受与纹理相交的集合. 这里用原始计数区分剩余范围哨兵和显式越界.
+                const auto &range = binding.subresources;
+                if (range.baseMipLevel >= textureDesc.mipLevels || range.baseArraySlice >= textureDesc.arraySize ||
+                    range.numMipLevels == 0 || range.numArraySlices == 0 ||
+                    (range.numMipLevels != TextureSubresourceSet::AllMipLevels &&
+                     range.numMipLevels > textureDesc.mipLevels - range.baseMipLevel) ||
+                    (range.numArraySlices != TextureSubresourceSet::AllArraySlices &&
+                     range.numArraySlices > textureDesc.arraySize - range.baseArraySlice))
+                {
+                    errorStream << "OpenGL storage image binding range exceeds texture subresources";
+                    return false;
+                }
+                // GL storage view 保持 sized format. 目标相关的 load/store 能力由底层按实际维度检查.
+                if (binding.format != Format::UNKNOWN && binding.format != textureDesc.format)
+                {
+                    errorStream << "OpenGL storage image requires the original format";
+                    return false;
+                }
+            }
+            else if (!Input::CheckViewFormat(m_Device, textureDesc, binding.format,
+                                             binding.type == ResourceType::Texture_UAV ? FormatSupport::ShaderUavStore
+                                                                                       : FormatSupport::Texture,
+                                             location))
             {
                 return false;
             }
@@ -2606,16 +2629,15 @@ namespace Physara::RHI::Validation
 
             if (binding.dimension != TextureDimension::Unknown)
             {
-                // 仅 GL 的普通采样 SRV 允许数组/cube storage 选择二维单层; 范围/格式仍沿原边界检查.
-                // 此处允许继续委托, 不证明原生 view 已有效; 精确范围和 view class 仍由后端确认.
-                const bool singleLayerOpenGLSrv = Profile::IsOpenGL(m_Device) &&
-                                                  binding.type == ResourceType::Texture_SRV &&
-                                                  binding.dimension == TextureDimension::Texture2D &&
-                                                  desc.sampleCount == 1 && subresources.numArraySlices == 1 &&
-                                                  (desc.dimension == TextureDimension::Texture2DArray ||
-                                                   desc.dimension == TextureDimension::TextureCube ||
-                                                   desc.dimension == TextureDimension::TextureCubeArray);
-                if (!singleLayerOpenGLSrv && !TextureDimensionsCompatible(desc.dimension, binding.dimension))
+                // GL 的采样与 storage view 均可选择 2DArray 的单层. cube 单面仅属于采样 profile.
+                const bool singleLayerOpenGLView = Profile::IsOpenGL(m_Device) &&
+                    binding.dimension == TextureDimension::Texture2D && desc.sampleCount == 1 &&
+                    subresources.numArraySlices == 1 &&
+                    (desc.dimension == TextureDimension::Texture2DArray ||
+                     (binding.type == ResourceType::Texture_SRV &&
+                      (desc.dimension == TextureDimension::TextureCube ||
+                       desc.dimension == TextureDimension::TextureCubeArray)));
+                if (!singleLayerOpenGLView && !TextureDimensionsCompatible(desc.dimension, binding.dimension))
                 {
                     errorStream << "Requested binding dimension (" << Utils::TextureDimensionToString(binding.dimension)
                                 << ") "
@@ -2693,12 +2715,15 @@ namespace Physara::RHI::Validation
             bool isConstantView = (binding.type == ResourceType::ConstantBuffer) ||
                                   (binding.type == ResourceType::VolatileConstantBuffer);
 
-            // Resolve 会截断显式长度. 常量绑定须先拒绝越界, 再解释零长度或全一长度哨兵.
-            if (isConstantView && (binding.range.byteOffset >= desc.byteSize ||
-                (binding.range.byteSize != ~0ull &&
-                 binding.range.byteSize > desc.byteSize - binding.range.byteOffset)))
+            // Resolve 会截断显式长度. 常量及 GL 结构化视图先按原字节区间验证, 零长度和全一表示剩余范围.
+            const auto &range = binding.range;
+            const bool remaining = range.byteSize == 0 || range.byteSize == ~0ull;
+            const bool exactRange = isConstantView || (isStructuredView && Profile::IsOpenGL(m_Device));
+            if (exactRange && (range.byteOffset >= desc.byteSize ||
+                (!remaining && range.byteSize > desc.byteSize - range.byteOffset)))
             {
-                errorStream << "Constant buffer binding range exceeds buffer capacity";
+                errorStream << (isConstantView ? "Constant" : "Structured")
+                            << " buffer binding range exceeds buffer capacity";
                 return false;
             }
             const auto resolvedRange = binding.range.Resolve(desc);

@@ -1,7 +1,7 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 执行普通 Buffer 和纹理传输, 并为图形动态常量登记版本. CPU 源在调用内复制或交给即时 GL 命令.
+/// @brief 执行 Buffer 和纹理上传, 为 Draw 和 Dispatch 保存动态常量版本. 普通源字节在本次调用内消费.
 
 #include <cstring>
 #include <limits>
@@ -57,7 +57,8 @@ namespace Physara::RHI::OpenGL
             return;
         }
         if (!Retain(native, native->m_InternalOwners) ||
-            !UseBuffer(*native, ResourceStates::CopyDest, "WriteBuffer", BufferRange{offset, size}))
+            !UseBuffer(*native, ResourceStates::CopyDest, "WriteBuffer", BufferRange{offset, size}, false,
+                       StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT, true))
         {
             return;
         }
@@ -77,6 +78,10 @@ namespace Physara::RHI::OpenGL
             packet->invalid = true;
             return;
         }
+        if (!PrepareNativeAccesses("WriteBuffer"))
+        {
+            return;
+        }
         // 从这里起原生调用可能已经消费目标或映射源. 先登记 issuedWork, 即使调用带错也必须保护整个前缀.
         ++packet->writes;
         packet->logicalBytes += size;
@@ -92,7 +97,11 @@ namespace Physara::RHI::OpenGL
             glCopyNamedBufferSubData(source.buffer, native->m_Deletion->name, GLintptr(source.offset), GLintptr(offset),
                                      GLsizeiptr(size));
         }
-        if (!m_Device->CheckNative("WriteBuffer", native->m_Deletion->name, native->m_Desc.debugName.c_str()))
+        if (m_Device->CheckNative("WriteBuffer", native->m_Deletion->name, native->m_Desc.debugName.c_str()))
+        {
+            RecordNativeAccesses();
+        }
+        else
         {
             packet->invalid = true;
         }
@@ -150,15 +159,17 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        if (!packet->graphicsSet)
+        if (!packet->graphicsSet && !packet->computeSet)
         {
-            m_Device->Report("SetPushConstants", "InvalidState: set graphics state before push constants");
+            m_Device->Report("SetPushConstants", "InvalidState: set an executable state before push constants");
             return;
         }
-        const auto &plan = static_cast<const OpenGLGraphicsPipeline *>(packet->graphics.pipeline)->Plan();
+        const auto &plan = packet->computeSet ?
+            static_cast<const OpenGLComputePipeline *>(packet->compute.pipeline)->Plan() :
+            static_cast<const OpenGLGraphicsPipeline *>(packet->graphics.pipeline)->Plan();
         if (!data || byteSize == 0 || byteSize != plan.pushBytes)
         {
-            m_Device->Report("SetPushConstants", "InvalidArgument: push bytes must match the active graphics layout");
+            m_Device->Report("SetPushConstants", "InvalidArgument: push bytes must match the active pipeline layout");
             return;
         }
         if (packet->writes == UploadItemLimit || byteSize > UploadCapacityLimit - packet->logicalBytes)
@@ -226,7 +237,8 @@ namespace Physara::RHI::OpenGL
         subresources.baseArraySlice = arraySlice;
         subresources.numArraySlices = 1;
         if (!Retain(native, native->m_InternalOwners) ||
-            !UseTexture(*native, subresources, TextureAspect::Color, ResourceStates::CopyDest, "WriteTexture"))
+            !UseTexture(*native, subresources, TextureAspect::Color, ResourceStates::CopyDest, "WriteTexture",
+                        ResourceStates::Unknown, StorageAccess::None, GL_TEXTURE_UPDATE_BARRIER_BIT, true))
         {
             return;
         }
@@ -256,6 +268,10 @@ namespace Physara::RHI::OpenGL
             packet->invalid = true;
             return;
         }
+        if (!PrepareNativeAccesses("WriteTexture"))
+        {
+            return;
+        }
         // 从此指针表示已绑定 PBO 内的字节 offset, 而不是 CPU 地址. 首个可能发出的写前保留全部包所有权.
         const auto *offset = reinterpret_cast<const void *>(source.offset);
         ++packet->writes;
@@ -282,7 +298,11 @@ namespace Physara::RHI::OpenGL
                                 GLsizei(layout.height), GLsizei(layout.depth), format, type, offset);
             break;
         }
-        if (!m_Device->CheckNative("WriteTexture", native->Name(), desc.debugName.c_str()))
+        if (m_Device->CheckNative("WriteTexture", native->Name(), desc.debugName.c_str()))
+        {
+            RecordNativeAccesses();
+        }
+        else
         {
             packet->invalid = true;
         }

@@ -46,7 +46,7 @@ namespace Physara::Renderer
         bool presentation = false;
     };
 
-    /// @brief 普通图 Buffer 的存储容量, 常量及结构化读视图的最大范围与偏移对齐, 单位为字节.
+    /// @brief 图编译所用的 Buffer 容量和绑定限制. 常量和结构化视图的容量及偏移对齐均以字节计.
     /// @note 零视图容量或零偏移对齐表示相应用途不可用. 公共 RHI 的常量子区间对齐另行检查.
     struct GraphBufferSupport
     {
@@ -55,6 +55,7 @@ namespace Physara::Renderer
         std::uint64_t constantOffsetAlignment = 0;
         std::uint64_t maxStructuredBytes = 0;
         std::uint64_t structuredOffsetAlignment = 0;
+        bool structuredUav = false; ///< 由接入方从实际计算能力取得, 与普通 SSBO 读取分开.
     };
 
     /// @brief 调用方提供的 CPU 能力表和瞬态逻辑字节预算. 边界状态表按完整状态组合匹配.

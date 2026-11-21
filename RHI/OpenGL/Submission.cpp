@@ -87,6 +87,7 @@ namespace Physara::RHI::OpenGL
         {
             record.packets[index] = nativeLists[index]->m_Packet;
         }
+        record.accessEpoch = m_AccessEpoch;
         record.sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         // 即使 flush 失败也保存真实 sync 供退出处理, 不把它发布为正常 Pending 票据.
         ++m_Submissions->count;
@@ -190,6 +191,7 @@ namespace Physara::RHI::OpenGL
         record = {};
         record.packets = issued;
         record.count = count;
+        record.accessEpoch = m_AccessEpoch;
         record.sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         ++m_Submissions->count;
         for (std::size_t index = 0; index < count; ++index)
@@ -294,6 +296,8 @@ namespace Physara::RHI::OpenGL
                 RetirePacket(*record.packets[index], clean && m_Phase != Phase::Faulted);
             }
             m_CompletedSubmissionId = std::max(m_CompletedSubmissionId, record.submissionId);
+            // 这份 fence 覆盖的访问已物理完成, 可解除后继写的顺序约束. 各消费域的可见性仍由其屏障推进.
+            m_CompletedAccessEpoch = std::max(m_CompletedAccessEpoch, record.accessEpoch);
             record = {};
             m_Submissions->head = (m_Submissions->head + 1) % UploadPacketLimit;
             --m_Submissions->count;
@@ -353,6 +357,10 @@ namespace Physara::RHI::OpenGL
         if (!clean)
         {
             m_WorkFailed = true;
+        }
+        if (complete)
+        {
+            m_CompletedAccessEpoch = m_AccessEpoch;
         }
         // 只退休已有提交/交接包, 活 recording 即使已物理完成也继续持有自己的存储.
         return complete && clean && CollectWork(false);

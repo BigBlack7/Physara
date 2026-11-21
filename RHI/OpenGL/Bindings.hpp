@@ -37,7 +37,7 @@ namespace Physara::RHI::OpenGL
     };
 
     /// @brief 已解析的单项绑定, name 是 buffer/view/sampler, range 仅用于 buffer, slot 仍为逻辑身份.
-    /// @note 缓冲记录粒度和 SRV 维度在集合创建时固定, 设置图形状态时再与活动 Shader 接口配对.
+    /// @note 集合固定记录 stride, 视图维度和原存储范围. 设置 Pipeline 候选时再与活动阶段反射配对.
     struct NativeBinding
     {
         std::uint32_t slot = 0;
@@ -46,8 +46,10 @@ namespace Physara::RHI::OpenGL
         BufferRange range;
         std::uint32_t recordStride = 0;
         Resource *resource = nullptr;       ///< 借用集合强持有的实际 storage/sampler, 不以 view 名称推断资源身份.
-        TextureDimension dimension = TextureDimension::Unknown; ///< SRV 视图的维度, 可以与原存储不同.
-        TextureSubresourceSet subresources; ///< SRV 已解析的 mip/layer 范围, 供实际用途和 feedback 检查.
+        Format imageFormat = Format::UNKNOWN; ///< 存储图像的公开格式, 用于与活动 IR 比较.
+        GLenum imageInternalFormat = 0;
+        TextureDimension dimension = TextureDimension::Unknown; ///< 采样或存储视图的目标, 可以和原存储不同.
+        TextureSubresourceSet subresources; ///< 原存储坐标中的 mip/layer, 用于权限, 重叠和同步检查.
     };
 
     /// @brief 集合拥有布局/资源与其自有 view, trackLiveness 只影响即时列表是否自动保活整个集合.

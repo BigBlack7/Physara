@@ -54,11 +54,12 @@ namespace Physara::Shader
     // 先核对身份, 依赖和载荷预算, 再从最终 IR 重建活动反射与所存元数据逐项比较.
     static void CheckPackage(const ShaderPackage &package, const InterfaceSchema &expected)
     {
-        RequirePackage(package.profile == "GraphicsBaselineV1" && IsHash(package.abiHash) &&
+        RequirePackage((package.profile == GraphicsProfile || package.profile == ComputeProfile) &&
+                           (package.profile == ComputeProfile) == (expected.localSize[0] != 0) && IsHash(package.abiHash) &&
                            IsHash(package.contentHash) && IsHash(package.compilerFingerprint),
                        "Invalid package identity/profile.");
         RequirePackage(package.abiHash == expected.abiHash, "Package ABI does not describe its interface snapshot.");
-        CheckProgramInterfaces(package.modules);
+        CheckProgramInterfaces(package.modules, package.profile);
         RequirePackage(!package.dependencies.empty() && package.dependencies.size() <= 256,
                        "Invalid package dependency count.");
         std::set<std::string> paths;
@@ -88,7 +89,7 @@ namespace Physara::Shader
             ReflectModule(reflected, expected);
             RequirePackage(Json(reflected.resources) == Json(module.resources) &&
                                Json(reflected.inputs) == Json(module.inputs) &&
-                               Json(reflected.outputs) == Json(module.outputs),
+                               Json(reflected.outputs) == Json(module.outputs) && reflected.localSize == module.localSize,
                            "Package metadata does not describe its final IR.");
         }
     }
@@ -139,6 +140,10 @@ namespace Physara::Shader
                                {"resources", module.resources},
                                {"inputs", module.inputs},
                                {"outputs", module.outputs}});
+            if (module.stage == Stage::Compute)
+            {
+                modules.back()["localSize"] = module.localSize;
+            }
             payloadBytes += module.words.size() * 4;
         }
         Json dependencies = Json::array();
@@ -250,13 +255,14 @@ namespace Physara::Shader
         const auto expected = ParseInterfaceSchema(metadata.at("interface"));
         package.declaration = SnapshotInterface(expected);
         const auto &modules = metadata.at("modules");
-        RequirePackage(modules.is_array() && modules.size() == 2, "Invalid module count.");
+        RequirePackage(modules.is_array() && modules.size() == (package.profile == ComputeProfile ? 1u : 2u),
+                       "Invalid module count.");
         // offset 从 payload 起点按字节计, wordCount 以 32 位字计.
-        // cursor 总是指向下一段起点, 两个模块读取后必须恰好耗尽 payload.
+        // cursor 始终指向下一模块起点, 当前 profile 的最后一个模块须恰好耗尽 payload.
         std::size_t cursor = 0;
         for (const auto &json : modules)
         {
-            CheckFields(json, {"stage", "entry", "source", "offset", "wordCount", "resources", "inputs", "outputs"},
+            CheckFields(json, {"stage", "entry", "source", "offset", "wordCount", "resources", "inputs", "outputs", "localSize"},
                         "module");
             const auto offset = UInt(json.at("offset"), MaxPackageBytes, "module/offset");
             const auto count = UInt(json.at("wordCount"), MaxPackageBytes / 4, "module/wordCount");
@@ -264,6 +270,12 @@ namespace Physara::Shader
                            "Module ranges overlap or exceed the aligned payload.");
             ShaderModule module;
             module.stage = ParseStage(json.at("stage").get<std::string>());
+            RequirePackage(json.contains("localSize") == (module.stage == Stage::Compute),
+                           "Invalid workgroup metadata.");
+            if (module.stage == Stage::Compute)
+            {
+                module.localSize = ParseLocalSize(json.at("localSize"));
+            }
             module.entry = json.at("entry").get<std::string>();
             module.sourcePath = json.at("source").get<std::string>();
             module.resources = json.at("resources").get<std::vector<ResourceReflection>>();

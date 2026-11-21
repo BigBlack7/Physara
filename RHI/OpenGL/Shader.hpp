@@ -4,7 +4,9 @@
 /// @brief 自持 canonical 模块与入口反射, 供 Pipeline 准备使用, 不持有 Engine 包或 GL Shader 名称.
 
 #include "Backend.hpp"
+#include "../ImmediateGraphics.hpp"
 
+#include <array>
 #include <compare>
 #include <span>
 #include <string>
@@ -28,11 +30,13 @@ namespace Physara::RHI::OpenGL
     {
         ShaderBindingKey key;
         ResourceType type = ResourceType::None;
-        TextureDimension dimension = TextureDimension::Unknown; ///< 独立采样图像的实际维度.
+        TextureDimension dimension = TextureDimension::Unknown; ///< 采样图像或存储图像的实际视图目标.
         std::uint32_t id = 0;
         std::uint32_t extent = 0;
         std::uint32_t recordStride = 0;
         std::vector<std::uint32_t> layout;
+        StorageAccess access = StorageAccess::None;
+        Format imageFormat = Format::UNKNOWN;
     };
 
     /// @brief 一个标量/向量 location, scalar 为 Float/Int/UInt 对应的 GL 基类型.
@@ -93,6 +97,10 @@ namespace Physara::RHI::OpenGL
         {
             return m_Outputs;
         }
+        [[nodiscard]] const std::array<std::uint32_t, 3> &LocalSize() const noexcept
+        {
+            return m_LocalSize;
+        }
         /// @brief 活动 PointSize 输出决定原生点光栅是否消费 Shader 大小, 不改变 canonical 模块.
         [[nodiscard]] bool WritesPointSize() const noexcept
         {
@@ -105,12 +113,28 @@ namespace Physara::RHI::OpenGL
         InternalOwnership m_InternalOwners;
         ShaderDesc m_Desc;
         bool m_WritesPointSize = false;
+        std::array<std::uint32_t, 3> m_LocalSize{};
         std::vector<std::uint32_t> m_Words;
         std::vector<ShaderResource> m_Resources;
         std::vector<ShaderSamplingPair> m_Pairs;
         std::vector<ShaderIo> m_Inputs;
         std::vector<ShaderIo> m_Outputs;
     };
+
+    /// @brief 模块检查和原生 Program 共用的 profile 与阶段标签. 两个字段均指向静态字符串.
+    struct ShaderDiagnosticLabels
+    {
+        const char *profile;
+        const char *stage;
+    };
+
+    /// @brief 为单个 VS, FS 或 CS 返回对应标签. 未支持的阶段或阶段组合使用 unknown.
+    [[nodiscard]] ShaderDiagnosticLabels DescribeShaderStage(ShaderType stage) noexcept;
+
+    /// @brief 准备错误随回调传递的固定大小字符数组.
+    using ShaderDiagnosticContext = std::array<char, 288>;
+    /// @brief 返回自持的诊断文本并保留原始阶段位. 入口和源名分别取至多 32 和 160 字节.
+    [[nodiscard]] ShaderDiagnosticContext FormatShaderDiagnosticContext(const ShaderDesc &desc) noexcept;
 
     /// @brief 准备算法内部的失败出口, 由公开工厂捕获并转为既有空句柄/诊断.
     void RequirePreparation(bool condition, const std::string &reason);

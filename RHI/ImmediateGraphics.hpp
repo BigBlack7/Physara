@@ -17,6 +17,21 @@ namespace Physara::RHI
         class CommandListWrapper;
     }
 
+    /// @brief 存储访问在图授权与活动 Shader 反射之间传递, 与共享的 RHI 状态分开.
+    enum class StorageAccess : std::uint8_t
+    {
+        None = 0,
+        Read = 1,
+        Write = 2,
+        ReadWrite = 3
+    };
+
+    /// @brief 声明方向须包含实际访问的所有位. 普通用途传 None, 其角色仍由资源状态单独核对.
+    [[nodiscard]] constexpr bool CoversStorageAccess(StorageAccess available, StorageAccess requested) noexcept
+    {
+        return (static_cast<unsigned>(available) & static_cast<unsigned>(requested)) == static_cast<unsigned>(requested);
+    }
+
     /// @brief 当前阶段可消费的物理纹理用途, 保留原 mip/layer 和 aspect.
     /// @note range 与 aspect 为已解析的明确范围. state 表示实际消费域. 采样附带的跟踪状态由图单独合并.
     struct GraphTextureUse
@@ -25,6 +40,7 @@ namespace Physara::RHI
         TextureSubresourceSet range;
         TextureAspect aspect;
         ResourceStates state;
+        StorageAccess storage = StorageAccess::None;
     };
 
     /// @brief 当前阶段可消费的物理 Buffer 用途和确切字节区间. 跟踪状态仍按整对象合并.
@@ -35,6 +51,7 @@ namespace Physara::RHI
         BufferRange range;
         ResourceStates state;
         std::optional<BufferRange> indexedBinding; ///< 仅限匹配的结构化 SRV 绑定, 不授权传输或其它额外访问.
+        StorageAccess storage = StorageAccess::None;
     };
 
     /// @brief 底层接管协议. 状态修改和提交只经一次成功接管的 GraphRecording 到达.
@@ -44,13 +61,13 @@ namespace Physara::RHI
         friend class GraphRecording;
         friend class Validation::CommandListWrapper;
 
-        /// @brief 在同一设备的有效打开录制上进入 GraphManaged, 并清空上个消费者的图形状态.
+        /// @brief 在同设备的有效 Graphics 录制上进入 GraphManaged, 撤销原有 Draw 和 Dispatch 候选.
         /// @pre 列表处于 Automatic, 调用方已提交待决状态请求.
         /// @note 拒绝时不修改列表或原生状态.
         /// @return 非零的物理录制身份, 用于结束同一录制.
         [[nodiscard]] virtual std::uint64_t BeginGraphManaged(Device &device) = 0;
 
-        /// @brief 恢复 Automatic 并清理图形状态, 不清除资源跟踪或已发命令的引用.
+        /// @brief 恢复 Automatic, 清除图授权和两类可执行状态. 资源跟踪与已发命令的引用继续有效.
         /// @param executionSucceeded 全部显式用途和边界请求均已成功提交时为 true.
         /// @return 身份匹配并且该录制仍可用时为 true. 对匹配的失效录制仍归还模式并收拢合法 CPU 状态.
         [[nodiscard]] virtual bool EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept = 0;
@@ -63,6 +80,8 @@ namespace Physara::RHI
         virtual void RequestGraphBuffer(Buffer &buffer, ResourceStates state) = 0;
         /// @brief 消费 tracker 依赖并发布本阶段精确用途. 列表保存副本至撤销或替换.
         virtual void CommitGraphUses(std::span<const GraphTextureUse> textures, std::span<const GraphBufferUse> buffers) = 0;
+        /// @brief 包装层在图内拒绝候选时撤销 Draw, Dispatch 和 push 资格. 当前录制的动态区域, 授权和已发前缀继续有效.
+        virtual void RevokeGraphPipelineState() noexcept = 0;
         /// @brief 同步撤销当前阶段授权, 保留实际跟踪状态和录制包内引用.
         virtual void RevokeGraphUses() noexcept = 0;
 

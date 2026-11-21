@@ -24,6 +24,8 @@ Device creation SHALL require the recorded owner thread, its current verified co
 ### Requirement: Expose actual resource capabilities conservatively
 Reported resource support SHALL be the intersection of the implemented resource profile and actual device, target, format and usage observations. Creation SHALL enforce the same limits, including supported sample counts rather than only a maximum. Metadata and allocation support SHALL NOT imply an implemented shader, binding or draw path. Unavailable feature queries SHALL preserve caller output.
 
+Storage image 的 `ShaderUavLoad` 和 `ShaderUavStore` SHALL 按实际目标与格式区分，设备和图能力查询 SHALL 只对已交付且实测能力允许的组合返回支持。直接 Compute Dispatch 的可用性 SHALL 不改变 `ComputeQueue` 的不支持结果。
+
 #### Scenario: Query mapped and unmapped formats
 - **WHEN** a caller queries a mapped format, a known but excluded format or an unknown value
 - **THEN** only supported mapped usages receive positive flags and excluded or unknown formats report no support
@@ -40,9 +42,16 @@ Reported resource support SHALL be the intersection of the implemented resource 
 - **WHEN** the underlying API has facilities for a feature whose RHI operation is not implemented in this profile
 - **THEN** the device and its validation layer report no enabled support and leave optional output data unchanged
 
+#### Scenario: Report storage image access independently of sampling
+
+- **WHEN** 查询普通采样支持与已定义的 storage image 格式，并以目标、格式、读写方向核对实际能力
+- **THEN** 仅被实现并得到设备支持的 storage 方向获得对应 flag。只有采样支持的格式仍拒绝 storage 用途
+
 ### Requirement: Create immutable buffer allocations
 
 A valid supported ordinary buffer description SHALL produce one device-owned immutable allocation with the requested byte capacity and preserved descriptor meaning. The ordinary buffer profile SHALL include the `isDrawIndirectArgs` role for supported indexed indirect commands, subject to ordinary allocation and transfer constraints. A supported volatile constant-buffer description SHALL retain its public logical byte capacity and nonzero `maxVersions`, with storage for that many aligned versions under the actual device limits and a finite device budget. Size conversions, stride multiplication, applicable UBO and mapping alignments, and layout constraints SHALL be checked before allocation. CPU mapping, typed views and volatile uses outside the constant-buffer profile SHALL be rejected. Allocating storage SHALL NOT initialize its contents or represent a completed upload.
+
+普通有结构化 stride 的 Buffer 在显式设置 `canHaveUAVs` 时 SHALL 支持已交付的 StructuredBuffer_UAV。符合各角色约束的 Buffer SHALL 可以同时用于结构化计算输出和已支持的 indexed indirect 参数消费。Buffer allocation 成功本身不赋予 typed/raw UAV、volatile 写入或其它未经交付的绑定用途。
 
 #### Scenario: Create and inspect an ordinary buffer
 - **WHEN** a caller requests a supported nonzero buffer allocation
@@ -64,8 +73,15 @@ A valid supported ordinary buffer description SHALL produce one device-owned imm
 - **WHEN** a caller creates a supported ordinary Buffer with `isDrawIndirectArgs` and uses the existing transfer operations to upload indexed argument records to a valid range
 - **THEN** both creation and transfer preserve the requested capacity, argument flag and byte range, and availability of the records follows the actual write and its access dependency
 
+#### Scenario: Allocate structured output for indexed arguments
+
+- **WHEN** 请求带有效结构 stride、`canHaveUAVs` 和 `isDrawIndirectArgs` 的普通 Buffer，并在支持的范围内构建各自绑定
+- **THEN** 返回描述与原生不可变容量匹配，同一存储接受经过检查的结构化写入及 indexed indirect 消费请求
+
 ### Requirement: Create texture storage with explicit shape and usage
 Valid supported textures SHALL retain their dimensions, mip and array semantics, sample count, usage and color encoding. Storage and creation checks SHALL use the actual target and format. Unsupported usages or formats SHALL fail without conversion to another resource. Initial-state and clear-value metadata SHALL NOT be interpreted as initialized pixels or completed transitions.
+
+装配 storage image 的 `isUAV` SHALL 只接受实现所列单样本、非压缩、同格式颜色 Texture2D 或 Texture2DArray。候选格式为 `R32_FLOAT`、`R32_UINT`、`RGBA8_UNORM` 与 `RGBA16_FLOAT`，每个目标仍须有对应设备的写能力。具体 image 读写方向 SHALL 在绑定消费时按其要求核对 load/store 能力。
 
 #### Scenario: Allocate supported texture dimensions
 - **WHEN** a caller creates valid one-dimensional, two-dimensional, three-dimensional, array, cube or permitted multisample storage
@@ -82,6 +98,11 @@ Valid supported textures SHALL retain their dimensions, mip and array semantics,
 #### Scenario: Preserve uninitialized-content semantics
 - **WHEN** storage is created with initial-state or clear-value metadata and no content operation has occurred
 - **THEN** the resource is not reported as containing uploaded or cleared pixels and no state transition or GPU completion is invented
+
+#### Scenario: Constrain storage texture creation to the delivered profile
+
+- **WHEN** 请求一个已支持的线性颜色 storage 目标，同时用 sRGB、深度、多样本或缺少目标写能力的描述作对照
+- **THEN** 合法描述保留准确 mip/layer、编码及 storage 用途，非法描述在分配前明确拒绝
 
 ### Requirement: Keep view interpretation compatible with storage
 An accepted attachment view SHALL address the requested valid subresources and a permitted interpretation of its parent's immutable storage. Reinterpretation SHALL require the declared typeless policy and actual view compatibility. Explicit invalid ranges SHALL fail rather than becoming bounded intersections. Unavailable public native-view requests SHALL return no view without fabricating an object.
@@ -206,12 +227,12 @@ Creation SHALL publish a handle only after all CPU and native steps succeed. Fai
 
 ### Requirement: Reject unavailable operations without fictitious GPU work
 
-The delivered device SHALL preserve the complete public interface and distinguish documented resource/upload operations, baseline Shader, BindingLayout/BindingSet, InputLayout and GraphicsPipeline preparation, limited immediate graphics execution specified by opengl-immediate-draw, and Event/Timer queries specified by opengl-completion-queries from unavailable commands, readbacks and extensions. Preparation SHALL remain limited to opengl-shader-pipelines. Supported direct and fixed-count indexed indirect graphics commands and queries SHALL require their documented profile, actual entry points, ownership and state. Successful resource allocation or native program link SHALL NOT establish execution support or full rendering acceptance.
+The delivered device SHALL preserve the complete public interface and distinguish documented resource/upload operations, baseline Shader, BindingLayout/BindingSet, InputLayout and GraphicsPipeline preparation, limited immediate graphics execution specified by opengl-immediate-draw, direct compute execution specified by opengl-immediate-compute, and Event/Timer queries specified by opengl-completion-queries from unavailable commands, readbacks and extensions. Preparation SHALL remain limited to opengl-shader-pipelines. Supported direct graphics, fixed-count indexed indirect, direct compute commands and queries SHALL require their documented profile, actual entry points, ownership and state. Successful resource allocation or native program link SHALL NOT establish execution support or full rendering acceptance.
 
-Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, issue work or tickets, or wait for invented GPU work. Nonindexed indirect draws, indirect count-buffer commands, Compute/UAV, public staging/map or asynchronous readback, other query extensions, multisample rendering and functionality outside the documented profiles SHALL remain unavailable through this capability.
+Unsupported calls SHALL preserve output data where required and SHALL NOT create successful dummy objects, issue work or tickets, or wait for invented GPU work. Nonindexed indirect draws, indirect count-buffer commands, indirect dispatch, storage access outside the delivered compute profile, public staging/map or asynchronous readback, other query extensions, multisample rendering and functionality outside the documented profiles SHALL remain unavailable through this capability.
 
 #### Scenario: Request a command list or submission
-- **WHEN** a caller requests a list or submission mode outside the documented upload and immediate graphics profiles
+- **WHEN** a caller requests a list or submission mode outside the documented upload and immediate Graphics queue profiles
 - **THEN** the operation fails with no list, replay, issued work or positive submission result
 
 #### Scenario: Request an excluded family with unused payload
@@ -233,6 +254,11 @@ Unsupported calls SHALL preserve output data where required and SHALL NOT create
 #### Scenario: Use queries without inferring a readback implementation
 - **WHEN** supported Event/Timer queries are used and a caller separately requests public staging/map or an excluded readback/query extension
 - **THEN** the queries follow opengl-completion-queries while the excluded operation remains explicitly unsupported, with no fabricated pixels, row pitch or completed request
+
+#### Scenario: Execute compute on the owning graphics recording
+
+- **WHEN** 既有 Graphics 即时列表使用合法 Compute Pipeline 执行直接 Dispatch，并对照请求间接 Dispatch 或专用 Compute 队列
+- **THEN** 直接 Dispatch 发出真实工作。间接 Dispatch 和专用队列按现有失败形式明确拒绝
 
 ### Requirement: Consume native and generic capabilities independently
 The existing generic RHI target and headers SHALL remain independently consumable without a GL loader, window library, native SDK or business dependency. Native integration SHALL use the documented backend consumer entry and retain one-direction dependencies. Neither consumer SHALL require the fixed reference sources to be compiled or introduce a second product entry.

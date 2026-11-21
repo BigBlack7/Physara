@@ -190,7 +190,7 @@ namespace Physara::Renderer::Detail
     }
 
     // WAW 直接关联所有重叠先前写入, 避免活性裁剪中间写入后丢失首尾约束.
-    // Load 从 previous 求内容边, 其 WAR 从本次写版本之后开始, 本次写由同一用途表达.
+    // 附件 Load 和 storage 读改写通过 previous 追溯输入. 对更晚覆写的 WAR 则从本次输出版本之后查找.
     template <typename Use, typename Declaration>
     GraphFailure GraphCompiler::BuildUseEdges(std::size_t pass, const Use &use, const Declaration &resource)
     {
@@ -222,12 +222,12 @@ namespace Physara::Renderer::Detail
                 {
                     return std::nullopt;
                 }
-                read = use.write->previous;
             }
-            else
+            else if (access.usage != GraphUsage::StorageReadWrite)
             {
                 return std::nullopt;
             }
+            read = use.write->previous;
         }
         if (auto error = TraceContent<Use>(read, access.range, resource, pass))
         {

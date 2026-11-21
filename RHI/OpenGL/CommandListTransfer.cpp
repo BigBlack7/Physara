@@ -105,8 +105,9 @@ namespace Physara::RHI::OpenGL
             return;
         }
         if (!Retain(native, native->m_InternalOwners) ||
-            !UseTexture(*native, range, TextureAspect::Color, ResourceStates::CopyDest, operation) ||
-            !m_Device->BeginNative(operation))
+            !UseTexture(*native, range, TextureAspect::Color, ResourceStates::CopyDest, operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_FRAMEBUFFER_BARRIER_BIT) ||
+            !m_Device->BeginNative(operation) || !PrepareNativeAccesses(operation))
         {
             return;
         }
@@ -138,6 +139,18 @@ namespace Physara::RHI::OpenGL
                 else
                 {
                     glClearNamedFramebufferfv(fbo, GL_COLOR, 0, floats.data());
+                }
+                if (!native->m_ShaderAccess.empty())
+                {
+                    if (!m_Device->CheckNative(operation, native->Name()))
+                    {
+                        DetachClear(fbo);
+                        m_Packet->invalid = true;
+                        context.Invalidate();
+                        return;
+                    }
+                    // 逐个子资源登记已完成的完整覆写, 后面的层或 mip 即使失败也保留当前前缀.
+                    RecordClearedSubresource(*native, layer, mip);
                 }
             }
         }
@@ -262,16 +275,25 @@ namespace Physara::RHI::OpenGL
         }
         // 两端的精确区间各自核对角色和授权. 同一对象的 tracker 可以同时持有两个复制状态位.
         if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
-            !UseBuffer(*src, ResourceStates::CopySource, Operation, BufferRange{sourceOffset, size}) ||
-            !UseBuffer(*dest, ResourceStates::CopyDest, Operation, BufferRange{destinationOffset, size}) ||
-            !m_Device->BeginNative(Operation))
+            !UseBuffer(*src, ResourceStates::CopySource, Operation, BufferRange{sourceOffset, size},
+                       false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT) ||
+            !UseBuffer(*dest, ResourceStates::CopyDest, Operation, BufferRange{destinationOffset, size},
+                       false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT, true) ||
+            !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
         {
             return;
         }
         m_Packet->issuedWork = true;
         glCopyNamedBufferSubData(src->Name(), dest->Name(), GLintptr(sourceOffset), GLintptr(destinationOffset),
                                  GLsizeiptr(size));
-        m_Packet->invalid = !m_Device->CheckNative(Operation, dest->Name());
+        if (m_Device->CheckNative(Operation, dest->Name()))
+        {
+            RecordNativeAccesses();
+        }
+        else
+        {
+            m_Packet->invalid = true;
+        }
     }
 
     /// @brief 先核对 mip/layer 再调用公共 Resolve, 全尺寸哨兵沿公共语义而非隐式剩余大小.
@@ -316,10 +338,15 @@ namespace Physara::RHI::OpenGL
         }
         // 同格式复制消费实际存储的全部分量, packed 复制需要两端同时提供深度和模板权限.
         const auto aspects = FormatAspects(GetFormatInfo(sd.format));
+        // 纹理历史按整个 mip/layer 跟踪. 只复制部分矩形时要保留目标其余像素的 Shader 写入来源.
+        const bool whole = d.x == 0 && d.y == 0 &&
+            d.width == std::max(1u, dd.width >> d.mipLevel) && d.height == std::max(1u, dd.height >> d.mipLevel);
         if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
-            !UseTexture(*src, {s.mipLevel, 1, s.arraySlice, 1}, aspects, ResourceStates::CopySource, Operation) ||
-            !UseTexture(*dest, {d.mipLevel, 1, d.arraySlice, 1}, aspects, ResourceStates::CopyDest, Operation) ||
-            !m_Device->BeginNative(Operation))
+            !UseTexture(*src, {s.mipLevel, 1, s.arraySlice, 1}, aspects, ResourceStates::CopySource, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_TEXTURE_UPDATE_BARRIER_BIT) ||
+            !UseTexture(*dest, {d.mipLevel, 1, d.arraySlice, 1}, aspects, ResourceStates::CopyDest, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_TEXTURE_UPDATE_BARRIER_BIT, whole) ||
+            !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
         {
             return;
         }
@@ -327,6 +354,13 @@ namespace Physara::RHI::OpenGL
         glCopyImageSubData(src->Name(), TextureTarget(sd.dimension), GLint(s.mipLevel), GLint(s.x), GLint(s.y),
                            GLint(s.arraySlice), dest->Name(), TextureTarget(dd.dimension), GLint(d.mipLevel),
                            GLint(d.x), GLint(d.y), GLint(d.arraySlice), GLsizei(s.width), GLsizei(s.height), 1);
-        m_Packet->invalid = !m_Device->CheckNative(Operation, dest->Name());
+        if (m_Device->CheckNative(Operation, dest->Name()))
+        {
+            RecordNativeAccesses();
+        }
+        else
+        {
+            m_Packet->invalid = true;
+        }
     }
 } // namespace Physara::RHI::OpenGL
