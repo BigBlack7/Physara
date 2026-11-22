@@ -46,7 +46,15 @@ namespace Physara::Renderer
         std::uint64_t offset = 0, bool *recorded = nullptr);
     /// @brief 只从同图代的存活计划判断生产者, 不将声明成功当成执行成功.
     [[nodiscard]] bool IsLivePass(const CompiledGraphPlan &plan, PassId pass) noexcept;
-    /// @brief 在成功执行的导出中查找精确版本. 返回借用句柄, 调用者按接受回执决定是否持久保存.
+    /// @brief 按精确版本借用首条纹理出口, 指针有效期随 outputs.
+    /// @note 同版本的不同范围, 用途和更新权都按声明顺序保存. 需要指定交接合同的调用方须一并匹配这些字段.
+    [[nodiscard]] const GraphTextureOutput *FindTextureExport(const GraphExecutionOutputList &outputs,
+                                                              TextureId id) noexcept;
+    /// @brief 按版本, 范围, 用途和更新权匹配出口, 供跨帧 owner 确认自己的交接.
+    /// @return 完全匹配时借用 outputs 的记录, 缺少该出口时返回空. 提交票据由接收方另行确认.
+    [[nodiscard]] const GraphTextureOutput *FindTextureExport(const GraphExecutionOutputList &outputs,
+                                                              const TextureExport &expected) noexcept;
+    /// @brief 借用该版本的物理纹理, 供同录制操作或对象身份比较. 跨帧所有者从出口取得持有.
     [[nodiscard]] RHI::Texture *FindTextureOutput(const GraphExecutionOutputList &outputs, TextureId id) noexcept;
 
     /// @brief 与设备准入顺序一致的写入清单, 纹理写在所有 Buffer 写之前.

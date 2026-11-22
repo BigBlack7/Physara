@@ -36,6 +36,8 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] Resource *Get() const noexcept;
         /// @brief 使用者停止后核对全部强引用是否来自包 lease/已保活复合对象, 不作为并发同步.
         [[nodiscard]] bool OnlyInternalOwners() const noexcept;
+        /// @brief 按子对象的稳定账目找出持有它的父对象. 用于区分父对象是随包退休还是仍受外部持有.
+        [[nodiscard]] bool HoldsDependency(const InternalOwnership &dependency) const noexcept;
         [[nodiscard]] InternalOwnership *Owners() const noexcept
         {
             return m_Owners;

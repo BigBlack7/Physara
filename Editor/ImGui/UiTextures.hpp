@@ -21,11 +21,13 @@ namespace Physara::Editor::Detail
     {
         ImTextureData *request = nullptr;
         UiTextureId created;
-        RHI::TextureHandle target; ///< 更新保留原代, 创建在执行前为空.
+        RHI::TextureHandle target; ///< 独立执行路径更新的原对象.
+        Renderer::GraphRetainedResource retainedTarget; ///< 池路径更新的原代, 用于向本图登记可写导入.
         RHI::TextureSlice region;
         std::span<const std::byte> pixels;
         Renderer::GraphTextureWrite written;
         [[nodiscard]] std::size_t ByteCount() const noexcept;
+        [[nodiscard]] bool Updates() const noexcept { return bool(target) || bool(retainedTarget); }
     };
 
     /// @brief 同次准备的请求集合. bytes 只计托管像素, 占位使用静态像素并由存活计划单独记账.
@@ -48,13 +50,15 @@ namespace Physara::Editor::Detail
         EnvironmentPending, EnvironmentRejected, DisplayUnavailable
     };
 
-    /// @brief 成功准备的外部驻留引用. 持有原对象及导入事实, 注销只阻止后续准备的新解析.
+    /// @brief 成功准备的外部驻留引用. 普通资源持有原对象, 托管别名持有原池租用和导入事实.
+    /// 注销只阻止后续准备的新解析.
     /// @note 不保存 GraphId 或 BindingSet. 构图导入后由图继续保活, 已发访问再沿 RHI 包退休.
     struct UiResidentSnapshot
     {
         UiTextureId token;
         RHI::TextureHandle texture;
         UiTextureImport imported;
+        Renderer::GraphRetainedResource retained;
     };
 
     /// @brief 仅在封存帧解析期间借用 View 显示色及主视口命令. 独立 Image 同样参与颜色消费.
@@ -83,6 +87,7 @@ namespace Physara::Editor::Detail
 
         /// @brief 保存外部纹理强引用及 owner 提供的导入事实, 不在注册阶段创建采样绑定.
         /// @pre texture 属于本会话设备, imported 描述已定义的单 mip 颜色范围及真实进出状态.
+        /// @note 任一仍登记的同对象池条目都可提供别名来源. 导入事实匹配后复制只读租用, 冲突时不分配新 token.
         [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture, UiTextureImport imported);
         /// @brief 仅停止外部驻留项的新解析. 已准备快照继续保活, 托管请求和 View 项不能经此入口移除.
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
@@ -116,8 +121,8 @@ namespace Physara::Editor::Detail
         void Detach() noexcept;
 
     private:
-        /// @brief 一个长期逻辑条目: 外部/托管项持有纹理, View 项只保存身份和输出角色.
-        /// @note WantCreate 临时项已有 managed 关联及预算, 但 texture 要到有效提交后才填入.
+        /// @brief 注册表按稳定 token 持有外部或托管纹理. View 项只保存身份和输出角色.
+        /// @note WantCreate 先占用逻辑预算. 匹配提交后, 池对象由 retained 持有, 其它对象由 texture 持有.
         struct Entry
         {
             UiTextureId id;
@@ -127,6 +132,8 @@ namespace Physara::Editor::Detail
             std::size_t managedBytes = 0;
             Renderer::ViewId view;
             Renderer::ViewOutputRole role = Renderer::ViewOutputRole::DisplayColor;
+            Renderer::GraphRetainedResource retained;
+            [[nodiscard]] RHI::Texture *Texture() const noexcept { return retained ? retained.Texture() : texture.Get(); }
         };
         /// @brief 本次 CPU 解析的借用结果. 两字段均为空表示必需字体缺失, 由调用方拒绝整批.
         struct Sample
@@ -155,6 +162,7 @@ namespace Physara::Editor::Detail
         RHI::BufferHandle m_Projection;
         RHI::SamplerHandle m_Sampler;
         RHI::TextureHandle m_Placeholder;
+        Renderer::GraphRetainedResource m_RetainedPlaceholder;
         std::array<Entry, 64> m_Entries;
         std::size_t m_ManagedBytes = 0;
     };

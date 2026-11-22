@@ -3,6 +3,7 @@
 /// @file
 /// @brief 管理列表 Open/Close 与唯一 recording claim, 未提交包的最终 Release 只交接给 Device, 不发 GL.
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <new>
@@ -228,6 +229,98 @@ namespace Physara::RHI::OpenGL
         return restored;
     }
 
+    std::shared_ptr<const GraphicsResourceUse> OpenGLCommandList::ObserveResource(
+        Device &device, Resource &resource, const GraphicsResourceUse *previous)
+    {
+        constexpr auto Operation = "ObserveGraphicsResource";
+        if (&device != m_Device.Get() || !m_Device->RequireContext(Operation))
+        {
+            return {};
+        }
+        auto *packet = OwningRecording();
+        if (!packet || packet->invalid || packet->tracker.HasErrors())
+        {
+            return {};
+        }
+        auto *texture = dynamic_cast<Texture *>(&resource);
+        auto *buffer = dynamic_cast<Buffer *>(&resource);
+        auto *nativeTexture = texture ? TextureFor(texture, Operation) : nullptr;
+        auto *nativeBuffer = buffer ? BufferFor(buffer, Operation) : nullptr;
+        if (!nativeTexture && !nativeBuffer)
+        {
+            return {};
+        }
+        for (const auto &observation : packet->observations)
+        {
+            if (observation.texture == nativeTexture && observation.buffer == nativeBuffer)
+            {
+                return observation.use;
+            }
+        }
+        try
+        {
+            // 一个包可能只改变数组中的一层. 用先前状态填底, Close 时再覆盖本包跟踪到的单元.
+            const auto cells = nativeTexture ? std::size_t(texture->GetDesc().arraySize) *
+                texture->GetDesc().mipLevels : 1;
+            auto use = std::make_shared<GraphicsResourceUse>(cells);
+            use->recording = packet->recordingId;
+            use->hasExternalOwners = &HasExternalGraphOwners;
+            if (previous && previous->ticket != 0 && previous->states.size() == cells)
+            {
+                std::copy(previous->states.begin(), previous->states.end(), use->states.begin());
+            }
+            // 观察表使用原生对象的借用指针, 发布条目前先让包取得该对象的强引用.
+            auto &owners = nativeTexture ? nativeTexture->m_InternalOwners : nativeBuffer->m_InternalOwners;
+            if (!Retain(&resource, owners))
+            {
+                return {};
+            }
+            packet->observations.push_back({nativeTexture, nativeBuffer, use});
+            return use;
+        }
+        catch (const std::bad_alloc &)
+        {
+            m_Device->Report(Operation, "CPU allocation failed");
+        }
+        catch (const std::length_error &)
+        {
+            m_Device->Report(Operation, "State coverage size is not representable");
+        }
+        return {};
+    }
+
+    void OpenGLCommandList::CaptureResourceStates(UploadWorkPacket &packet)
+    {
+        // 缓冲跟踪整个对象. 纹理用实际物理追踪单元, 已在登记时准备目标存储.
+        for (auto &observation : packet.observations)
+        {
+            auto &states = observation.use->states;
+            if (auto *texture = observation.texture)
+            {
+                const auto &desc = texture->GetDesc();
+                for (std::uint32_t layer = 0; layer < desc.arraySize; ++layer)
+                {
+                    for (std::uint32_t mip = 0; mip < desc.mipLevels; ++mip)
+                    {
+                        const auto state = packet.tracker.GetTextureSubresourceState(&texture->m_State, layer, mip);
+                        if (state != ResourceStates::Unknown)
+                        {
+                            states[std::size_t(layer) * desc.mipLevels + mip] = state;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                const auto state = packet.tracker.GetBufferState(&observation.buffer->m_State);
+                if (state != ResourceStates::Unknown)
+                {
+                    states.front() = state;
+                }
+            }
+        }
+    }
+
     void OpenGLCommandList::Close()
     {
         // Faulted 仍允许结束逻辑录制并释放 claim, 但不会让错误包恢复为可正常提交.
@@ -263,7 +356,11 @@ namespace Physara::RHI::OpenGL
         {
             m_Packet->tracker.KeepBufferInitialStates();
             m_Packet->tracker.KeepTextureInitialStates();
-            static_cast<void>(ConsumeBarriers());
+            if (ConsumeBarriers())
+            {
+                // 此时图尾之后的 Automatic 访问及初态恢复都已并入 tracker. 票据由提交端稍后填写.
+                CaptureResourceStates(*m_Packet);
+            }
         }
         m_Packet->phase = PacketPhase::Closed;
         // Close 同步结果有效性但不撤销查询/Draw 引用, 后者仍等提交完成或 orphan/退出退休.

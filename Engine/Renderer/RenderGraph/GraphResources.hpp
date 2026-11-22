@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,23 +18,54 @@
 #include "Core/Error.hpp"
 #include "Core/Identity.hpp"
 
+namespace Physara::RHI
+{
+    struct GraphicsResourceUse;
+}
+
 namespace Physara::Renderer
 {
+    class RenderGraph;
+    class PassBuilder;
+    namespace Detail
+    {
+        class GraphExecutor;
+        struct GraphPoolEntry;
+    }
     struct GraphTextureTag;
     struct GraphBufferTag;
     struct GraphPassTag;
 
-    /// @brief 某一图代中指定类型资源的逻辑版本. 同一 identity 的版本共享底层资源身份.
-    /// @note 版本 0 表示创建或导入时的内容. 该值只在所属图内使用.
+    /// @brief 某资源的图内身份和逻辑版本. 只有创建, 有权导入或写入的调用方取得写权限.
+    /// @note 从身份和版本构造只读引用. 比较只看内容身份, 同一版本的读写引用共享同一资源.
     template <typename Tag>
-    struct GraphId
+    class GraphId
     {
-        Core::Identity<Tag> identity;
-        std::uint32_t version = 0;
+        Core::Identity<Tag> m_Identity;
+
+    public:
+        std::uint32_t version = 0; ///< 版本 0 表示创建或导入时的内容. 每次成功写声明产生后继版本.
+        constexpr GraphId() noexcept = default;
+        constexpr GraphId(Core::Identity<Tag> identity, std::uint32_t versionNumber) noexcept
+            : m_Identity(identity), version(versionNumber) {}
 
         /// @brief 仅区分空值. 所属图, 索引和已发布版本由图验证.
-        [[nodiscard]] constexpr bool IsValid() const noexcept { return identity.IsValid(); }
-        bool operator==(const GraphId &) const = default;
+        [[nodiscard]] constexpr bool IsValid() const noexcept { return m_Identity.IsValid(); }
+        [[nodiscard]] constexpr Core::Identity<Tag> Identity() const noexcept { return m_Identity; }
+        /// @brief 该引用可用于声明或解析写入. 调用方仍须匹配图代, 版本, 用途和范围.
+        [[nodiscard]] constexpr bool CanWrite() const noexcept { return m_CanWrite; }
+        [[nodiscard]] constexpr GraphId AsReadOnly() const noexcept { return {m_Identity, version}; }
+        [[nodiscard]] constexpr bool operator==(const GraphId &other) const noexcept
+        {
+            return m_Identity == other.m_Identity && version == other.version;
+        }
+
+    private:
+        friend class RenderGraph;
+        friend class PassBuilder;
+        constexpr GraphId(Core::Identity<Tag> identity, std::uint32_t versionNumber, bool writable) noexcept
+            : m_Identity(identity), version(versionNumber), m_CanWrite(writable) {}
+        bool m_CanWrite = false;
     };
 
     using TextureId = GraphId<GraphTextureTag>;
@@ -130,7 +162,7 @@ namespace Physara::Renderer
     /// @brief 外部 owner 提供允许范围的进出状态与初始内容事实.
     /// @note 导入方须填写 entry 和 final. 两者都须为公共 RHI 定义的非零状态位组合.
     /// entry 用于接管外部对象时的状态跟踪, final 用于将其交还给外部 owner.
-    /// contentDefined 为 true 时, 整个导入范围初始有效. Buffer 也可单独提供部分有效区间.
+    /// contentDefined 为 true 时, 整个导入范围初始有效. 也可单独提供部分有效范围.
     struct ImportState
     {
         RHI::ResourceStates entry = RHI::ResourceStates::Unknown;
@@ -148,6 +180,46 @@ namespace Physara::Renderer
         ShaderRead,
         Readback,
         Presentation
+    };
+
+    /// @brief 由图尾交接保留的物理资源, 连同其精确出口和生成录制一并持有.
+    /// @note 只在设备 owner 线程检查或使用. 复制此值延续池租用, 不保存原图身份.
+    /// Texture/Buffer 返回短借用. 跨录制访问须经图导入或本出口的读回入口登记.
+    class GraphRetainedResource
+    {
+    public:
+        [[nodiscard]] explicit operator bool() const noexcept { return bool(m_Entry); }
+        /// @brief 核对生成本出口的提交票据和出口范围的 Close 状态. 接受时 GPU 可以仍在执行.
+        [[nodiscard]] bool Accepted(std::uint64_t ticket) const noexcept;
+        /// @brief 检查生产票据与最近的物理状态. 跟随可更新存储的引用还须核对当前内容覆盖.
+        [[nodiscard]] bool Readable() const noexcept;
+        /// @brief 复制现有持有并撤去原地更新权. 已固定的范围仍受保护, 从可写 owner 派生的读别名跟随当前内容.
+        [[nodiscard]] GraphRetainedResource AsReadOnly() const noexcept
+        {
+            auto retained = *this;
+            retained.m_OwnerWrite = false;
+            return retained;
+        }
+        [[nodiscard]] ExportUsage Usage() const noexcept { return m_Usage; }
+        /// @brief 受保留出口授予的原地更新权. 使用前仍须核对对应的接受回执.
+        [[nodiscard]] bool AllowsOwnerWrite() const noexcept { return m_OwnerWrite; }
+        [[nodiscard]] RHI::Texture *Texture() const noexcept;
+        [[nodiscard]] RHI::Buffer *Buffer() const noexcept;
+        /// @brief 将已接受的 Readback 出口登记到本设备打开的后继录制. 范围或录制不匹配时返回空.
+        /// @note 取得短借用后在同一录制内复制指定范围. CPU 取数还须等复制所属提交完成.
+        [[nodiscard]] RHI::Texture *ReadbackTexture(RHI::CommandList &commands, TextureRange range) const;
+        [[nodiscard]] RHI::Buffer *ReadbackBuffer(RHI::CommandList &commands, RHI::BufferRange range) const;
+
+    private:
+        friend class RenderGraph;
+        friend class Detail::GraphExecutor;
+        [[nodiscard]] bool HasStates(const RHI::GraphicsResourceUse &use) const noexcept;
+        std::shared_ptr<Detail::GraphPoolEntry> m_Entry;
+        std::shared_ptr<const RHI::GraphicsResourceUse> m_Produced;
+        std::shared_ptr<const TextureRange> m_ContentPin; ///< 可写对象的只读出口用它阻止相交的原地写.
+        std::variant<TextureRange, RHI::BufferRange> m_Range;
+        ExportUsage m_Usage = ExportUsage::ShaderRead;
+        bool m_OwnerWrite{};
     };
 
     /// @brief 一次访问的精确版本, 已校验范围与用途.
@@ -207,6 +279,7 @@ namespace Physara::Renderer
         Id resource;
         Range range;
         ExportUsage usage;
+        bool ownerWrite = false; ///< 只给 UI 托管的可更新版本, View/历史及读回保持只读.
     };
 
     using TextureExport = ResourceExport<TextureId, TextureRange>;
@@ -239,16 +312,14 @@ namespace Physara::Renderer
         Range range;
         Handle imported;
         std::optional<ImportState> importState;
+        std::vector<Range> initialContent = std::vector<Range>(0); ///< 规范化的版本 0 部分内容.
+        GraphRetainedResource retained; ///< 原图的池租用. 本图仍使用自己的版本和权限.
+        std::shared_ptr<const RHI::GraphicsResourceUse> importUse; ///< 构图时经接受的逐单元状态.
         std::vector<VersionProducer> writes = std::vector<VersionProducer>(0);
     };
 
     using TextureDeclaration = ResourceDeclaration<RHI::TextureDesc, TextureRange, RHI::TextureHandle>;
-    /// @brief 共享页的初始有效字节. 部分区间互不重叠, 不相邻并按起点排序.
-    struct BufferDeclaration : ResourceDeclaration<RHI::BufferDesc, RHI::BufferRange, RHI::BufferHandle>
-    {
-        using ResourceDeclaration::ResourceDeclaration;
-        std::vector<RHI::BufferRange> initialContent = std::vector<RHI::BufferRange>(0);
-    };
+    using BufferDeclaration = ResourceDeclaration<RHI::BufferDesc, RHI::BufferRange, RHI::BufferHandle>;
 
     /// @brief 供编译读取的已发布 Pass. 名称仅用于诊断, uses 按 setup 的声明顺序保存.
     /// @invariant 生产者和读回记录的用途索引均指向同一份 uses. 图通过 PassId 关联拥有型回调.
@@ -286,6 +357,10 @@ namespace Physara::Renderer
         CyclicDependency,
         OverwrittenExport,
         TransientBudgetExceeded,
+        PoolBudgetExceeded, ///< 空池也不能接纳请求.
+        PoolRecording, ///< 预留或尚未取得票据的录制仍占据所需容量.
+        PoolInFlight, ///< 仍需完成正在使用池容量的工作.
+        PoolRetained, ///< 外部 owner 或准备值仍持有池容量.
         InvalidRecording, ///< 调用阶段或录制接管前提不满足.
         StateMismatch, ///< 已知物理状态与导入声明的 entry 不符.
         ConflictingExport, ///< 一个瞬态追踪单元的图尾用途无法合并.

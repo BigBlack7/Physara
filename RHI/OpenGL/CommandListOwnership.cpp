@@ -13,6 +13,49 @@
 
 namespace Physara::RHI::OpenGL
 {
+    bool OpenGLCommandList::HasExternalGraphOwners(Resource &resource, unsigned long poolHolds) noexcept
+    {
+        const InternalOwnership *owners = nullptr;
+        const OpenGLDevice *device = nullptr;
+        if (auto *texture = dynamic_cast<OpenGLTexture *>(&resource))
+        {
+            owners = &texture->m_InternalOwners;
+            device = texture->Owner();
+        }
+        else if (auto *buffer = dynamic_cast<OpenGLBuffer *>(&resource))
+        {
+            owners = &buffer->m_InternalOwners;
+            device = buffer->Owner();
+        }
+        // 先扣除池本身, 直接包引用和已登记的父对象边. 仍有余量就已有独立持有者.
+        if (!owners || resource.GetRefCount() > poolHolds + owners->packetHolds + owners->dependencyHolds)
+        {
+            return true;
+        }
+        if (owners->dependencyHolds == 0)
+        {
+            return false;
+        }
+
+        // FBO 和 BindingSet 的子引用可被多个包共享. 父对象仍有外部 owner 时, 这组边在退休后仍存在.
+        // 当前能直接持有 Texture/Buffer 的复合包对象自身没有上游包依赖边.
+        for (const auto &packet : device->m_Packets)
+        {
+            if (!packet)
+            {
+                continue;
+            }
+            for (const auto &lease : packet->resources)
+            {
+                if (lease.HoldsDependency(*owners) && !lease.OnlyInternalOwners())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // 将已验证对象的实际强引用树接入包账目, CPU 准备失败可以留下额外 lease, 不发出本次原生操作.
     InternalOwnership *OpenGLCommandList::RetainResource(Resource *resource)
     {

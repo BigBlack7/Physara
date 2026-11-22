@@ -10,6 +10,7 @@
 
 #include <GraphicsStatistics.hpp>
 #include <Renderer/Paths/Forward.hpp>
+#include <Renderer/RenderGraph/GraphResourcePool.hpp>
 
 namespace Physara::Editor
 {
@@ -103,10 +104,23 @@ namespace Physara::Editor
         double seconds;
     };
 
-    /// @brief 分别保留最近出图与最近就绪计时. 消费者可按各自的 submission 判定时长属于哪次提交.
+    /// @brief 最近编译结果的有界摘要. 安全图与失败前缀可以有提交身份, 不覆盖正常场景快照.
+    struct GraphFrameSummary
+    {
+        /// 图代来自编译器. submission 为零表示尚无接受票据, 非零时还须按 accepted 区分有效图与前缀.
+        std::uint64_t generation{}, plannedBytes{}, submission{};
+        std::size_t declared{}, live{}, imports{}, exports{}, slots{};
+        std::uint64_t nativeTextures{}, nativeBuffers{}; ///< 此图执行区间内实际新建的原生存储数.
+        bool safeUi{}, accepted{};
+    };
+
+    /// @brief 场景, 计时和最近图准入分别发布. 诊断只保存值并沿现有面板可见性消费.
     struct FrameStatistics
     {
         std::optional<SceneFrameStatistics> latestScene;
         std::optional<SceneGpuInterval> latestGpu;
+        std::optional<GraphFrameSummary> latestGraph;
+        Renderer::GraphPoolStatistics graphPool;
+        std::optional<Core::BoundedText> graphPressure;
     };
 }

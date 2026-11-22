@@ -36,7 +36,7 @@ namespace Physara::Renderer::Detail
     {
         using Kind = CompileResourceLocation::Kind;
         return {std::is_same_v<Tag, GraphTextureTag> ? Kind::Texture : Kind::Buffer,
-                id.identity.index, id.version, name};
+                id.Identity().index, id.version, name};
     }
 
     /// @brief 将索引或状态值写入有界诊断, 无需分配临时字符串.
@@ -59,9 +59,13 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] GraphFailure BuildPassPlans(const RenderGraph &graph, const GraphCompileOptions &options,
                                                std::vector<PlannedGraphPass> &passes);
 
-    /// @brief 从有序用途和图尾导出建立使用区间, 按兼容描述分配瞬态槽.
+    /// @brief 图内与设备池共用的完整存储兼容条件. 调试名不参与匹配.
+    [[nodiscard]] bool CompatibleStorage(const RHI::TextureDesc &left, const RHI::TextureDesc &right) noexcept;
+    [[nodiscard]] bool CompatibleStorage(const RHI::BufferDesc &left, const RHI::BufferDesc &right) noexcept;
+
+    /// @brief 从有序用途和图尾导出建立使用区间, 在对象和字节预算内分配瞬态槽.
     /// @pre plan 已填写同图代的存活顺序和导出, 资源映射与槽表为空, 预算总量为零.
     /// @note 失败时调用方丢弃整份临时计划, 包括已登记的资源和槽.
-    [[nodiscard]] GraphFailure BuildStoragePlan(const RenderGraph &graph, std::uint64_t budget,
+    [[nodiscard]] GraphFailure BuildStoragePlan(const RenderGraph &graph, const GraphCompileOptions &options,
                                                 CompiledGraphPlan &plan);
 }

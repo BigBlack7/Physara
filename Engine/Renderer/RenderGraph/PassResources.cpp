@@ -129,7 +129,7 @@ namespace Physara::Renderer
         for (auto it = m_Uses.rbegin(); it != m_Uses.rend(); ++it)
         {
             const auto *use = std::get_if<Use>(&*it);
-            if (use && use->write && use->access.resource.identity == id.identity)
+            if (use && use->write && use->access.resource.Identity() == id.Identity())
             {
                 return use->access.resource.version;
             }
@@ -146,12 +146,12 @@ namespace Physara::Renderer
         {
             return std::nullopt;
         }
-        if (!id.IsValid() || id.identity.generation != m_Graph.m_Generation || id.identity.index >= resources.size())
+        if (!id.IsValid() || id.Identity().generation != m_Graph.m_Generation || id.Identity().index >= resources.size())
         {
             Fail(GraphErrorCode::InvalidResource, {}, id.version, "Resource identity is not part of this graph");
             return std::nullopt;
         }
-        const auto &resource = resources[id.identity.index];
+        const auto &resource = resources[id.Identity().index];
         if (id.version > resource.writes.size() && id.version > LatestVersion<Id, Declaration, Use>(id, resource))
         {
             Fail(GraphErrorCode::InvalidResource, resource.desc.debugName, id.version, "Resource version is unpublished");
@@ -227,7 +227,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        const auto &resource = m_Graph.m_Textures[id.identity.index];
+        const auto &resource = m_Graph.m_Textures[id.Identity().index];
         if (!AllowsRead(resource.desc, range->aspect, usage))
         {
             return Fail(GraphErrorCode::InvalidUsage, resource.desc.debugName, id.version, "Invalid texture read usage");
@@ -236,7 +236,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        m_Uses.emplace_back(TextureUse{{id, *range, usage}, std::nullopt});
+        m_Uses.emplace_back(TextureUse{{id.AsReadOnly(), *range, usage}, std::nullopt});
         return true;
     }
 
@@ -259,7 +259,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        const auto &resource = m_Graph.m_Buffers[id.identity.index];
+        const auto &resource = m_Graph.m_Buffers[id.Identity().index];
         if (!AllowsRead(resource.desc, usage))
         {
             return Fail(GraphErrorCode::InvalidUsage, resource.desc.debugName, id.version, "Invalid buffer read usage");
@@ -284,7 +284,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        m_Uses.emplace_back(BufferUse{{id, *range, usage}, std::nullopt, indexedBinding});
+        m_Uses.emplace_back(BufferUse{{id.AsReadOnly(), *range, usage}, std::nullopt, indexedBinding});
         return true;
     }
 
@@ -312,7 +312,7 @@ namespace Physara::Renderer
                 return true;
             }
         }
-        return Fail(GraphErrorCode::InvalidUsage, resources[id.identity.index].desc.debugName, id.version,
+        return Fail(GraphErrorCode::InvalidUsage, resources[id.Identity().index].desc.debugName, id.version,
                     "Readback requires a matching CopySource read in this Pass");
     }
 
@@ -336,7 +336,12 @@ namespace Physara::Renderer
         {
             return {};
         }
-        const auto &resource = m_Graph.m_Textures[id.identity.index];
+        const auto &resource = m_Graph.m_Textures[id.Identity().index];
+        if (!id.CanWrite())
+        {
+            Fail(GraphErrorCode::AccessDenied, resource.desc.debugName, id.version, "Texture reference is read-only");
+            return {};
+        }
         if (!AllowsWrite(resource.desc, range->aspect, usage, ops))
         {
             const auto reason = ops.load == LoadOp::Clear ? "Invalid texture clear target, usage or value" :
@@ -358,8 +363,9 @@ namespace Physara::Renderer
         {
             return {};
         }
-        const TextureId next{id.identity, id.version + 1};
-        m_Uses.emplace_back(TextureUse{{next, *range, usage}, TextureWrite{id, ops}});
+        const TextureId next{id.Identity(), id.version + 1, true};
+        // setup 将可写后继交给实际生产者. 对外可见的用途和前驱只记录内容身份.
+        m_Uses.emplace_back(TextureUse{{next.AsReadOnly(), *range, usage}, TextureWrite{id.AsReadOnly(), ops}});
         return next;
     }
 
@@ -372,7 +378,12 @@ namespace Physara::Renderer
         {
             return {};
         }
-        const auto &resource = m_Graph.m_Buffers[id.identity.index];
+        const auto &resource = m_Graph.m_Buffers[id.Identity().index];
+        if (!id.CanWrite())
+        {
+            Fail(GraphErrorCode::AccessDenied, resource.desc.debugName, id.version, "Buffer reference is read-only");
+            return {};
+        }
         if (usage != GraphUsage::CopyDestination &&
             ((usage != GraphUsage::StorageWrite && usage != GraphUsage::StorageReadWrite) ||
              !resource.desc.canHaveUAVs || resource.desc.structStride == 0))
@@ -394,13 +405,13 @@ namespace Physara::Renderer
         {
             return {};
         }
-        const BufferId next{id.identity, id.version + 1};
-        m_Uses.emplace_back(BufferUse{{next, *range, usage}, BufferWrite{id}, std::nullopt});
+        const BufferId next{id.Identity(), id.version + 1, true};
+        m_Uses.emplace_back(BufferUse{{next.AsReadOnly(), *range, usage}, BufferWrite{id.AsReadOnly()}, std::nullopt});
         return next;
     }
 
     // 纹理和缓冲导出均核对外部用途及指定版本的内容, 成功后暂存精确范围.
-    bool PassBuilder::Export(TextureId id, ExportUsage usage, std::optional<TextureRange> requested)
+    bool PassBuilder::Export(TextureId id, ExportUsage usage, std::optional<TextureRange> requested, bool ownerWrite)
     {
         const auto range = Validate<TextureId, TextureRange, TextureDeclaration, TextureUse>(
             id, requested, m_Graph.m_Textures);
@@ -408,8 +419,14 @@ namespace Physara::Renderer
         {
             return false;
         }
-        const auto &resource = m_Graph.m_Textures[id.identity.index];
+        const auto &resource = m_Graph.m_Textures[id.Identity().index];
+        if (ownerWrite && !id.CanWrite())
+        {
+            return Fail(GraphErrorCode::AccessDenied, resource.desc.debugName, id.version,
+                        "Texture reference cannot grant owner write access");
+        }
         if (usage > ExportUsage::Presentation ||
+            (ownerWrite && usage != ExportUsage::ShaderRead) ||
             (usage == ExportUsage::ShaderRead && !resource.desc.isShaderResource) ||
             (usage == ExportUsage::Presentation && (!resource.importState || range->aspect != TextureAspect::Color)))
         {
@@ -419,7 +436,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        m_Exports.emplace_back(TextureExport{id, *range, usage});
+        m_Exports.emplace_back(TextureExport{id.AsReadOnly(), *range, usage, ownerWrite});
         return true;
     }
 
@@ -431,7 +448,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        const auto &resource = m_Graph.m_Buffers[id.identity.index];
+        const auto &resource = m_Graph.m_Buffers[id.Identity().index];
         if (usage >= ExportUsage::Presentation ||
             (usage == ExportUsage::ShaderRead && !AllowsRead(resource.desc, GraphUsage::ShaderRead)))
         {
@@ -441,7 +458,7 @@ namespace Physara::Renderer
         {
             return false;
         }
-        m_Exports.emplace_back(BufferExport{id, *range, usage});
+        m_Exports.emplace_back(BufferExport{id.AsReadOnly(), *range, usage});
         return true;
     }
 
@@ -462,11 +479,11 @@ namespace Physara::Renderer
             Fail(code, "PassResources", name, reason, id.version);
             return nullptr;
         };
-        if (!id.IsValid() || id.identity.generation != m_Graph.m_Generation || id.identity.index >= resources.size())
+        if (!id.IsValid() || id.Identity().generation != m_Graph.m_Generation || id.Identity().index >= resources.size())
         {
             return fail(GraphErrorCode::InvalidResource, {}, "Resource identity is not part of this graph");
         }
-        const auto &resource = resources[id.identity.index];
+        const auto &resource = resources[id.Identity().index];
         if (id.version > resource.writes.size())
         {
             return fail(GraphErrorCode::InvalidResource, resource.desc.debugName, "Resource version is unpublished");
@@ -477,10 +494,12 @@ namespace Physara::Renderer
         {
             return fail(GraphErrorCode::InvalidRange, resource.desc.debugName, "Query range exceeds the resource");
         }
+        // 声明表中的内容引用均为只读. 对写用途须另外核对查询者带入的授权, 等价版本本身不授予写入.
         const bool permitted = std::ranges::any_of(m_Pass.uses, [&](const PassUse &use)
         {
             const auto *declared = std::get_if<Use>(&use);
-            return declared && declared->access.resource == id && declared->access.usage == usage &&
+            return declared && (!declared->write || id.CanWrite()) &&
+                   declared->access.resource == id && declared->access.usage == usage &&
                    Contains(declared->access.range, range);
         });
         if (!permitted)

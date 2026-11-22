@@ -63,6 +63,11 @@ namespace Physara::RHI::OpenGL
         return m_Resource->GetRefCount() == m_Owners->packetHolds + m_Owners->dependencyHolds;
     }
 
+    bool UploadResourceLease::HoldsDependency(const InternalOwnership &dependency) const noexcept
+    {
+        return std::ranges::find(m_Dependencies, &dependency) != m_Dependencies.end();
+    }
+
     bool CheckedAlign(std::size_t value, std::size_t alignment, std::size_t &result) noexcept
     {
         if (alignment == 0)

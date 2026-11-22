@@ -92,6 +92,7 @@ namespace Physara::Runtime
     /// remainingDiagnosticBytes 已扣除其它槽的在途额度.
     /// @param editorSeconds 产生 editorFrame 的 Advance 实测秒数. 与本次 UI 准备时间共同归入 UI 阶段.
     /// @param statistics 此宿主的查询及统计 owner. 只在 View 接受本次场景输出后发布场景统计.
+    /// @param graphPool 此设备会话共用的池. 本轮的正常候选和独立安全 UI 各按自己的编译计划准入.
     /// @param offscreenRequests 当前配置额外接受一路, 身份须与主 View 不同. 请求对象和 View 借用至返回.
     /// @return 正常或可恢复状态; 文本错误表示必须退出, 未证明完成的工作仍归 RHI/宿主收拢.
     /// @note 准备值和图的 CPU 借用在返回前结束, 已发 GPU 引用由原物理包保活.
@@ -100,5 +101,6 @@ namespace Physara::Runtime
         Renderer::ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
-        FrameStatistics &statistics, double editorSeconds, std::span<OffscreenViewRequest> offscreenRequests = {});
+        FrameStatistics &statistics, Renderer::GraphResourcePool &graphPool, double editorSeconds,
+        std::span<OffscreenViewRequest> offscreenRequests = {});
 }

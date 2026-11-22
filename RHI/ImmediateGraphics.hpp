@@ -3,10 +3,13 @@
 /// @file
 /// @brief 即时 Graphics 列表提供的录制互操作. 图借用现有物理包并接管显式用途, 调用方持有录制和提交职责.
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "RHI.hpp"
 
@@ -54,10 +57,40 @@ namespace Physara::RHI
         StorageAccess storage = StorageAccess::None;
     };
 
+    /// @brief 同一资源在一个 Graphics 包内的 Close 状态及接受/退休事实, 不持有资源或 Device.
+    /// @note 只在录制 owner 线程读取. states 按 layer 后 mip 排列, Buffer 只有一个单元.
+    /// ticket 只由真实接受写入. complete 由已接受包的 fence 完成置位, unused 由未发工作的弃包退休置位.
+    /// states 描述物理访问状态, 对应逻辑版本的内容覆盖由图所有者维护.
+    struct GraphicsResourceUse
+    {
+        /// @brief 按物理单元构造可抛出的状态数组, 使 Debug 迭代器代理分配也走录制错误出口.
+        explicit GraphicsResourceUse(std::size_t cells) : states(cells) {}
+
+        /// @brief 查询 Graphics 包全部退休后, 池自身引用之外是否仍有强引用.
+        using ExternalOwnerCheck = bool (*)(Resource &resource, unsigned long poolHolds) noexcept;
+
+        std::vector<ResourceStates> states;
+        ExternalOwnerCheck hasExternalOwners{}; ///< 只以观察的同一活对象在其 owner 线程查询.
+        std::uint64_t recording{};
+        std::uint64_t ticket{};
+        bool complete{};
+        bool unused{};
+    };
+
     /// @brief 底层接管协议. 状态修改和提交只经一次成功接管的 GraphRecording 到达.
     class ImmediateGraphicsRecording
     {
     public:
+        /// @brief 在当前物理包登记可跨 Close/提交观察的资源. 同包同对象共享观察结果.
+        /// @param previous 上次已接受的同资源状态, 只用于保留新包未追踪的单元.
+        /// @return 只读观察随包推进. 设备或录制不匹配, 无法登记或后端未提供观察时返回空.
+        [[nodiscard]] virtual std::shared_ptr<const GraphicsResourceUse> ObserveResource(
+            Device &, Resource &, const GraphicsResourceUse *previous)
+        {
+            static_cast<void>(previous);
+            return {};
+        }
+
         /// @brief 从 range 的基础 mip 逐级过滤选中的层或 cube 面. 单级范围成功时没有写入.
         /// @note 使用 Automatic 或已提交用途的 Explicit 录制. 基础级需 CopySource, 后续级需 CopyDest.
         [[nodiscard]] virtual bool GenerateMipmaps(Texture *texture, TextureSubresourceSet range) = 0;
@@ -97,6 +130,14 @@ namespace Physara::RHI
         ImmediateGraphicsRecording(const ImmediateGraphicsRecording &) = delete;
         ImmediateGraphicsRecording &operator=(const ImmediateGraphicsRecording &) = delete;
     };
+
+    /// @brief 在已打开的即时 Graphics 录制中登记本资源的结束事实. 观察本身不发出 GPU 命令.
+    [[nodiscard]] inline std::shared_ptr<const GraphicsResourceUse> ObserveGraphicsResource(
+        CommandList &commands, Device &device, Resource &resource, const GraphicsResourceUse *previous = nullptr)
+    {
+        auto *recording = dynamic_cast<ImmediateGraphicsRecording *>(&commands);
+        return recording ? recording->ObserveResource(device, resource, previous) : nullptr;
+    }
 
     /// @brief 在原列表上调用即时颜色传输扩展. 缺少此扩展或本次请求被拒绝时返回 false.
     [[nodiscard]] inline bool GenerateMipmaps(CommandList &commands, Texture *texture, TextureSubresourceSet range)

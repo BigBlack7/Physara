@@ -90,6 +90,7 @@ namespace Physara::RHI::OpenGL
             {
                 return false;
             }
+            ++m_CommandCounts.textureStorages;
         }
         return true;
     }
@@ -247,6 +248,7 @@ namespace Physara::RHI::OpenGL
             {
                 return nullptr;
             }
+            ++m_CommandCounts.textureStorages;
             if (!multisample)
             {
                 // swizzle 改变未来采样的分量解释, 不变换存储字节; MS target 不接受这些普通纹理参数.

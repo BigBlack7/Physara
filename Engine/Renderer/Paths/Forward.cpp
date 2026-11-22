@@ -590,6 +590,7 @@ namespace Physara::Renderer
     };
 
     /// @brief 同一 Pass 按资源及范围去重, 同页上不同几何或材质区间仍各自保留.
+    /// 表键使用本图的存储索引, 值内的 BufferUse 和 TextureAccess 仍携带相应内容版本.
     struct RasterReads
     {
         std::map<std::tuple<std::uint32_t, std::uint64_t, std::uint64_t, GraphUsage>, BufferUse> buffers;
@@ -621,7 +622,7 @@ namespace Physara::Renderer
                                     std::optional<RHI::BufferRange> indexedBinding = std::nullopt)
         {
             BufferAccess access{versions.BufferVersion(graph, handle, page, true), range, usage};
-            reads.buffers.try_emplace(std::tuple{access.resource.identity.index, range.byteOffset, range.byteSize,
+            reads.buffers.try_emplace(std::tuple{access.resource.Identity().index, range.byteOffset, range.byteSize,
                                                  usage}, BufferUse{access, std::nullopt, indexedBinding});
             return access;
         };
@@ -655,7 +656,7 @@ namespace Physara::Renderer
                 const auto &desc = texture.texture->GetDesc();
                 const TextureAccess access{version, {.mipCount = desc.mipLevels, .layerCount = desc.arraySize},
                                            GraphUsage::Sampled};
-                reads.textures.try_emplace(version.identity.index, access);
+                reads.textures.try_emplace(version.Identity().index, access);
                 return access;
             };
             if (environment.dfg)
@@ -689,7 +690,7 @@ namespace Physara::Renderer
             {
                 const auto &product = *material.textures[i];
                 const auto version = versions.ReadTexture(graph, product);
-                reads.textures.try_emplace(version.identity.index,
+                reads.textures.try_emplace(version.Identity().index,
                     TextureAccess{version, {.firstMip = product.sampling.baseMipLevel,
                         .mipCount = product.sampling.numMipLevels}, GraphUsage::Sampled});
             }

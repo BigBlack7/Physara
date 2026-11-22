@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "GraphRanges.hpp"
+#include "GraphPoolInternal.hpp"
 #include "RenderGraph.hpp"
 
 /// @file
@@ -68,6 +69,25 @@ namespace Physara::Renderer::Detail
             if (!supports(resource.importState->entry))
             {
                 return CompileError(GraphErrorCode::UnsupportedCapability, "Unsupported import entry state", location);
+            }
+            if constexpr (std::is_same_v<Declaration, TextureDeclaration>)
+            {
+                if (resource.importUse)
+                {
+                    // 首个单元的 entry 不能代表整张纹理. 每个允许单元的实际 Close 状态都须受支持.
+                    const auto &range = resource.range;
+                    for (auto layer = range.firstLayer; layer < range.firstLayer + range.layerCount; ++layer)
+                    {
+                        for (auto mip = range.firstMip; mip < range.firstMip + range.mipCount; ++mip)
+                        {
+                            if (!supports(TextureStateAt(*resource.importUse, desc, layer, mip)))
+                            {
+                                return CompileError(GraphErrorCode::UnsupportedCapability,
+                                                    "Unsupported retained Texture entry state", location);
+                            }
+                        }
+                    }
+                }
             }
             if (!supports(resource.importState->final))
             {
@@ -238,7 +258,7 @@ namespace Physara::Renderer::Detail
             return incompatible("Attachment extent or sample count mismatch");
         }
         shape = selected;
-        const PlannedGraphAttachment attachment{{access.resource.identity, 0}, range, desc.format,
+        const PlannedGraphAttachment attachment{{access.resource.Identity(), 0}, range, desc.format,
                                                   access.usage == GraphUsage::DepthStencilRead};
         if (access.usage == GraphUsage::ColorAttachment)
         {
@@ -325,7 +345,7 @@ namespace Physara::Renderer::Detail
                 continue;
             }
             const auto *other = std::get_if<Use>(&planned.declaration);
-            if (!other || other->access.resource.identity != use.access.resource.identity)
+            if (!other || other->access.resource.Identity() != use.access.resource.Identity())
             {
                 continue;
             }
@@ -387,7 +407,7 @@ namespace Physara::Renderer::Detail
             if (const auto *texture = std::get_if<TextureUse>(&use))
             {
                 const auto &access = texture->access;
-                const auto index = access.resource.identity.index;
+                const auto index = access.resource.Identity().index;
                 const auto &desc = graph.Textures()[index].desc;
                 const auto &support = *textureSupport[index];
                 const auto location = LocateResource(access.resource, desc.debugName);
@@ -438,7 +458,7 @@ namespace Physara::Renderer::Detail
             {
                 const auto &buffer = std::get<BufferUse>(use);
                 const auto &access = buffer.access;
-                const auto &desc = graph.Buffers()[access.resource.identity.index].desc;
+                const auto &desc = graph.Buffers()[access.resource.Identity().index].desc;
                 const auto location = LocateResource(access.resource, desc.debugName);
                 // 行寻址可落在绑定对齐粒度以内. 只在实际绑定区间上核对设备对齐与大小.
                 const auto bindingRange = buffer.indexedBinding.value_or(access.range);
@@ -520,7 +540,7 @@ namespace Physara::Renderer::Detail
         {
             if (const auto *texture = std::get_if<TextureExport>(&output))
             {
-                const auto index = texture->resource.identity.index;
+                const auto index = texture->resource.Identity().index;
                 if (auto error = ValidateTextureExport(*texture, graph.Textures()[index], *textureSupport[index],
                                                         options.presentationFinalState))
                 {
@@ -530,7 +550,7 @@ namespace Physara::Renderer::Detail
             else
             {
                 const auto &buffer = std::get<BufferExport>(output);
-                const auto &desc = graph.Buffers()[buffer.resource.identity.index].desc;
+                const auto &desc = graph.Buffers()[buffer.resource.Identity().index].desc;
                 if (buffer.usage == ExportUsage::ShaderRead &&
                     !SupportsBufferUse(desc, buffer.range, GraphUsage::ShaderRead, options.buffers))
                 {

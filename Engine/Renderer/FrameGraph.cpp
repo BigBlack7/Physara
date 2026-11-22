@@ -102,18 +102,44 @@ namespace Physara::Renderer
                std::ranges::any_of(plan.passes, [&](const auto &item) { return item.id == pass; });
     }
 
-    // 输出对象可由调用方转为强引用, GraphId 仍只用于匹配这次执行的确切版本.
-    RHI::Texture *FindTextureOutput(const GraphExecutionOutputList &outputs, TextureId id) noexcept
+    // 结果借用自输出表. 根据消费者用途匹配版本或完整交接合同.
+    template <typename Matches>
+    static const GraphTextureOutput *FindMatchingTextureExport(const GraphExecutionOutputList &outputs,
+                                                                Matches matches) noexcept
     {
         for (const auto &item : outputs)
         {
             if (const auto *texture = std::get_if<GraphTextureOutput>(&item);
-                texture && texture->declaration.resource == id)
+                texture && matches(texture->declaration))
             {
-                return texture->object.Get();
+                return texture;
             }
         }
         return nullptr;
+    }
+
+    const GraphTextureOutput *FindTextureExport(const GraphExecutionOutputList &outputs, TextureId id) noexcept
+    {
+        return FindMatchingTextureExport(outputs, [id](const TextureExport &actual) noexcept
+        {
+            return actual.resource == id;
+        });
+    }
+
+    const GraphTextureOutput *FindTextureExport(const GraphExecutionOutputList &outputs,
+                                                const TextureExport &expected) noexcept
+    {
+        return FindMatchingTextureExport(outputs, [&expected](const TextureExport &actual) noexcept
+        {
+            return actual.resource == expected.resource && actual.range == expected.range &&
+                actual.usage == expected.usage && actual.ownerWrite == expected.ownerWrite;
+        });
+    }
+
+    RHI::Texture *FindTextureOutput(const GraphExecutionOutputList &outputs, TextureId id) noexcept
+    {
+        const auto *output = FindTextureExport(outputs, id);
+        return output ? output->Get() : nullptr;
     }
 
     // 以拓扑计划为顺序权威. 被裁剪的声明不进入设备准入, 区域复制也不重复计作 CPU 上传.

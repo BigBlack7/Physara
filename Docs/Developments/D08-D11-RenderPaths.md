@@ -79,9 +79,11 @@
 
 **职责位置：** RenderGraph、RenderEngine 资源池。**前置：** [D08-T02](#d08-t02)、[D08-T04](#d08-t04)、[D08-T05](#d08-t05)。**架构依据：** [6.4](../Architecture.md#graph-resources)、[6.3](../Architecture.md#graph-compile)、[11.4](../Architecture.md#diagnostics)。
 
-- [ ] 按格式/usage/尺寸/样本与真实使用区间复用兼容对象，首次使用 materialize，建立池容量与回收高水位。
-- [ ] 完善外部/history/UI/readback 导出、状态回传、子资源活性与 resize 换代，初期仍为单队列且不做 heap aliasing。
-- [ ] 压力测试尺寸/格式来回切换、无活性分支、资源池预算耗尽及在途对象保留，发布图摘要供诊断。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-23-complete-render-graph-resource-pooling/tasks.md#final-verification)
+
+- [x] 按格式/usage/尺寸/样本与真实使用区间复用兼容对象，首次使用 materialize，建立池容量与回收高水位。
+- [x] 完善外部/history/UI/readback 导出、状态回传、子资源活性与 resize 换代，初期仍为单队列且不做 heap aliasing。
+- [x] 压力测试尺寸/格式来回切换、无活性分支、资源池预算耗尽及在途对象保留，发布图摘要供诊断。
 
 **完成条件：** 图对象复用与 GPU 安全可同时证明，缓存增长不会因持续 resize 无界累积。
 

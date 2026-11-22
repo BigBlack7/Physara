@@ -301,11 +301,14 @@ namespace Physara::Renderer
         m_Reason = ViewSettingReason::LayoutPending;
     }
 
-    // 只复制已接受资源的强引用, 不调用 Prepare, 因而不借用当前布局或生成新候选.
+    // 旧图只在最近的物理状态仍可接入时交给安全 UI. 快照独立持有该颜色代, 即使布局已经改变.
     PreparedViewOutput View::LastAcceptedOutput(ViewSettingReason reason) const noexcept
     {
         PreparedViewOutput outputs;
-        outputs.m_Output = m_Accepted;
+        if (m_Accepted && m_Accepted->HasReadableColor())
+        {
+            outputs.m_Output = m_Accepted;
+        }
         outputs.m_Retained = true;
         outputs.m_Scale = m_EffectiveScale;
         outputs.m_UnavailableReason = reason;
@@ -467,6 +470,10 @@ namespace Physara::Renderer
     GraphResult<TextureId> PreparedViewOutput::Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads) const
     {
         assert(m_Output);
+        if (m_Output->retained)
+        {
+            return graph.ImportTexture(m_Output->retained, RHI::ResourceStates::ShaderResource);
+        }
         if (m_Output->texture)
         {
             return graph.ImportTexture(m_Output->texture,
@@ -492,13 +499,21 @@ namespace Physara::Renderer
     }
 
     // 换入已接受的新代并释放旧代的 View 引用. 原有 UI 绑定由已提交的 RHI 包继续持有.
-    bool View::Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept
+    bool View::Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture,
+                       const GraphRetainedResource &retained, std::uint64_t ticket) noexcept
     {
         // 拒绝安全图旧快照和已被后继编辑取代的候选, 即使尺寸或比例碰巧相同也不重新确认.
-        if (outputs.m_Retained || !acceptedTexture || !outputs.m_Output || outputs.m_Output->view != m_Id ||
+        const auto *color = retained ? retained.Texture() : acceptedTexture.Get();
+        if (outputs.m_Retained || !color || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
             (outputs.m_Output->scene && (outputs.m_Output->scene->mode != m_Preview ||
                                          outputs.m_Output->scene->documentRevision != m_DocumentRevision)))
+        {
+            return false;
+        }
+        if (retained && (!retained.Accepted(ticket) || retained.Usage() != ExportUsage::ShaderRead ||
+            color->GetDesc().width != outputs.m_Output->layout.outputExtent.width ||
+            color->GetDesc().height != outputs.m_Output->layout.outputExtent.height))
         {
             return false;
         }
@@ -507,7 +522,8 @@ namespace Physara::Renderer
             // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
             m_RenderedScene = outputs.m_Output->scene;
         }
-        outputs.m_Output->texture = acceptedTexture;
+        outputs.m_Output->texture = retained ? RHI::TextureHandle{} : acceptedTexture;
+        outputs.m_Output->retained = retained;
         m_Accepted = std::move(outputs.m_Output);
         m_EffectiveScale = outputs.m_Scale;
         m_Reason = ViewSettingReason::None;

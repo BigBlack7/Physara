@@ -53,12 +53,13 @@ namespace Physara::Renderer::Detail
     GraphFailure CheckTransientExports(const RenderGraph &graph, const CompiledGraphPlan &plan) noexcept
     {
         // 导出延寿至同一图尾, 因此不同逻辑导出资源不会共享槽. 导入的出口始终由其 final 覆盖.
+        // 同一存储的状态冲突看 RHI 跟踪单元与消费用途. 引用的更新权留给声明和跨帧交接检查.
         for (std::size_t i = 0; i < plan.exports.size(); ++i)
         {
             const auto &entry = plan.exports[i];
             if (const auto *texture = std::get_if<TextureExport>(&entry))
             {
-                const auto &declared = graph.Textures()[texture->resource.identity.index];
+                const auto &declared = graph.Textures()[texture->resource.Identity().index];
                 if (declared.imported)
                 {
                     continue;
@@ -66,7 +67,7 @@ namespace Physara::Renderer::Detail
                 for (std::size_t j = 0; j < i; ++j)
                 {
                     const auto *other = std::get_if<TextureExport>(&plan.exports[j]);
-                    if (other && other->resource.identity == texture->resource.identity &&
+                    if (other && other->resource.Identity() == texture->resource.Identity() &&
                         !SupportsCombinedState(OutputState(*other) | OutputState(*texture)) &&
                         SharesTrackedSubresource(other->range, texture->range))
                     {
@@ -77,7 +78,7 @@ namespace Physara::Renderer::Detail
             else
             {
                 const auto &buffer = std::get<BufferExport>(entry);
-                const auto &declared = graph.Buffers()[buffer.resource.identity.index];
+                const auto &declared = graph.Buffers()[buffer.resource.Identity().index];
                 if (declared.imported)
                 {
                     continue;
@@ -85,7 +86,7 @@ namespace Physara::Renderer::Detail
                 for (std::size_t j = 0; j < i; ++j)
                 {
                     const auto *other = std::get_if<BufferExport>(&plan.exports[j]);
-                    if (other && other->resource.identity == buffer.resource.identity &&
+                    if (other && other->resource.Identity() == buffer.resource.Identity() &&
                         !SupportsCombinedState(OutputState(*other) | OutputState(buffer)))
                     {
                         return MakeGraphError(GraphErrorCode::ConflictingExport, "GraphExec.Preflight", {},

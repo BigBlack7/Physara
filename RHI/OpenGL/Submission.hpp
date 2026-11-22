@@ -113,6 +113,14 @@ namespace Physara::RHI::OpenGL
         std::size_t writes = 0;
         std::size_t logicalBytes = 0;
         std::vector<UploadResourceLease> resources;
+        /// @brief 观察表借包内资源 lease, 只把 Close 状态和提交事实写给外部 owner.
+        struct ResourceObservation
+        {
+            OpenGLTexture *texture;
+            OpenGLBuffer *buffer;
+            std::shared_ptr<GraphicsResourceUse> use;
+        };
+        std::vector<ResourceObservation> observations = std::vector<ResourceObservation>(0);
         std::vector<OpenGLTimerQuery *> timers; ///< 借用 resources 保活的 query, 配对与退休时核对 recording 身份.
         std::vector<std::unique_ptr<UploadChunk>> chunks;
     };

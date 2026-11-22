@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -58,7 +59,7 @@ namespace Physara::Renderer
         bool structuredUav = false; ///< 由接入方从实际计算能力取得, 与普通 SSBO 读取分开.
     };
 
-    /// @brief 调用方提供的 CPU 能力表和瞬态逻辑字节预算. 边界状态表按完整状态组合匹配.
+    /// @brief 调用方提供的 CPU 能力表与单图的对象数和逻辑字节限额. 边界状态表按完整状态组合匹配.
     /// @note 能力表涵盖实际存储及用途, 借用至编译返回. 预算按不同瞬态槽累计, 导入由外部 owner 持有.
     /// presentationFinalState 为窗口 owner 要求的完整出口状态, 必须与呈现导入的 final 相等.
     /// 首发 PresentColor 使用 ShaderResource. 导入的进出状态仍须各自匹配纹理边界状态表.
@@ -71,6 +72,7 @@ namespace Physara::Renderer
         std::uint32_t maxColorAttachments = 0;
         std::uint64_t transientByteBudget = 0;
         RHI::ResourceStates presentationFinalState = RHI::ResourceStates::ShaderResource;
+        std::size_t transientObjectBudget = (std::numeric_limits<std::size_t>::max)(); ///< 每个不同瞬态槽计一次.
     };
 
     /// @brief Pass 声明的精确版本和范围, 以及清除之后的公共 RHI 状态请求.

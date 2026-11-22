@@ -134,6 +134,7 @@ namespace Physara::RHI::OpenGL
             {
                 return nullptr;
             }
+            ++m_CommandCounts.bufferStorages;
             if (desc.isVolatile)
             {
                 buffer->m_Mapping = static_cast<std::byte *>(

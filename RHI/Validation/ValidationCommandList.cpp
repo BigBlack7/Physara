@@ -88,6 +88,18 @@ namespace Physara::RHI::Validation
     {
     }
 
+    std::shared_ptr<const GraphicsResourceUse> CommandListWrapper::ObserveResource(
+        Device &device, Resource &resource, const GraphicsResourceUse *previous)
+    {
+        if (&device != m_Device.Get() || !m_IsImmediate || m_QueueType != CommandQueue::Graphics ||
+            m_State != CommandListState::Open || !m_HasImmediateClaim)
+        {
+            return {};
+        }
+        // 上层以包装设备建立租用, 底层用自己的设备核对原生资源. 两层共享同一份提交与完成事实.
+        return ObserveGraphicsResource(*m_CommandList.Get(), *m_CommandList->GetDevice(), resource, previous);
+    }
+
     std::uint64_t CommandListWrapper::BeginGraphManaged(Device &device)
     {
         // 先确认公共列表协议, 再让实际后端核对 owner/context 和物理包. 回调继续走本包装.

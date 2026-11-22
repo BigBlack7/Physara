@@ -146,7 +146,8 @@ namespace Physara::Runtime
                         .structuredUav = structuredUav},
             .textureBoundaryStates = m_States, .bufferBoundaryStates = m_States, .maxColorAttachments = 1,
             .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
-                ((!scene || diagnostic) ? DiagnosticUploadBudget : 0)};
+                ((!scene || diagnostic) ? DiagnosticUploadBudget : 0),
+            .transientObjectBudget = GraphResourcePool::DefaultLimit.objects};
     }
 
     /// @brief 一次尝试只返回一种动作. 开放列表前的图拒绝或视口准入失败可重建; 录制后的失败不追加安全图.
@@ -295,23 +296,24 @@ namespace Physara::Runtime
 
     // 成功 Close 恢复 keepInitialState. 失败目标将换代, 其它持久导入必须仍满足下次入口事实.
     // 不推测未执行到哪个 Pass, 按整个存活计划保守检查可能已消费的导入.
-    // 这里只证明状态可重新进入, 不撤销已经发生的像素更新; 未确认的 UI 请求由其原 owner 重试.
+    // 池导入还检查所保留出口是否可读. 该检查会影响本轮能否继续处理后续帧, UI 请求由其 owner 确认.
     static bool ImportsCanRetry(const RenderGraph &graph, const CompiledGraphPlan &plan, RHI::Texture *target) noexcept
     {
         for (const auto &texture : plan.textures)
         {
-            const auto &source = graph.Textures()[texture.resource.identity.index];
-            if (texture.importState && source.imported.Get() != target &&
-                (!source.desc.keepInitialState || source.desc.initialState != texture.importState->entry))
+            const auto &source = graph.Textures()[texture.resource.Identity().index];
+            if (texture.importState && source.imported.Get() != target && (source.retained ?
+                !source.retained.Readable() :
+                (!source.desc.keepInitialState || source.desc.initialState != texture.importState->entry)))
             {
                 return false;
             }
         }
         for (const auto &buffer : plan.buffers)
         {
-            const auto &source = graph.Buffers()[buffer.resource.identity.index];
-            if (buffer.importState &&
-                (!source.desc.keepInitialState || source.desc.initialState != buffer.importState->entry))
+            const auto &source = graph.Buffers()[buffer.resource.Identity().index];
+            if (buffer.importState && (source.retained ? !source.retained.Readable() :
+                (!source.desc.keepInitialState || source.desc.initialState != buffer.importState->entry)))
             {
                 return false;
             }
@@ -374,7 +376,7 @@ namespace Physara::Runtime
         Core::Diagnostics &diagnostics, RenderGraph &graph, const CompiledGraphPlan &plan,
         const FrameDeclaration &declared, PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared,
         Editor::UiFrameMode mode, Platform::RhiErrorScope &errors, GraphExecutionDiagnostics graphErrors,
-        bool &opened, FrameMeasurements measurements, OffscreenCandidate *offscreen)
+        bool &opened, FrameMeasurements measurements, OffscreenCandidate *offscreen, GraphPoolReservation &reservation)
     {
         std::optional<Core::BoundedText> failure;
         const auto stopped = [&](std::string_view stage, const Core::BoundedText &reason)
@@ -435,10 +437,13 @@ namespace Physara::Runtime
                 }
             }
         }
+        const auto graphStorageBefore = host.ReadGraphicsCounts();
         const auto graphStart = CpuClock::now();
-        auto executed = ExecuteRenderGraph(graph, plan, *host.GetDevice(), commands, graphErrors);
+        auto executed = ExecuteRenderGraph(graph, plan, *host.GetDevice(), commands, graphErrors, &reservation);
         measurements.cpu.graphExecute = SecondsSince(graphStart);
-        const auto native = measure ? host.ReadGraphicsCounts() - before : RHI::GraphicsOperationCounts{};
+        const auto afterGraph = host.ReadGraphicsCounts();
+        const auto native = measure ? afterGraph - before : RHI::GraphicsOperationCounts{};
+        measurements.statistics.GraphStorageCreated(afterGraph - graphStorageBefore);
         if (timer.query)
         {
             // 保留正常录制的配对义务. 失败候选即使有完整区间也只获得退休资格.
@@ -494,6 +499,9 @@ namespace Physara::Runtime
         const auto receipt = host.SubmitPresentation(presentation.token, hostError);
         // 非零 ticket 先记账. 随后的 Event 或诊断失败只撤销继续运行资格, 不能抹去已接受工作.
         slot.lastSubmission = receipt.ticket;
+        const bool accepted = recorded && receipt.colorValid && receipt.ticket != 0 && !hostError &&
+            handoffErrors.IsClear();
+        measurements.statistics.GraphReceipt(receipt.ticket, accepted);
         if (receipt.ticket != 0)
         {
             ReportTicket(diagnostics, "Window Graphics submission accepted", receipt.ticket);
@@ -503,7 +511,6 @@ namespace Physara::Runtime
             return stopped("Frame.Submit", hostError ? Platform::DescribeHostError(*hostError) :
                                                        Core::BoundedText("Submission has no reliable receipt"));
         }
-        const bool accepted = recorded && receipt.colorValid;
         const bool usedViewport = prepared && prepared->UsesViewOutput();
         // 确认只消费当前图实际执行的 UI 请求. 安全图可以确认自己的上传, 但永不发布旧 View 快照.
         if (prepared)
@@ -512,8 +519,13 @@ namespace Physara::Runtime
             assert(confirmed == accepted);
             static_cast<void>(confirmed);
         }
+        const auto publishView = [&](View &owner, PreparedViewOutput &candidate, TextureId color)
+        {
+            const auto *output = FindTextureExport(*execution, color);
+            return output && owner.Publish(std::move(candidate), output->object, output->retained, receipt.ticket);
+        };
         const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
-            view.Publish(std::move(outputs), RHI::TextureHandle(FindTextureOutput(*execution, declared.viewport)));
+            publishView(view, outputs, declared.viewport);
         if (accepted && declared.scene)
         {
             // 共享存储按本计划的写入确认. 每路显示色另外用自己的出口查找原生对象, 再核对所属 View 的请求.
@@ -522,8 +534,7 @@ namespace Physara::Runtime
             {
                 auto &request = *offscreen->request;
                 const auto color = declared.scene->views[OffscreenViewIndex]->displayColor;
-                if (request.view.Publish(std::move(offscreen->outputs),
-                        RHI::TextureHandle(FindTextureOutput(*execution, color))))
+                if (publishView(request.view, offscreen->outputs, color))
                 {
                     request.reason = ViewSettingReason::None;
                     request.submission = receipt.ticket;
@@ -580,13 +591,13 @@ namespace Physara::Runtime
         return {.status = AttemptStatus::Succeeded, .viewportPublished = published};
     }
 
-    // 先准备 UI, 再声明/封存/编译图, 只按存活上传账单准入后 Open.
+    // 先准备 UI 并编译图. 按存活上传账单检查设备容量, 再向会话图池预留本计划的物理槽, 两者就绪才 Open.
     // 失败返回按局部对象逆序结束计划, 图和准备值, 调用者随后才可 reset 槽.
     // 宿主首错捕获持续到下一候选或 Shutdown; 本次错误须在返回前复制到 AttemptResult.
     static AttemptResult TryFrame(Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
         const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
         Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode,
-        FrameMeasurements measurements, OffscreenCandidate *offscreen)
+        FrameMeasurements measurements, OffscreenCandidate *offscreen, GraphResourcePool &graphPool)
     {
         bool opened = false;
         try
@@ -616,7 +627,7 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.Prepare",
                               Core::BoundedText("Cannot reserve graph storage"));
             }
-            RenderGraph graph(slot.graphArena);
+            RenderGraph graph(slot.graphArena, host.GetDevice());
             auto declaration = DeclareFrame(graph, presentation.target, outputs, prepared, mode, slot, graphErrors,
                                             offscreen != nullptr);
             // 其它图消费者的准备也属于此边界, Fatal 不能被编译或安全图覆盖.
@@ -647,9 +658,24 @@ namespace Physara::Runtime
             measurements.cpu.graphCompile = SecondsSince(compileStart);
             if (const auto *error = std::get_if<GraphError>(&compiled))
             {
+                if (error->code == GraphErrorCode::TransientBudgetExceeded)
+                {
+                    measurements.statistics.ReportPoolPressure(error->description);
+                }
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Compile", error->description);
             }
             const auto &plan = *std::get<std::unique_ptr<const CompiledGraphPlan>>(compiled);
+            // 此时可以发布编译规模. 中途取消仍保留这次计划, 原生创建数和提交资格在各自发生时补入.
+            const auto imports = [](const auto &resources)
+            {
+                return static_cast<std::size_t>(std::ranges::count_if(resources,
+                    [](const auto &resource) { return resource.importState.has_value(); }));
+            };
+            measurements.statistics.PublishGraph({.generation = plan.graphGeneration, .plannedBytes = plan.transientBytes,
+                .declared = graph.Passes().size(), .live = plan.passes.size(),
+                .imports = imports(plan.textures) + imports(plan.buffers), .exports = plan.exports.size(),
+                // 主路使用旧色时, 显式离屏出口仍可保住场景生产者. 只有纯 UI 图标为安全图.
+                .slots = plan.transientSlots.size(), .safeUi = mode == Editor::UiFrameMode::SafeUi && !declared.scene});
             auto measured = CollectGraphUploads(plan, declared.uploads);
             if (const auto *error = std::get_if<GraphError>(&measured))
             {
@@ -689,8 +715,17 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UploadAdmission",
                               Core::BoundedText("UI upload capacity rejected"));
             }
+            auto reservation = graphPool.Admit(plan);
+            if (const auto *error = std::get_if<GraphError>(&reservation))
+            {
+                measurements.statistics.ReportPoolPressure(error->description);
+                auto rejected = Failed(host, AttemptStatus::GraphRejected, "Frame.GraphPool", error->description);
+                rejected.viewportReason = ViewSettingReason::SceneOutputUnavailable;
+                return rejected;
+            }
             return ExecuteFrame(host, editor, view, presentation, slot, commands, diagnostics, graph, plan, declared,
-                                outputs, prepared, mode, errors, graphErrors, opened, measurements, offscreen);
+                                outputs, prepared, mode, errors, graphErrors, opened, measurements, offscreen,
+                                *std::get<std::unique_ptr<GraphPoolReservation>>(reservation));
         }
         catch (const std::bad_alloc &)
         {
@@ -800,8 +835,10 @@ namespace Physara::Runtime
         Platform::DeviceHost &host, Editor::EditorSession &editor, View &view, ForwardRenderer &forward,
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
-        FrameStatistics &statistics, double editorSeconds, std::span<OffscreenViewRequest> offscreenRequests)
+        FrameStatistics &statistics, GraphResourcePool &graphPool, double editorSeconds,
+        std::span<OffscreenViewRequest> offscreenRequests)
     {
+        statistics.BeginGraphFrame();
         // 即使候选在准备前终止, 复用的请求也不能带回上一帧的接受票据.
         for (auto &request : offscreenRequests)
         {
@@ -937,7 +974,8 @@ namespace Physara::Runtime
             slot.arena.Reset();
             slot.bindings.Reset();
             const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode,
-                                          measurements, selectedOffscreen);
+                                          measurements, selectedOffscreen, graphPool);
+            statistics.PublishPool(graphPool.Statistics());
             const bool attemptedOffscreen = selectedOffscreen != nullptr;
             selectedOffscreen = nullptr;
             if (attemptedOffscreen && offscreen.request->submission == 0 && attempt.status != AttemptStatus::Succeeded)
@@ -959,7 +997,11 @@ namespace Physara::Runtime
                 (mode != Editor::UiFrameMode::SafeUi || attemptedOffscreen))
             {
                 mode = Editor::UiFrameMode::SafeUi;
-                outputs = view.LastAcceptedOutput();
+                if (attempt.viewportReason != ViewSettingReason::None)
+                {
+                    static_cast<void>(view.Unavailable(attempt.viewportReason));
+                }
+                outputs = view.LastAcceptedOutput(attempt.viewportReason);
                 continue;
             }
             if (attempt.status == AttemptStatus::RebuildWithoutViewport)

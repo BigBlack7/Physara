@@ -185,6 +185,13 @@ namespace Physara::RHI::OpenGL
                                     bool initial, bool graphRequest);
         /// @brief 串行 owner 上借用本列表当前持有的物理录制, 含已失效但仍须收拢的包.
         [[nodiscard]] UploadWorkPacket *OwningRecording() const noexcept;
+        /// @brief 为本包的 Texture 或 Buffer 建立唯一观察. 对象由包内 lease 保活, 观察值可跨包退休读取.
+        [[nodiscard]] std::shared_ptr<const GraphicsResourceUse> ObserveResource(
+            Device &device, Resource &resource, const GraphicsResourceUse *previous) override;
+        /// @brief 区分对象或其附件/绑定的长持有与只随包退休的引用边.
+        [[nodiscard]] static bool HasExternalGraphOwners(Resource &resource, unsigned long poolHolds) noexcept;
+        /// @brief 成功提交 Close 的最后状态请求后, 读取该包追踪的完整物理状态.
+        static void CaptureResourceStates(UploadWorkPacket &packet);
         /// @brief 撤销两类执行资格和 push, 保留本次录制建立的 viewport/scissor.
         void ResetPipelineState() noexcept;
         /// @brief 清除两类执行候选, push 和图形动态状态, 并使原生缓存失效. 已发命令仍由包持有.

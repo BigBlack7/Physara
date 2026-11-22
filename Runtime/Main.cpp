@@ -150,7 +150,7 @@ namespace Physara::Runtime
     // 暂停与槽忙共享发布入口和有限等待; 本函数不等待文件或资产 worker, 退出收拢由外层 owner 负责.
     static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
                          Renderer::ForwardRenderer &forward, Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
-                         std::optional<std::uint64_t> pollLimit)
+                         Renderer::GraphResourcePool &graphPool, std::optional<std::uint64_t> pollLimit)
     {
         std::optional<bool> previousFrame;
         std::array<FrameSlot, FrameSlotCount> slots;
@@ -282,7 +282,7 @@ namespace Physara::Runtime
                 }
                 const auto rendered =
                     RenderFrame(host, editor, view, forward, frame, *presentation, slot, remaining, *commands,
-                                diagnostics, statistics, editorSeconds);
+                                diagnostics, statistics, graphPool, editorSeconds);
                 if (const auto *error = std::get_if<Core::BoundedText>(&rendered))
                 {
                     PrintError(*error);
@@ -313,6 +313,9 @@ namespace Physara::Runtime
                 PrintError(Core::BoundedText("Window Graphics retirement failed"));
                 return 1;
             }
+            // 包退休后它持有的 FBO 和纹理已可释放, 此时按空闲上限整理池并发布新的占用值.
+            graphPool.Collect();
+            statistics.PublishPool(graphPool.Statistics());
             // 有限等待把收到的回调留给下一次 poll. 正常, 槽忙及暂停轮次共用这条入口.
             if (auto error = host.WaitForEvents(0.05))
             {
@@ -326,6 +329,8 @@ namespace Physara::Runtime
     static int RunProduct(Platform::DeviceHost &host, const ResourceLocations &resources,
                           Core::Diagnostics &diagnostics, const StartupOptions &options)
     {
+        // 所有帧槽和两种图候选共享一本设备账. View 和 UI 先析构以归还持有, 池随后在宿主关闭前释放.
+        Renderer::GraphResourcePool graphPool(*host.GetDevice());
         auto assets = Asset::AssetManager::Create(resources.projectRoot);
         if (const auto *error = std::get_if<Asset::AssetFailure>(&assets))
         {
@@ -364,7 +369,7 @@ namespace Physara::Runtime
             resources.forward,
             info.maxTextureSizePixels, std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels),
             info.uniformBufferOffsetAlignmentBytes);
-        const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, options.pollLimit);
+        const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, graphPool, options.pollLimit);
         editor.ShutdownSceneDocument();
         manager.Shutdown();
         return result;

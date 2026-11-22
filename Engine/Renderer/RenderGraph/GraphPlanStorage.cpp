@@ -18,7 +18,7 @@ namespace Physara::Renderer::Detail
     static constexpr auto MaxBytes = (std::numeric_limits<ByteCount>::max)();
 
     // 比较影响原生对象和默认视图行为的字段. 调试名不参与, 未启用的清除值不影响兼容性.
-    static bool Compatible(const RHI::TextureDesc &a, const RHI::TextureDesc &b) noexcept
+    bool CompatibleStorage(const RHI::TextureDesc &a, const RHI::TextureDesc &b) noexcept
     {
         const auto fields = [](const RHI::TextureDesc &d)
         {
@@ -31,7 +31,7 @@ namespace Physara::Renderer::Detail
     }
 
     // 同时比较容量和视图/状态相关描述, 因此同容量的不同用法仍可能需要独立槽.
-    static bool Compatible(const RHI::BufferDesc &a, const RHI::BufferDesc &b) noexcept
+    bool CompatibleStorage(const RHI::BufferDesc &a, const RHI::BufferDesc &b) noexcept
     {
         const auto fields = [](const RHI::BufferDesc &d)
         {
@@ -135,26 +135,31 @@ namespace Physara::Renderer::Detail
     // 复用首个描述兼容且末用严格早于本次首用的槽. 同一 Pass 首末相接仍是重叠.
     // 预算只在新开槽时增长, 超限或估算不可表示时由调用方放弃局部计划.
     template <typename Desc, typename Resource>
-    static GraphFailure AssignSlot(const Desc &desc, Resource &resource, ByteCount budget,
+    static GraphFailure AssignSlot(const Desc &desc, Resource &resource, const GraphCompileOptions &options,
                                    std::vector<std::size_t> &lastUses, CompiledGraphPlan &plan)
     {
         for (std::size_t i = 0; i < lastUses.size(); ++i)
         {
             const auto *existing = std::get_if<Desc>(&plan.transientSlots[i].desc);
-            if (existing && lastUses[i] < resource.firstUse && Compatible(*existing, desc))
+            if (existing && lastUses[i] < resource.firstUse && CompatibleStorage(*existing, desc))
             {
                 resource.transientSlot = i;
                 lastUses[i] = resource.lastUse;
                 return std::nullopt;
             }
         }
+        const auto location = LocateResource(resource.resource, desc.debugName);
+        if (plan.transientSlots.size() >= options.transientObjectBudget)
+        {
+            return CompileError(GraphErrorCode::TransientBudgetExceeded, "Transient plan exceeds object budget",
+                                location);
+        }
         const auto bytes = StorageBytes(desc);
-        if (!bytes || *bytes > budget - plan.transientBytes)
+        if (!bytes || *bytes > options.transientByteBudget - plan.transientBytes)
         {
             const auto reason = bytes ? "Transient plan exceeds byte budget" :
                                         "Transient storage size is not representable";
-            return CompileError(GraphErrorCode::TransientBudgetExceeded, reason,
-                                LocateResource(resource.resource, desc.debugName));
+            return CompileError(GraphErrorCode::TransientBudgetExceeded, reason, location);
         }
         const auto slot = plan.transientSlots.size();
         // 在目标存储内复制描述, 避免 Debug string 的 noexcept move 分配迭代器代理.
@@ -166,7 +171,8 @@ namespace Physara::Renderer::Detail
     }
 
     // 用实际执行位置覆盖每项资源的寿命, 再按首用分配瞬态槽.
-    GraphFailure BuildStoragePlan(const RenderGraph &graph, ByteCount budget, CompiledGraphPlan &plan)
+    GraphFailure BuildStoragePlan(const RenderGraph &graph, const GraphCompileOptions &options,
+                                  CompiledGraphPlan &plan)
     {
         std::vector<UseInterval> textures(graph.Textures().size());
         std::vector<UseInterval> buffers(graph.Buffers().size());
@@ -176,11 +182,11 @@ namespace Physara::Renderer::Detail
             {
                 if (const auto *texture = std::get_if<TextureUse>(&use.declaration))
                 {
-                    textures[texture->access.resource.identity.index].Include(i);
+                    textures[texture->access.resource.Identity().index].Include(i);
                 }
                 else
                 {
-                    buffers[std::get<BufferUse>(use.declaration).access.resource.identity.index].Include(i);
+                    buffers[std::get<BufferUse>(use.declaration).access.resource.Identity().index].Include(i);
                 }
             }
         }
@@ -189,11 +195,11 @@ namespace Physara::Renderer::Detail
         {
             if (const auto *texture = std::get_if<TextureExport>(&output))
             {
-                textures[texture->resource.identity.index].Include(plan.passes.size());
+                textures[texture->resource.Identity().index].Include(plan.passes.size());
             }
             else
             {
-                buffers[std::get<BufferExport>(output).resource.identity.index].Include(plan.passes.size());
+                buffers[std::get<BufferExport>(output).resource.Identity().index].Include(plan.passes.size());
             }
         }
 
@@ -204,15 +210,15 @@ namespace Physara::Renderer::Detail
         {
             return std::tie(resource.firstUse, resource.buffer, resource.index);
         });
-        plan.transientSlots.reserve(transients.size());
+        plan.transientSlots.reserve((std::min)(transients.size(), options.transientObjectBudget));
         std::vector<std::size_t> lastUses(0);
         for (const auto &entry : transients)
         {
             if (entry.buffer)
             {
                 auto &resource = plan.buffers[entry.index];
-                if (auto error = AssignSlot(graph.Buffers()[resource.resource.identity.index].desc, resource,
-                                            budget, lastUses, plan))
+                if (auto error = AssignSlot(graph.Buffers()[resource.resource.Identity().index].desc, resource,
+                                            options, lastUses, plan))
                 {
                     return error;
                 }
@@ -220,8 +226,8 @@ namespace Physara::Renderer::Detail
             else
             {
                 auto &resource = plan.textures[entry.index];
-                if (auto error = AssignSlot(graph.Textures()[resource.resource.identity.index].desc, resource,
-                                            budget, lastUses, plan))
+                if (auto error = AssignSlot(graph.Textures()[resource.resource.Identity().index].desc, resource,
+                                            options, lastUses, plan))
                 {
                     return error;
                 }

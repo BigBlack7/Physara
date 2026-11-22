@@ -11,12 +11,14 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "Core/FrameArena.hpp"
 
@@ -61,7 +63,7 @@ namespace Physara::Renderer
 
         /// @brief 查询已授权的纹理或缓冲. 省略 range 表示资源的整个图内允许范围.
         /// @return 借用的 RHI 对象, 身份, 范围, 权限或解析失败时返回空指针.
-        /// @note 回调对返回对象的使用须遵守本次查询的用途和范围.
+        /// @note 查询已声明的写用途还须持有该版本的写权限. 回调对返回对象的访问限于该用途和范围.
         [[nodiscard]] RHI::Texture *Resolve(TextureId id, GraphUsage usage,
                                             std::optional<TextureRange> range = std::nullopt) noexcept;
         [[nodiscard]] RHI::Buffer *Resolve(BufferId id, GraphUsage usage,
@@ -139,8 +141,10 @@ namespace Physara::Renderer
                                      std::optional<RHI::BufferRange> range = std::nullopt);
 
         /// @brief 核对外部用途与内容后, 将指定版本和范围登记为外部消费根.
+        /// @param ownerWrite 给 ShaderRead 纹理的拥有者保留后继更新权限, 用于 UI 托管图像.
         /// @note 导出随本 Pass 一起发布, 回调查询权限来自 Read 和 Write.
-        [[nodiscard]] bool Export(TextureId id, ExportUsage usage, std::optional<TextureRange> range = std::nullopt);
+        [[nodiscard]] bool Export(TextureId id, ExportUsage usage, std::optional<TextureRange> range = std::nullopt,
+                                  bool ownerWrite = false);
         [[nodiscard]] bool Export(BufferId id, ExportUsage usage, std::optional<RHI::BufferRange> range = std::nullopt);
 
     private:
@@ -178,8 +182,9 @@ namespace Physara::Renderer
     {
     public:
         /// @brief 取得一张独立的图代并记住专用 arena 的初始游标.
+        /// @param importDevice 受保留出口所属的设备身份, 借用至图销毁. 纯 CPU 构图可省略.
         /// @throws std::bad_alloc 无法建立声明表时.
-        explicit RenderGraph(Core::FrameArena &arena);
+        explicit RenderGraph(Core::FrameArena &arena, RHI::Device *importDevice = nullptr);
         /// @brief 逆序销毁拥有型 Pass 对象, 再将 arena 游标退回图构造时的位置.
         ~RenderGraph();
         RenderGraph(const RenderGraph &) = delete;
@@ -191,9 +196,10 @@ namespace Physara::Renderer
 
         /// @brief 持有已存在的 RHI 对象. 同一对象只接受等价的规范范围, 状态和内容声明.
         /// @pre 调用方传入外部 owner 使用的规范 RHI 对象.
-        /// @note 省略 range 导入整个资源. 等价导入始终返回版本 0, 冲突时保留原记录.
+        /// @note 省略 range 导入整个资源. defined 提供允许范围内的部分有效内容, 与整范围简写互斥.
+        /// 等价导入始终返回版本 0, 冲突时保留原记录.
         [[nodiscard]] GraphResult<TextureId> ImportTexture(const RHI::TextureHandle &texture, ImportState states,
-                                                            std::optional<TextureRange> range = std::nullopt);
+            std::optional<TextureRange> range = std::nullopt, std::span<const TextureRange> defined = {});
         /// @brief 部分有效的 Buffer 通过借用区间声明, 图复制并规范化其覆盖.
         /// @pre contentDefined 为 true 时, 通过整范围简写声明, 不同时提供已定义区间.
         /// @note defined 的起点相对物理 Buffer. 覆盖恰好铺满 range 时与整段有效的简写共用版本 0.
@@ -201,10 +207,19 @@ namespace Physara::Renderer
             std::optional<RHI::BufferRange> range = std::nullopt,
             std::span<const RHI::BufferRange> defined = {});
 
+        /// @brief 重新导入该设备的已接受 ShaderRead 出口. 使用实际接受状态和已有的精确有效范围.
+        /// @note 省略 range 使用完整出口. ownerWrite 仅适用于已明确允许 owner 更新的纹理.
+        /// 默认返回只读引用. 同一内容版本可被多个调用方读取, 各自的写权限随本次导入确定.
+        /// 等价导入共用版本 0. 图在其生命周期内持有传入的固定快照, Pass 的访问仍限于声明范围.
+        [[nodiscard]] GraphResult<TextureId> ImportTexture(const GraphRetainedResource &retained,
+            RHI::ResourceStates final, std::optional<TextureRange> range = std::nullopt, bool ownerWrite = false);
+        [[nodiscard]] GraphResult<BufferId> ImportBuffer(const GraphRetainedResource &retained,
+            RHI::ResourceStates final, std::optional<RHI::BufferRange> range = std::nullopt);
+
         /// @brief 标记外部读用途. 省略 range 表示资源的整个图内允许范围.
         /// @return 成功时为空. 拒绝时保留此前的导出记录.
         [[nodiscard]] GraphFailure Export(TextureId id, ExportUsage usage,
-                                          std::optional<TextureRange> range = std::nullopt);
+                                          std::optional<TextureRange> range = std::nullopt, bool ownerWrite = false);
         [[nodiscard]] GraphFailure Export(BufferId id, ExportUsage usage,
                                           std::optional<RHI::BufferRange> range = std::nullopt);
 
@@ -430,23 +445,38 @@ namespace Physara::Renderer
         [[nodiscard]] GraphFailure CheckBuilding(std::string_view stage, std::string_view name) const noexcept;
         void PublishPass(PassBuilder &builder, PassCallback callback);
 
+        /// @brief 合并等价导入承诺的固定内容范围, 保持规范声明的允许范围和本次导入权限独立.
+        /// @pre 调用方已核对同一池项和入口事实. 比较保护范围时使用各出口原有的快照范围.
+        void KeepImportSnapshot(GraphRetainedResource &current, const GraphRetainedResource &incoming);
+
         template <typename Id, typename Range>
-        [[nodiscard]] GraphFailure ExportResource(Id id, ExportUsage usage, std::optional<Range> range);
+        [[nodiscard]] GraphFailure ExportResource(Id id, ExportUsage usage, std::optional<Range> range,
+                                                  bool ownerWrite = false);
         template <typename Id, typename Declaration>
         [[nodiscard]] GraphResult<Id> DeclareResource(std::string_view stage, std::deque<Declaration> &resources,
                                                       const typename Declaration::Description &desc,
                                                       std::optional<typename Declaration::AccessRange> requested,
                                                       const typename Declaration::ResourceHandle &imported,
                                                       std::optional<ImportState> state,
-                                                      std::span<const RHI::BufferRange> defined = {});
+                                                      std::span<const typename Declaration::AccessRange> defined = {},
+                                                      const GraphRetainedResource &retained = {},
+                                                      std::shared_ptr<const RHI::GraphicsResourceUse> importUse = {},
+                                                      bool writable = true);
+        template <typename Id, typename Declaration>
+        [[nodiscard]] GraphResult<Id> ImportRetained(std::deque<Declaration> &resources,
+            const GraphRetainedResource &retained, RHI::ResourceStates final,
+            std::optional<typename Declaration::AccessRange> requested, bool writable);
 
         static constexpr auto MaxIndex = (std::numeric_limits<std::uint32_t>::max)();
 
         Core::FrameArena &m_Arena;
         std::size_t m_ArenaStart;
         std::uint64_t m_Generation;
+        RHI::Device *m_ImportDevice; ///< 借用设备身份, 仅用于已接受池导入的归属核对.
         std::deque<TextureDeclaration> m_Textures;
         std::deque<BufferDeclaration> m_Buffers;
+        /// @brief 同一规范导入可能接管多个不同的快照保护. 主持有放在资源声明中, 其余只在需要时保存.
+        std::optional<std::vector<GraphRetainedResource>> m_AdditionalImportSnapshots;
         std::deque<PassDeclaration> m_Passes;
         std::vector<PassCallback> m_Callbacks = std::vector<PassCallback>(0);
         std::vector<GraphExport> m_Exports = std::vector<GraphExport>(0);

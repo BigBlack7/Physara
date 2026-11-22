@@ -264,6 +264,9 @@ namespace Physara::RHI::Validation
         ~CommandListWrapper() override;
 
       private:
+        /// @brief 核对本包装的即时 Graphics 录制身份, 将观察交给持有实际包和 tracker 的底层列表.
+        [[nodiscard]] std::shared_ptr<const GraphicsResourceUse> ObserveResource(
+            Device &device, Resource &resource, const GraphicsResourceUse *previous) override;
         /// @brief 在同一包装设备的 Open 即时 Graphics 列表上接管底层录制. 命令消费仍经原包装验证.
         [[nodiscard]] std::uint64_t BeginGraphManaged(Device &device) override;
         /// @brief 只归还本包装曾接管的物理包, 清除包装的绘制和常量前提, 再由底层收拢录制.

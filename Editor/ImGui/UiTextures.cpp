@@ -115,6 +115,18 @@ namespace Physara::Editor::Detail
             return Core::BoundedText(
                 "Editor UI resident texture requires defined content and explicit valid import facts");
         }
+        // 已登记的池租用维持同一来源. 托管 token 注销后, 活动别名仍可提供等价的只读登记.
+        for (const auto &entry : m_Entries)
+        {
+            if (entry.retained && entry.Texture() == &texture)
+            {
+                if (entry.imported.range != imported.range || entry.imported.states != imported.states)
+                {
+                    return Core::BoundedText("Editor UI alias conflicts with the existing pooled texture import");
+                }
+                return Register(Entry{.imported = imported, .retained = entry.retained.AsReadOnly()});
+            }
+        }
         return Register(Entry{.texture = RHI::TextureHandle(&texture), .imported = imported});
     }
 
@@ -238,8 +250,9 @@ namespace Physara::Editor::Detail
         {
             // 更新保持当前代. 在原像素空间校验包围矩形, 准备结果只保存该区域的紧密行.
             entry = Find(DecodeUiTexture(source.TexID));
-            if (entry == nullptr || entry->managed != &source ||
-                entry->texture->GetDesc().width != width || entry->texture->GetDesc().height != height)
+            const auto *texture = entry ? entry->Texture() : nullptr;
+            if (texture == nullptr || entry->managed != &source ||
+                texture->GetDesc().width != width || texture->GetDesc().height != height)
             {
                 return Core::BoundedText("Editor UI update has no matching managed texture");
             }
@@ -268,6 +281,7 @@ namespace Physara::Editor::Detail
         else
         {
             upload.target = entry->texture;
+            upload.retainedTarget = entry->retained;
         }
         return std::nullopt;
     }
@@ -279,7 +293,7 @@ namespace Physara::Editor::Detail
         {
             const auto &region = upload.region;
             // 同一请求只能安装一次临时身份. 前面的上传项可能已经为它建立 token.
-            if (!upload.target && upload.request->TexID != ImTextureID_Invalid)
+            if (!upload.Updates() && upload.request->TexID != ImTextureID_Invalid)
             {
                 return Core::BoundedText("Editor UI texture create repeats a prepared identity");
             }
@@ -291,7 +305,7 @@ namespace Physara::Editor::Detail
             CopyTexturePixels(*upload.request, region, reinterpret_cast<std::uint8_t *>(pixels.data()));
             upload.pixels = pixels;
 
-            if (upload.target)
+            if (upload.Updates())
             {
                 continue;
             }
@@ -376,7 +390,8 @@ namespace Physara::Editor::Detail
                 bindings.residents.end())
         {
             // 准备后 registry 可被注销或复用. 原对象和导入事实属于已封存批次, 不再借用可变条目.
-            bindings.residents.push_back({sample.entry->id, sample.entry->texture, sample.entry->imported});
+            bindings.residents.push_back({sample.entry->id, sample.entry->texture, sample.entry->imported,
+                                          sample.entry->retained});
         }
         return sample.entry->id;
     }
@@ -418,15 +433,16 @@ namespace Physara::Editor::Detail
         using namespace Renderer;
         if (uploads.usesPlaceholder)
         {
-            auto target = m_Placeholder ? graph.ImportTexture(m_Placeholder,
-                {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true}) :
-                graph.CreateTexture(UploadDescription(1, 1, true));
+            auto target = m_RetainedPlaceholder ? graph.ImportTexture(m_RetainedPlaceholder, RHI::ResourceStates::Common)
+                : m_Placeholder ? graph.ImportTexture(m_Placeholder,
+                    {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true})
+                : graph.CreateTexture(UploadDescription(1, 1, true));
             if (const auto *error = std::get_if<GraphError>(&target))
             {
                 return *error;
             }
             uploads.placeholder.texture = std::get<TextureId>(target);
-            if (!m_Placeholder)
+            if (!m_Placeholder && !m_RetainedPlaceholder)
             {
                 auto written = AddTextureUpload(graph, uploads.placeholder.texture,
                     std::as_bytes(std::span(PlaceholderPixel)), PixelBytes, writes);
@@ -436,12 +452,12 @@ namespace Physara::Editor::Detail
                 }
                 uploads.placeholder = std::get<GraphTextureWrite>(written);
             }
-            bindings.tokens.push_back({{}, {uploads.placeholder.texture, {}}});
+            bindings.tokens.push_back({{}, {uploads.placeholder.texture.AsReadOnly(), {}}});
         }
         for (auto &upload : uploads.items)
         {
             const auto &region = upload.region;
-            auto source = graph.CreateTexture(UploadDescription(region.width, region.height, !upload.target));
+            auto source = graph.CreateTexture(UploadDescription(region.width, region.height, !upload.Updates()));
             if (const auto *error = std::get_if<GraphError>(&source))
             {
                 return *error;
@@ -453,11 +469,12 @@ namespace Physara::Editor::Detail
                 return *error;
             }
             upload.written = std::get<GraphTextureWrite>(written);
-            if (upload.target)
+            if (upload.Updates())
             {
-                // 托管纹理在 Close 后保持 Common. Load 保留区域外 texel, 终结 Pass 改为目标复制.
-                auto imported = graph.ImportTexture(upload.target,
-                    {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true});
+                // 池内托管纹理用原出口的更新许可接入. 区域复制通过 Load 保留矩形外的 texel.
+                auto imported = upload.retainedTarget ?
+                    graph.ImportTexture(upload.retainedTarget, RHI::ResourceStates::Common, {}, true) :
+                    graph.ImportTexture(upload.target, {RHI::ResourceStates::Common, RHI::ResourceStates::Common, true});
                 if (const auto *error = std::get_if<GraphError>(&imported))
                 {
                     return *error;
@@ -487,7 +504,7 @@ namespace Physara::Editor::Detail
                 }
                 upload.written = {target, std::get<PassId>(copied)};
             }
-            bindings.tokens.push_back({DecodeUiTexture(upload.request->TexID), {upload.written.texture, {}}});
+            bindings.tokens.push_back({DecodeUiTexture(upload.request->TexID), {upload.written.texture.AsReadOnly(), {}}});
         }
         return std::nullopt;
     }
@@ -510,24 +527,27 @@ namespace Physara::Editor::Detail
         {
             return GraphError{GraphErrorCode::InvalidResource, Core::BoundedText("Expired UI graph token")};
         }
-        UiFrameTexture value{diagnostic, {}};
+        UiFrameTexture value{diagnostic.AsReadOnly(), {}};
         if (resident != residents.end() || !entry->view.IsValid())
         {
             const auto &texture = resident != residents.end() ? resident->texture : entry->texture;
             const auto &facts = resident != residents.end() ? resident->imported : entry->imported;
-            auto imported = graph.ImportTexture(texture, facts.states, facts.range);
+            const auto &retained = resident != residents.end() ? resident->retained : entry->retained;
+            auto imported = retained
+                ? graph.ImportTexture(retained, facts.states.final, facts.range)
+                : graph.ImportTexture(texture, facts.states, facts.range);
             if (const auto *error = std::get_if<GraphError>(&imported))
             {
                 return *error;
             }
-            value = {std::get<TextureId>(imported), facts.range};
-            // 等价导入返回版本零, alias 必须沿当前帧的规范身份取最新写版本.
+            value = {std::get<TextureId>(imported).AsReadOnly(), facts.range};
+            // 沿同一规范身份取得最新内容版本, 采样引用的权限保持只读.
             for (const auto &item : bindings.tokens)
             {
-                if (item.value.texture.identity == value.texture.identity &&
+                if (item.value.texture.Identity() == value.texture.Identity() &&
                     item.value.texture.version > value.texture.version)
                 {
-                    value.texture = item.value.texture;
+                    value.texture.version = item.value.texture.version;
                 }
             }
         }
@@ -536,7 +556,9 @@ namespace Physara::Editor::Detail
     }
 
     // 非空回执已证明整图成功, 因而存活终结 Pass 等价于本请求实际执行成功.
-    // 创建还需导出句柄才能持久发布; 更新继续使用原对象. 未确认的创建撤销身份并归还预算.
+    // 同一票据也可包含该版本的只读出口. 创建项须取得自己声明的可更新 ShaderRead 出口和匹配的接受事实.
+    // 区域更新已有长期持有, 成功回执只确认本次复制.
+    // 未确认的创建撤销临时身份并归还逻辑预算.
     // 主图取消和安全图重试各持自己的 uploads. 即使 request 相同, 也只能由成功图的终结 Pass 确认.
     void UiTextures::Finish(const UiTextureUploads &uploads, const UiSubmission *submission) noexcept
     {
@@ -544,13 +566,17 @@ namespace Physara::Editor::Detail
         {
             const bool live = submission && Renderer::IsLivePass(submission->plan, upload.written.pass);
             auto *created = upload.created.IsValid() ? Find(upload.created) : nullptr;
-            auto *texture = live && created ?
-                Renderer::FindTextureOutput(*submission->outputs, upload.written.texture) : nullptr;
-            if (live && (!created || texture))
+            const auto *output = live && created ?
+                Renderer::FindTextureExport(*submission->outputs, Renderer::TextureExport{
+                    upload.written.texture, created->imported.range, Renderer::ExportUsage::ShaderRead, true}) : nullptr;
+            if (live && (!created || (output && output->Get() &&
+                (!output->retained || (output->retained.Accepted(submission->ticket) &&
+                                       output->retained.AllowsOwnerWrite())))))
             {
                 if (created)
                 {
-                    created->texture = texture;
+                    created->texture = output->object;
+                    created->retained = output->retained;
                 }
                 upload.request->SetStatus(ImTextureStatus_OK);
             }
@@ -562,7 +588,13 @@ namespace Physara::Editor::Detail
         }
         if (submission && Renderer::IsLivePass(submission->plan, uploads.placeholder.pass))
         {
-            m_Placeholder = Renderer::FindTextureOutput(*submission->outputs, uploads.placeholder.texture);
+            const auto *output = Renderer::FindTextureExport(*submission->outputs, Renderer::TextureExport{
+                uploads.placeholder.texture, {}, Renderer::ExportUsage::ShaderRead, false});
+            if (output && (!output->retained || output->retained.Accepted(submission->ticket)))
+            {
+                m_Placeholder = output->object;
+                m_RetainedPlaceholder = output->retained;
+            }
         }
     }
 

@@ -1,11 +1,13 @@
 #include "RenderGraph.hpp"
 
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <stdexcept>
 
-#include "GraphRanges.hpp"
+#include "GraphContent.hpp"
+#include "GraphPoolInternal.hpp"
 
 /// @file
 /// @brief 分配图代并发布资源, Pass 及导出记录. 在封存后按 PassId 分派拥有型回调.
@@ -31,8 +33,9 @@ namespace Physara::Renderer
         return 0;
     }
 
-    RenderGraph::RenderGraph(Core::FrameArena &arena)
-        : m_Arena(arena), m_ArenaStart(arena.Used()), m_Generation(AcquireGeneration())
+    RenderGraph::RenderGraph(Core::FrameArena &arena, RHI::Device *importDevice)
+        : m_Arena(arena), m_ArenaStart(arena.Used()), m_Generation(AcquireGeneration()),
+          m_ImportDevice(importDevice)
     {
     }
 
@@ -97,8 +100,10 @@ namespace Physara::Renderer
     }
 
     // 先按起点排序, 再原地合并重叠或相邻的覆盖. 导入等价比较和版本 0 的内容查询共用这个表示.
-    static void MergeDefinedRanges(std::vector<RHI::BufferRange> &ranges)
+    static bool MergeDefinedRanges(std::vector<RHI::BufferRange> &ranges, const RHI::BufferRange &full,
+                                   std::span<const RHI::BufferRange> defined)
     {
+        ranges.assign(defined.begin(), defined.end());
         std::ranges::sort(ranges, {}, &RHI::BufferRange::byteOffset);
         std::size_t count = 0;
         for (const auto range : ranges)
@@ -116,6 +121,78 @@ namespace Physara::Renderer
             ranges[count++] = range;
         }
         ranges.resize(count);
+        return ranges.size() == 1 && ranges.front() == full;
+    }
+
+    // 分解为相同 mip 和 aspect 的层区间, 再合并相邻覆盖. 输入分块方式不影响规范身份.
+    static bool MergeDefinedRanges(std::vector<TextureRange> &ranges, const TextureRange &full,
+                                   std::span<const TextureRange> defined)
+    {
+        for (const auto &range : defined)
+        {
+            for (const auto aspect : Detail::ContentAspects)
+            {
+                if ((range.aspect & aspect) != aspect)
+                {
+                    continue;
+                }
+                for (auto mip = range.firstMip; mip < range.firstMip + range.mipCount; ++mip)
+                {
+                    ranges.push_back({mip, 1, range.firstLayer, range.layerCount, aspect});
+                }
+            }
+        }
+        std::ranges::sort(ranges, {}, Detail::ContentOrder);
+        std::size_t count = 0;
+        for (const auto range : ranges)
+        {
+            if (count != 0)
+            {
+                auto &last = ranges[count - 1];
+                const auto end = last.firstLayer + last.layerCount;
+                if (last.firstMip == range.firstMip && last.aspect == range.aspect && range.firstLayer <= end)
+                {
+                    last.layerCount = (std::max)(end, range.firstLayer + range.layerCount) - last.firstLayer;
+                    continue;
+                }
+            }
+            ranges[count++] = range;
+        }
+        ranges.resize(count);
+        return Detail::ContainsDefinedTexture(ranges, full);
+    }
+
+    void RenderGraph::KeepImportSnapshot(GraphRetainedResource &current, const GraphRetainedResource &incoming)
+    {
+        if (!incoming.m_ContentPin)
+        {
+            return;
+        }
+        if (!current.m_ContentPin)
+        {
+            // 普通读别名和固定快照共用版本. 升级图的持有时, 保留原规范导入的可访问范围.
+            const auto range = current.m_Range;
+            current = incoming.AsReadOnly();
+            current.m_Range = range;
+            return;
+        }
+        if (Detail::Contains(*current.m_ContentPin, *incoming.m_ContentPin))
+        {
+            return;
+        }
+
+        // 两个较宽快照可能导入同一小块. 只有同一池项上完全包含的保护才可共用已有持有.
+        // 互有未覆盖部分的快照都要留到图销毁, 其保护范围不会扩大 Pass 的访问权限.
+        auto &snapshots = m_AdditionalImportSnapshots
+            ? *m_AdditionalImportSnapshots : m_AdditionalImportSnapshots.emplace(0);
+        if (std::ranges::none_of(snapshots, [&](const auto &snapshot)
+        {
+            return snapshot.m_Entry == incoming.m_Entry &&
+                Detail::Contains(*snapshot.m_ContentPin, *incoming.m_ContentPin);
+        }))
+        {
+            snapshots.push_back(incoming.AsReadOnly());
+        }
     }
 
     // 先确定完整范围和导入合同, 再查同一公共 RHI 对象是否已有身份.
@@ -126,7 +203,10 @@ namespace Physara::Renderer
                                                 std::optional<typename Declaration::AccessRange> requested,
                                                 const typename Declaration::ResourceHandle &imported,
                                                 std::optional<ImportState> state,
-                                                std::span<const RHI::BufferRange> defined)
+                                                std::span<const typename Declaration::AccessRange> defined,
+                                                const GraphRetainedResource &retained,
+                                                std::shared_ptr<const RHI::GraphicsResourceUse> importUse,
+                                                bool writable)
     try
     {
         const auto full = Detail::FullRange(desc);
@@ -142,7 +222,8 @@ namespace Physara::Renderer
         }
         const auto range = requested.value_or(*full);
 
-        std::optional<std::vector<RHI::BufferRange>> initialContent;
+        using Range = typename Declaration::AccessRange;
+        std::optional<std::vector<Range>> initialContent;
         if (state)
         {
             if (!IsExplicitImportState(state->entry))
@@ -156,46 +237,50 @@ namespace Physara::Renderer
                                               "Import final state is unknown or contains undefined RHI bits");
             }
 
-            if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
+            if (!defined.empty())
             {
-                if (!defined.empty())
+                if constexpr (std::is_same_v<Range, TextureRange>)
                 {
-                    if (state->contentDefined || !std::ranges::all_of(defined, [&](const auto &interval)
-                        { return Detail::Contains(range, interval); }))
+                    // 纹理范围按 mip 拆分. 在导入边界先确保层级数可由物理尺寸表示.
+                    const auto maxMips = std::bit_width((std::max)({desc.width, desc.height, desc.depth}));
+                    if (desc.mipLevels > static_cast<std::uint32_t>(maxMips))
                     {
-                        return Detail::MakeGraphError(GraphErrorCode::InvalidRange, stage, {}, desc.debugName,
-                                                      "Invalid initial buffer content ranges");
+                        return Detail::MakeGraphError(GraphErrorCode::InvalidDescription, stage, {}, desc.debugName,
+                                                      "Texture mip count exceeds its storage extent");
                     }
-                    auto &ranges = initialContent.emplace(defined.begin(), defined.end());
-                    MergeDefinedRanges(ranges);
-                    if (ranges.size() == 1 && ranges.front() == range)
-                    {
-                        state->contentDefined = true;
-                        initialContent.reset();
-                    }
+                }
+                if (state->contentDefined || !std::ranges::all_of(defined, [&](const auto &part)
+                    { return Detail::Contains(range, part); }))
+                {
+                    return Detail::MakeGraphError(GraphErrorCode::InvalidRange, stage, {}, desc.debugName,
+                                                  "Invalid initial content ranges");
+                }
+                if (MergeDefinedRanges(initialContent.emplace(0), range, defined))
+                {
+                    state->contentDefined = true;
+                    initialContent.reset();
                 }
             }
 
-            // 公共 RHI 对象是导入键. 返回版本 0, 后续写入不改变外部输入身份.
+            // 公共 RHI 对象是导入键. 范围, 内容和状态来源必须匹配.
+            // 规范声明共享内容版本. 成功返回给本次调用方的引用只携带本次已经核实的权限.
             for (std::size_t i = 0; i < resources.size(); ++i)
             {
-                const auto &resource = resources[i];
+                auto &resource = resources[i];
                 if (resource.imported.Get() != imported.Get())
                 {
                     continue;
                 }
-                bool equivalent = resource.range == range && resource.importState == state;
-                if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
-                {
-                    equivalent = equivalent && (initialContent ? resource.initialContent == *initialContent
-                                                               : resource.initialContent.empty());
-                }
+                const bool equivalent = resource.range == range && resource.importState == state &&
+                    resource.retained.m_Entry == retained.m_Entry && resource.importUse == importUse &&
+                    (initialContent ? resource.initialContent == *initialContent : resource.initialContent.empty());
                 if (!equivalent)
                 {
                     return Detail::MakeGraphError(GraphErrorCode::ConflictingImport, stage, {}, desc.debugName,
                                                   "External resource already has a different import declaration");
                 }
-                return Id{{static_cast<std::uint32_t>(i), m_Generation}, 0};
+                KeepImportSnapshot(resource.retained, retained);
+                return Id{{static_cast<std::uint32_t>(i), m_Generation}, 0, writable};
             }
         }
 
@@ -204,14 +289,18 @@ namespace Physara::Renderer
             return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, stage, {}, desc.debugName,
                                           "Resource index space exhausted");
         }
-        const Id id{{static_cast<std::uint32_t>(resources.size()), m_Generation}, 0};
+        const Id id{{static_cast<std::uint32_t>(resources.size()), m_Generation}, 0, writable};
         resources.emplace_back(desc, range, imported, state);
-        if constexpr (std::is_same_v<Declaration, BufferDeclaration>)
+        resources.back().retained = retained.AsReadOnly();
+        if (retained)
         {
-            if (initialContent)
-            {
-                resources.back().initialContent = std::move(*initialContent);
-            }
+            // 可读检查核对本图导入范围. 快照自己的固定保护可以覆盖更宽的范围.
+            resources.back().retained.m_Range = range;
+        }
+        resources.back().importUse = std::move(importUse);
+        if (initialContent)
+        {
+            resources.back().initialContent.swap(*initialContent);
         }
         return id;
     }
@@ -245,7 +334,7 @@ namespace Physara::Renderer
     }
 
     GraphResult<TextureId> RenderGraph::ImportTexture(const RHI::TextureHandle &texture, ImportState states,
-                                                     std::optional<TextureRange> range)
+        std::optional<TextureRange> range, std::span<const TextureRange> defined)
     {
         if (auto failure = CheckBuilding("ImportTexture", {}))
         {
@@ -256,7 +345,8 @@ namespace Physara::Renderer
             return Detail::MakeGraphError(GraphErrorCode::InvalidResource, "ImportTexture", {}, {},
                                           "Missing external texture");
         }
-        return DeclareResource<TextureId>("ImportTexture", m_Textures, texture->GetDesc(), range, texture, states);
+        return DeclareResource<TextureId>("ImportTexture", m_Textures, texture->GetDesc(), range, texture, states,
+                                          defined);
     }
 
     GraphResult<BufferId> RenderGraph::ImportBuffer(const RHI::BufferHandle &buffer, ImportState states,
@@ -274,9 +364,102 @@ namespace Physara::Renderer
         return DeclareResource<BufferId>("ImportBuffer", m_Buffers, buffer->GetDesc(), range, buffer, states, defined);
     }
 
+    // 选定已接受出口的一部分作为新版本 0, 先核对角色, 设备和每个入口状态单元.
+    template <typename Id, typename Declaration>
+    GraphResult<Id> RenderGraph::ImportRetained(std::deque<Declaration> &resources,
+        const GraphRetainedResource &retained, RHI::ResourceStates final,
+        std::optional<typename Declaration::AccessRange> requested, bool writable)
+    try
+    {
+        constexpr auto Stage = "ImportRetained";
+        if (auto failure = CheckBuilding(Stage, {}))
+        {
+            return *failure;
+        }
+        using Range = typename Declaration::AccessRange;
+        const auto *allowed = std::get_if<Range>(&retained.m_Range);
+        const auto &entry = retained.m_Entry;
+        if (!entry || entry->device.Get() != m_ImportDevice || !allowed || retained.m_Usage != ExportUsage::ShaderRead ||
+            (writable && !retained.m_OwnerWrite) || !retained.m_Produced ||
+            !retained.Accepted(retained.m_Produced->ticket))
+        {
+            return Detail::MakeGraphError(GraphErrorCode::InvalidResource, Stage, {}, {},
+                                          "Expected an accepted output of this device and role");
+        }
+        const auto range = requested.value_or(*allowed);
+        if (!Detail::Contains(*allowed, range))
+        {
+            return Detail::MakeGraphError(GraphErrorCode::InvalidRange, Stage, {}, {},
+                                          "Retained input exceeds the published range");
+        }
+        // 生产票据标识出口. 此后可能有其它录制读过同一对象, 跨列表入口取最近一次已接受的状态.
+        auto facts = entry->ShareAcceptedUse();
+        if (!facts)
+        {
+            return Detail::MakeGraphError(GraphErrorCode::StateMismatch, Stage, {}, {},
+                                          "Retained input has no verified entry state");
+        }
+        if constexpr (std::is_same_v<Range, TextureRange>)
+        {
+            auto *texture = retained.Texture();
+            const auto &desc = texture->GetDesc();
+            const auto first = Detail::TextureStateAt(*facts, desc, range.firstLayer, range.firstMip);
+            for (auto layer = range.firstLayer; layer < range.firstLayer + range.layerCount; ++layer)
+            {
+                for (auto mip = range.firstMip; mip < range.firstMip + range.mipCount; ++mip)
+                {
+                    if (Detail::TextureStateAt(*facts, desc, layer, mip) == RHI::ResourceStates::Unknown)
+                    {
+                        return Detail::MakeGraphError(GraphErrorCode::StateMismatch, Stage, {}, desc.debugName,
+                                                      "Retained Texture subresource has no verified entry state");
+                    }
+                }
+            }
+            // 可更新存储的 owner 和读别名都接续当前实际内容. 受保护的只读出口沿用原图内容证明.
+            const bool usePrior = entry->use->unused;
+            if (entry->mutableContent && !retained.m_ContentPin && !entry->mutableContent->Covers(range, usePrior))
+            {
+                const auto defined = entry->mutableContent->DefinedRanges(range, usePrior);
+                return DeclareResource<Id>(Stage, resources, desc, range, RHI::TextureHandle(texture),
+                    ImportState{first, final, false}, defined, retained, std::move(facts), writable);
+            }
+            return DeclareResource<Id>(Stage, resources, desc, range, RHI::TextureHandle(texture),
+                ImportState{first, final, true}, {}, retained, std::move(facts), writable);
+        }
+        else
+        {
+            auto *buffer = retained.Buffer();
+            return DeclareResource<Id>(Stage, resources, buffer->GetDesc(), range, RHI::BufferHandle(buffer),
+                ImportState{facts->states.front(), final, true}, {}, retained, facts, writable);
+        }
+    }
+
+    catch (const std::bad_alloc &)
+    {
+        return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, "ImportRetained", {}, {},
+                                      "Could not hold retained content coverage");
+    }
+    catch (const std::length_error &)
+    {
+        return Detail::MakeGraphError(GraphErrorCode::OutOfStorage, "ImportRetained", {}, {},
+                                      "Retained content coverage exceeds storage");
+    }
+
+    GraphResult<TextureId> RenderGraph::ImportTexture(const GraphRetainedResource &retained,
+        RHI::ResourceStates final, std::optional<TextureRange> range, bool ownerWrite)
+    {
+        return ImportRetained<TextureId>(m_Textures, retained, final, range, ownerWrite);
+    }
+
+    GraphResult<BufferId> RenderGraph::ImportBuffer(const GraphRetainedResource &retained,
+        RHI::ResourceStates final, std::optional<RHI::BufferRange> range)
+    {
+        return ImportRetained<BufferId>(m_Buffers, retained, final, range, false);
+    }
+
     // 直接导出沿用 Builder 的版本, 内容和范围规则. 空 PassId 表示图级声明.
     template <typename Id, typename Range>
-    GraphFailure RenderGraph::ExportResource(Id id, ExportUsage usage, std::optional<Range> range)
+    GraphFailure RenderGraph::ExportResource(Id id, ExportUsage usage, std::optional<Range> range, bool ownerWrite)
     {
         if (auto failure = CheckBuilding("Export", {}))
         {
@@ -285,7 +468,18 @@ namespace Physara::Renderer
         try
         {
             PassBuilder builder(*this, {}, {});
-            if (!builder.Export(id, usage, range))
+            const auto exported = [&]
+            {
+                if constexpr (std::is_same_v<Id, TextureId>)
+                {
+                    return builder.Export(id, usage, range, ownerWrite);
+                }
+                else
+                {
+                    return builder.Export(id, usage, range);
+                }
+            };
+            if (!exported())
             {
                 return builder.m_Failure;
             }
@@ -304,9 +498,10 @@ namespace Physara::Renderer
         }
     }
 
-    GraphFailure RenderGraph::Export(TextureId id, ExportUsage usage, std::optional<TextureRange> range)
+    GraphFailure RenderGraph::Export(TextureId id, ExportUsage usage, std::optional<TextureRange> range,
+                                     bool ownerWrite)
     {
-        return ExportResource(id, usage, range);
+        return ExportResource(id, usage, range, ownerWrite);
     }
 
     GraphFailure RenderGraph::Export(BufferId id, ExportUsage usage, std::optional<RHI::BufferRange> range)
@@ -322,10 +517,10 @@ namespace Physara::Renderer
         {
             if (const auto *texture = std::get_if<TextureUse>(&use))
             {
-                return texture->write ? &m_Textures[texture->access.resource.identity.index].writes : nullptr;
+                return texture->write ? &m_Textures[texture->access.resource.Identity().index].writes : nullptr;
             }
             const auto &buffer = std::get<BufferUse>(use);
-            return buffer.write ? &m_Buffers[buffer.access.resource.identity.index].writes : nullptr;
+            return buffer.write ? &m_Buffers[buffer.access.resource.Identity().index].writes : nullptr;
         };
 
         // 先登记可从尾部撤回的生产者索引, 导出和回调, 最后原位构造 Pass 声明.

@@ -10,6 +10,7 @@ namespace Physara::RHI
     /// @brief 累计设备实际发出的绘制, 对象绑定, 传输和屏障. 纹理传输字节只计有效 texel.
     /// @note 取差得到两次采样之间的调用数. 图版本转换由后端发出原生屏障时才贡献 barriers.
     /// 映射块按新分配或从空闲表重借计数, 同包在已有块尾部追加写入沿用该次分配.
+    /// 存储计数取自成功的原生分配调用. 复用一个已有图槽不会增加该项.
     struct GraphicsOperationCounts
     {
         std::uint64_t draws{};
@@ -19,6 +20,8 @@ namespace Physara::RHI
         std::uint64_t barriers{};
         std::uint64_t uploadChunksAllocated{};
         std::uint64_t uploadChunksReused{};
+        std::uint64_t textureStorages{}; ///< 普通 Texture 的实际原生存储, 分离 BC5 mip 各计一次.
+        std::uint64_t bufferStorages{}; ///< 普通 Buffer 的实际原生存储, staging 和上传块独立.
 
         /// @brief 只对同一设备按时间排序的两个快照取差, 使用无符号模差.
         [[nodiscard]] GraphicsOperationCounts operator-(const GraphicsOperationCounts &earlier) const noexcept
@@ -26,7 +29,8 @@ namespace Physara::RHI
             return {draws - earlier.draws, bindings - earlier.bindings, uploads - earlier.uploads,
                     uploadBytes - earlier.uploadBytes, barriers - earlier.barriers,
                     uploadChunksAllocated - earlier.uploadChunksAllocated,
-                    uploadChunksReused - earlier.uploadChunksReused};
+                    uploadChunksReused - earlier.uploadChunksReused, textureStorages - earlier.textureStorages,
+                    bufferStorages - earlier.bufferStorages};
         }
     };
 

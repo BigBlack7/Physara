@@ -4,8 +4,12 @@
 /// @brief 声明与编译共用的写入效果和范围扣除规则.
 /// 调用方沿版本链从新到旧解释已校验的请求, 并据实际贡献判断内容有效性或登记依赖.
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <tuple>
 #include <vector>
 
 #include "GraphRanges.hpp"
@@ -83,8 +87,43 @@ namespace Physara::Renderer::Detail
         Undefined
     };
 
+    inline constexpr std::array ContentAspects{TextureAspect::Color, TextureAspect::Depth, TextureAspect::Stencil};
+
+    /// @brief 纹理部分覆盖按单 mip, 单 aspect 的层区间规范化.
+    inline auto ContentOrder(const TextureRange &range) noexcept
+    {
+        return std::tuple(range.firstMip, range.aspect, range.firstLayer);
+    }
+
+    /// @brief 每个请求的 mip 和 aspect 都须有一段连续的已定义层范围完整包含它.
+    inline bool ContainsDefinedTexture(std::span<const TextureRange> coverage, const TextureRange &range) noexcept
+    {
+        if (coverage.empty())
+        {
+            return false;
+        }
+        for (const auto aspect : ContentAspects)
+        {
+            if ((range.aspect & aspect) != aspect)
+            {
+                continue;
+            }
+            for (auto mip = range.firstMip; mip < range.firstMip + range.mipCount; ++mip)
+            {
+                const TextureRange row{mip, 1, range.firstLayer, range.layerCount, aspect};
+                // 导入已合并相接的层段. 在起点不晚于请求的末段查包含关系即可识别中间的空洞.
+                const auto end = std::ranges::upper_bound(coverage, ContentOrder(row), {}, ContentOrder);
+                if (end == coverage.begin() || !Contains(*(end - 1), row))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     /// @brief 用版本 0 的内容填补尚未被图内写入解释的区间.
-    /// @note 空 optional 表示整段仍待解释. 导入时已合并相邻覆盖, 每个余段只需检查起点所在的一个区间.
+    /// @note 空 optional 表示整段仍待解释. 导入时已合并各状态单元内相邻的内容覆盖.
     template <typename Declaration, typename Range>
     bool ContainsInitialContent(const Declaration &resource, const Range &requested,
                                 const std::optional<std::vector<Range>> &remaining) noexcept
@@ -105,7 +144,11 @@ namespace Physara::Renderer::Detail
         }
         else
         {
-            return false;
+            const auto covered = [&](const TextureRange &range)
+            {
+                return ContainsDefinedTexture(resource.initialContent, range);
+            };
+            return remaining ? std::ranges::all_of(*remaining, covered) : covered(requested);
         }
     }
 

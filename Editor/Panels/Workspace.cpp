@@ -160,10 +160,49 @@ namespace Physara::Editor::Detail
                     data.graph.highWater, data.graph.capacity, data.graph.growths);
     }
 
+    /// @brief 当期图和池来自值快照, 可以在首个正常场景前显示安全图或准入压力.
+    static void DrawGraphStatistics(const FrameStatistics &stats)
+    {
+        // 池的总量与峰值覆盖整个设备会话. 下方图规模和原生创建数只覆盖最近一张已编译的图.
+        const auto &pool = stats.graphPool;
+        const auto bytes = [](std::uint64_t value) { return static_cast<unsigned long long>(value); };
+        ImGui::Text("Graph pool: %zu / %zu objects, %llu / %llu logical B",
+                    pool.used.objects, pool.limit.objects, bytes(pool.used.bytes), bytes(pool.limit.bytes));
+        ImGui::Text("Peak: %zu objects / %llu B; idle limit: %zu / %llu B",
+                    pool.highWater.objects, bytes(pool.highWater.bytes), pool.idleLimit.objects, bytes(pool.idleLimit.bytes));
+        ImGui::Text("Reserved: %zu / %llu B; in flight: %zu / %llu B", pool.reserved.objects,
+                    bytes(pool.reserved.bytes), pool.inFlight.objects, bytes(pool.inFlight.bytes));
+        ImGui::Text("Retained: %zu / %llu B; idle: %zu / %llu B", pool.retained.objects, bytes(pool.retained.bytes),
+                    pool.idle.objects, bytes(pool.idle.bytes));
+        ImGui::Text("Pool hits %llu / created %llu / evicted %llu / denied %llu",
+                    bytes(pool.hits), bytes(pool.created), bytes(pool.evicted), bytes(pool.rejected));
+        if (stats.latestGraph)
+        {
+            const auto &graph = *stats.latestGraph;
+            ImGui::Text("Graph %llu (%s) / %s %llu", bytes(graph.generation), graph.safeUi ? "safe UI" : "normal",
+                        graph.accepted ? "accepted ticket" : graph.submission ? "prefix ticket" : "no ticket",
+                        bytes(graph.submission));
+            ImGui::Text("Passes declared %zu / live %zu / culled %zu; imports %zu / exports %zu",
+                        graph.declared, graph.live, graph.declared - graph.live, graph.imports, graph.exports);
+            ImGui::Text("Physical slots %zu / %llu logical B; native storage creates %llu texture / %llu buffer",
+                        graph.slots, bytes(graph.plannedBytes), bytes(graph.nativeTextures), bytes(graph.nativeBuffers));
+        }
+        if (stats.graphPressure)
+        {
+            const auto reason = stats.graphPressure->View();
+            ImGui::TextWrapped("%.*s", static_cast<int>(reason.size()), reason.data());
+        }
+        ImGui::Separator();
+    }
+
     /// @brief 展示最近一次场景提交. 表面, 批次和参数记录取自 source.view, 原生调用数还包括同图 UI 等消费者.
     /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
     {
+        if (state.statistics)
+        {
+            DrawGraphStatistics(*state.statistics);
+        }
         if (!state.statistics || !state.statistics->latestScene)
         {
             ImGui::TextUnformatted("Awaiting accepted scene frame");

@@ -770,11 +770,11 @@ namespace Physara::Editor::Detail
         Renderer::GraphExecutionDiagnostics diagnostics)
     {
         using namespace Renderer;
-        if (!color.IsValid() || color.identity.index >= graph.Textures().size())
+        if (!color.IsValid() || color.Identity().index >= graph.Textures().size())
         {
             return GraphError{GraphErrorCode::InvalidResource, Core::BoundedText("UI graph target is invalid")};
         }
-        const auto &target = graph.Textures()[color.identity.index];
+        const auto &target = graph.Textures()[color.Identity().index];
         if (target.desc.width != batch.extent.width || target.desc.height != batch.extent.height ||
             target.desc.dimension != RHI::TextureDimension::Texture2D || target.desc.sampleCount != 1 ||
             target.desc.format != TargetFormat || !target.desc.isRenderTarget || target.range != TextureRange{})
@@ -783,7 +783,7 @@ namespace Physara::Editor::Detail
                 Core::BoundedText("UI graph requires the sealed frame's single-sample SRGBA8 2D target")};
         }
         // 一旦开始声明便消费该准备值的构图机会. 后续失败由调用方丢弃整张候选图并取消准备值.
-        batch.graphGeneration = color.identity.generation;
+        batch.graphGeneration = color.Identity().generation;
         for (auto &draw : batch.draws)
         {
             if (draw.reset)
@@ -806,16 +806,19 @@ namespace Physara::Editor::Detail
                 bindings.sampled.push_back(sample);
             }
         }
-        // 持久结果只为实际采样者导出. 未使用创建不会成为活性根.
+        // 只为实际采样者导出. 新建的托管纹理保留后继区域更新权限, 视口和占位的出口只供读取.
         for (const auto &sample : bindings.sampled)
         {
-            const bool created = std::ranges::any_of(batch.uploads.items, [&](const auto &upload)
+            const auto created = std::ranges::find_if(batch.uploads.items, [&](const auto &upload)
             {
                 return upload.created.IsValid() && upload.written.texture == sample.texture;
             });
-            if (created || sample.texture == diagnostic || sample.texture == batch.uploads.placeholder.texture)
+            const bool publishManaged = created != batch.uploads.items.end();
+            if (publishManaged || sample.texture == diagnostic || sample.texture == batch.uploads.placeholder.texture)
             {
-                if (auto error = graph.Export(sample.texture, ExportUsage::ShaderRead, sample.range))
+                // 托管更新权限来自上传生产者. 采样引用只能导出只读版本.
+                const auto output = publishManaged ? created->written.texture : sample.texture;
+                if (auto error = graph.Export(output, ExportUsage::ShaderRead, sample.range, publishManaged))
                 {
                     return *error;
                 }
@@ -950,7 +953,7 @@ namespace Physara::Editor
                 Core::BoundedText("UI texture declaration requires a live preparation and empty frame bindings")};
         }
         auto &batch = *m_Data->batch;
-        batch.uploadsGeneration = bindings.graphGeneration = target.identity.generation;
+        batch.uploadsGeneration = bindings.graphGeneration = target.Identity().generation;
         return m_Data->owner->m_Textures.DeclareUploads(graph, batch.uploads, bindings, uploads);
     }
     catch (const std::bad_alloc &)
@@ -977,8 +980,8 @@ namespace Physara::Editor
                 return *failure;
             }
         }
-        if (m_Data->batch->uploadsGeneration != color.identity.generation ||
-            bindings.graphGeneration != color.identity.generation)
+        if (m_Data->batch->uploadsGeneration != color.Identity().generation ||
+            bindings.graphGeneration != color.Identity().generation)
         {
             return Renderer::GraphError{Renderer::GraphErrorCode::InvalidPhase,
                 Core::BoundedText("UI raster and texture uploads must belong to the same graph")};

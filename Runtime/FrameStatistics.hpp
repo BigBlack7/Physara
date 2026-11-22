@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 以固定数量的原生查询轮转测量完整场景图, 并发布关联票据的最近统计.
+/// @brief 发布实际接受的场景计时, 最近编译图及设备池容量. 各自按产生事实的阶段更新.
 
 #include <array>
 
@@ -37,6 +37,29 @@ namespace Physara::Runtime
 
         /// @brief 发布已接受场景的值快照. 之前票据的就绪 GPU 区间沿自己的身份保留.
         void Publish(Editor::SceneFrameStatistics frame) noexcept { m_Stats.latestScene = frame; }
+        /// @brief 每次窗口取得重新记录首个容量原因. 同一次取得内重建安全图时保留主候选原因.
+        void BeginGraphFrame() noexcept { m_Stats.graphPressure.reset(); }
+        /// @brief 编译成功就登记候选. 其后才可为这张图补充原生创建数和宿主回执.
+        void PublishGraph(Editor::GraphFrameSummary graph) noexcept { m_Stats.latestGraph = graph; }
+        void PublishPool(Renderer::GraphPoolStatistics pool) noexcept { m_Stats.graphPool = pool; }
+        void ReportPoolPressure(const Core::BoundedText &reason) noexcept
+        {
+            if (!m_Stats.graphPressure)
+            {
+                m_Stats.graphPressure = reason;
+            }
+        }
+        /// @brief ticket 也可属于失败前缀. accepted 表示本图完整执行且宿主确认了有效颜色.
+        void GraphReceipt(std::uint64_t ticket, bool accepted) noexcept
+        {
+            m_Stats.latestGraph->submission = ticket;
+            m_Stats.latestGraph->accepted = accepted;
+        }
+        void GraphStorageCreated(RHI::GraphicsOperationCounts native) noexcept
+        {
+            m_Stats.latestGraph->nativeTextures = native.textureStorages;
+            m_Stats.latestGraph->nativeBuffers = native.bufferStorages;
+        }
         [[nodiscard]] const Editor::FrameStatistics &Snapshot() const noexcept { return m_Stats; }
 
     private:

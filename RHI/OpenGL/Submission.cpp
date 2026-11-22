@@ -112,6 +112,11 @@ namespace Physara::RHI::OpenGL
             auto *packet = record.packets[index];
             packet->phase = PacketPhase::Submitted;
             packet->submissionId = record.submissionId;
+            // 同一批次的观察共用接受票据. 这里仍须保留包和所有 GPU 依赖.
+            for (auto &observation : packet->observations)
+            {
+                observation.use->ticket = record.submissionId;
+            }
             // 旧包也可能保留同一 Timer 的强引用. 只有当前使用属于被接受的包时才给这个区间提交身份.
             for (auto *query : packet->timers)
             {
@@ -128,6 +133,14 @@ namespace Physara::RHI::OpenGL
 
     void OpenGLDevice::RetirePacket(UploadWorkPacket &packet, bool nativeAvailable) noexcept
     {
+        // 仅无实发工作的未提交包可以撤回本次观察. 失效退出不能制造完成.
+        if (packet.submissionId == 0 && !packet.issuedWork)
+        {
+            for (auto &observation : packet.observations)
+            {
+                observation.use->unused = true;
+            }
+        }
         // 只由完成收集或最终退出调用. 先收拢查询并断开包借用, 再释放 tracker/chunk, lease 和包.
         ReconcileQueries(packet, true);
         // 正常接受的包和孤包都能走到退休. 前者还须保留本次复制的发布资格才能使 Read 可映射.
@@ -317,7 +330,16 @@ namespace Physara::RHI::OpenGL
             // sync 删除失败不撤销已经取得的完成证明, 但禁止后续未知的 GL 清理.
             for (std::size_t index = 0; index < record.count; ++index)
             {
-                RetirePacket(*record.packets[index], clean && m_Phase != Phase::Faulted);
+                auto &packet = *record.packets[index];
+                if (packet.submissionId != 0)
+                {
+                    // 已观察到这个 fence 完成. 在撤销包内强引用前将完成事实交给继续持有观察值的 owner.
+                    for (auto &observation : packet.observations)
+                    {
+                        observation.use->complete = true;
+                    }
+                }
+                RetirePacket(packet, clean && m_Phase != Phase::Faulted);
             }
             m_CompletedSubmissionId = std::max(m_CompletedSubmissionId, record.submissionId);
             // 这份 fence 覆盖的访问已物理完成, 可解除后继写的顺序约束. 各消费域的可见性仍由其屏障推进.

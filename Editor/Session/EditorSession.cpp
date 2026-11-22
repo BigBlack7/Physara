@@ -852,10 +852,10 @@ namespace Physara::Editor
         }
         if (mode == UiFrameMode::SafeUi)
         {
-            // 旧输出无需匹配新尺寸和请求代, 但必须来自已接受快照和本会话的 View/角色.
+            // 旧输出可以沿用旧布局. 除本会话的 View 和颜色角色外, 池对象还须有可接入的录制状态.
             if (!outputs.IsRetained() || (color &&
                 (color->view != state.viewport.Id() ||
-                 color->role != Renderer::ViewOutputRole::DisplayColor || !color->texture)))
+                 color->role != Renderer::ViewOutputRole::DisplayColor || !color->HasReadableColor())))
             {
                 return Core::BoundedText("Safe UI requires this View's retained output snapshot");
             }

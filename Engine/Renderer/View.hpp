@@ -268,7 +268,7 @@ namespace Physara::Renderer
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
-    /// @note 候选代的 texture 为空. 图执行并获得有效提交后才交付持久句柄.
+    /// @note 新颜色尚无物理对象. 池输出获接受后由 retained 持有, 独立执行的颜色由 texture 持有.
     struct ViewOutput
     {
         ViewId view;
@@ -277,6 +277,8 @@ namespace Physara::Renderer
         ViewImageLayout layout;
         RHI::TextureHandle texture;
         std::optional<RenderedScene> scene; ///< 缺席表示空文档诊断图.
+        GraphRetainedResource retained; ///< 设备池交接持有, 普通外部颜色使用 texture.
+        [[nodiscard]] bool HasReadableColor() const noexcept { return retained ? retained.Readable() : bool(texture); }
     };
 
     /// @brief 本轮视口候选或安全 UI 的只读旧输出.
@@ -410,10 +412,12 @@ namespace Physara::Renderer
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
         /// @brief 接受本轮匹配的颜色, 发布比例、布局与实际场景记录. 复用测试图也可确认新比例.
         /// @pre outputs 属于本轮准备, 其显示色在已接受的完整图中被 UI 采样或由该 View 显式导出.
-        /// acceptedTexture 是同次成功图导出的该版本, 本入口不自行验证提交票据或等待 GPU.
+        /// @param retained 池路径传入该颜色的 ShaderRead 出口和匹配的 ticket, 可在 GPU 完成前发布.
+        /// @param acceptedTexture 独立执行路径传入同一版本的已接受句柄, 由调用者核对提交.
         /// @note 比例、相机或场景候选携带的持久请求代过期时保留原状态. 旧代由原 RHI 包保活.
         /// @return true 表示输出和有效设置已发布, false 表示候选无资格且原状态保留.
-        [[nodiscard]] bool Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture) noexcept;
+        [[nodiscard]] bool Publish(PreparedViewOutput &&outputs, const RHI::TextureHandle &acceptedTexture,
+                                   const GraphRetainedResource &retained = {}, std::uint64_t ticket = 0) noexcept;
 
     private:
         View(ViewId id, std::uint32_t maxTextureSize) noexcept;

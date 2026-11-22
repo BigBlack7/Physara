@@ -60,7 +60,7 @@ namespace Physara::Renderer::Detail
     template <typename Access, typename Inspect>
     static decltype(auto) WithResource(const RenderGraph &graph, const Access &access, Inspect &&inspect)
     {
-        const auto index = access.resource.identity.index;
+        const auto index = access.resource.Identity().index;
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(access.resource)>, TextureId>)
         {
             return inspect.template operator()<TextureUse>(graph.Textures()[index]);
@@ -263,7 +263,7 @@ namespace Physara::Renderer::Detail
             {
                 const auto error = std::visit([&]<typename Use>(const Use &typed)
                 {
-                    const auto resource = typed.access.resource.identity.index;
+                    const auto resource = typed.access.resource.Identity().index;
                     if constexpr (std::is_same_v<Use, TextureUse>)
                     {
                         return BuildUseEdges(index, typed, m_Graph.Textures()[resource]);
@@ -498,7 +498,7 @@ namespace Physara::Renderer::Detail
         {
             plan->passes[i] = std::move(passes[order[i]]);
         }
-        if (auto error = BuildStoragePlan(graph, options.transientByteBudget, *plan))
+        if (auto error = BuildStoragePlan(graph, options, *plan))
         {
             return *error;
         }

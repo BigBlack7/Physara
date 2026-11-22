@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -17,6 +18,7 @@
 
 namespace Physara::Renderer
 {
+    class GraphPoolReservation;
     /// @brief 用当前 Pass 声明生成绑定条目, 并持有本次 prepare 创建的集合.
     /// @note 准备器和中间条目只在同步 prepare 中使用. 成功的集合按从 0 开始的创建索引借给 execute,
     /// 用到的集合随后由 RHI 录制持有. 准备失败会阻止该 Pass 的清除和执行回调.
@@ -66,12 +68,28 @@ namespace Physara::Renderer
     };
 
     /// @brief 拥有实际资源及原图的版本, 范围与外部用途. 交付顺序沿计划的 exports.
-    /// @note 句柄可跨图销毁保留. 声明中的资源身份仍属原图代, 跨录制消费使用 Close 后的状态与真实提交顺序.
+    /// @note 池对象由 retained 持有, 普通外部导入或独立执行中新建的对象由 object 持有. Get 统一提供短借用.
+    /// 声明中的身份仍属原图代. 跨录制交接须使用所属包的 Close 状态和接受票据.
     template <typename Export, typename Handle>
     struct GraphOutput
     {
         Export declaration;
         Handle object;
+        GraphRetainedResource retained;
+        RHI::ResourceStates graphTailState = RHI::ResourceStates::Unknown; ///< 状态截止到图尾, Close 后使用接受事实.
+
+        /// @brief 只借用本次图尾对象. 跨图保留用 retained, 普通外部导入仍有原 owner.
+        [[nodiscard]] auto *Get() const noexcept
+        {
+            if constexpr (std::is_same_v<Handle, RHI::TextureHandle>)
+            {
+                return object ? object.Get() : retained.Texture();
+            }
+            else
+            {
+                return object ? object.Get() : retained.Buffer();
+            }
+        }
     };
 
     using GraphTextureOutput = GraphOutput<TextureExport, RHI::TextureHandle>;
@@ -84,9 +102,10 @@ namespace Physara::Renderer
     /// @brief 按计划顺序物化资源, 消费存活 Pass, 并在同一次录制中完成图尾状态交接.
     /// @pre graph 已封存且空闲, plan 来自同一图代. 在设备 owner 线程上提供打开且有效的 Automatic Graphics 录制,
     /// 并先用 CommitBarriers 提交已有的状态请求. diagnostics 从该设备当次调用前同步取样, scope 借用至返回.
+    /// @param reservation 可省略. 启用设备池时传入为同一个 plan 取得的预留, 一次接管只消费一次.
     /// @note 回调借用现有录制和本 Pass 授权范围. 调用方负责 Close, 提交和完成观察.
     /// @return 图尾和录制恢复完成后交付导出. 失败返回首错, 已发前缀继续随原录制或退出协议保活.
     [[nodiscard]] GraphResult<GraphExecutionOutputs> ExecuteRenderGraph(
         const RenderGraph &graph, const CompiledGraphPlan &plan, RHI::Device &device, RHI::CommandList &commands,
-        GraphExecutionDiagnostics diagnostics);
+        GraphExecutionDiagnostics diagnostics, GraphPoolReservation *reservation = nullptr);
 }
