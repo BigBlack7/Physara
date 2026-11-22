@@ -148,6 +148,7 @@ namespace Physara::RHI::OpenGL
                                  {glDeleteFramebuffers != nullptr, "glDeleteFramebuffers"},
                                  {glNamedBufferSubData != nullptr, "glNamedBufferSubData"},
                                  {glCopyNamedBufferSubData != nullptr, "glCopyNamedBufferSubData"},
+                                 {glClearNamedBufferData != nullptr, "glClearNamedBufferData"},
                                  {glMapNamedBufferRange != nullptr, "glMapNamedBufferRange"},
                                  {glUnmapNamedBuffer != nullptr, "glUnmapNamedBuffer"},
                                  {glBindBuffer != nullptr, "glBindBuffer"},
@@ -278,8 +279,13 @@ namespace Physara::RHI::OpenGL
                 // 入队/CPU wrapper 析构不归还预算, 只有实际删除成功才减少活名字数.
                 --m_TimerNames;
             }
-            // 最后一个 CPU 引用只交接删除节点. 直到原生名字删除成功, 版本槽的 backing 才退还设备预算.
+            // 版本槽与公开 staging 分别记账. 只有原生删除成功才归还字节, 每个 staging 名字同时归还一个对象名额.
             m_VolatileCapacity -= record.volatileBytes;
+            if (record.stagingBytes != 0)
+            {
+                m_StagingCapacity -= record.stagingBytes;
+                --m_StagingObjects;
+            }
         }
         // FBO 已解除原生附件引用, 才撤销该 FBO 自己拥有的 view.
         for (std::uint32_t index = 0; index < record.viewCount && m_NativeUsable; ++index)

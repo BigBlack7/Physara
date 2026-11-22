@@ -21,6 +21,7 @@
 */
 
 #include "ValidationBackend.hpp"
+#include "../Common/Transfer.hpp"
 
 /// @file
 /// @brief Device 输入/profile 校验与一次委托, 保留固定来源算法, 项目适配不缓存原生 caps 或地址归属.
@@ -125,8 +126,7 @@ namespace Physara::RHI::Validation
                 return false;
             }
             const auto &format = GetFormatInfo(desc.format);
-            if ((format.blockSize > 1 && (desc.isRenderTarget || desc.isUAV || ms)) ||
-                (format.kind == FormatKind::DepthStencil && desc.isUAV))
+            if (!Transfer::CompatibleTextureUsage(desc, format))
             {
                 return Reject(device, "format is incompatible with texture usage", &desc.debugName, location);
             }
@@ -163,6 +163,11 @@ namespace Physara::RHI::Validation
             {
                 Profile::RejectOpenGL(device, location);
                 return false;
+            }
+            if (Profile::IsOpenGL(device) && desc.cpuAccess != CpuAccessMode::None && !Transfer::DedicatedBuffer(desc))
+            {
+                return Reject(device, "OpenGL staging buffers require a dedicated copy direction", &desc.debugName,
+                              location);
             }
             if (desc.byteSize == 0 || desc.cpuAccess > CpuAccessMode::Write || desc.format >= Format::COUNT ||
                 desc.structStride > desc.byteSize || (uint32_t(desc.sharedResourceFlags) & ~7u) != 0 ||
@@ -255,16 +260,47 @@ namespace Physara::RHI::Validation
         }
 
         bool CheckTextureCopy(Device *device, const TextureDesc &dest, const TextureSlice &destSlice,
-                              const TextureDesc &src, const TextureSlice &srcSlice, std::source_location location)
+                              const TextureDesc &src, const TextureSlice &srcSlice, TextureCopyEndpoints endpoints,
+                              std::source_location location)
         {
             if (!CheckTextureSlice(device, dest, destSlice, location) ||
                 !CheckTextureSlice(device, src, srcSlice, location))
             {
                 return false;
             }
+            // 通用层允许部分等字节布局的复制. OpenGL 公开的普通复制与 staging 复制均要求相同格式和矩形尺寸.
             const auto dst = destSlice.Resolve(dest);
             const auto source = srcSlice.Resolve(src);
+            const bool openGL = Profile::IsOpenGL(device);
+            if (openGL &&
+                (dest.format != src.format || dest.sampleCount != 1 || src.sampleCount != 1 ||
+                 !Transfer::Planar(dest.dimension) || !Transfer::Planar(src.dimension) ||
+                 dst.width != source.width || dst.height != source.height))
+            {
+                return Reject(device, "OpenGL texture copy requires equal format and single-sample planar regions",
+                              nullptr, location);
+            }
             const auto &df = GetFormatInfo(dest.format);
+            if (openGL)
+            {
+                if (endpoints == TextureCopyEndpoints::Staging)
+                {
+                    if (!Transfer::StagingCopyRegionSupported(df, dest, dst, src, source))
+                    {
+                        return Reject(device, "OpenGL compressed staging copy requires matching full mips",
+                                      nullptr, location);
+                    }
+                }
+                else if (!Transfer::OrdinaryCopyFormat(df))
+                {
+                    return Reject(device, "OpenGL ordinary texture copy requires an uncompressed format",
+                                  nullptr, location);
+                }
+                else if (endpoints == TextureCopyEndpoints::SameTexture && Transfer::PlanarSlicesOverlap(dst, source))
+                {
+                    return Reject(device, "overlapping regions in the same texture subresource", nullptr, location);
+                }
+            }
             const auto &sf = GetFormatInfo(src.format);
             const uint32_t dw = dst.width / df.blockSize + (dst.width % df.blockSize != 0);
             const uint32_t dh = dst.height / df.blockSize + (dst.height % df.blockSize != 0);
@@ -945,6 +981,11 @@ namespace Physara::RHI::Validation
         {
             return nullptr;
         }
+        if (Profile::IsOpenGL(m_Device) && !Transfer::StagingTextureShape(d))
+        {
+            Error("Unsupported: OpenGL staging requires a single-sample planar texture shape");
+            return nullptr;
+        }
         if (cpuAccess == CpuAccessMode::None || cpuAccess > CpuAccessMode::Write)
         {
             Error("InvalidArgument: staging texture requires Read or Write CPU access");
@@ -972,7 +1013,13 @@ namespace Physara::RHI::Validation
         {
             return nullptr;
         }
+        if (Profile::IsOpenGL(m_Device) && !Transfer::WholeSlice(tex->GetDesc(), slice.Resolve(tex->GetDesc())))
+        {
+            Error("InvalidArgument: staging map requires one complete mip/layer");
+            return nullptr;
+        }
 
+        // pitch 和地址都来自同一次底层 Map. 当前包能否读取由实际设备的完成状态决定.
         return m_Device->MapStagingTexture(tex, slice, cpuAccess, outRowPitch);
     }
 

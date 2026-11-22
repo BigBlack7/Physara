@@ -6,6 +6,10 @@ add_library(PhysaraRHIOpenGL STATIC
     Formats.cpp
     Unsupported.cpp
     Buffer.cpp
+    # 公开 staging 的 footprint 和 CPU 借用独立于瞬态上传, 与实际传输共用物理包退休.
+    Staging.hpp
+    Staging.cpp
+    CommandListStaging.cpp
     Texture.cpp
     Sampler.cpp
     Framebuffer.cpp

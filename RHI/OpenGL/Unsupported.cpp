@@ -30,7 +30,7 @@
 namespace Physara::RHI::OpenGL
 {
     // 以下简单入口共用同一合同: 检查 context 后只报告 Unsupported, 不解引用专有输入或改写输出.
-    // 已交付资源/Shader/Bindings/InputLayout/GraphicsPipeline 工厂及 Event/Timer 位于各自文件, 不在此拒绝表.
+    // Staging.cpp 接受公开 staging 的创建和映射. Event/Timer 的创建, 就绪查询与复位位于 Queries.cpp.
     HeapHandle OpenGLDevice::CreateHeap(const HeapDesc &)
     {
         if (RequireContext("CreateHeap"))
@@ -77,32 +77,6 @@ namespace Physara::RHI::OpenGL
         return nullptr;
     }
 
-    StagingTextureHandle OpenGLDevice::CreateStagingTexture(const TextureDesc &, CpuAccessMode)
-    {
-        if (RequireContext("CreateStagingTexture"))
-        {
-            Report("CreateStagingTexture", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
-    void *OpenGLDevice::MapStagingTexture(StagingTexture *, const TextureSlice &, CpuAccessMode, size_t *)
-    {
-        if (RequireContext("MapStagingTexture"))
-        {
-            Report("MapStagingTexture", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
-    void OpenGLDevice::UnmapStagingTexture(StagingTexture *)
-    {
-        if (RequireContext("UnmapStagingTexture"))
-        {
-            Report("UnmapStagingTexture", "Unsupported: resource-only device");
-        }
-    }
-
     void OpenGLDevice::GetTextureTiling(Texture *, uint32_t *, PackedMipDesc *, TileShape *, uint32_t *,
                                         SubresourceTiling *)
     {
@@ -137,23 +111,6 @@ namespace Physara::RHI::OpenGL
             Report("CreateSamplerFeedbackForNativeTexture", "Unsupported: resource-only device");
         }
         return nullptr;
-    }
-
-    void *OpenGLDevice::MapBuffer(Buffer *, CpuAccessMode)
-    {
-        if (RequireContext("MapBuffer"))
-        {
-            Report("MapBuffer", "Unsupported: resource-only device");
-        }
-        return nullptr;
-    }
-
-    void OpenGLDevice::UnmapBuffer(Buffer *)
-    {
-        if (RequireContext("UnmapBuffer"))
-        {
-            Report("UnmapBuffer", "Unsupported: resource-only device");
-        }
     }
 
     MemoryRequirements OpenGLDevice::GetBufferMemoryRequirements(Buffer *)

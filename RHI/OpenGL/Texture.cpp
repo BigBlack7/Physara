@@ -10,6 +10,8 @@
 #include <new>
 #include <utility>
 
+#include "../Common/Transfer.hpp"
+
 namespace Physara::RHI::OpenGL
 {
     void SetStorageImageFilters(GLuint name, Format format) noexcept
@@ -41,19 +43,59 @@ namespace Physara::RHI::OpenGL
 
     OpenGLTexture::~OpenGLTexture()
     {
+        // 创建中途失败也经过这里. 每个已取得的名字有独立删除节点, 其余空节点可直接释放.
+        if (m_CompressedLevels)
+        {
+            for (std::uint32_t mip = 1; mip < m_Desc.mipLevels; ++mip)
+            {
+                m_Device->ReleaseAllocation(std::move(m_CompressedLevels[mip - 1]), m_Published);
+            }
+        }
         m_Device->ReleaseAllocation(std::move(m_Deletion), m_Published);
     }
 
-    // 分别校验形状, 用途和设备能力, 取得存储后设置非 MS swizzle, 失败由未发布 wrapper 回滚.
-    TextureHandle OpenGLDevice::CreateTexture(const TextureDesc &desc)
+    // 本机非零 native mip 的压缩尾块 PBO 下载会重复块行. 每个逻辑级别用自己的实际尺寸和 native level 0.
+    // 此 profile 只有二维 staging 传输, 所有 GL 名称由同一逻辑 Texture 和原物理包持有.
+    bool OpenGLDevice::AllocateBC5Levels(OpenGLTexture &texture, GLenum internalFormat)
     {
-        if (!RequireContext("CreateTexture"))
+        const auto &desc = texture.GetDesc();
+        if (desc.mipLevels > 1)
         {
-            return nullptr;
+            texture.m_CompressedLevels = std::make_unique<std::unique_ptr<NativeDeletion>[]>(desc.mipLevels - 1);
+            for (std::uint32_t mip = 1; mip < desc.mipLevels; ++mip)
+            {
+                texture.m_CompressedLevels[mip - 1] = std::make_unique<NativeDeletion>(NativeKind::Texture);
+            }
         }
-        const GLenum target = TextureTarget(desc.dimension);
-        const bool multisample =
-            desc.dimension == TextureDimension::Texture2DMS || desc.dimension == TextureDimension::Texture2DMSArray;
+        if (!BeginNative("CreateTexture.BC5", desc.debugName.c_str()))
+        {
+            return false;
+        }
+        for (std::uint32_t mip = 0; mip < desc.mipLevels; ++mip)
+        {
+            auto &record = mip == 0 ? *texture.m_Deletion : *texture.m_CompressedLevels[mip - 1];
+            glCreateTextures(GL_TEXTURE_2D, 1, &record.name);
+            if (!CheckNative("CreateTexture.BC5Name", record.name, desc.debugName.c_str()))
+            {
+                return false;
+            }
+            if (record.name == 0)
+            {
+                Report("CreateTexture.BC5Name", "NativeFailure: zero compressed texture name", desc.debugName.c_str());
+                return false;
+            }
+            glTextureStorage2D(record.name, 1, internalFormat, GLsizei(Transfer::MipSize(desc.width, mip)),
+                               GLsizei(Transfer::MipSize(desc.height, mip)));
+            if (!CheckNative("CreateTexture.BC5Storage", record.name, desc.debugName.c_str()))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool OpenGLDevice::ValidTextureShape(const TextureDesc &desc) const noexcept
+    {
         const bool cube =
             desc.dimension == TextureDimension::TextureCube || desc.dimension == TextureDimension::TextureCubeArray;
         const bool volume = desc.dimension == TextureDimension::Texture3D;
@@ -61,7 +103,7 @@ namespace Physara::RHI::OpenGL
         const auto spatialLimit = std::uint32_t(volume ? m_Caps.max3DTextureSize
                                                 : cube ? m_Caps.maxCubeTextureSize
                                                        : m_Caps.maxTextureSize);
-        bool shapeValid = target != 0 && desc.width > 0 && desc.width <= spatialLimit && desc.height > 0 &&
+        bool shapeValid = desc.width > 0 && desc.width <= spatialLimit && desc.height > 0 &&
                           desc.height <= spatialLimit && desc.depth > 0 && desc.depth <= spatialLimit &&
                           desc.arraySize > 0;
         switch (desc.dimension)
@@ -96,15 +138,29 @@ namespace Physara::RHI::OpenGL
             break;
         }
         const auto maxMipLevels = std::uint32_t(std::bit_width(std::max({desc.width, desc.height, desc.depth})));
+        return shapeValid && desc.mipLevels != 0 && desc.mipLevels <= maxMipLevels;
+    }
+
+    // 分别校验形状, 用途和设备能力, 取得存储后设置非 MS swizzle, 失败由未发布 wrapper 回滚.
+    TextureHandle OpenGLDevice::CreateTexture(const TextureDesc &desc)
+    {
+        if (!RequireContext("CreateTexture"))
+        {
+            return nullptr;
+        }
+        const GLenum target = TextureTarget(desc.dimension);
+        const bool multisample =
+            desc.dimension == TextureDimension::Texture2DMS || desc.dimension == TextureDimension::Texture2DMSArray;
         const auto &caps = GetFormatCaps(desc.format, desc.dimension);
         // 描述保留完整 RHI 语义, 接受能力取当前实现与原生 target/format 观察的交集, 不自动降级格式或样本数.
         const ComponentSwizzle components[] = {desc.defaultComponentMapping.r, desc.defaultComponentMapping.g,
                                                desc.defaultComponentMapping.b, desc.defaultComponentMapping.a};
+        bool swizzleValid = true;
         for (auto component : components)
         {
-            shapeValid = shapeValid && component <= ComponentSwizzle::One;
+            swizzleValid = swizzleValid && component <= ComponentSwizzle::One;
         }
-        if (!shapeValid || desc.mipLevels == 0 || desc.mipLevels > maxMipLevels || desc.sampleQuality != 0 ||
+        if (!ValidTextureShape(desc) || !swizzleValid || desc.sampleQuality != 0 ||
             (multisample
                  ? (desc.mipLevels != 1 || desc.sampleCount > 8 || (caps.sampleMask & (1u << desc.sampleCount)) == 0)
                  : desc.sampleCount != 1) ||
@@ -129,6 +185,15 @@ namespace Physara::RHI::OpenGL
         {
             // 描述副本与退休节点先取得, 未发布对象负责撤销失败前缀; 成功后也只拥有未初始化存储.
             auto texture = std::make_unique<OpenGLTexture>(this, desc);
+            if (desc.format == Format::BC5_UNORM)
+            {
+                if (!AllocateBC5Levels(*texture, caps.internalFormat))
+                {
+                    return nullptr;
+                }
+                texture->Publish();
+                return TextureHandle::Create(texture.release());
+            }
             if (!BeginNative("CreateTexture", desc.debugName.c_str()))
             {
                 return nullptr;

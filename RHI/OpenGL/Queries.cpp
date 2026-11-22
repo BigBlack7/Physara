@@ -75,6 +75,12 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    OpenGLEventQuery::~OpenGLEventQuery()
+    {
+        // CPU 观察者可由 worker 最后释放, 其槽位归还与该 Event 原来观察的 GPU 工作无关.
+        m_Device->m_EventQueries.fetch_sub(1, std::memory_order_relaxed);
+    }
+
     // Event 仅分配强持 Device 的 CPU 观察者, 没有独立 fence 或工作保活队列.
     EventQueryHandle OpenGLDevice::CreateEventQuery()
     {
@@ -82,9 +88,17 @@ namespace Physara::RHI::OpenGL
         {
             return nullptr;
         }
+        const auto eventCount = m_EventQueries.load(std::memory_order_relaxed);
+        if (eventCount == EventQueryLimit)
+        {
+            ReportBudget("CreateEventQuery", 1, eventCount, EventQueryLimit);
+            return nullptr;
+        }
         try
         {
-            return EventQueryHandle::Create(new OpenGLEventQuery(this));
+            auto *query = new OpenGLEventQuery(this);
+            m_EventQueries.fetch_add(1, std::memory_order_relaxed);
+            return EventQueryHandle::Create(query);
         }
         catch (const std::bad_alloc &)
         {
@@ -230,6 +244,11 @@ namespace Physara::RHI::OpenGL
             Report("TimerQuery.Result", "InvalidState: no valid complete timing interval");
             return false;
         }
+        if (query.m_SubmissionId == 0)
+        {
+            // 驱动可以先执行已录制的 timestamp. 接受前的 Ended 返回 Pending, 连 available 也无需查询.
+            return false;
+        }
         // GL_QUERY_BUFFER 非零会把输出参数解释成 buffer offset, 必须先通过唯一缓存建立客户端指针语义.
         m_ContextState.ApplyQueryRead();
         for (const auto &point : query.m_Deletion)
@@ -288,9 +307,9 @@ namespace Physara::RHI::OpenGL
         {
             return native->m_Seconds;
         }
-        if (native->m_Phase != OpenGLTimerQuery::Phase::Ended)
+        if (native->m_Phase != OpenGLTimerQuery::Phase::Ended || native->m_SubmissionId == 0)
         {
-            Report("GetTimerQueryTime", "InvalidState: no valid complete timing interval");
+            Report("GetTimerQueryTime", "InvalidState: no accepted complete timing interval");
             return 0;
         }
         if (!BeginNative("GetTimerQueryTime"))
@@ -336,6 +355,7 @@ namespace Physara::RHI::OpenGL
             return;
         }
         native->m_Phase = OpenGLTimerQuery::Phase::Idle;
+        native->m_SubmissionId = 0;
         native->m_Seconds = 0;
     }
 } // namespace Physara::RHI::OpenGL

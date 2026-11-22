@@ -208,12 +208,24 @@ namespace Physara::RHI::OpenGL
         ResetGraphicsState();
         packet->graphUses.Reset();
         packet->useMode = UseMode::Automatic;
-        if (!executionSucceeded)
+        const bool restored = m_Device->RequireContext("EndGraphManaged") &&
+                              !packet->invalid && !packet->tracker.HasErrors();
+        const bool publishReadbacks = executionSucceeded && restored;
+        for (auto &lease : packet->staging)
+        {
+            if (lease.graphUse)
+            {
+                // 图内复制和归还录制都成功才可发布本图读回. 归还失败仍由原包保留已发前缀.
+                lease.publish = publishReadbacks;
+                lease.graphUse = false;
+            }
+        }
+        if (!publishReadbacks)
         {
             // 丢弃本图未提交的公共用途, 已发命令的访问留在物理存储上, 包继续持有前缀依赖.
             packet->tracker.ClearBarriers();
         }
-        return m_Device->RequireContext("EndGraphManaged") && !packet->invalid && !packet->tracker.HasErrors();
+        return restored;
     }
 
     void OpenGLCommandList::Close()

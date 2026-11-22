@@ -36,7 +36,7 @@ namespace Physara::RHI::OpenGL
         ContextState() : m_UniformRanges(0), m_StorageRanges(0), m_TextureUnits(0), m_Images(0)
         {
         }
-        /// @brief 预留实际 limits 对应缓存并创建唯一 VAO/清除 FBO, 失败由 Device 工厂回收.
+        /// @brief 预留实际 limits 对应的缓存, 创建 VAO 及分开的传输读写 FBO, 失败由 Device 工厂回收.
         [[nodiscard]] bool Initialize(OpenGLDevice &device);
         /// @brief 在已收拢工作后解除绑定并删除辅助对象, context 失效时只清 CPU 身份.
         void Shutdown(OpenGLDevice &device, bool nativeAvailable) noexcept;
@@ -44,8 +44,11 @@ namespace Physara::RHI::OpenGL
         void Invalidate() noexcept;
         /// @brief 原生删除前解除可能扣留旧对象的绑定, 保留逻辑状态供下一次 Draw 重建.
         void ReleaseBindings() noexcept;
-        /// @brief 建立紧凑 texel 的标准 unpack 状态并按需绑定 PBO, 调用者保证 current context.
-        void ApplyUnpack(GLuint buffer) noexcept;
+        /// @brief 绑定上传 PBO 并设置行寻址. alignment 的单位是字节, rowLength 的单位是像素.
+        /// @note 默认参数供已紧排的普通上传使用. staging 矩形传入所在 mip 的完整行宽.
+        void ApplyUnpack(GLuint buffer, GLint alignment = 1, GLint rowLength = 0) noexcept;
+        /// @brief 建立 Read staging 的行寻址和 PBO, 与普通上传的 unpack 状态分别记录.
+        void ApplyPack(GLuint buffer, GLint alignment, GLint rowLength) noexcept;
         /// @brief 冷路径客户端查询结果必须使用指针语义, 外部互操作失效后重新解绑 query buffer.
         /// @pre 调用方已通过 BeginNative, 随后仍须 CheckNative 确认本批状态/结果读取.
         void ApplyQueryRead() noexcept;
@@ -78,6 +81,8 @@ namespace Physara::RHI::OpenGL
         void ApplyScissor(const Rect &rect) noexcept;
         /// @brief 为完整子资源 typed clear 建立无 scissor/完整 mask 状态, 下次 Draw 重新应用固定状态.
         void ApplyClearState(bool srgb) noexcept;
+        /// @brief 仅改 blit 影响的 scissor 和颜色编码, 下次 Draw 恢复其逻辑状态.
+        void ApplyBlitState(bool srgb) noexcept;
         /// @brief 选择默认后缓冲的写附件, 关闭裁剪并设置 sRGB 开关.
         /// @pre 调用方拥有 current context, 并已确认默认后缓冲编码.
         /// @note 后续 Draw 重建固定状态. 调用方检查同步 GL 错误并在失败时撤销已知性.
@@ -85,6 +90,10 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] GLuint ClearFramebuffer() const noexcept
         {
             return m_ClearFramebuffer;
+        }
+        [[nodiscard]] GLuint ReadTransferFramebuffer() const noexcept
+        {
+            return m_ReadTransferFramebuffer;
         }
         /// @brief 复制 context 的对象绑定调用累计值, 包含实际解绑. 命中缓存的请求跳过计数.
         [[nodiscard]] std::uint64_t BindingCount() const noexcept { return m_BindingCount; }
@@ -140,6 +149,7 @@ namespace Physara::RHI::OpenGL
         std::array<VertexBindingState, MaxVertexAttributes> m_VertexBindings{};
         GLuint m_VertexArray = 0;
         GLuint m_ClearFramebuffer = 0;
+        GLuint m_ReadTransferFramebuffer = 0;
         GLuint m_Program = 0;
         GLuint m_Framebuffer = 0;
         GLuint m_IndexBuffer = 0;
@@ -163,8 +173,16 @@ namespace Physara::RHI::OpenGL
         StaticVector<Format, MaxRenderTargets> m_ColorFormats;
         Viewport m_Viewport;
         Rect m_Scissor;
-        bool m_Known = false;
-        GLuint m_UnpackBuffer = 0;
+        struct PixelTransfer
+        {
+            GLuint buffer = 0;
+            GLint alignment = 1;
+            GLint rowLength = 0;
+            bool known = false;
+        };
+        void ApplyPixelTransfer(bool pack, GLuint buffer, GLint alignment, GLint rowLength) noexcept;
+        PixelTransfer m_Pack;
+        PixelTransfer m_Unpack;
         bool m_QueryReadKnown = false; ///< true 只表示已建立 GL_QUERY_BUFFER=0, 不表示任何查询已 ready.
         std::uint64_t m_BindingCount{}; ///< 实际发出的资源和管线对象绑定调用, 不受缓存失效影响.
     };

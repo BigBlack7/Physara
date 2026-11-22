@@ -57,6 +57,11 @@ namespace Physara::RHI
     /// @brief 底层接管协议. 状态修改和提交只经一次成功接管的 GraphRecording 到达.
     class ImmediateGraphicsRecording
     {
+    public:
+        /// @brief 从 range 的基础 mip 逐级过滤选中的层或 cube 面. 单级范围成功时没有写入.
+        /// @note 使用 Automatic 或已提交用途的 Explicit 录制. 基础级需 CopySource, 后续级需 CopyDest.
+        [[nodiscard]] virtual bool GenerateMipmaps(Texture *texture, TextureSubresourceSet range) = 0;
+
     private:
         friend class GraphRecording;
         friend class Validation::CommandListWrapper;
@@ -68,8 +73,9 @@ namespace Physara::RHI
         [[nodiscard]] virtual std::uint64_t BeginGraphManaged(Device &device) = 0;
 
         /// @brief 恢复 Automatic, 清除图授权和两类可执行状态. 资源跟踪与已发命令的引用继续有效.
-        /// @param executionSucceeded 全部显式用途和边界请求均已成功提交时为 true.
-        /// @return 身份匹配并且该录制仍可用时为 true. 对匹配的失效录制仍归还模式并收拢合法 CPU 状态.
+        /// @param executionSucceeded 图的 Pass 和图尾用途均已成功录制时为 true.
+        /// @return 原录制已归还且仍可用时为 true. 身份匹配的失效录制也会清除图授权并归还模式.
+        /// @note 图执行和归还均成功后, 读回仍须等所属包正式提交并退休才可映射.
         [[nodiscard]] virtual bool EndGraphManaged(std::uint64_t recordingId, bool executionSucceeded) noexcept = 0;
 
         /// @brief 将已知前态登记到当前 tracker, 供后续状态请求比较.
@@ -91,6 +97,13 @@ namespace Physara::RHI
         ImmediateGraphicsRecording(const ImmediateGraphicsRecording &) = delete;
         ImmediateGraphicsRecording &operator=(const ImmediateGraphicsRecording &) = delete;
     };
+
+    /// @brief 在原列表上调用即时颜色传输扩展. 缺少此扩展或本次请求被拒绝时返回 false.
+    [[nodiscard]] inline bool GenerateMipmaps(CommandList &commands, Texture *texture, TextureSubresourceSet range)
+    {
+        auto *recording = dynamic_cast<ImmediateGraphicsRecording *>(&commands);
+        return recording && recording->GenerateMipmaps(texture, range);
+    }
 
     /// @brief 在同设备 owner 线程同步接管当前录制的状态准备. 执行器持有接管, 回调沿原列表消费.
     /// @pre 列表处于 Automatic, 原状态请求已提交, 列表及设备借用至 Finish 或析构结束.

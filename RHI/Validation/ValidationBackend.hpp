@@ -96,9 +96,16 @@ namespace Physara::RHI::Validation
         /// @brief 检查显式 texel 区域, mip/layer 与原尺寸, 拒绝越界而不静默裁剪请求.
         bool CheckTextureSlice(Device *device, const TextureDesc &desc, const TextureSlice &slice,
                                std::source_location location = std::source_location::current());
-        /// @brief 核对两个显式区域的维度/格式/样本与大小兼容, 不在失败时发出底层复制.
+        /// @brief 普通重载按两个 Texture 的对象身份分类. 任一端为 StagingTexture 时选 Staging, OpenGL 据此核对整级压缩块传输.
+        enum class TextureCopyEndpoints
+        {
+            DistinctTextures,
+            SameTexture,
+            Staging
+        };
+        /// @brief 核对两端的维度, 格式, 样本和区域. OpenGL 自复制只在同一 mip 和层上比较已界检的半开矩形.
         bool CheckTextureCopy(Device *device, const TextureDesc &dest, const TextureSlice &destSlice,
-                              const TextureDesc &src, const TextureSlice &srcSlice,
+                              const TextureDesc &src, const TextureSlice &srcSlice, TextureCopyEndpoints endpoints,
                               std::source_location location = std::source_location::current());
         /// @brief 使用剩余容量检查字节区间, 避免 offset+size 溢出, 零长度按命令合同解释.
         bool CheckBufferRange(Device *device, Buffer *buffer, uint64_t offset, uint64_t size,
@@ -414,6 +421,8 @@ namespace Physara::RHI::Validation
         void ConvertCoopVecMatrices(CoopVec::ConvertMatrixLayoutDesc const *convertDescs, size_t numDescs) override;
 
         void BeginTimerQuery(TimerQuery *query) override;
+        /// @brief 校验已打开的 Graphics 列表及选层, 调用同一底层列表的即时 mip 扩展并传回其结果.
+        [[nodiscard]] bool GenerateMipmaps(Texture *texture, TextureSubresourceSet range) override;
         void EndTimerQuery(TimerQuery *query) override;
 
         void BeginMarker(const char *name) override;

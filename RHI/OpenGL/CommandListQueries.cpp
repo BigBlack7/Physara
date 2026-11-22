@@ -52,6 +52,7 @@ namespace Physara::RHI::OpenGL
         native->m_Packet = packet;
         // Ready 结果已解析, 下一次合法 recording 的 Begin 明确消费前值, 旧包仍保留自己的 lease.
         native->m_LastRecordingId = packet->recordingId;
+        native->m_SubmissionId = 0;
         native->m_Phase = OpenGLTimerQuery::Phase::Begun;
         native->m_Seconds = 0;
         // 标记可能发出, 失败也不能撤销驱动已消费的点或提前释放其名字.
@@ -64,7 +65,7 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    // End 必须匹配当前包中的 Begin, 复用其已取得的 lease; 原生成功后才形成可解析的完整区间.
+    // End 复用同一包中 Begin 取得的 lease. 原生成功只补齐结束点, Execute 接受本包后才可查询这次区间.
     void OpenGLCommandList::EndTimerQuery(TimerQuery *query)
     {
         auto *packet = Recording("EndTimerQuery");

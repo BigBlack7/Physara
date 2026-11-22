@@ -37,6 +37,7 @@ namespace Physara::RHI::OpenGL
     struct PlannedResource;
     struct PipelineBindingPlan;
     class OpenGLComputePipeline;
+    class OpenGLStagingTexture;
     struct NativeBinding;
     /// @brief 单写者即时列表, GL 在 recording 调用时发出, Execute 只接受提交而不重放.
     /// @note 物理包归 Device, 未提交列表的 worker 最终析构只交接 orphan, 不执行 GL.
@@ -62,21 +63,26 @@ namespace Physara::RHI::OpenGL
         /// @brief 同 format/单样本二维 slice 精确 1:1 copy, 不重采样, 翻转, 转换或裁剪越界请求.
         void CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
                          const TextureSlice &srcSlice) override;
+        /// @brief 读回只写目标矩形, 选层起点和行距由 Map 返回. 本次复制所属包在提交并完成后才可发布数据.
         void CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
                          const TextureSlice &srcSlice) override;
+        /// @brief 从已 Unmap 的 Write staging 上传同格式矩形. 录制包占用整份 staging 存储直到退休.
         void CopyTexture(Texture *dest, const TextureSlice &destSlice, StagingTexture *src,
                          const TextureSlice &srcSlice) override;
         /// @brief 在 owning/current recording 写完整选定 mip/layer/face 或 3D volume, 拒绝深度/模板/MS.
         /// @note CPU 源在返回前消费, caller 保证完整可读 footprint; 单行可 rowPitch=0, 单 depth 忽略 depthPitch.
         void WriteTexture(Texture *dest, uint32_t arraySlice, uint32_t mipLevel, const void *data, size_t rowPitch,
                           size_t depthPitch) override;
+        /// @brief 逐层将多样本颜色附件归约到同尺寸的单样本目标 mip, 两端可有不同的起始层.
         void ResolveTexture(Texture *dest, const TextureSubresourceSet &dstSubresources, Texture *src,
                             const TextureSubresourceSet &srcSubresources) override;
+        [[nodiscard]] bool GenerateMipmaps(Texture *texture, TextureSubresourceSet range) override;
         /// @brief 写受检 Buffer 区间, 非空源在返回前消费, GPU lease 保留至真实完成.
         /// @note dataSize=0 是严格空写, 允许 null 与末尾 offset, 不取得上传容量或 lease.
         void WriteBuffer(Buffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes) override;
         void ClearBufferUInt(Buffer *b, uint32_t clearValue) override;
-        /// @brief 按受检 byte interval 复制普通 Buffer, 同 storage 非法重叠在 native 前拒绝.
+        /// @brief 复制两个普通 Buffer 的字节区间, 或在普通 Buffer 和一个方向匹配的 staging 之间复制.
+        /// @note 同一存储的重叠区间在发出前拒绝. 图内的 Buffer 读回从图尾导出后在调用方录制.
         void CopyBuffer(Buffer *dest, uint64_t destOffsetBytes, Buffer *src, uint64_t srcOffsetBytes,
                         uint64_t dataSizeBytes) override;
         void ClearSamplerFeedbackTexture(SamplerFeedbackTexture *texture) override;
@@ -189,6 +195,18 @@ namespace Physara::RHI::OpenGL
         [[nodiscard]] OpenGLTexture *TextureFor(Texture *texture, const char *operation);
         /// @brief 一个包对一个 wrapper 只建立一份 lease, 跨包 holds 单独计数以支持精确关闭预检.
         [[nodiscard]] bool Retain(Resource *resource, InternalOwnership &owners);
+        /// @brief 核对方向对应的可用性, 在包内取得或复用 lease. 准备本身保留旧结果.
+        /// @return 返回值借自包内 vector, 仅在准备下一份 lease 前使用.
+        [[nodiscard]] UploadWorkPacket::StagingLease *PrepareStagingUse(StagingAccess &access, bool &ready,
+                                                                       CpuAccessMode mode, const char *operation);
+        /// @brief 在可能发出原生复制前占用 backing, 同时撤销 Read 目标的旧就绪标记.
+        void RecordStagingUse(UploadWorkPacket::StagingLease &lease) noexcept;
+        void CopyStaging(StagingTexture *staging, const TextureSlice &stagingSlice, Texture *texture,
+                         const TextureSlice &textureSlice, CpuAccessMode mode);
+        /// @brief 为已预检的源和目标各选一个附件并执行 blit. epoch 由调用方在同一批 blit 中复用.
+        [[nodiscard]] bool BlitColor(OpenGLTexture &dest, std::uint32_t destMip, std::uint32_t destLayer,
+                                     OpenGLTexture &src, std::uint32_t srcMip, std::uint32_t srcLayer,
+                                     GLenum filter, const char *operation, std::uint64_t &epoch);
         /// @brief 已验证的原生复合对象按实际依赖展开一次, 返回稳定账目; nullptr 表示准备失败.
         [[nodiscard]] InternalOwnership *RetainResource(Resource *resource);
         /// @brief 自动模式请求状态. 图模式核对已提交范围, 无 range 时只检查该 Buffer 能否绑定到指定角色.

@@ -72,6 +72,7 @@ namespace Physara::RHI::OpenGL
         CommandListResourceStateTracker tracker;
         const std::uint64_t recordingId;
         const std::size_t minimumChunk;
+        std::uint64_t submissionId = 0; ///< 仅 fence 和 flush 成功接受本包时写入, orphan 收拢不发布身份.
         PacketPhase phase = PacketPhase::Recording;
         // worker 最后释放列表时以 release 交接, owner 以 acquire 接收后才可读取/退休包; 交接后 worker 不再访问.
         std::atomic<bool> orphaned{false};
@@ -98,6 +99,17 @@ namespace Physara::RHI::OpenGL
             std::uint32_t version;
         };
         std::vector<VolatileLease> volatileLeases = std::vector<VolatileLease>(0);
+        /// @brief resources 保活 backing. 已发 Read 在包退休时向所选子资源交付结果, Write 只归还 GPU 占用.
+        /// @note Prepare 可提前取得表项. 只有 issued 的表项才有资格在退休时修改目标状态.
+        struct StagingLease
+        {
+            StagingAccess *access;
+            bool *readReady; ///< Read 目标子资源的可映射性; Write 只需保留存储.
+            bool issued = false;
+            bool publish = false;
+            bool graphUse = false; ///< 最新写入属于当前接管的图, 失败时取消结果发布.
+        };
+        std::vector<StagingLease> staging = std::vector<StagingLease>(0);
         std::size_t writes = 0;
         std::size_t logicalBytes = 0;
         std::vector<UploadResourceLease> resources;

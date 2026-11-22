@@ -40,7 +40,9 @@ namespace Physara::RHI::OpenGL
         m_Images.resize(std::size_t(caps.imageUnits));
         glCreateVertexArrays(1, &m_VertexArray);
         glCreateFramebuffers(1, &m_ClearFramebuffer);
-        return device.CheckNative("CreateDevice.Graphics") && m_VertexArray != 0 && m_ClearFramebuffer != 0;
+        glCreateFramebuffers(1, &m_ReadTransferFramebuffer);
+        return device.CheckNative("CreateDevice.Graphics") && m_VertexArray != 0 && m_ClearFramebuffer != 0 &&
+               m_ReadTransferFramebuffer != 0;
     }
 
     void ContextState::Shutdown(OpenGLDevice &device, bool nativeAvailable) noexcept
@@ -55,13 +57,15 @@ namespace Physara::RHI::OpenGL
             glDeleteVertexArrays(1, &m_VertexArray);
             nativeAvailable = device.CheckNative("Shutdown.VertexArray");
         }
-        if (nativeAvailable && m_ClearFramebuffer != 0)
+        if (nativeAvailable)
         {
-            glDeleteFramebuffers(1, &m_ClearFramebuffer);
-            static_cast<void>(device.CheckNative("Shutdown.ClearFramebuffer"));
+            const GLuint framebuffers[] = {m_ClearFramebuffer, m_ReadTransferFramebuffer};
+            glDeleteFramebuffers(2, framebuffers);
+            static_cast<void>(device.CheckNative("Shutdown.TransferFramebuffers"));
         }
         m_VertexArray = 0;
         m_ClearFramebuffer = 0;
+        m_ReadTransferFramebuffer = 0;
         Invalidate();
     }
 
@@ -69,7 +73,7 @@ namespace Physara::RHI::OpenGL
     {
         // 只撤销已知性, 保留名称以便真正删除前仍能解除原生引用; 不查询或保存外部 GL 状态.
         // 累计值跨缓存失效保留, 下一次实际重绑由各 Apply 入口计入.
-        m_Known = false;
+        m_Pack.known = m_Unpack.known = false;
         m_IndirectKnown = false;
         m_QueryReadKnown = false;
         m_SeamlessCubeKnown = false;
@@ -161,6 +165,18 @@ namespace Physara::RHI::OpenGL
             glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
             ++m_BindingCount;
             m_IndirectBuffer = 0;
+        }
+        if (m_Pack.buffer != 0)
+        {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            ++m_BindingCount;
+            m_Pack.buffer = 0;
+        }
+        if (m_Unpack.buffer != 0)
+        {
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            ++m_BindingCount;
+            m_Unpack.buffer = 0;
         }
         glUseProgram(0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -352,25 +368,47 @@ namespace Physara::RHI::OpenGL
         }
     }
 
-    void ContextState::ApplyUnpack(GLuint buffer) noexcept
+    void ContextState::ApplyUnpack(GLuint buffer, GLint alignment, GLint rowLength) noexcept
     {
-        if (!m_Known || m_UnpackBuffer != buffer)
+        ApplyPixelTransfer(false, buffer, alignment, rowLength);
+    }
+
+    void ContextState::ApplyPack(GLuint buffer, GLint alignment, GLint rowLength) noexcept
+    {
+        ApplyPixelTransfer(true, buffer, alignment, rowLength);
+    }
+
+    // pack 和 unpack 分别缓存. 失效后重建全部像素存储参数, 已知状态间只更新 PBO, 对齐或行长.
+    void ContextState::ApplyPixelTransfer(bool pack, GLuint buffer, GLint alignment, GLint rowLength) noexcept
+    {
+        auto &state = pack ? m_Pack : m_Unpack;
+        if (!state.known || state.buffer != buffer)
         {
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer);
+            glBindBuffer(pack ? GL_PIXEL_PACK_BUFFER : GL_PIXEL_UNPACK_BUFFER, buffer);
             ++m_BindingCount;
         }
-        if (!m_Known)
+        if (!state.known)
         {
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
-            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-            glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
-            glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
-            glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+            // 调用者通过 offset 定位区域. 压缩入口用紧密完整块行, 不继承外部跳过或块重排参数.
+            glPixelStorei(pack ? GL_PACK_IMAGE_HEIGHT : GL_UNPACK_IMAGE_HEIGHT, 0);
+            glPixelStorei(pack ? GL_PACK_SKIP_PIXELS : GL_UNPACK_SKIP_PIXELS, 0);
+            glPixelStorei(pack ? GL_PACK_SKIP_ROWS : GL_UNPACK_SKIP_ROWS, 0);
+            glPixelStorei(pack ? GL_PACK_SKIP_IMAGES : GL_UNPACK_SKIP_IMAGES, 0);
+            glPixelStorei(pack ? GL_PACK_SWAP_BYTES : GL_UNPACK_SWAP_BYTES, GL_FALSE);
+            glPixelStorei(pack ? GL_PACK_LSB_FIRST : GL_UNPACK_LSB_FIRST, GL_FALSE);
+            glPixelStorei(pack ? GL_PACK_COMPRESSED_BLOCK_WIDTH : GL_UNPACK_COMPRESSED_BLOCK_WIDTH, 0);
+            glPixelStorei(pack ? GL_PACK_COMPRESSED_BLOCK_HEIGHT : GL_UNPACK_COMPRESSED_BLOCK_HEIGHT, 0);
+            glPixelStorei(pack ? GL_PACK_COMPRESSED_BLOCK_DEPTH : GL_UNPACK_COMPRESSED_BLOCK_DEPTH, 0);
+            glPixelStorei(pack ? GL_PACK_COMPRESSED_BLOCK_SIZE : GL_UNPACK_COMPRESSED_BLOCK_SIZE, 0);
         }
-        m_Known = true;
-        m_UnpackBuffer = buffer;
+        if (!state.known || state.alignment != alignment)
+        {
+            glPixelStorei(pack ? GL_PACK_ALIGNMENT : GL_UNPACK_ALIGNMENT, alignment);
+        }
+        if (!state.known || state.rowLength != rowLength)
+        {
+            glPixelStorei(pack ? GL_PACK_ROW_LENGTH : GL_UNPACK_ROW_LENGTH, rowLength);
+        }
+        state = {buffer, alignment, rowLength, true};
     }
 }

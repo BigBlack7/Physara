@@ -200,7 +200,20 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        if (!TransferStateSupported(state, native->m_Desc.initialState, native->m_Desc.keepInitialState, false, native->m_Desc.isUAV))
+        const auto &desc = native->m_Desc;
+        bool supported = false;
+        if (state == ResourceStates::ResolveSource || state == ResourceStates::ResolveDest)
+        {
+            // 跟踪单个端点时检查其目标类型和样本能力. 两端所选 mip 的尺寸在实际 ResolveTexture 中配对.
+            const auto caps = m_Device->GetTransferFormatSupport(desc.format, desc.dimension);
+            supported = desc.isRenderTarget && (state == ResourceStates::ResolveSource
+                ? (caps.resolveSourceSamples & (1u << desc.sampleCount)) != 0 : caps.resolveDestination);
+        }
+        else
+        {
+            supported = TransferStateSupported(state, desc.initialState, desc.keepInitialState, false, desc.isUAV);
+        }
+        if (!supported)
         {
             packet->invalid = true;
             m_Device->Report(operation, "Unsupported: texture state or resource role");

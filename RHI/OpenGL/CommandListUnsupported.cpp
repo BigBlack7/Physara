@@ -6,44 +6,8 @@
 namespace Physara::RHI::OpenGL
 {
     // 以下同组薄入口只保留完整公共方法表, 共用 Unsupported 的 context/诊断合同.
-    // 直接 Dispatch 见 CommandListCompute.cpp, 动态常量见 CommandListUpload.cpp, 计时查询见 CommandListQueries.cpp.
-    void OpenGLCommandList::CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
-                                        const TextureSlice &srcSlice)
-    {
-        static_cast<void>(dest);
-        static_cast<void>(destSlice);
-        static_cast<void>(src);
-        static_cast<void>(srcSlice);
-        Unsupported("CopyTexture");
-    }
-
-    void OpenGLCommandList::CopyTexture(Texture *dest, const TextureSlice &destSlice, StagingTexture *src,
-                                        const TextureSlice &srcSlice)
-    {
-        static_cast<void>(dest);
-        static_cast<void>(destSlice);
-        static_cast<void>(src);
-        static_cast<void>(srcSlice);
-        Unsupported("CopyTexture");
-    }
-
-    void OpenGLCommandList::ResolveTexture(Texture *dest, const TextureSubresourceSet &dstSubresources, Texture *src,
-                                           const TextureSubresourceSet &srcSubresources)
-    {
-        static_cast<void>(dest);
-        static_cast<void>(dstSubresources);
-        static_cast<void>(src);
-        static_cast<void>(srcSubresources);
-        Unsupported("ResolveTexture");
-    }
-
-    void OpenGLCommandList::ClearBufferUInt(Buffer *b, uint32_t clearValue)
-    {
-        static_cast<void>(b);
-        static_cast<void>(clearValue);
-        Unsupported("ClearBufferUInt");
-    }
-
+    // 普通复制, mip 与 resolve 由 CommandListTransfer.cpp 发出, 两个 Texture staging 重载由 CommandListStaging.cpp 发出.
+    // 直接 Dispatch, 动态常量和计时点分别位于 CommandListCompute.cpp, CommandListUpload.cpp 和 CommandListQueries.cpp.
     void OpenGLCommandList::ClearSamplerFeedbackTexture(SamplerFeedbackTexture *texture)
     {
         static_cast<void>(texture);

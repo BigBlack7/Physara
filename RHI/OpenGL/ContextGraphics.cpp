@@ -252,6 +252,16 @@ namespace Physara::RHI::OpenGL
         m_SrgbKnown = true;
         m_Srgb = srgb;
     }
+    void ContextState::ApplyBlitState(bool srgb) noexcept
+    {
+        // blit 使用第 0 个 scissor. 保留矩形, 只关闭裁剪并记录目标编码, 后续 Draw 会重设光栅状态.
+        glDisablei(GL_SCISSOR_TEST, 0);
+        Enable(GL_FRAMEBUFFER_SRGB, srgb);
+        m_RenderKnown = false;
+        m_SrgbKnown = true;
+        m_Srgb = srgb;
+    }
+
     void ContextState::ApplyWindowPresentation(bool srgb) noexcept
     {
         // 从离屏绘制切回默认 FBO, 让已观察到的 WGL 驱动在窗口 resize 后更新 drawable 尺寸.
@@ -260,10 +270,6 @@ namespace Physara::RHI::OpenGL
         // DSA 设置默认后缓冲的写附件, 沿用上面建立的绑定事实.
         glNamedFramebufferDrawBuffer(0, GL_BACK_LEFT);
         // 复制使用 viewport 0 的裁剪开关, 保留其 box. 固定光栅设置在下次 Draw 重新应用.
-        glDisablei(GL_SCISSOR_TEST, 0);
-        Enable(GL_FRAMEBUFFER_SRGB, srgb);
-        m_RenderKnown = false;
-        m_SrgbKnown = true;
-        m_Srgb = srgb;
+        ApplyBlitState(srgb);
     }
 } // namespace Physara::RHI::OpenGL

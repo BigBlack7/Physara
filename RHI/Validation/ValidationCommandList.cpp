@@ -29,6 +29,7 @@
 /// 原生包检查与完成由后端负责. 其余 API 沿用上游图形和 push constants 快照.
 
 #include "Common/Misc.hpp"
+#include "Common/Transfer.hpp"
 #include "Utils.hpp"
 
 #include <algorithm>
@@ -40,6 +41,32 @@
 
 namespace Physara::RHI::Validation
 {
+    // 精确传输在 Resolve 截断 count 前拒绝越界. 其他 API 仍沿用固定来源的范围策略.
+    static bool CheckTransferRange(Device *device, Texture *texture, const TextureSubresourceSet &range,
+                                   std::source_location location = std::source_location::current())
+    {
+        if (texture && Profile::IsOpenGL(device) && !Transfer::ExactRange(texture->GetDesc(), range))
+        {
+            return Input::Reject(device, "out-of-range explicit transfer subresources", &texture->GetDesc().debugName,
+                                 location);
+        }
+        return Input::CheckTextureRange(device, texture, range, false, location);
+    }
+
+    // GL typed color clear 走颜色附件. 其他 API 保留 UAV clear 的描述准入.
+    static bool CheckColorClearTarget(Device *device, const TextureDesc &desc,
+                                      std::source_location location = std::source_location::current())
+    {
+        const bool openGL = Profile::IsOpenGL(device);
+        if (desc.isRenderTarget || (!openGL && desc.isUAV))
+        {
+            return true;
+        }
+        return Input::Reject(device, openGL ? "OpenGL color clear requires a render target" :
+                                             "color clear requires render target or UAV usage",
+                             &desc.debugName, location);
+    }
+
     // 与 Execute 共享 Closed 前置. 原生复制借用底层列表, 正式提交仍沿验证设备入口.
     CommandList *BorrowClosedCommandList(Device *device, CommandList *commands)
     {
@@ -325,7 +352,7 @@ namespace Physara::RHI::Validation
         {
             return;
         }
-        if (!Input::CheckTextureRange(m_Device, t, subresources))
+        if (!CheckTransferRange(m_Device, t, subresources))
         {
             return;
         }
@@ -358,13 +385,8 @@ namespace Physara::RHI::Validation
             return;
         }
 
-        if (!textureDesc.isRenderTarget && !textureDesc.isUAV)
+        if (!CheckColorClearTarget(m_Device, textureDesc))
         {
-            std::stringstream ss;
-            ss << "Texture " << Utils::DebugNameToString(textureDesc.debugName)
-               << " cannot be cleared with "
-                  "clearTextureFloat because it was created with both isRenderTarget = false and isUAV = false.";
-            Error(ss.str());
             return;
         }
 
@@ -378,7 +400,7 @@ namespace Physara::RHI::Validation
         {
             return;
         }
-        if (!Input::CheckTextureRange(m_Device, t, subresources))
+        if (!CheckTransferRange(m_Device, t, subresources))
         {
             return;
         }
@@ -425,7 +447,7 @@ namespace Physara::RHI::Validation
         {
             return;
         }
-        if (!Input::CheckTextureRange(m_Device, t, subresources))
+        if (!CheckTransferRange(m_Device, t, subresources))
         {
             return;
         }
@@ -458,20 +480,15 @@ namespace Physara::RHI::Validation
             return;
         }
 
-        if (!textureDesc.isRenderTarget && !textureDesc.isUAV)
+        if (!CheckColorClearTarget(m_Device, textureDesc))
         {
-            std::stringstream ss;
-            ss << "Texture " << Utils::DebugNameToString(textureDesc.debugName)
-               << " cannot be cleared with "
-                  "clearTextureUInt because it was created with both isRenderTarget = false and isUAV = false.";
-            Error(ss.str());
             return;
         }
 
         m_CommandList->ClearTextureUInt(t, subresources, clearColor);
     }
 
-    // 三种 copy 重载共用显式 slice 的格式/尺寸边界, 不把 staging 对象存在解释为后端已支持 staging copy.
+    // 三种重载都校验两个公开 slice. StagingTexture 的公开描述没有 CPU 方向, 实际归属与借用状态由后端核对.
     void CommandListWrapper::CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
                                          const TextureSlice &srcSlice)
     {
@@ -484,7 +501,9 @@ namespace Physara::RHI::Validation
             Error("InvalidArgument: texture copy requires source and destination");
             return;
         }
-        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice))
+        const auto endpoints = dest == src ? Input::TextureCopyEndpoints::SameTexture
+                                           : Input::TextureCopyEndpoints::DistinctTextures;
+        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice, endpoints))
         {
             return;
         }
@@ -504,7 +523,8 @@ namespace Physara::RHI::Validation
             Error("InvalidArgument: texture copy requires source and destination");
             return;
         }
-        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice))
+        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice,
+                                     Input::TextureCopyEndpoints::Staging))
         {
             return;
         }
@@ -524,7 +544,8 @@ namespace Physara::RHI::Validation
             Error("InvalidArgument: texture copy requires source and destination");
             return;
         }
-        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice))
+        if (!Input::CheckTextureCopy(m_Device, dest->GetDesc(), destSlice, src->GetDesc(), srcSlice,
+                                     Input::TextureCopyEndpoints::Staging))
         {
             return;
         }
@@ -596,8 +617,7 @@ namespace Physara::RHI::Validation
         {
             return;
         }
-        if (!Input::CheckTextureRange(m_Device, dest, dstSubresources) ||
-            !Input::CheckTextureRange(m_Device, src, srcSubresources))
+        if (!CheckTransferRange(m_Device, dest, dstSubresources) || !CheckTransferRange(m_Device, src, srcSubresources))
         {
             return;
         }
@@ -629,8 +649,17 @@ namespace Physara::RHI::Validation
         const TextureDesc &dstDesc = dest->GetDesc();
         const TextureDesc &srcDesc = src->GetDesc();
 
+        // 两端都有合法的起始 mip 和层, 此时才能展开全剩余哨兵并比较选层数和实际 mip 尺寸.
         TextureSubresourceSet dstSR = dstSubresources.Resolve(dstDesc, false);
         TextureSubresourceSet srcSR = srcSubresources.Resolve(srcDesc, false);
+        if (Profile::IsOpenGL(m_Device) &&
+            (!dstDesc.isRenderTarget || !srcDesc.isRenderTarget || dstSR.numMipLevels != 1 ||
+             !Transfer::ResolveTargets(dstDesc.dimension, srcDesc.dimension) ||
+             (srcDesc.format != Format::RGBA8_UNORM && srcDesc.format != Format::RGBA16_FLOAT)))
+        {
+            Error("Unsupported: OpenGL resolve color profile or subresource pairing");
+            return;
+        }
 
         if (dstSR.numArraySlices != srcSR.numArraySlices || dstSR.numMipLevels != srcSR.numMipLevels)
         {
@@ -675,6 +704,23 @@ namespace Physara::RHI::Validation
         m_CommandList->ResolveTexture(dest, dstSubresources, src, srcSubresources);
     }
 
+    bool CommandListWrapper::GenerateMipmaps(Texture *texture, TextureSubresourceSet range)
+    {
+        if (!RequireOpenState() || !RequireType(CommandQueue::Graphics, "GenerateMipmaps") ||
+            !CheckTransferRange(m_Device, texture, range))
+        {
+            return false;
+        }
+        const auto &desc = texture->GetDesc();
+        if (!Transfer::Planar(desc.dimension) || desc.sampleCount != 1 || !desc.isRenderTarget ||
+            (Profile::IsOpenGL(m_Device) && !Transfer::ColorMipFormat(desc.format)))
+        {
+            Error("Unsupported: mip generation requires a supported single-sample planar color attachment");
+            return false;
+        }
+        return RHI::GenerateMipmaps(*m_CommandList, texture, range);
+    }
+
     // 先检查 recording, 目标字节区间和非空源, 再一次委托; 不在包装中另存 CPU 源.
     void CommandListWrapper::WriteBuffer(Buffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes)
     {
@@ -689,6 +735,11 @@ namespace Physara::RHI::Validation
         if (dataSize != 0 && !data)
         {
             Error("InvalidArgument: nonempty buffer write requires data");
+            return;
+        }
+        if (Profile::IsOpenGL(m_Device) && b->GetDesc().cpuAccess != CpuAccessMode::None)
+        {
+            Error("InvalidArgument: fill Write staging by MapBuffer and UnmapBuffer");
             return;
         }
 
@@ -759,6 +810,17 @@ namespace Physara::RHI::Validation
         {
             Error("InvalidArgument: volatile buffers cannot participate in copies");
             return;
+        }
+        if (Profile::IsOpenGL(m_Device))
+        {
+            const auto srcMode = src->GetDesc().cpuAccess;
+            const auto destMode = dest->GetDesc().cpuAccess;
+            if (srcMode == CpuAccessMode::Read || destMode == CpuAccessMode::Write ||
+                (srcMode == CpuAccessMode::Write && destMode == CpuAccessMode::Read))
+            {
+                Error("InvalidArgument: staging copy requires one ordinary endpoint and matching CPU direction");
+                return;
+            }
         }
 
         m_CommandList->CopyBuffer(dest, destOffsetBytes, src, srcOffsetBytes, dataSizeBytes);

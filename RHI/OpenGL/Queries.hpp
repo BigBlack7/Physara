@@ -14,6 +14,7 @@
 namespace Physara::RHI::OpenGL
 {
     inline constexpr std::size_t TimerNameLimit = 512; ///< 每 Device 的存活及待删除名字总数, 每 Timer 占两个.
+    inline constexpr std::size_t EventQueryLimit = 256; ///< CPU 观察对象, 不占原生名字或提交槽.
 
     /// @brief 强持 Device 的已接受提交快照, 不插入原生 fence, 不保活第二份工作包.
     /// @note 零 ID 只表示无捕获提交; Reset 不取消工作, 未提交即时前缀仍由原协议保护.
@@ -23,6 +24,7 @@ namespace Physara::RHI::OpenGL
         explicit OpenGLEventQuery(OpenGLDevice *device) noexcept : m_Device(device)
         {
         }
+        ~OpenGLEventQuery() override;
         [[nodiscard]] OpenGLDevice *Owner() const noexcept
         {
             return m_Device.Get();
@@ -49,7 +51,8 @@ namespace Physara::RHI::OpenGL
         }
 
     private:
-        /// @brief Idle -> Begun -> Ended -> Ready; 录制失效或原生取值错误进入 Failed.
+        /// @brief Begin 与 End 发出两个时间点. Ended 可以早于提交, 正常接受且两点都 available 后才能进入 Ready.
+        /// @note 录制失效或原生取值错误进入 Failed.
         /// @note Ready 可 Reset 或由另一 recording 的 Begin 消费, 仍不解除旧包 lease.
         /// Failed 且仍关联包时不能 Reset, 须先由原包完成退休或受控退出.
         enum class Phase : std::uint8_t
@@ -68,6 +71,7 @@ namespace Physara::RHI::OpenGL
         const GLint m_CounterBits; ///< 纳秒 counter 的实际有效位, 合法区间小于一个周期.
         UploadWorkPacket *m_Packet = nullptr; ///< 最近使用的借用; Ready/Reset 均不证明原包已退休.
         std::uint64_t m_LastRecordingId = 0; ///< Reset 也不抹去, 禁止同 recording 再次 Begin.
+        std::uint64_t m_SubmissionId = 0; ///< 最近一次 Timer 使用获接受的身份, 与原生 available 分开.
         Phase m_Phase = Phase::Idle;
         float m_Seconds = 0; ///< 仅 Ready 时为有效缓存; 零秒也可能是合法结果.
         bool m_Published = false; ///< 发布后析构仅入删除 FIFO, 不在 final Release 直接执行 GL.

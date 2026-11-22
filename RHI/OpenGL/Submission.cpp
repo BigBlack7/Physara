@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "CommandList.hpp"
+#include "Queries.hpp"
 
 namespace Physara::RHI::OpenGL
 {
@@ -110,6 +111,15 @@ namespace Physara::RHI::OpenGL
         {
             auto *packet = record.packets[index];
             packet->phase = PacketPhase::Submitted;
+            packet->submissionId = record.submissionId;
+            // 旧包也可能保留同一 Timer 的强引用. 只有当前使用属于被接受的包时才给这个区间提交身份.
+            for (auto *query : packet->timers)
+            {
+                if (query->m_Packet == packet)
+                {
+                    query->m_SubmissionId = record.submissionId;
+                }
+            }
             packet->tracker.CommandListSubmitted();
             nativeLists[index]->m_Packet = nullptr;
         }
@@ -120,6 +130,20 @@ namespace Physara::RHI::OpenGL
     {
         // 只由完成收集或最终退出调用. 先收拢查询并断开包借用, 再释放 tracker/chunk, lease 和包.
         ReconcileQueries(packet, true);
+        // 正常接受的包和孤包都能走到退休. 前者还须保留本次复制的发布资格才能使 Read 可映射.
+        // ready 与 access 借自 resources 中的对象, 先完成交接再释放强引用.
+        const bool publish = nativeAvailable && m_Phase == Phase::Active && packet.submissionId != 0;
+        for (const auto &lease : packet.staging)
+        {
+            if (lease.issued)
+            {
+                if (lease.readReady)
+                {
+                    *lease.readReady = publish && lease.publish;
+                }
+                lease.access->packet = nullptr;
+            }
+        }
         packet.tracker.Reset();
         // 版本记录借用 Buffer wrapper. 必须先归还版本再释放 resources 中的强引用.
         for (const auto &lease : packet.volatileLeases)
@@ -486,6 +510,7 @@ namespace Physara::RHI::OpenGL
         // 原生删除失败或 context 不可用时, 剩余名字交确切 context 的最终销毁, 不恢复 Active 预算.
         m_TimerNames = 0;
         m_VolatileCapacity = 0;
+        m_StagingCapacity = m_StagingObjects = 0;
         m_Phase = Phase::Stopped;
         if (nativeError != nullptr)
         {

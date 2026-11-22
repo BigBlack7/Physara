@@ -6,6 +6,8 @@
 #include <cmath>
 #include <vector>
 
+#include "../Common/Transfer.hpp"
+
 namespace Physara::RHI::OpenGL
 {
     // 分配 internal format 与颜色上传解释共享一表, 无 external format 的格式不允许 CPU 上传.
@@ -34,7 +36,8 @@ namespace Physara::RHI::OpenGL
         {Format::D16, GL_DEPTH_COMPONENT16},
         {Format::D24S8, GL_DEPTH24_STENCIL8},
         {Format::D32, GL_DEPTH_COMPONENT32F},
-        {Format::D32S8, GL_DEPTH32F_STENCIL8}};
+        {Format::D32S8, GL_DEPTH32F_STENCIL8},
+        {Format::BC5_UNORM, GL_COMPRESSED_RG_RGTC2}};
 
     bool GetUploadFormat(Format format, GLenum &externalFormat, GLenum &externalType) noexcept
     {
@@ -83,7 +86,8 @@ namespace Physara::RHI::OpenGL
     {
         const auto &format = GetFormatInfo(mapping.format);
         // GL 4.6 8.5 排除 3D 深度/模板存储; 不能由驱动的乐观 query 放行非法 target.
-        if (dimension == TextureDimension::Texture3D && format.hasDepth)
+        if ((dimension == TextureDimension::Texture3D && format.hasDepth) ||
+            (format.blockSize > 1 && dimension != TextureDimension::Texture2D))
         {
             return true;
         }
@@ -102,8 +106,9 @@ namespace Physara::RHI::OpenGL
         const GLint stencil = query(GL_STENCIL_RENDERABLE);
         const GLint vertex = query(GL_VERTEX_TEXTURE);
         const GLint fragment = query(GL_FRAGMENT_TEXTURE);
-        const bool sampledCube = dimension != TextureDimension::TextureCube ||
-                                 (!format.hasDepth && query(GL_FILTER) == GL_FULL_SUPPORT);
+        const bool filterable = format.kind != FormatKind::Integer && !format.hasDepth &&
+                                Transfer::Planar(dimension) && query(GL_FILTER) == GL_FULL_SUPPORT;
+        const bool sampledCube = dimension != TextureDimension::TextureCube || filterable;
         const GLint viewClass = query(GL_VIEW_COMPATIBILITY_CLASS);
         if (!device.CheckNative("CreateDevice.FormatQueries"))
         {
@@ -115,7 +120,14 @@ namespace Physara::RHI::OpenGL
         }
         result.internalFormat = mapping.internalFormat;
         result.viewClass = viewClass;
+        result.filterable = filterable;
         result.support = FormatSupport::Texture;
+        if (format.blockSize > 1)
+        {
+            // RGTC 首发仅交付二维存储与 staging, 保留独立的 Shader/图能力门槛.
+            result.sampleMask = 1u << 1;
+            return true;
+        }
         // 仅将有限 storage profile 与此 target 的实际 image 能力相交. 读与写的查询结果分别记录.
         if (glDispatchCompute && glMemoryBarrier && glBindImageTexture && glGetIntegeri_v &&
             (dimension == TextureDimension::Texture2D || dimension == TextureDimension::Texture2DArray) &&
@@ -278,5 +290,61 @@ namespace Physara::RHI::OpenGL
             }
         }
         return true;
+    }
+
+    // 可选传输入口由对应操作的能力控制. Resolve 同时需要源与匹配目标的真实颜色附件能力.
+    TransferFormatSupport OpenGLDevice::GetTransferFormatSupport(Format format,
+                                                                  TextureDimension dimension) const noexcept
+    {
+        const auto &caps = GetFormatCaps(format, dimension);
+        TransferFormatSupport result;
+        if (!(caps.support & FormatSupport::Texture))
+        {
+            return result;
+        }
+        const auto &info = GetFormatInfo(format);
+        const bool colorAttachment = (caps.support & FormatSupport::RenderTarget) != FormatSupport::None;
+        const bool resolveColor = format == Format::RGBA8_UNORM || format == Format::RGBA16_FLOAT;
+        if (Transfer::Multisample(dimension))
+        {
+            const auto dest = dimension == TextureDimension::Texture2DMS ? TextureDimension::Texture2D
+                                                                        : TextureDimension::Texture2DArray;
+            if (resolveColor && colorAttachment &&
+                (GetFormatCaps(format, dest).support & FormatSupport::RenderTarget) != FormatSupport::None)
+            {
+                result.resolveSourceSamples = caps.sampleMask;
+                result.colorClearSamples = caps.sampleMask;
+            }
+            return result;
+        }
+        if (!Transfer::Planar(dimension))
+        {
+            return result;
+        }
+        result.colorClearSamples = colorAttachment ? caps.sampleMask : 0;
+        result.depthStencilClear = (caps.support & FormatSupport::DepthStencil) != FormatSupport::None;
+        // copy 表示普通纹理之间的复制. 压缩格式通过下方的 staging 标志单独公布整级块传输.
+        result.copy = Transfer::OrdinaryCopyFormat(info);
+        result.mipmaps = colorAttachment && caps.filterable && Transfer::ColorMipFormat(format);
+        result.resolveDestination = resolveColor && colorAttachment &&
+                                    (dimension == TextureDimension::Texture2D || dimension == TextureDimension::Texture2DArray);
+        if (format == Format::BC5_UNORM)
+        {
+            result.stagingRead = glGetCompressedTextureImage != nullptr;
+            result.stagingWrite = glCompressedTextureSubImage2D != nullptr;
+        }
+        else if (resolveColor || format == Format::SRGBA8_UNORM || format == Format::R8_UNORM ||
+                 format == Format::R32_UINT)
+        {
+            result.stagingRead = glGetTextureSubImage != nullptr;
+            result.stagingWrite = true; // 设备启动已核对对应的普通 DSA subimage 入口.
+        }
+        return result;
+    }
+
+    TransferFormatSupport QueryTransferFormatSupport(Device *device, Format format, TextureDimension dimension) noexcept
+    {
+        const auto *native = dynamic_cast<OpenGLDevice *>(device);
+        return native ? native->GetTransferFormatSupport(format, dimension) : TransferFormatSupport{};
     }
 }

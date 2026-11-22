@@ -60,6 +60,7 @@ namespace Physara::RHI::OpenGL
         FormatSupport support = FormatSupport::None;
         GLint viewClass = 0;
         std::uint32_t sampleMask = 0;
+        bool filterable = false;
     };
 
     /// @brief 创建时查询的设备限制及格式表, 准备与执行能力仍由各工厂/命令入口明确限定.
@@ -101,6 +102,7 @@ namespace Physara::RHI::OpenGL
         std::array<GLuint, MaxRenderTargets + 1> views{};
         std::uint32_t viewCount = 0;
         std::size_t volatileBytes = 0; ///< 版本化常量 backing 在 owner 删除时归还额度.
+        std::size_t stagingBytes = 0; ///< 公开 staging 原生删除后归还的字节额度, 非零计一个对象.
         NativeDeletion *next = nullptr;
 
         explicit NativeDeletion(NativeKind value) noexcept : kind(value)
@@ -117,8 +119,11 @@ namespace Physara::RHI::OpenGL
     struct UploadSlice;
     struct SubmissionState;
     class OpenGLCommandList;
+    class OpenGLTexture;
     class UploadResourceLease;
     class OpenGLTimerQuery;
+    class OpenGLEventQuery;
+    struct StagingAccess;
     /// @brief 原生设备状态的唯一 owner, 跨实现文件管理能力, 上传, 提交与删除.
     /// @invariant Active 接受新工作, Faulted 保留未知完成前缀, Draining 仅推进退出, Stopped 后才可最终析构.
     /// @note context 健康与阶段独立, CPU 引用释放不能代替 GPU 完成证明.
@@ -162,6 +167,8 @@ namespace Physara::RHI::OpenGL
         void ReleaseAllocation(std::unique_ptr<NativeDeletion> record, bool published) noexcept;
         /// @brief 只读查询指定格式/target 的能力, 非法或未映射项返回零能力, 不调用 GL.
         [[nodiscard]] const FormatCaps &GetFormatCaps(Format format, TextureDimension dimension) const noexcept;
+        [[nodiscard]] TransferFormatSupport GetTransferFormatSupport(Format format, TextureDimension dimension)
+            const noexcept;
         [[nodiscard]] const DeviceCaps &GetCaps() const noexcept
         {
             return m_Caps;
@@ -224,9 +231,9 @@ namespace Physara::RHI::OpenGL
         /// @brief 创建有界 GPU timestamp 对, 入口或有效 counter 位宽不足/预算耗尽时返回空.
         /// @note 以下查询操作均要求本 Device 的实际实现及 owner/current context, 由既有回调报告失败.
         TimerQueryHandle CreateTimerQuery() override;
-        /// @brief 两点 available 才缓存结果并返回 true; Pending 不等待或读取可能阻塞的数值.
+        /// @brief 本次录制已接受且两个点均 available 才缓存秒值并返回 true. Pending 不等待.
         bool PollTimerQuery(TimerQuery *query) override;
-        /// @brief 取缓存秒值, 完整 Pending 区间允许一次五秒应用层等待, 超时/失败返回 0 并诊断.
+        /// @brief 取缓存秒值. 对已接受的完整区间最多等待五秒, 未接受或超时返回 0 并诊断.
         /// @note 合法计时间隔小于实际 counter 周期; 正常帧先 Poll, true 后 Get, 零秒可以是有效结果.
         float GetTimerQueryTime(TimerQuery *query) override;
         /// @brief 丢弃 Idle/Ready 或已退休 Failed 的结果, 未解析/未退休失败使用保持原状态并拒绝.
@@ -314,6 +321,26 @@ namespace Physara::RHI::OpenGL
         void ReconcileQueries(UploadWorkPacket &packet, bool retired) noexcept;
         /// @brief 只获取已 available 的完整时间戳并缓存秒值, Pending 不触发阻塞结果读取.
         [[nodiscard]] bool ResolveTimer(OpenGLTimerQuery &query);
+        /// @brief 普通存储与 staging 共用目标尺寸和子资源几何检查.
+        [[nodiscard]] bool ValidTextureShape(const TextureDesc &desc) const noexcept;
+        /// @brief 为各逻辑 BC5 mip 分配独立的二维 level 0, 已取得的名字交由同一 Texture 回滚或退休.
+        [[nodiscard]] bool AllocateBC5Levels(OpenGLTexture &texture, GLenum internalFormat);
+        /// @brief 分配一个固定 Map 方向的 PBO 或 staging Buffer, 成功后将对象和字节同时计入删除节点.
+        [[nodiscard]] bool AllocateStaging(NativeDeletion &record, std::size_t bytes, CpuAccessMode mode,
+                                           const char *operation, const char *label);
+        /// @brief 在 owner/current 上借出已解析的字节区间. 有物理包占用时返回空, 完成由提交观察者推进.
+        [[nodiscard]] void *MapStaging(StagingAccess &access, bool &ready, GLuint name, std::size_t offset,
+                                       std::size_t size, CpuAccessMode mode, const char *operation);
+        /// @brief Unmap 的结果. StoreLost 表示驱动已结束映射并报告整份 backing 损坏, 所有层和 mip 的旧内容均失效.
+        enum class StagingUnmapResult : std::uint8_t
+        {
+            Rejected,
+            Unmapped,
+            StoreLost
+        };
+        /// @brief 结束当前借用并更新其就绪标记. StoreLost 表示整个 backing 的数据都失效.
+        [[nodiscard]] StagingUnmapResult UnmapStaging(StagingAccess &access, GLuint name, CpuAccessMode mode,
+                                                      const char *operation);
         /// @brief 分段等待至统一截止点, 只将实际 signaled 视为成功, WAIT_FAILED 锁存停止.
         [[nodiscard]] bool WaitSync(GLsync sync, std::chrono::steady_clock::time_point deadline);
         /// @brief 同时检查 GL 错误和 sync 的实际有效性, 零 fence 不表示完成.
@@ -348,9 +375,12 @@ namespace Physara::RHI::OpenGL
         std::size_t m_AvailableUploadCapacity = 0;
         std::size_t m_UploadHighWater = 0;
         std::size_t m_VolatileCapacity = 0;
+        std::size_t m_StagingCapacity = 0;
+        std::size_t m_StagingObjects = 0;
         std::uint64_t m_DepthWriteEpoch = 0;     ///< owner 已发出的深度附件写入序号, 独立于包和状态缓存.
         std::uint64_t m_TextureBarrierEpoch = 0; ///< 最近一次 GL TextureBarrier 覆盖的设备级写入进度.
         std::size_t m_TimerNames = 0; ///< 实际存活/待删除名字, 只有原生删除或最终失效退出归还.
+        std::atomic<std::size_t> m_EventQueries{0}; ///< CPU 观察者可在 worker 线程最后释放.
         // 每个拥有包 lease 的 wrapper 只贡献一个 Device 根, 不随其跨包 lease 数重复计数.
         unsigned long m_InternallyRetainedWrappers = 0;
         ContextState m_ContextState;
@@ -363,6 +393,7 @@ namespace Physara::RHI::OpenGL
         bool m_WorkFailed = false;
         friend class OpenGLCommandList;
         friend class UploadResourceLease;
+        friend class OpenGLEventQuery;
     };
 
     /// @brief 查询限制和每 target 的格式/样本集合, 再验证必需的 2D 基线.
@@ -393,6 +424,14 @@ namespace Physara::RHI::OpenGL
         std::uint64_t first;
         std::uint64_t end;
         ShaderAccessStamp stamp;
+    };
+
+    /// @brief 同一 staging 存储的 CPU 借用与 GPU 包独占. 所指状态在 retire/Unmap 前一直有效.
+    struct StagingAccess
+    {
+        // 包与 CPU 映射互斥. mapped 指向本次借用的 ready 标志, 原生地址只返回给持有资源的调用方.
+        UploadWorkPacket *packet = nullptr;
+        bool *mapped = nullptr;
     };
 
     /// @brief 不可变 Buffer 存储的 CPU wrapper, 自持描述并强持有 Device, 发布后析构仅交接删除节点.
@@ -439,6 +478,8 @@ namespace Physara::RHI::OpenGL
         std::uint64_t m_LatestRecording = 0;
         std::uint32_t m_LatestVersion = 0;
         std::uint32_t m_NextVersion = 0;
+        StagingAccess m_Staging;
+        bool m_StagingReady = false;
         bool m_Published = false;
         friend class OpenGLDevice;
         friend class OpenGLCommandList;
@@ -481,7 +522,13 @@ namespace Physara::RHI::OpenGL
         std::vector<ShaderAccessStamp> m_ShaderAccess = std::vector<ShaderAccessStamp>(0);
         std::unique_ptr<std::uint64_t[]> m_DepthWrites; ///< 可联合采样的 2D 存储才按 mip 分配深度写入历史.
         std::unique_ptr<NativeDeletion> m_Deletion;
+        // BC5 每个逻辑 mip 使用实际尺寸的 native level 0, 主节点保存逻辑 mip 0.
+        std::unique_ptr<std::unique_ptr<NativeDeletion>[]> m_CompressedLevels;
         bool m_Published = false;
+        [[nodiscard]] GLuint CompressedMipName(std::uint32_t mip) const noexcept
+        {
+            return mip == 0 ? Name() : m_CompressedLevels[mip - 1]->name;
+        }
         friend class OpenGLDevice;
         friend class OpenGLCommandList;
     };

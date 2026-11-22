@@ -86,6 +86,25 @@ namespace Physara::RHI::OpenGL
                                                                 TextureDimension dimension,
                                                                 std::uint32_t &maxLayers) noexcept;
 
+    /// @brief 各传输用途的原生准入, 样本掩码第 n 位表示 n 个样本. 具体命令仍校验描述及范围.
+    /// @note copy 指两个普通纹理间的同格式复制. stagingRead 是从该纹理下载, stagingWrite 是向它上传.
+    struct TransferFormatSupport
+    {
+        std::uint32_t colorClearSamples = 0;
+        std::uint32_t resolveSourceSamples = 0;
+        bool depthStencilClear = false;
+        bool copy = false;
+        bool stagingRead = false;
+        bool stagingWrite = false;
+        bool mipmaps = false;
+        bool resolveDestination = false;
+    };
+
+    /// @brief 查询原生 Device 初始化记录的能力和实际提供的传输入口, 不发出 GL 调用.
+    /// @return 非原生设备或未知格式/目标返回空能力. Resolve 配对同时检查源样本位和单样本目标.
+    [[nodiscard]] TransferFormatSupport QueryTransferFormatSupport(Device *device, Format format,
+                                                                    TextureDimension dimension) noexcept;
+
     /// @brief 新包上传的容量预检结果. Pending 表示等待物理录制包槽或映射容量释放后可重试.
     enum class UploadAdmission : std::uint8_t
     {

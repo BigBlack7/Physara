@@ -3,6 +3,8 @@ add_library(PhysaraRHI STATIC
     Common/Misc.hpp
     Common/Misc.cpp
     Common/FormatInfo.cpp
+    # 传输描述的静态规则供 Validation 和 OpenGL 共用, 这个头只依赖公共 RHI 类型.
+    Common/Transfer.hpp
     Common/Utils.cpp
     Common/StateTracking.hpp
     Common/StateTracking.cpp

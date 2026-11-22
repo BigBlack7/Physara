@@ -1,7 +1,7 @@
 #include "Backend.hpp"
 
 /// @file
-/// @brief 创建设备拥有的普通或 volatile Buffer. 公开描述保存逻辑容量, 多版本常量另分配对齐的映射存储.
+/// @brief 创建普通 GPU Buffer, 固定 CPU 方向的 staging 或多版本常量. 公开描述保留调用方的逻辑容量.
 
 #include <cstdio>
 #include <limits>
@@ -9,6 +9,8 @@
 #include <new>
 #include <numeric>
 #include <utility>
+
+#include "../Common/Transfer.hpp"
 #include "Upload.hpp"
 
 namespace Physara::RHI::OpenGL
@@ -44,7 +46,8 @@ namespace Physara::RHI::OpenGL
             Report("CreateBuffer", "InvalidArgument: size, layout or initial state", desc.debugName.c_str());
             return nullptr;
         }
-        if (desc.cpuAccess != CpuAccessMode::None || desc.isVirtual || desc.canHaveTypedViews ||
+        if ((desc.cpuAccess != CpuAccessMode::None && !Transfer::DedicatedBuffer(desc)) ||
+            desc.isVirtual || desc.canHaveTypedViews ||
             desc.format != Format::UNKNOWN || desc.sharedResourceFlags != SharedResourceFlags::None ||
             desc.isAccelStructBuildInput || desc.isAccelStructStorage || desc.isShaderBindingTable)
         {
@@ -93,6 +96,17 @@ namespace Physara::RHI::OpenGL
         {
             // 字符串副本/删除节点的分配必须先于原生 name. wrapper 发布前的任何返回都会清理本次取得的对象.
             auto buffer = std::make_unique<OpenGLBuffer>(this, desc);
+            if (desc.cpuAccess != CpuAccessMode::None)
+            {
+                // 专用 staging 使用按需 Map 的单份存储, 与 Texture staging 共用设备额度.
+                if (!AllocateStaging(*buffer->m_Deletion, storageBytes, desc.cpuAccess, "CreateBuffer",
+                                     desc.debugName.c_str()))
+                {
+                    return nullptr;
+                }
+                buffer->Publish();
+                return BufferHandle::Create(buffer.release());
+            }
             if (desc.isVolatile)
             {
                 buffer->m_Versions.resize(desc.maxVersions);

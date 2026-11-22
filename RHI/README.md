@@ -11,21 +11,21 @@ OpenGL.hpp 是不包含 GL/GLFW 类型的后端互操作入口. PhysaraRHIOpenGL
 | 当前入口 | 支持和边界 |
 |---|---|
 | Device | 68 项 override 保留; 仅 ConstantBufferRanges 随实际 BindingSet 范围消费返回 true, 其它 Feature 为 false/output 不变, 格式 flags 只说明已实现用途. clip 为 upper-left/zero-to-one, 有限离屏直接绘制不代表稳定图像/呈现阶段出口 |
-| Buffer | 普通 immutable storage 保留 raw/structured、vertex/index/constant 和 indirect 参数用途. 普通 structured Buffer 可显式提供 UAV, 并与兼容的 indexed indirect 参数角色共用存储. volatile 常量使用有界 coherent backing, `GetDesc` 返回逻辑大小和版本数. 列表支持普通 byte copy 与受检区间写, volatile 从 offset 0 写有效前缀. 公共 Map/readback、UInt clear 及 typed/virtual/shared/RT profile 仍拒绝 |
-| Texture | 17 项格式映射与 9 种 target 按合法组合、每 target 实际用途/limits/样本集合的交集创建. 公共格式 flags 表示 2D 基线, 包括按驱动实际查询公布的 ReadOnlyDepthSampling. 受检的单样本 2D/2DArray 颜色 storage image 按实际格式查询 load/store. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata |
+| Buffer | 普通 immutable storage 保留 raw/structured、vertex/index/constant 和 indirect 参数用途. 普通 structured Buffer 可提供 UAV, 与兼容的 indexed indirect 参数角色共用存储, 并支持四字节对齐的全 Buffer UInt clear. volatile 常量使用有界 coherent backing, `GetDesc` 返回逻辑大小和版本数. 专用 Read/Write Buffer 通过 Map/Unmap 与 `CopyBuffer` 交接数据 |
+| Texture | 按实际 target、format、usage、limits 和样本集合创建. 公共格式 flags 表示 2D 基线, ReadOnlyDepthSampling 及 2D/2DArray storage image 方向来自驱动查询. 非 MS 应用合法 component mapping, initial state/clear 仅存 metadata. 二维 `BC5_UNORM` 提供压缩存储与 staging |
 | Sampler | 独立 filter/address/border/bias/anisotropy; finite 和实际范围预检, Comparison 使用固定 Vulkan 来源的 LESS, Minimum/Maximum 拒绝 |
-| Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. 当前执行仅单样本; 3D/layered/空/shading-rate/只读颜色拒绝, 只读深度在图形组合时拒绝潜在写入 |
+| Framebuffer | 单 mip/单层或 cube face, color/depth/组合及实际 MS; 完整附件集先预检, typeless 解释还需实际 view class 兼容, COMPLETE 后发布. 必要 view 用 glGenTextures -> glTextureView, 不缓存. Draw 为单样本, 部分 MS 颜色附件可 clear/resolve. 只读深度在图形组合时拒绝潜在写入 |
 | Shader | 自持 canonical Vulkan SPIR-V 1.3、main 入口和活动反射, 支持基线 VS/FS 和固定 local size 的单 CS, 创建阶段保留 canonical 字节码及反射. 原始输入存储可在返回后释放 |
 | BindingLayout/Set | 常规逻辑布局保留 set/b/t/s/u, 支持顺序和 descriptor-set 策略. Set 强持有布局/资源并预解析普通及 volatile UBO、push 声明、只读定长 record SSBO、浮点二维视图、同格式深度采样视图及完整六面的颜色 cube 视图. Draw 消费独立 Sampler 并核对活动 IR 和视图维度, cube 线性采样按真实目标能力准备并支持跨面过滤. 整数格式可按实际能力用于存储、附件及传输. Compute set 支持定长 structured UAV 与同格式单 mip image, 按实际 Buffer 字节或 Texture 层范围绑定. descriptor 数组、typed/raw 绑定及图形 UAV 拒绝 |
 | InputLayout/GraphicsPipeline | 有限 core 顶点格式和属性展开, 单样本普通图形准备. Pipeline 按跨 stage 活动 IR 紧凑分配 UBO/SSBO/pair 单元, 核对 per-stage/combined limits, lowering 为 GLSL 460 并真实 link. 同纹理不同 sampler 占不同 pair, texture-only fetch 使用设备自有 nearest/clamp sampler; 兼容性沿 FramebufferInfo 全部字段, 不含附件身份/尺寸 |
 | ComputePipeline | 单 CS 与兼容布局经同一 GLSL 460 lowering 及真实链接. UBO、SSBO、image 和组合采样密集映射到各自命名空间, 预检实际 local size、活动资源量和设备限制 |
-| CommandList | 61 项 override 完整. Graphics/immediate 支持上传、完整二维选层 typed clear、普通 Buffer/同格式单样本二维 copy、单 viewport/scissor 图形状态、直接 Draw/DrawIndexed/实例、固定数量 indexed indirect/MDI 和直接 Dispatch. 活动 volatile 常量使用本 recording 最近的有效区间, push 由有效状态设置后的 `SetPushConstants` 写入. 其他未交付命令按原有入口报告 Unsupported |
-| 即时录制互操作 | ImmediateGraphics.hpp 的 GraphRecording 借用经 Validation 和后端确认的当前录制, 负责状态准备和提交. GraphManaged 按用途、读写方向、字节区间及纹理分量核对授权. Automatic 由实际 RHI 操作推导用途, Explicit 由调用方登记并提交. 三种路径共用 tracker 与后端发射 |
+| CommandList | Graphics/immediate 支持上传、选层 typed clear、普通及 staging copy、等尺寸颜色 resolve、单 viewport/scissor、直接 Draw/DrawIndexed/实例、固定数量 indexed indirect/MDI 和直接 Dispatch. 活动 volatile 常量使用本 recording 最近的有效区间, push 由有效状态设置后的 `SetPushConstants` 写入 |
+| 即时录制互操作 | `ImmediateGraphics.hpp` 提供 `GenerateMipmaps` 和 `GraphRecording`. Mip 生成使用 Automatic 或 Explicit. GraphManaged 按用途、读写方向、字节区间及纹理分量核对授权. 三种路径共用 tracker 与后端发射 |
 | 附件分量 | RHI.hpp 的 FramebufferAttachment 增加可选 aspects, 默认使用视图格式的全部分量. OpenGL 按选中分量挂载 packed depth/stencil, 预检 FBO 完整性及 Pipeline 需要的分量 |
 | 提交/完成 | Execute 整批预检, 非空成功才发布真实 fence/flush 票据, 按即时录制时已经发出的上传、clear/copy、Draw、Dispatch 或时间戳建立完成记录. GC 零超时轮询, WaitForIdle 显式 5 秒期限. CPU Release 与 GPU 完成分开, 图形/计时依赖沿同一包保活, orphan 由 owner 建内部 fence 退休 |
-| Event/Timer | Event 捕获最后已接受的 Graphics ID, Poll 不阻塞, Wait 只等待该前缀, 单次 5 秒期限. Timer 使用可重叠的 timestamp 对, available 后读取完整 GPU 数值并转换为秒; 显式 Get 可冷路径有界等待, Ready 不退休整个提交包 |
+| Event/Timer | Event 捕获最后已接受的 Graphics ID, Poll 不阻塞, Wait 只等待该前缀, 单次 5 秒期限. Timer 使用可重叠的 timestamp 对, 录制被接受且双 available 后读取 GPU 秒数. 显式 Get 可在接受后有限等待, 包退休仍由提交完成权威处理 |
 | 窗口末端复制 | OpenGL.hpp 的 PrepareWindowPresentation 消费同设备闭合 Graphics 包及单层单 mip 单样本 SRGBA8 FBO, 核对 ShaderResource 出口. 源 FBO/附件先登记到原包, 同尺寸复制至默认后缓冲, 按实测编码控制 sRGB 并在此处适配行序. 后续 Execute 才插 fence/flush, 窗口交换由 Platform 拥有 |
-| 其余 Device 操作 | indirect Dispatch、专用 Compute/Copy 队列、Shader library/specialization、bindless、公共 staging/map/readback 和其它 query/extensions 明确 Unsupported, 不读取无关 payload、不制造对象/票据. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
+| 其余 Device 操作 | indirect Dispatch、专用 Compute/Copy 队列、Shader library/specialization、bindless 和额外 query/extensions 报告 Unsupported. 空 Execute 为 0, 引用型 crash helper 报告后 logic_error |
 
 GetNativeObject/GetNativeView 不新增 GL 公共标识且对未支持导出返回空. Backend.hpp/CommandList.hpp 中的声明形状来自同一公共合同并保留 MIT 通知, GL 算法为本项目实现. Sampler LESS 的参考为固定 src/vulkan/vulkan-texture.cpp 的 compareOp=eLess, 未将 Vulkan 原生实现加入链接. 上传与完成的具体方法/证据见 [上传 change](../openspec/changes/archive/2026-10-28-establish-opengl-resource-uploads/design.md), 不从分配 flags 推导 Shader/Draw 或完整 readback 能力.
 
@@ -39,11 +39,17 @@ GL 4.6 Core 8.5 不允许 TEXTURE_3D 的深度/模板存储. 自有 `Formats.cpp
 
 staging 大写、PBO 与图形 push 共享 64 MiB 映射预算, 至多保留 64 个完成区段. 同容量的空闲 chunk 可重借, 受压时回收不匹配的空闲容量. volatile backing 按 UBO 与映射对齐计入独立的 16 MiB 预算. 版本与 chunk 由物理录制包持有, 仅在实际退休后复用. push 的 canonical 块由公开 `CreateShader` 接入 Graphics/Compute 计划, 按反射匹配大小、布局和可见性, 占用与普通/volatile UBO 独立的位置. `ComputeBaselineV1` 包通过生成接口提供普通常量及存储绑定. [上传与动态常量合同](../Docs/Architecture.md#uploads)
 
-ContextState 统一拥有 unpack、Program/FBO、ranges、image 单元、采样对、VAO 输入及普通固定/动态状态缓存, 只有一个辅助 VAO 和完整子资源 clear FBO. 逻辑 Graphics/Compute 状态与 Common 用途 tracker 另由同一物理包拥有; 外部原生互操作后在 recording 中 ClearState 并重新设置图形状态, 已发工作和引用仍保留. Automatic 在每次实际消费建立用途; 显式模式由调用方请求并 Commit. Close 恢复 keepInitialState. 实际命令按重叠底层范围和后继域发射需要的 GL barrier. 采样、indirect、复制等分别取得 Shader 写的可见性, 后继 SSBO/image 写同时保持先前访问的顺序. 原生状态命中与切换列表都沿用实际访问历史. 只有 fence/flush 接受后才发布 tracker metadata, 不表示 texel 初始化或 GPU 完成.
+ContextState 统一拥有 pack/unpack、Program/FBO、ranges、image 单元、采样对、VAO 输入及固定/动态状态缓存, 共用一个辅助 VAO 与传输读写 FBO. 逻辑 Graphics/Compute 状态与 Common 用途 tracker 由同一物理包拥有. 外部原生互操作后在 recording 中 ClearState 并重新设置图形状态. Automatic 在每次实际消费建立用途, Explicit 由调用方请求并 Commit, Close 恢复 keepInitialState. 采样、indirect 和传输按实际范围与消费域取得 Shader 写的可见性, 后继 SSBO/image 写保持先前访问的顺序. fence/flush 接受后发布 tracker metadata, GPU 完成另行观察.
 
 GL 的有效 Graphics/Compute 快照与本次执行范围检查统一由 owning recording 保存/消费; Validation 不把 void 设置委托当作候选生效, 其他 API 保留上游快照规则. 基线没有第二颜色输出, 准备阶段拒绝活动双源 blend 因子; inactive 因子按关闭 blend、附件类型/分量、Min/Max 和写 mask 判定, 原生使用无害值. 缓存包含颜色格式, 切换附件格式时重新应用实际使用的通路. 只读深度拒绝测试和写入均启用的组合, 不因关闭测试时未使用的 write flag 拒绝合法颜色 Pass; stencil 写入仍检查.
 
-完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, 不改变 clip origin; depth-only/stencil-only 保留另一 aspect. copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序只在后端适配, viewport/scissor 不额外翻转; Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. 固定数量 indirect 读取紧排的 20 字节参数, 索引绑定偏移须为 0. staging/resolve、1D/3D clear/copy、Buffer UInt clear、MSAA 执行、多 viewport、非索引 indirect、indirect count 和间接 Dispatch 明确拒绝.
+完整二维 clear 逐 mip/layer 使用 typed FBO 路径, 关闭残留 scissor 并恢复完整 mask, depth-only/stencil-only 保留另一 aspect. Copy 保留 byte/texel、编码及逻辑 row 0, 拒绝越界/重叠和格式转换. 图形消费依当前 Pipeline 的活动计划绑定 UBO/SSBO ranges 与跨集合采样对, 支持整数/归一化属性、R16/R32 索引及实例偏移. 公共目标空间绕序在后端适配, viewport/scissor 沿用目标逻辑坐标. Reverse-Z 由调用方 clear/深度/比较共同选择. sRGB 目标写入编码一次、采样解码一次. 固定数量 indirect 读取紧排的 20 字节参数, 索引绑定偏移须为 0.
+
+`QueryTransferFormatSupport` 在 raw Device 上分别返回实际 clear 样本掩码、copy、staging 读写、mip、resolve 源样本及目标资格. 普通色 mip 支持可过滤并可挂载为颜色附件的 RGBA8_UNORM、SRGBA8_UNORM、RGBA16_FLOAT, 逐选层/面进行线性颜色 blit. Resolve 支持等尺寸同格式 RGBA8_UNORM 或 RGBA16_FLOAT 的 2DMS 到 2D 及 2DMSArray 到 2DArray, 源实际样本掩码的第 n 位表示 n 个样本. 这些能力独立于 MSAA Draw.
+
+Texture staging 的单样本颜色格式为 R8_UNORM、R32_UINT、RGBA8_UNORM、SRGBA8_UNORM、RGBA16_FLOAT, 覆盖 2D、2DArray、Cube、CubeArray 的数组层或展平面. 二维 BC5_UNORM 以实际块行复制完整 mip, 普通 BC5 Texture 使用传输专用描述, 设置 `isShaderResource=false`. 每个逻辑 mip 由同一 wrapper 内对应的原生 level 0 保存, 避免本机驱动非零级别压缩尾块下载的重复行. 普通格式逐行四字节对齐, Map 只在成功时返回当前 mip/layer 起点和真实 pitch. Write 先 Map 填入实际源范围并 Unmap, Read 先复制、Close/Execute、捕获 Event, 再于后续 Poll 完成时 Map. 调用方只读取自己已定义的字节/texel, 持有句柄直至 Unmap. 同一 backing 的 CPU 映射与物理包使用互斥. GraphManaged Texture 复制核对 CopySource/CopyDest 宣告范围, 图尾 Buffer 读回导出由调用方在 Automatic 下接续复制. 失败图和未接受的孤包不会发表该次读回数据.
+
+设备的公开 staging 额度为 128 MiB 和 128 个存储对象. 未退休的 lease 和待原生删除的分配仍计入额度, 耗尽返回诊断. 释放观察者或取消请求后, 已发工作继续由原录制包持有. GraphManaged 读回在图执行和录制归还都成功时取得发布资格. Unmap 报告存储损坏时, 同一 PBO 的全部旧内容失效. 成功重写或完成新复制只重新定义相应子资源. [传输合同](../Docs/Architecture.md#readbacks)
 
 Compute storage 候选为 R32_FLOAT/R32_UINT/RGBA8_UNORM/RGBA16_FLOAT, 维度为单样本 Texture2D/Texture2DArray. `image2D` 可选择 2DArray 的单层, `image2DArray` 选择一个 mip 的连续层. 实际 image load/store 按设备、目标、原存储与视图格式以及活动 IR 方向核对. 整数 storage image 的原纹理与独立 view 都设置 nearest 过滤, 满足 image 单元的纹理完整性. GL 4.6 同步映射见 [访问同步合同](../Docs/Architecture.md#barriers).
 
@@ -51,7 +57,7 @@ Compute storage 候选为 R32_FLOAT/R32_UINT/RGBA8_UNORM/RGBA16_FLOAT, 维度为
 
 Event 新建/Reset 的零快照 Poll 为 true、Wait 无工作返回, 只表示未捕获待等待提交, 不证明未提交即时前缀完成. 非零快照重新 Set 前先 Reset; Reset 可丢弃 Pending 观察, 不取消提交或撤销其引用. Timer Begin/End 必须在同一 recording, 同 query 同 recording 不重复使用. 未配对 Close 拒绝正常提交, 失败/放弃点仍保留到原包退休, 之后才可 Reset. 已解析结果保持稳定, 显式 Reset 或下一次合法 recording Begin 才消费旧结果; Pending 使用不得覆盖.
 
-计时存储预算为每 Device 512 个实际名字/256 对, 包引用和待删除名字仍占容量, owner 实际删除或最终失效退出才归还. 64 位读取不代表硬件必有 64 个有效位: 创建时核对实际 counter bits, 时间差按其模周期解释, 合法区间小于该设备 counter 的一个周期, 不支持零有效位计时. 正常帧先 Poll 后 Get, Pending 不是 0 ms; Get 到期通过诊断区分失败占位 0 和合法零测量, 不把 timeout 当 device lost. 客户端取值由唯一 ContextState 解绑 query buffer, 互操作后仍须沿 ClearState 失效合同重新建立状态.
+每 Device 最多 256 个 CPU Event 观察者, 最后 Release 归还对象额度. 计时存储预算为 512 个实际名字/256 对, 包引用和待删除名字仍占容量, owner 实际删除或最终失效退出才归还. 时间差依实际 counter bits 的模周期计算, 合法区间小于该周期. 正常帧先 Poll 后 Get, Poll 为 true 后的 0 秒也可能是有效测量. 已接受区间的显式 Get 到期有诊断. 客户端取值由唯一 ContextState 解绑 query buffer.
 
 ContextAccess 的 user/isCurrent 和 MessageCallback 借用到所有 Device CPU 引用结束; 直接工厂调用方保留根 owner, 收拢资源和额外引用后在 owner 线程 ShutdownDevice. CPU final Release 只转移创建时预留的删除记录, 真正 glDelete 由 owning/current 线程收集. Normal 与 ContextUnavailable 明确区分当前 context 删除和外部 owner 随后销毁不可用 context 的退出; 后者不发布 GPU 完成. 普通缺少 current 不自动切换模式.
 
@@ -130,7 +136,7 @@ D02-T02 的当前有限差异及前提:
 - 初始 OpenGL 策略在 Device/CommandList 共同的私有 profile 中判定, 无第二份 caps/cache. 27 个 Feature 仅 ConstantBufferRanges 可委托底层, 其余 false 且不改 output; 已知格式仅转发实际 flags, UNKNOWN 无支持. Graphics/immediate 以外、heap/virtual/sparse、bindless、RT/Mesh/feedback/CoopVec 及专属 Shader/raster/VRS/共享资源扩展拒绝. 当前仅有 D3D/Vulkan 原生对象标识, 对应 native-handle imports 拒绝. ShaderLibrary 可提取普通及扩展阶段, 来源 Validation 不包装其 GetShader; 初始 GL 关闭这一未受检入口, 普通 Shader 通过受检的 CreateShader, 库能力随真实消费者接入并验收. 创建/查询/mutation/void 及复用现有 pipeline/bindings 的状态入口共同检查, 不先读取专有 payload. IsAftermathEnabled=false, 引用 getter 报告后抛 logic_error. 现有 D3D11 忽略 registerSpace、Vulkan 要求 descriptor-set 标记等分支保留, GL 的 logical spaces 不被合并.
 - 经维护者确认, 修正固定源 validation-device.cpp:309 的 sampler-feedback native-handle 工厂自递归, 仅在来源允许的 D3D12 分支改为底层一次委托并保留 handle/失败结果; GL 的 Unsupported 拒绝不变. CPU recording double 的调用/参数/空结果回归验证此局部差异, 不声称原生 D3D12 支持.
 - Release 输入检查先于解析/转换/委托. 共用私有 Input 规则集中 Texture/Buffer 的维度、mip、格式、flags、范围与状态条件, 创建和命令消费同一事实; 绑定 validator 在创建和复用已有集合时共享, 不新增可变 registry/caps cache. Resource* 的 Texture/Buffer/Sampler/反馈/AS 类型检查在所有配置使用 dynamic_cast. 只读取 type 对应的 union 载荷, 校验 view、arrayElement、slot/type/layout 与 push constant size. 合法请求保留一次委托, 参数错误、缺少格式能力分别为 InvalidArgument/Unsupported, 一个失败操作只报告一次.
-- buffer/heap 显式区间以 size<=capacity-offset 检查, 不用加法或 clamp 掩盖 copy/write 越界. Texture slice 先证明 mip<32 与范围, 写入按 block/row/depth pitch 检查最小可表示 footprint. Framebuffer 多附件检查 mip 尺寸、层级、sampleCount/quality, 状态检查 vertex/index/indirect range、固定枚举、viewport/scissor 和绑定对应. 公共数据不能表达全部 native limits、每格式样本集合、staging CPU access/mapped 状态或资源 Device. T03 已原生验证基础分配的 limits、样本集合与 Device 归属, T04 验证普通 Buffer/初始颜色上传及实际完成; 公共 staging/mapped 与完整读回仍归后续验收. 不臆造 QueryLimits、owner getter 或全局地址表.
+- buffer/heap 显式区间以 size<=capacity-offset 检查. Texture slice 先证明 mip<32 与范围, 按 block/row/depth pitch 检查最小可表示 footprint. Framebuffer 多附件检查 mip 尺寸、层级、sampleCount/quality, 状态检查 vertex/index/indirect range、固定枚举、viewport/scissor 和绑定对应. Validation 检查公共 staging 描述、方向和精确区域. 实际 Device 归属、样本集合、映射借用及录制完成由后端确认.
 - 外部值进入 builder 的窄字段前仍须检查, 本层无法恢复已截断的原值. Utils 自动 layout 生成保留来源的每槽单元素前提, 数组由调用者提供现有匹配 layout. Vertex attribute 不臆造设备 stride/offset 上限, 允许可表示的零步长和较大相对偏移; viewport 深度端点分别受 [0,1] 限制, 不额外禁止反向范围. 资源描述与参数均须先初始化, 例如值初始化 GraphicsState, 再填充实际使用字段.
 - 列表批次先检查数量/包装身份/queue/Closed/重复项并准备全部暂存, 再统一消耗状态并委托一次. 拒绝或自身预检分配失败保留全部 Closed, 后项失败不消耗前项; 委托后的 0/异常不恢复重放. MSVC Debug 的容器构造也纳入分配失败边界, 空 batch 按来源直接返回 0. immediate claim 以原子 CAS 获取, 关闭/析构只释放一次; 底层列表先于父包装释放, 不补执行. BitSetAllocator 的容量检查放在 vector 成员的构造参数求值中, 先于其 Debug bookkeeping/数据存储; 私有数组比较使用 size_t 遍历, 不截断逻辑序列长度.
 

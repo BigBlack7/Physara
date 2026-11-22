@@ -66,9 +66,11 @@
 
 **职责位置：** RHI/OpenGL Transfer/Queries。**前置：** [D08-T02](#d08-t02)、[D08-T04](#d08-t04)。**架构依据：** [7.6](../Architecture.md#command-execution)、[11.3](../Architecture.md#readbacks)、[7.7](../Architecture.md#capabilities)。
 
-- [ ] 完善 clear/copy、mip 生成、基础支持格式的 resolve、Buffer/Texture staging 与真实 row pitch，覆盖数组/cube/mip/range。
-- [ ] 实现 EventQuery 捕获提交与可轮转 TimerQuery，提供 available/pending 结果及有界查询容量，正常帧不阻塞获取。
-- [ ] 验证 transfer 与 graphics/compute 混合顺序、不同消费域、读回格式/行对齐、取消和在途退出，更新真实格式/样本能力。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-22-complete-opengl-transfer-queries/tasks.md#final-verification)
+
+- [x] 完善 clear/copy、mip 生成、基础支持格式的 resolve、Buffer/Texture staging 与真实 row pitch，覆盖数组/cube/mip/range。
+- [x] 实现 EventQuery 捕获提交与可轮转 TimerQuery，提供 available/pending 结果及有界查询容量，正常帧不阻塞获取。
+- [x] 验证 transfer 与 graphics/compute 混合顺序、不同消费域、读回格式/行对齐、取消和在途退出，更新真实格式/样本能力。
 
 **完成条件：** 后续拾取/截图/计时复用正式传输查询链，未完成数据不能提前 map 或报告成功。
 

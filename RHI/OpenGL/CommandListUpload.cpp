@@ -23,6 +23,11 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
+        if (native->m_Desc.cpuAccess != CpuAccessMode::None)
+        {
+            m_Device->Report("WriteBuffer", "InvalidArgument: fill Write staging by MapBuffer and UnmapBuffer");
+            return;
+        }
         if (offset > native->m_Desc.byteSize || size > native->m_Desc.byteSize - offset ||
             offset > std::uint64_t(std::numeric_limits<GLintptr>::max()) ||
             size > std::size_t(std::numeric_limits<GLsizeiptr>::max()) || (size != 0 && data == nullptr))
@@ -262,6 +267,7 @@ namespace Physara::RHI::OpenGL
             packet->invalid = true;
             return;
         }
+        // 普通上传已经逐行紧排. 前一次 staging 上传可能留下较宽的行长与四字节对齐.
         m_Device->m_ContextState.ApplyUnpack(source.buffer);
         if (!m_Device->CheckNative("WriteTexture.Unpack", source.buffer))
         {

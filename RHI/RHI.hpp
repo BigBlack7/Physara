@@ -5185,15 +5185,17 @@ namespace Physara::RHI
         // they must be equal, and for reinterpret copies between compressed and uncompressed textures, they must differ
         // by a factor equal to the block size. The function does not resize textures, only 1:1 pixel copies are
         // supported.
-        /// @note OpenGL 当前只接受同 format, 单样本二维选层的 1:1 copy, 拒绝越界/重叠及 staging/resolve.
+        /// @note OpenGL 接受支持的同 format, 单样本二维选层 1:1 copy, 拒绝越界或同一存储的重叠区域.
         virtual void CopyTexture(Texture *dest, const TextureSlice &destSlice, Texture *src,
                                  const TextureSlice &srcSlice) = 0;
 
         // Copies a single 2D or 3D region of texture data from regular texture 'src' into staging texture 'dst'.
+        /// @note OpenGL 目标须为 Read staging; 只有接受此复制的提交真实完成后才能映射该选层.
         virtual void CopyTexture(StagingTexture *dest, const TextureSlice &destSlice, Texture *src,
                                  const TextureSlice &srcSlice) = 0;
 
         // Copies a single 2D or 3D region of texture data from staging texture 'src' into regular texture 'dst'.
+        /// @note OpenGL 源须为已成功 Unmap 的 Write staging. 复制保持实际格式, 行序及所选矩形.
         virtual void CopyTexture(Texture *dest, const TextureSlice &destSlice, StagingTexture *src,
                                  const TextureSlice &srcSlice) = 0;
 
@@ -5214,6 +5216,7 @@ namespace Physara::RHI
         // into matching subresources of a non-multisample texture 'dest'. Both textures' formats must be of color type.
         // - DX11/12: Maps to a sequence of ResolveSubresource calls, one per subresource.
         // - Vulkan: Maps to a single vkCmdResolveImage call.
+        /// @note OpenGL 源和目标为设备支持的同格式等尺寸颜色附件, 选中单 mip 以及对应层数.
         virtual void ResolveTexture(Texture *dest, const TextureSubresourceSet &dstSubresources, Texture *src,
                                     const TextureSubresourceSet &srcSubresources) = 0;
 
@@ -5240,6 +5243,7 @@ namespace Physara::RHI
         // Fills the entire buffer using the provided uint32 value.
         // - DX11/12: Maps to ClearUnorderedAccessViewUint.
         // - Vulkan: Maps to vkCmdFillBuffer.
+        /// @note OpenGL 对带 UAV 用途且容量为四字节倍数的普通 Buffer 清除全范围.
         virtual void ClearBufferUInt(Buffer *b, uint32_t clearValue) = 0;
 
         // Copies 'dataSizeBytes' of data from buffer 'src' at offset 'srcOffsetBytes' into buffer 'dest' at offset
@@ -5247,6 +5251,8 @@ namespace Physara::RHI
         // - DX11: Maps to CopySubresourceRegion.
         // - DX12: Maps to CopyBufferRegion.
         // - Vulkan: Maps to vkCmdCopyBuffer.
+        /// @note OpenGL 可将普通 Buffer 复制到 Read staging, 或从已 Unmap 的 Write staging 复制到普通 Buffer.
+        /// 调用方用偏移与长度记录本次定义的字节范围, MapBuffer 成功后返回整份存储的起点.
         virtual void CopyBuffer(Buffer *dest, uint64_t destOffsetBytes, Buffer *src, uint64_t srcOffsetBytes,
                                 uint64_t dataSizeBytes) = 0;
 
@@ -5659,7 +5665,10 @@ namespace Physara::RHI
         virtual TextureHandle CreateHandleForNativeTexture(ObjectType objectType, Object texture,
                                                            const TextureDesc &desc) = 0;
 
+        /// @brief OpenGL 按固定的 CPU Read 或 Write 方向创建 staging. 各 mip 和数组层共用一个缓冲区.
         virtual StagingTextureHandle CreateStagingTexture(const TextureDesc &d, CpuAccessMode cpuAccess) = 0;
+        /// @brief OpenGL 映射一个完整 mip/layer 的起点. 成功才写实际像素行或压缩块行的字节跨度.
+        /// @note 保持句柄到 Unmap. Read 调用方先观察实际复制提交完成. 未就绪返回空, 不等待 GPU.
         virtual void *MapStagingTexture(StagingTexture *tex, const TextureSlice &slice, CpuAccessMode cpuAccess,
                                         size_t *outRowPitch) = 0;
         virtual void UnmapStagingTexture(StagingTexture *tex) = 0;
@@ -5677,6 +5686,8 @@ namespace Physara::RHI
                                                                                    Texture *pairedTexture) = 0;
 
         virtual BufferHandle CreateBuffer(const BufferDesc &d) = 0;
+        /// @brief OpenGL 映射专用 staging Buffer. 成功借到整 Buffer 起点, 消费范围由调用方实际复制或写入确定.
+        /// @note 未完成的 GPU 使用或不匹配的访问方向返回空, 调用方保持句柄直到 Unmap.
         virtual void *MapBuffer(Buffer *buffer, CpuAccessMode cpuAccess) = 0;
         virtual void UnmapBuffer(Buffer *buffer) = 0;
         virtual MemoryRequirements GetBufferMemoryRequirements(Buffer *buffer) = 0;
@@ -5705,6 +5716,7 @@ namespace Physara::RHI
 
         // Timer queries - see also begin/endTimerQuery in ICommandList
         virtual TimerQueryHandle CreateTimerQuery() = 0;
+        /// @note OpenGL 仅在录制已接受且两个时间点均 available 后提供有效结果; 正常帧先 Poll 再 Get.
         virtual bool PollTimerQuery(TimerQuery *query) = 0;
         // returns time in seconds
         virtual float GetTimerQueryTime(TimerQuery *query) = 0;

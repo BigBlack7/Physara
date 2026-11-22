@@ -1,7 +1,7 @@
 #include "CommandList.hpp"
 
 /// @file
-/// @brief 完整二维子资源 typed clear 与精确区间 copy, 先预检/保活/建立用途再发出内容操作.
+/// @brief 实现 typed clear, 普通资源复制和两类颜色 blit. 普通复制保留存储编码, mip 生成和 resolve 各按附件操作.
 
 #include <algorithm>
 #include <array>
@@ -9,33 +9,16 @@
 #include <cmath>
 #include <limits>
 
+#include "../Common/Transfer.hpp"
+#include "Staging.hpp"
+
 namespace Physara::RHI::OpenGL
 {
-    /// @brief 当前二维传输 profile 包含普通二维 storage 与数组/cube 的单层, 不扩展 3D/MS 支持.
-    static bool Planar(const TextureDesc &desc) noexcept
-    {
-        return desc.sampleCount == 1 &&
-               (desc.dimension == TextureDimension::Texture2D || desc.dimension == TextureDimension::Texture2DArray ||
-                desc.dimension == TextureDimension::TextureCube ||
-                desc.dimension == TextureDimension::TextureCubeArray);
-    }
-
     bool OpenGLCommandList::TransferRange(OpenGLTexture &texture, TextureSubresourceSet requested,
                                           TextureSubresourceSet &resolved, const char *operation)
     {
         const auto &desc = texture.GetDesc();
-        if (!Planar(desc))
-        {
-            m_Device->Report(operation, "Unsupported: single-sample 2D subresource required");
-            return false;
-        }
-        const auto layers = desc.arraySize;
-        if (requested.baseMipLevel >= desc.mipLevels || requested.baseArraySlice >= layers ||
-            requested.numMipLevels == 0 || requested.numArraySlices == 0 ||
-            (requested.numMipLevels != TextureSubresourceSet::AllMipLevels &&
-             requested.numMipLevels > desc.mipLevels - requested.baseMipLevel) ||
-            (requested.numArraySlices != TextureSubresourceSet::AllArraySlices &&
-             requested.numArraySlices > layers - requested.baseArraySlice))
+        if (!Transfer::ExactRange(desc, requested))
         {
             m_Device->Report(operation, "InvalidArgument: explicit texture subresource range");
             return false;
@@ -44,8 +27,9 @@ namespace Physara::RHI::OpenGL
         return true;
     }
 
-    /// @brief 清除辅助 FBO 不缓存附件, 每次显式选层并在命令后解除, 避免长期保留 storage.
-    static void AttachClear(GLuint fbo, OpenGLTexture &texture, GLuint mip, GLuint layer, bool depth) noexcept
+    // 为 clear 或 blit 选择单个附件. 只有 blit 源需要可读的颜色附件.
+    static void AttachClear(GLuint fbo, OpenGLTexture &texture, GLuint mip, GLuint layer, bool depth,
+                            bool read = false) noexcept
     {
         glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, 0, 0);
         glNamedFramebufferTexture(fbo, GL_DEPTH_STENCIL_ATTACHMENT, 0, 0);
@@ -53,7 +37,7 @@ namespace Physara::RHI::OpenGL
         const auto point = !depth                                  ? GL_COLOR_ATTACHMENT0
                            : GetFormatInfo(desc.format).hasStencil ? GL_DEPTH_STENCIL_ATTACHMENT
                                                                    : GL_DEPTH_ATTACHMENT;
-        if (desc.dimension == TextureDimension::Texture2D)
+        if (desc.dimension == TextureDimension::Texture2D || desc.dimension == TextureDimension::Texture2DMS)
         {
             glNamedFramebufferTexture(fbo, point, texture.Name(), GLint(mip));
         }
@@ -62,7 +46,7 @@ namespace Physara::RHI::OpenGL
             glNamedFramebufferTextureLayer(fbo, point, texture.Name(), GLint(mip), GLint(layer));
         }
         glNamedFramebufferDrawBuffer(fbo, depth ? GL_NONE : GL_COLOR_ATTACHMENT0);
-        glNamedFramebufferReadBuffer(fbo, GL_NONE);
+        glNamedFramebufferReadBuffer(fbo, read ? GL_COLOR_ATTACHMENT0 : GL_NONE);
     }
 
     // 清除结束立即解除颜色及两个 depth/stencil attachment point, 辅助 FBO 不跨命令拥有纹理.
@@ -99,7 +83,9 @@ namespace Physara::RHI::OpenGL
         }
         const auto &desc = native->GetDesc();
         const auto &format = GetFormatInfo(desc.format);
-        if (!desc.isRenderTarget || format.hasDepth || (format.kind == FormatKind::Integer) != integer)
+        const auto support = m_Device->GetTransferFormatSupport(desc.format, desc.dimension);
+        if (!desc.isRenderTarget || format.hasDepth || !(support.colorClearSamples & (1u << desc.sampleCount)) ||
+            (format.kind == FormatKind::Integer) != integer)
         {
             m_Device->Report(operation, "Unsupported or InvalidArgument: typed render-target clear");
             return;
@@ -179,7 +165,8 @@ namespace Physara::RHI::OpenGL
         }
         const auto &desc = native->GetDesc();
         const auto &format = GetFormatInfo(desc.format);
-        if (!desc.isRenderTarget || !format.hasDepth || (clearStencil && !format.hasStencil) ||
+        if (!desc.isRenderTarget || !m_Device->GetTransferFormatSupport(desc.format, desc.dimension).depthStencilClear ||
+            (clearStencil && !format.hasStencil) ||
             (clearDepth && (!std::isfinite(depth) || depth < 0.f || depth > 1.f)))
         {
             m_Device->Report(Operation, "InvalidArgument: depth/stencil format, aspect or clear value");
@@ -241,6 +228,43 @@ namespace Physara::RHI::OpenGL
                size <= std::uint64_t(std::numeric_limits<GLsizeiptr>::max());
     }
 
+    void OpenGLCommandList::ClearBufferUInt(Buffer *buffer, uint32_t value)
+    {
+        constexpr auto Operation = "ClearBufferUInt";
+        if (!Recording(Operation))
+        {
+            return;
+        }
+        auto *native = BufferFor(buffer, Operation);
+        if (!native)
+        {
+            return;
+        }
+        const auto &desc = native->GetDesc();
+        if (!desc.canHaveUAVs || (desc.byteSize % sizeof(value)) != 0)
+        {
+            m_Device->Report(Operation, "InvalidArgument: clear requires four-byte aligned ordinary UAV storage");
+            return;
+        }
+        if (!Retain(native, native->m_InternalOwners) ||
+            !UseBuffer(*native, ResourceStates::CopyDest, Operation, BufferRange{0, desc.byteSize},
+                       false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT, true) ||
+            !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
+        {
+            return;
+        }
+        m_Packet->issuedWork = true;
+        glClearNamedBufferData(native->Name(), GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &value);
+        if (m_Device->CheckNative(Operation, native->Name()))
+        {
+            RecordNativeAccesses();
+        }
+        else
+        {
+            m_Packet->invalid = true;
+        }
+    }
+
     void OpenGLCommandList::CopyBuffer(Buffer *destination, uint64_t destinationOffset, Buffer *source,
                                        uint64_t sourceOffset, uint64_t size)
     {
@@ -262,6 +286,16 @@ namespace Physara::RHI::OpenGL
             m_Device->Report(Operation, "Unsupported: copying volatile constant buffers");
             return;
         }
+        const auto srcMode = src->GetDesc().cpuAccess;
+        const auto destMode = dest->GetDesc().cpuAccess;
+        const bool fromHost = srcMode == CpuAccessMode::Write;
+        const bool toHost = destMode == CpuAccessMode::Read;
+        if (srcMode == CpuAccessMode::Read || destMode == CpuAccessMode::Write || (fromHost && toHost) ||
+            ((fromHost || toHost) && m_Packet->useMode == UseMode::GraphManaged))
+        {
+            m_Device->Report(Operation, "Unsupported: staging direction or graph buffer endpoint");
+            return;
+        }
         if (!BufferInterval(*dest, destinationOffset, size) || !BufferInterval(*src, sourceOffset, size) ||
             (dest == src && size != 0 && destinationOffset < sourceOffset + size &&
              sourceOffset < destinationOffset + size))
@@ -273,15 +307,26 @@ namespace Physara::RHI::OpenGL
         {
             return;
         }
-        // 两端的精确区间各自核对角色和授权. 同一对象的 tracker 可以同时持有两个复制状态位.
-        if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
-            !UseBuffer(*src, ResourceStates::CopySource, Operation, BufferRange{sourceOffset, size},
-                       false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT) ||
-            !UseBuffer(*dest, ResourceStates::CopyDest, Operation, BufferRange{destinationOffset, size},
-                       false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT, true) ||
+        if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners))
+        {
+            return;
+        }
+        auto *staging = fromHost ? src : toHost ? dest : nullptr;
+        auto *lease = staging ? PrepareStagingUse(staging->m_Staging, staging->m_StagingReady,
+                                                   staging->m_Desc.cpuAccess, Operation) : nullptr;
+        // staging 的专用端点由方向和物理包保护. 普通端点仍走精确 tracker 和实际消费域.
+        if ((staging && !lease) ||
+            (!fromHost && !UseBuffer(*src, ResourceStates::CopySource, Operation, BufferRange{sourceOffset, size},
+                                    false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT)) ||
+            (!toHost && !UseBuffer(*dest, ResourceStates::CopyDest, Operation, BufferRange{destinationOffset, size},
+                                  false, StorageAccess::None, GL_BUFFER_UPDATE_BARRIER_BIT, true)) ||
             !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
         {
             return;
+        }
+        if (lease)
+        {
+            RecordStagingUse(*lease);
         }
         m_Packet->issuedWork = true;
         glCopyNamedBufferSubData(src->Name(), dest->Name(), GLintptr(sourceOffset), GLintptr(destinationOffset),
@@ -294,20 +339,6 @@ namespace Physara::RHI::OpenGL
         {
             m_Packet->invalid = true;
         }
-    }
-
-    /// @brief 先核对 mip/layer 再调用公共 Resolve, 全尺寸哨兵沿公共语义而非隐式剩余大小.
-    static bool ResolveSlice(const TextureDesc &desc, const TextureSlice &input, TextureSlice &out) noexcept
-    {
-        if (!Planar(desc) || input.mipLevel >= desc.mipLevels || input.arraySlice >= desc.arraySize)
-        {
-            return false;
-        }
-        out = input.Resolve(desc);
-        const auto width = std::max(1u, desc.width >> out.mipLevel);
-        const auto height = std::max(1u, desc.height >> out.mipLevel);
-        return out.z == 0 && out.depth == 1 && out.width != 0 && out.height != 0 && out.x <= width &&
-               out.width <= width - out.x && out.y <= height && out.height <= height - out.y;
     }
 
     void OpenGLCommandList::CopyTexture(Texture *destination, const TextureSlice &destinationSlice, Texture *source,
@@ -328,10 +359,11 @@ namespace Physara::RHI::OpenGL
         TextureSlice d, s;
         const auto &dd = dest->GetDesc();
         const auto &sd = src->GetDesc();
-        if (dd.format != sd.format || !ResolveSlice(dd, destinationSlice, d) || !ResolveSlice(sd, sourceSlice, s) ||
+        if (dd.format != sd.format || !m_Device->GetTransferFormatSupport(dd.format, dd.dimension).copy ||
+            !m_Device->GetTransferFormatSupport(sd.format, sd.dimension).copy ||
+            !ResolvePlanarSlice(dd, destinationSlice, d) || !ResolvePlanarSlice(sd, sourceSlice, s) ||
             d.width != s.width || d.height != s.height ||
-            (dest == src && d.mipLevel == s.mipLevel && d.arraySlice == s.arraySlice && d.x < s.x + s.width &&
-             s.x < d.x + d.width && d.y < s.y + s.height && s.y < d.y + d.height))
+            (dest == src && Transfer::PlanarSlicesOverlap(d, s)))
         {
             m_Device->Report(Operation, "Unsupported or InvalidArgument: texture copy profile, region or overlap");
             return;
@@ -339,8 +371,7 @@ namespace Physara::RHI::OpenGL
         // 同格式复制消费实际存储的全部分量, packed 复制需要两端同时提供深度和模板权限.
         const auto aspects = FormatAspects(GetFormatInfo(sd.format));
         // 纹理历史按整个 mip/layer 跟踪. 只复制部分矩形时要保留目标其余像素的 Shader 写入来源.
-        const bool whole = d.x == 0 && d.y == 0 &&
-            d.width == std::max(1u, dd.width >> d.mipLevel) && d.height == std::max(1u, dd.height >> d.mipLevel);
+        const bool whole = Transfer::WholeSlice(dd, d);
         if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
             !UseTexture(*src, {s.mipLevel, 1, s.arraySlice, 1}, aspects, ResourceStates::CopySource, Operation,
                         ResourceStates::Unknown, StorageAccess::None, GL_TEXTURE_UPDATE_BARRIER_BIT) ||
@@ -361,6 +392,153 @@ namespace Physara::RHI::OpenGL
         else
         {
             m_Packet->invalid = true;
+        }
+    }
+
+    // 每次选择实际的单层 attachment. FBO 不跨调用持有纹理, 已发命令由包中的原存储引用保活.
+    bool OpenGLCommandList::BlitColor(OpenGLTexture &dest, std::uint32_t destMip, std::uint32_t destLayer,
+                                     OpenGLTexture &src, std::uint32_t srcMip, std::uint32_t srcLayer,
+                                     GLenum filter, const char *operation, std::uint64_t &epoch)
+    {
+        auto &context = m_Device->m_ContextState;
+        const GLuint readFbo = context.ReadTransferFramebuffer();
+        const GLuint writeFbo = context.ClearFramebuffer();
+        const auto &d = dest.GetDesc();
+        const auto &s = src.GetDesc();
+        AttachClear(readFbo, src, srcMip, srcLayer, false, true);
+        AttachClear(writeFbo, dest, destMip, destLayer, false);
+        m_Packet->issuedWork = true;
+        glBlitNamedFramebuffer(readFbo, writeFbo, 0, 0, GLint(Transfer::MipSize(s.width, srcMip)),
+                               GLint(Transfer::MipSize(s.height, srcMip)), 0, 0,
+                               GLint(Transfer::MipSize(d.width, destMip)), GLint(Transfer::MipSize(d.height, destMip)),
+                               GL_COLOR_BUFFER_BIT, filter);
+        DetachClear(readFbo);
+        DetachClear(writeFbo);
+        if (!m_Device->CheckNative(operation, dest.Name()))
+        {
+            m_Packet->invalid = true;
+            context.Invalidate();
+            return false;
+        }
+        // 保留已发前缀的访问. 同一 blit 序列共享序号, 层间的顺序由普通 framebuffer 操作提供.
+        if (epoch == 0 && (!src.m_ShaderAccess.empty() || !dest.m_ShaderAccess.empty()))
+        {
+            epoch = ++m_Device->m_AccessEpoch;
+        }
+        if (!src.m_ShaderAccess.empty())
+        {
+            src.m_ShaderAccess[std::size_t(srcLayer) * s.mipLevels + srcMip].lastAccess = epoch;
+        }
+        if (!dest.m_ShaderAccess.empty())
+        {
+            dest.m_ShaderAccess[std::size_t(destLayer) * d.mipLevels + destMip] = {0, epoch};
+        }
+        return true;
+    }
+
+    bool OpenGLCommandList::GenerateMipmaps(Texture *texture, TextureSubresourceSet requested)
+    {
+        constexpr auto Operation = "GenerateMipmaps";
+        if (!Recording(Operation))
+        {
+            return false;
+        }
+        auto *native = TextureFor(texture, Operation);
+        TextureSubresourceSet range;
+        if (!native || !TransferRange(*native, requested, range, Operation))
+        {
+            return false;
+        }
+        const auto &desc = native->GetDesc();
+        if (!desc.isRenderTarget || !m_Device->GetTransferFormatSupport(desc.format, desc.dimension).mipmaps ||
+            m_Packet->useMode == UseMode::GraphManaged)
+        {
+            m_Device->Report(Operation, "Unsupported: mip generation requires a filterable color attachment and direct use");
+            return false;
+        }
+        if (range.numMipLevels == 1)
+        {
+            return true;
+        }
+        // 先为整条链准备外部用途. 每层的第一次 blit 读基础级, 后面的 blit 读取刚写完的前一级.
+        auto source = range;
+        source.numMipLevels = 1;
+        auto dest = range;
+        ++dest.baseMipLevel;
+        --dest.numMipLevels;
+        if (!Retain(native, native->m_InternalOwners) ||
+            !UseTexture(*native, source, TextureAspect::Color, ResourceStates::CopySource, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_FRAMEBUFFER_BARRIER_BIT) ||
+            !UseTexture(*native, dest, TextureAspect::Color, ResourceStates::CopyDest, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_FRAMEBUFFER_BARRIER_BIT, true) ||
+            !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
+        {
+            return false;
+        }
+        m_Device->m_ContextState.ApplyBlitState(GetFormatInfo(desc.format).isSRGB);
+        std::uint64_t epoch = 0;
+        for (auto layer = range.baseArraySlice; layer < range.baseArraySlice + range.numArraySlices; ++layer)
+        {
+            for (auto mip = dest.baseMipLevel; mip < dest.baseMipLevel + dest.numMipLevels; ++mip)
+            {
+                if (!BlitColor(*native, mip, layer, *native, mip - 1, layer, GL_LINEAR, Operation, epoch))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void OpenGLCommandList::ResolveTexture(Texture *destination, const TextureSubresourceSet &requestedDest,
+                                           Texture *source, const TextureSubresourceSet &requestedSrc)
+    {
+        constexpr auto Operation = "ResolveTexture";
+        if (!Recording(Operation))
+        {
+            return;
+        }
+        auto *dest = TextureFor(destination, Operation);
+        auto *src = TextureFor(source, Operation);
+        TextureSubresourceSet dstRange, srcRange;
+        if (!dest || !src || !TransferRange(*dest, requestedDest, dstRange, Operation) ||
+            !TransferRange(*src, requestedSrc, srcRange, Operation))
+        {
+            return;
+        }
+        const auto &d = dest->GetDesc();
+        const auto &s = src->GetDesc();
+        const auto srcSupport = m_Device->GetTransferFormatSupport(s.format, s.dimension);
+        const auto dstSupport = m_Device->GetTransferFormatSupport(d.format, d.dimension);
+        if (d.format != s.format || !d.isRenderTarget || !s.isRenderTarget ||
+            !Transfer::ResolveTargets(d.dimension, s.dimension) || !(srcSupport.resolveSourceSamples & (1u << s.sampleCount)) ||
+            !dstSupport.resolveDestination || srcRange.numMipLevels != 1 || dstRange.numMipLevels != 1 ||
+            srcRange.numArraySlices != dstRange.numArraySlices ||
+            s.width != Transfer::MipSize(d.width, dstRange.baseMipLevel) ||
+            s.height != Transfer::MipSize(d.height, dstRange.baseMipLevel) || m_Packet->useMode == UseMode::GraphManaged)
+        {
+            m_Device->Report(Operation, "Unsupported or InvalidArgument: color format, samples or resolve pairing");
+            return;
+        }
+        if (!Retain(src, src->m_InternalOwners) || !Retain(dest, dest->m_InternalOwners) ||
+            !UseTexture(*src, srcRange, TextureAspect::Color, ResourceStates::ResolveSource, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_FRAMEBUFFER_BARRIER_BIT) ||
+            !UseTexture(*dest, dstRange, TextureAspect::Color, ResourceStates::ResolveDest, Operation,
+                        ResourceStates::Unknown, StorageAccess::None, GL_FRAMEBUFFER_BARRIER_BIT, true) ||
+            !m_Device->BeginNative(Operation) || !PrepareNativeAccesses(Operation))
+        {
+            return;
+        }
+        // 两端按各自的 baseArraySlice 配对. 用 NEAREST 触发等尺寸颜色 resolve, 样本归约由驱动执行.
+        m_Device->m_ContextState.ApplyBlitState(false);
+        std::uint64_t epoch = 0;
+        for (std::uint32_t layer = 0; layer < srcRange.numArraySlices; ++layer)
+        {
+            if (!BlitColor(*dest, dstRange.baseMipLevel, dstRange.baseArraySlice + layer, *src, srcRange.baseMipLevel,
+                           srcRange.baseArraySlice + layer, GL_NEAREST, Operation, epoch))
+            {
+                return;
+            }
         }
     }
 } // namespace Physara::RHI::OpenGL
