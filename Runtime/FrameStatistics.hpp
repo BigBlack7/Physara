@@ -32,7 +32,8 @@ namespace Physara::Runtime
         void FinishTimer(TimerReservation timer, const Editor::SceneFrameIdentity *source) noexcept;
         /// @brief 无法安全复用时释放池引用. RHI 保留已登记到包中的资源直至退休.
         void FailTimer(TimerReservation timer) noexcept;
-        /// @brief 在任何录制开始前推进. 仅 Poll 成功后读取秒数.
+        /// @brief 在录制开始前轮询待处理区间, 就绪后读取秒数. 同轮可回收多组查询.
+        /// @note latestGpu 只保留有效结果中提交票据最大的一组. 逐轮读取快照可能跳过已经就绪的较早区间.
         void Poll(Platform::DeviceHost &host);
 
         /// @brief 发布已接受场景的值快照. 之前票据的就绪 GPU 区间沿自己的身份保留.

@@ -105,18 +105,20 @@
 
 **职责位置：** RHI、Renderer/RenderGraph、Renderer、Editor/Diagnostics。**前置：** [D08-T03](#d08-t03)、[D08-T04](#d08-t04)、[D08-T05](#d08-t05)、[D08-T06](#d08-t06)、[D08-T07](#d08-t07)。**架构依据：** [12.1](../Architecture.md#tests)、[11.4](../Architecture.md#diagnostics)、[12.2](../Architecture.md#benchmark)。
 
-- [ ] 对冻结场景、稀疏编辑、多 View、连续加载和 Shader 重载运行集成测试，核对上传/创建/绑定与池统计。
-- [ ] 验证打开/隐藏统计面板不改变事实归属，未就绪 GPU timer 为 Pending，不触发同步查询。
-- [ ] 以同画质比较增量/批处理前后的成本；没有测得收益的复杂优化回到对应 change 重新评估。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-23-verify-execution-chain-and-idle-cost/tasks.md#final-verification)
+
+- [x] 对冻结场景、稀疏编辑、多 View、连续加载和 Shader 重载运行集成测试，核对上传/创建/绑定与池统计。
+- [x] 验证打开/隐藏统计面板不改变事实归属，未就绪 GPU timer 为 Pending，不触发同步查询。
+- [x] 以同画质比较增量/批处理前后的成本；没有测得收益的复杂优化回到对应 change 重新评估。
 
 **完成条件：** 后续特性建立在已测量、可诊断且寿命可靠的准备/执行链上。
 
-**D08 阶段出口：** 固定场景空闲时无无谓重建/上传，变更只更新相关版本；批次与原生调用可核对，缓存有预算，原生同步与在途重载测试通过。
+**D08 阶段出口：** 已通过。固定场景空闲时无无谓重建/上传，变更只更新相关版本；批次与原生调用可核对，缓存有预算，原生同步与在途重载测试通过。 [阶段出口证据](../../openspec/changes/archive/2026-11-23-verify-execution-chain-and-idle-cost/tasks.md#final-verification)
 
 <a id="dev-d09"></a>
 ## D09 · 实现完整基础阴影链
 
-**性质：** 基线。**入口：** [D08](#dev-d08) 的阶段出口通过。
+**性质：** 基线。**入口：** [D08](#dev-d08) 的阶段出口已通过。 [入口证据](../../openspec/changes/archive/2026-11-23-verify-execution-chain-and-idle-cost/tasks.md#final-verification)
 
 **阶段目标：** 将保守阴影 CPU 计划、资源预算、静态几何/遮罩绘制及 Hard/PCF 采样接入共享灯光模型。
 
@@ -124,6 +126,8 @@
 ### D09-T01 · 实现阴影计划、分配与缓存失效
 
 **职责位置：** Renderer/Lighting、Prepare、View、Editor/Panels。**前置：** 本阶段入口满足。**架构依据：** [5.4](../Architecture.md#light-preparation)、[8.3](../Architecture.md#shadows)。
+
+**状态** 当前工作包，待立项。
 
 - [ ] 从稳定有限相机范围生成阴影视图和保守 caster 集，包含相机画外但影响可见区域的物体。
 - [ ] 建立方向/spot/point 的 region/层分配、质量和字节预算、dirty 更新与稳定 light/shadow 索引。

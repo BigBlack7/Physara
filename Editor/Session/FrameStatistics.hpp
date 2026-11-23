@@ -35,6 +35,8 @@ namespace Physara::Editor
     };
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.
+    /// scenePreparation 截止于候选构图前, graphCompile 只覆盖 CompileRenderGraph.
+    /// 声明 Pass 及其资源访问发生在这两个区间之外, 四项之和只表示采样到的 CPU 工作.
     struct FrameCpuSeconds
     {
         double ui{};
