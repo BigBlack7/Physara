@@ -92,9 +92,11 @@
 
 **职责位置：** Engine/Shader、Renderer/Paths、View、Editor/Diagnostics。**前置：** [D08-T02](#d08-t02)、[D08-T04](#d08-t04)。**架构依据：** [5.7](../Architecture.md#plan-readiness)、[1.3](../Architecture.md#shader-build)、[8.1](../Architecture.md#shader-runtime)。
 
-- [ ] 建立 schema 化 VariantKey 与允许组合、含 include/工具/ABI 及 native 设备驱动身份的 cache key 和明确容量；数值参数仍走数据。
-- [ ] 后台处理 CPU 编译，在 GL context 线程按预算 link/建 Pipeline；完整 ABI/绑定/资源代就绪后帧边界发布。
-- [ ] 随热重载接入文件变更通知及事件合并；检查 Shader 错误、include 修改、ABI 变化、快速重复请求及在途旧代，失败保留旧完整代并展示源行诊断。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-23-complete-shader-variant-hot-reload/tasks.md#final-verification)
+
+- [x] 建立 schema 化 VariantKey 与允许组合、含 include/工具/ABI 及 native 设备驱动身份的 cache key 和明确容量；数值参数仍走数据。
+- [x] 后台处理 CPU 编译，在 GL context 线程按预算 link/建 Pipeline；完整 ABI/绑定/资源代就绪后帧边界发布。
+- [x] 随热重载接入文件变更通知及事件合并；检查 Shader 错误、include 修改、ABI 变化、快速重复请求及在途旧代，失败保留旧完整代并展示源行诊断。
 
 **完成条件：** 热重载和计划准备不在 Draw 内阻塞编译，Pending/Failed 与 Active 有可追踪状态。
 

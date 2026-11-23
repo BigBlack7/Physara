@@ -42,6 +42,12 @@ namespace Physara::Runtime
         /// @brief 编译成功就登记候选. 其后才可为这张图补充原生创建数和宿主回执.
         void PublishGraph(Editor::GraphFrameSummary graph) noexcept { m_Stats.latestGraph = graph; }
         void PublishPool(Renderer::GraphPoolStatistics pool) noexcept { m_Stats.graphPool = pool; }
+        /// @brief 复制本轮 owner 准备及最近一次 worker 回报. 场景统计另随实际接受的提交发布.
+        void PublishShaders(Renderer::ShaderPreparationStatistics native, Shader::ReloadStatistics cpu) noexcept
+        {
+            m_Stats.shader = native;
+            m_Stats.shaderCpu = cpu;
+        }
         void ReportPoolPressure(const Core::BoundedText &reason) noexcept
         {
             if (!m_Stats.graphPressure)

@@ -83,6 +83,7 @@ namespace Physara::Editor::Detail
         case InvalidSampling: return "Failed - invalid camera sampling profile";
         case ScenePreparationFailed: return "Failed - scene preparation";
         case ScenePipelineUnavailable: return "Failed - Forward pipeline unavailable";
+        case ShaderPending: return "Pending - preparing Shader pipelines";
         case SceneResidencyPending: return "Pending - waiting for scene residency";
         case SceneResidencyLimit: return "Failed - scene residency budget";
         case SceneAttachmentLimit: return "Failed - Forward attachment limit";
@@ -195,6 +196,47 @@ namespace Physara::Editor::Detail
         ImGui::Separator();
     }
 
+    // 面板只读取 Runtime 已复制的准备计数和失败原因. 下方的场景代与票据取自独立的提交快照.
+    static void DrawShaderStatistics(const FrameStatistics &stats)
+    {
+        using Renderer::ShaderPreparationState;
+        const auto &shader = stats.shader;
+        const auto &cpu = stats.shaderCpu;
+        const auto counts = [](auto value) { return static_cast<unsigned long long>(value); };
+        const char *status = shader.state == ShaderPreparationState::Active ? "Active" :
+            (shader.state == ShaderPreparationState::Failed ? "Failed" : "Pending");
+        ImGui::Text("Shader active %llu / request %llu %s", counts(shader.active), counts(shader.request), status);
+        ImGui::Text("Programs %zu / Pipeline demand %zu / step %zu of %zu", Shader::ProductShaderCount,
+                    shader.demand, shader.started, shader.budget);
+        ImGui::Text("Pipeline cache %zu / %zu, hits %llu, created %llu, CPU %.3f ms",
+                    shader.inCache, shader.cacheLimit, counts(shader.nativeHits), counts(shader.nativeCreated),
+                    shader.nativeSeconds * 1000);
+        if (shader.request)
+        {
+            ImGui::Text("CPU packages %zu / %zu, bytes %zu / %zu, hits %llu",
+                cpu.entries, cpu.limit.entries, cpu.bytes, cpu.limit.bytes, counts(cpu.hits));
+            ImGui::Text("Package attempts %llu / %.3f ms, GLSL stages %llu / %.3f ms",
+                counts(cpu.builds), cpu.buildSeconds * 1000, counts(cpu.compilation.stages),
+                cpu.compilation.seconds * 1000);
+            if (cpu.discarded)
+            {
+                ImGui::Text("Superseded shader results %llu", counts(cpu.discarded));
+            }
+        }
+        if (shader.reason)
+        {
+            if (const auto *program = Shader::FindProductProgram(shader.role))
+            {
+                ImGui::Text("%.*s / variant %u", static_cast<int>(program->name.size()), program->name.data(),
+                            program->key.physicalLighting);
+            }
+            const auto reason = shader.reason->View();
+            ImGui::PushTextWrapPos();
+            ImGui::TextUnformatted(reason.data(), reason.data() + reason.size());
+            ImGui::PopTextWrapPos();
+        }
+    }
+
     /// @brief 展示最近一次场景提交. 表面, 批次和参数记录取自 source.view, 原生调用数还包括同图 UI 等消费者.
     /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
@@ -202,6 +244,7 @@ namespace Physara::Editor::Detail
         if (state.statistics)
         {
             DrawGraphStatistics(*state.statistics);
+            DrawShaderStatistics(*state.statistics);
         }
         if (!state.statistics || !state.statistics->latestScene)
         {
@@ -216,6 +259,7 @@ namespace Physara::Editor::Detail
                     static_cast<unsigned long long>(source.scene.generation),
                     static_cast<unsigned long long>(source.view.generation),
                     static_cast<unsigned long long>(source.submission));
+        ImGui::Text("Accepted shader generation %llu", static_cast<unsigned long long>(source.shaderGeneration));
         ImGui::Text("%s / %s / %s", PreviewNames[static_cast<std::size_t>(source.preview)],
                     source.display.profile == Renderer::DisplayProfile::AcesSdr ? "Filament ACES SDR" : "Linear clamp",
                     source.display.antiAliasing == Renderer::AntiAliasing::Fxaa ? "FXAA" : "None");

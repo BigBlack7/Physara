@@ -31,6 +31,7 @@ namespace Physara::Editor::Detail
         case UiFallback::InvalidSampling: return "Invalid camera sampling profile";
         case UiFallback::ScenePreparationFailed: return "Scene preparation failed";
         case UiFallback::ScenePipelineUnavailable: return "Forward pipeline unavailable";
+        case UiFallback::ShaderPending: return "Preparing Shader pipelines";
         case UiFallback::SceneResidencyPending: return "Waiting for scene residency";
         case UiFallback::SceneResidencyLimit: return "Scene residency budget exceeded";
         case UiFallback::SceneAttachmentLimit: return "Forward attachment limit exceeded";

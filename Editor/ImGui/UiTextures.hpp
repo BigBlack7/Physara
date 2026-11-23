@@ -40,12 +40,12 @@ namespace Physara::Editor::Detail
     };
 
     /// @brief 视口解析状态及共享占位原因. RetainedOutput 只加标签, 仍采样已接受的旧图像.
-    /// 相机, 表面, 灯表, 环境和显示阶段各自提供原因. 旧图标签与本轮拒绝原因可以同时出现.
+    /// 源自当前 View 的等待和拒绝原因可与旧图标签同时出现. ShaderPending 表示所需 Pipeline 尚在准备.
     enum class UiFallback : std::uint8_t
     {
         None, InvalidIdentity, MissingOutput, UploadPending, InvalidExtent, TextureSizeLimit, DiagnosticBudget,
         CameraUnavailable, InvalidProjection, InvalidImageRect, InvalidSampling, ScenePreparationFailed,
-        ScenePipelineUnavailable, SceneResidencyPending, SceneResidencyLimit, SceneAttachmentLimit,
+        ScenePipelineUnavailable, ShaderPending, SceneResidencyPending, SceneResidencyLimit, SceneAttachmentLimit,
         SceneUnsupported, SceneUploadLimit, RetainedOutput, FrameFailed, SceneLightTableRejected,
         EnvironmentPending, EnvironmentRejected, DisplayUnavailable
     };

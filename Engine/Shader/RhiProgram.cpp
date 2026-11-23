@@ -1,7 +1,7 @@
 #include "RhiProgram.hpp"
 
 /// @file
-/// @brief 复用包读取边界, Shader 工厂自行复制模块, 本层不再保存或重算一份 native 反射.
+/// @brief 为文件包和内存包检查消费者的 ABI, 源入口及指定的活动资源. RHI 工厂在返回前复制模块字节.
 
 #include <algorithm>
 
@@ -38,19 +38,34 @@ namespace Physara::Shader
                                       std::optional<ExpectedActiveResources> expectedActive,
                                       std::string_view expectedFragmentSource) noexcept
     {
+        const auto loaded = ReadPackage(path, expectedAbiHash);
+        if (const auto *failure = std::get_if<Failure>(&loaded))
+        {
+            return *failure;
+        }
+        return CreateRhiProgram(device, std::get<ShaderPackage>(loaded), expectedAbiHash, expectedActive,
+                                expectedFragmentSource);
+    }
+
+    Result<RhiProgram> CreateRhiProgram(RHI::Device &device, const ShaderPackage &package,
+        std::string_view expectedAbiHash, std::optional<ExpectedActiveResources> expectedActive,
+        std::string_view expectedFragmentSource, std::string_view expectedVertexSource) noexcept
+    {
         return GuardBuild<RhiProgram>([&]() -> Result<RhiProgram> {
-            // ReadPackage 重建包内声明和最终反射. 创建任何阶段前再核对调用方要求的图形 profile.
-            auto loaded = ReadPackage(path, expectedAbiHash);
-            if (const auto *failure = std::get_if<Failure>(&loaded))
-            {
-                return *failure;
-            }
-            const auto &package = std::get<ShaderPackage>(loaded);
-            if (package.profile != GraphicsProfile)
+            // 两个上游均验证包. 到设备边界时确认当前调用方的阶段和消费合同.
+            if (package.profile != GraphicsProfile || package.modules.size() != 2 ||
+                package.modules[0].stage != Stage::Vertex || package.modules[1].stage != Stage::Fragment)
             {
                 return MakeFailure(ErrorCode::UnsupportedProfile, "The consumer requires a graphics Shader package.");
             }
-            // ReadPackage 已验证图形包按 VS、FS 排列. 先核对包内阶段, 再交给 RHI 工厂.
+            if (package.abiHash != expectedAbiHash)
+            {
+                return MakeFailure(ErrorCode::InterfaceMismatch, "Program ABI does not match the running consumer.");
+            }
+            if (!expectedVertexSource.empty() && package.modules[0].sourcePath != expectedVertexSource)
+            {
+                return MakeFailure(ErrorCode::InterfaceMismatch, "Package vertex source does not match the role.");
+            }
             if (!expectedFragmentSource.empty() && package.modules[1].sourcePath != expectedFragmentSource)
             {
                 Core::BoundedText issue("Package fragment source mismatch. Expected ");

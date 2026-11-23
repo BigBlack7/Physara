@@ -23,7 +23,9 @@ endforeach()
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>/RuntimeResources.hpp"
     CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}}\n")
 target_include_directories(Physara PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>")
-target_link_libraries(Physara PRIVATE PhysaraPlatform PhysaraCore PhysaraAsset PhysaraScene PhysaraEditor PhysaraRenderer)
+# Runtime 装配开发会话的 Shader 源观察, 编译依赖保持在 Shader 模块中.
+target_link_libraries(Physara PRIVATE PhysaraPlatform PhysaraCore PhysaraAsset PhysaraScene PhysaraEditor PhysaraRenderer
+    PhysaraShader)
 target_compile_features(Physara PRIVATE cxx_std_20)
 set_target_properties(Physara PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(Physara PRIVATE /W4 /WX /utf-8 /permissive-)

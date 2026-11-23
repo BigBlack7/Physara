@@ -501,6 +501,7 @@ namespace Physara::Editor::Detail
         case Renderer::ViewSettingReason::InvalidSampling: return UiFallback::InvalidSampling;
         case Renderer::ViewSettingReason::ScenePreparationFailed: return UiFallback::ScenePreparationFailed;
         case Renderer::ViewSettingReason::ScenePipelineUnavailable: return UiFallback::ScenePipelineUnavailable;
+        case Renderer::ViewSettingReason::ShaderPending: return UiFallback::ShaderPending;
         case Renderer::ViewSettingReason::SceneResidencyPending: return UiFallback::SceneResidencyPending;
         case Renderer::ViewSettingReason::SceneResidencyLimit: return UiFallback::SceneResidencyLimit;
         case Renderer::ViewSettingReason::SceneAttachmentLimit: return UiFallback::SceneAttachmentLimit;

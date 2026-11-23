@@ -31,6 +31,7 @@ namespace Physara::Editor
         Renderer::ViewImageLayout render;
         Renderer::ViewImageLayout displayLayout;
         Renderer::DisplaySettings display;
+        std::uint64_t shaderGeneration{}; ///< 此票据实际使用的程序代, 后续准备轮可独立推进.
     };
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.
@@ -122,5 +123,7 @@ namespace Physara::Editor
         std::optional<GraphFrameSummary> latestGraph;
         Renderer::GraphPoolStatistics graphPool;
         std::optional<Core::BoundedText> graphPressure;
+        Renderer::ShaderPreparationStatistics shader;
+        Shader::ReloadStatistics shaderCpu;
     };
 }

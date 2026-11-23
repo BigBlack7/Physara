@@ -86,6 +86,13 @@ namespace Physara::Runtime
     [[nodiscard]] Platform::DeviceHost::PresentationAcquire
         AcquireFrame(Platform::DeviceHost &host, std::size_t &next);
 
+    /// @brief 在录制外推进一次原生预算, 有本帧计划时在复核源修订后发布, 再交付只读统计.
+    /// @param hasFramePlan 本轮已取得呈现槽并收齐可规划 View 的需求时为真. 槽忙或暂停时为假, 只推进预热.
+    /// @pre 允许发布时, 各路尚未冻结本帧的程序表. 最后一次原生准备返回后再轮询已到达的文件通知.
+    void AdvanceFrameShaders(Platform::DeviceHost &host, Renderer::ForwardRenderer &forward,
+        FrameStatistics &statistics, Shader::SourceReload *reload, std::optional<Shader::ReloadResult> startupFailure,
+        bool hasFramePlan) noexcept;
+
     /// @brief 从封存 UI 推进一次取得, 执行前最多建立一张独立安全图.
     /// @pre slot 对应 presentation 的安全取得, commands 来自同一宿主且无活动录制.
     /// editorFrame 来自本轮尚未失效的 Advance, editor 已装配 Scene 文档.
@@ -94,6 +101,7 @@ namespace Physara::Runtime
     /// @param statistics 此宿主的查询及统计 owner. 只在 View 接受本次场景输出后发布场景统计.
     /// @param graphPool 此设备会话共用的池. 本轮的正常候选和独立安全 UI 各按自己的编译计划准入.
     /// @param offscreenRequests 当前配置额外接受一路, 身份须与主 View 不同. 请求对象和 View 借用至返回.
+    /// @param reload 可选开发源会话, 在原生准备前和候选切换前读取通知和当前请求.
     /// @return 正常或可恢复状态; 文本错误表示必须退出, 未证明完成的工作仍归 RHI/宿主收拢.
     /// @note 准备值和图的 CPU 借用在返回前结束, 已发 GPU 引用由原物理包保活.
     [[nodiscard]] std::variant<FrameStatus, Core::BoundedText> RenderFrame(
@@ -102,5 +110,6 @@ namespace Physara::Runtime
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
         FrameStatistics &statistics, Renderer::GraphResourcePool &graphPool, double editorSeconds,
-        std::span<OffscreenViewRequest> offscreenRequests = {});
+        std::span<OffscreenViewRequest> offscreenRequests = {}, Shader::SourceReload *reload = nullptr,
+        std::optional<Shader::ReloadResult> startupShaderFailure = {});
 }

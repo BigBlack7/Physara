@@ -1,27 +1,35 @@
+<p align="center">
+  <a href="#overview">
+    <img src="Assets/Editor/icon_physara.png" width="220" alt="Physara renderer logo">
+  </a>
+</p>
+
 <h1 align="center">Physara</h1>
 
 <p align="center">
-    A Physically Based Renderer With Lightweight Scene Editor
+  <strong>A physically based renderer with a lightweight scene editor.</strong>
+  <br>
 </p>
 
 <p align="center">
-    <a href="Docs/Architecture.md">Architecture</a> &nbsp;·&nbsp;
-    <a href="Docs/Developments/Developments.md">Development</a> &nbsp;·&nbsp;
-    <a href="Docs/Build.md">Build</a>
+  <a href="Docs/Build.md"><img src="https://img.shields.io/badge/C%2B%2B-20-368D9B?style=flat&amp;labelColor=263844" alt="C++20"></a>
+  <a href="RHI/README.md"><img src="https://img.shields.io/badge/OpenGL-4.6-76AFC4?style=flat&amp;labelColor=263844" alt="OpenGL 4.6"></a>
+  <a href="Docs/Build.md"><img src="https://img.shields.io/badge/Windows-x64-667787?style=flat&amp;labelColor=263844" alt="Windows x64"></a>
+  <a href="Docs/Developments/Developments.md#current-stage"><img src="https://img.shields.io/badge/Status-In%20development-D98F94?style=flat&amp;labelColor=263844" alt="In development"> </a>
 </p>
 
-Physara is a personal C++20 rendering project focused on light, materials, and static scenes.
-The aim is to create convincing images through rendering algorithms that remain clear enough to study, refine, and maintain.
+<br>
 
-The design draws on [Filament](Docs/Reference/Filament_Rendering_Pipeline_Analysis.md)
-and [NVRHI](Docs/Reference/NVRHI_RHI_Vulkan_Analysis.md), with simplicity guiding the architecture and editing workflow.
+## Overview
 
-## Feature
+Physara is a **C++20 rendering project** for static scenes, with a lightweight editor for working with geometry, materials, lights, and cameras.
 
-Coming soon😋....
+The goal is to create **Beautiful Scenery** through rendering algorithms that remain clear enough to study, refine, and maintain. The current implementation combines **physical Forward rendering**, an **OpenGL 4.6 backend**, and an integrated scene-editing workflow.
 
-## Gallery
+> **In active development.** The [development plan](Docs/Developments/Developments.md#current-stage) tracks completed capabilities and upcoming work.
 
-Coming soon😋....
+## Design references
 
-<!-- Add images from Assets/Gallery below, using ![Caption](Assets/Gallery/Filename.png). -->
+Physara draws on [Filament](Docs/Reference/Filament_Rendering_Pipeline_Analysis.md) for rendering and display design, and [NVRHI](Docs/Reference/NVRHI_RHI_Vulkan_Analysis.md) for rendering interfaces and resource management.
+
+The linked notes document the ideas studied and the decisions made for Physara. Dependency versions and notices are collected in the [third-party guide](ThirdParty/README.md).

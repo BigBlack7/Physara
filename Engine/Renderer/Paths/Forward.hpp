@@ -4,9 +4,13 @@
 /// @brief 正式 Forward 准备和图声明入口. 设备缓存与完成驱动的帧槽准备分开保有资源.
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
+
+#include <Shader/Reload.hpp>
 
 #include "../Prepare/ViewPreparation.hpp"
 
@@ -42,6 +46,28 @@ namespace Physara::Renderer
     {
         ViewSettingReason reason;
         Core::BoundedText description;
+    };
+
+    enum class ShaderPreparationState : std::uint8_t { Active, Pending, Failed };
+
+    /// @brief 有界源码请求和帧前原生准备统计. active 记录准备器选中的代, 已接受的 View 另有提交票据.
+    /// @note demand 按最近登记的不同键计数, started 和 budget 是本轮准备量, nativeSeconds 是累计秒数.
+    struct ShaderPreparationStatistics
+    {
+        std::uint64_t active{}, request{}, nativeCreated{}, nativeHits{};
+        std::size_t demand{}, inCache{}, cacheLimit{}, budget = 1, started{};
+        double nativeSeconds{};
+        ShaderPreparationState state = ShaderPreparationState::Pending;
+        Shader::ProductShader role = Shader::ProductShader::Count;
+        std::optional<Core::BoundedText> reason;
+    };
+
+    /// @brief 实际在途槽为退役代提供可计数的持有. entryLimit 为零时按有限键和帧槽数导出.
+    struct ShaderPreparationLimits
+    {
+        std::size_t frames = 3;
+        std::size_t perStep = 1;
+        std::size_t entryLimit = 0;
     };
 
     /// @brief 显示前工作色及深度共用的来源. layout 是渲染栅格, camera.exposure 是本帧的曝光快照.
@@ -139,6 +165,8 @@ namespace Physara::Renderer
 
         /// @brief 同槽安全取得时释放上轮 Draw 和活动绑定. View 常量, 普通灯表以及各路批次数据可供下轮复用.
         void Reset() noexcept;
+        /// @brief 本槽持有的程序表编号, 尚未取得表时为零. View 的接受票据另由正常图提交产生.
+        [[nodiscard]] std::uint64_t ShaderGeneration() const noexcept;
         /// @brief 借用本轮被跳过项的有界摘要, 下次 Reset/Prepare 后失效; 空值表示无局部降级.
         [[nodiscard]] const std::optional<Core::BoundedText> &Degradation(std::size_t index = 0) const noexcept;
         /// @brief 本候选实际使用的环境角色, 与当前 PreparedView 一起交给 View.
@@ -203,20 +231,60 @@ namespace Physara::Renderer
         [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
             DisplaySettings display, bool resample) const noexcept;
 
-        /// @brief 用已有的静态工作集准备当前模式. 空可见集允许背景输出.
+        /// @brief 在同一已选代中连续规划并完成一路 View. 空可见集允许背景输出.
+        /// 产品多 View 帧分别调用 PlanView 和 FinishView, 在两者之间推进一次原生预算.
         /// @pre frame 已由安全槽 Reset, index 是本轮尚未准备的工作集位置. 各路在同一候选内连续准备.
         /// @note 局部失败清理该路的 Draw, 已完整登记的生产仍由共同批次保有, 图将核对活性.
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
+        /// @brief 准备一路的常量, 批次及驻留资源, 汇入原生键供本帧统一选代.
+        /// @pre frame 已由安全槽 Reset, index 是本帧尚未规划的位置. 局部失败仍允许规划其它路.
+        [[nodiscard]] std::optional<ForwardFailure> PlanView(ForwardFrame &frame, const PreparedView &view,
+            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
+        /// @brief 所有 View 完成计划且本帧 Shader 代已选定后, 将该代的句柄与成功规划的一路绑定.
+        /// @pre view 和 index 与成功的 PlanView 相同, 第一条成功绑定后本帧无 Shader 切换.
+        [[nodiscard]] std::optional<ForwardFailure> FinishView(ForwardFrame &frame, const PreparedView &view,
+                                                               std::size_t index = 0);
         /// @brief 在设备 owner 线程读取目录条目数, 物理存储占用和材质复用计数. 首次准备前各项为零.
         [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
+        /// @brief 初始化会话的原生设备身份和额度, 在首帧准备前调用.
+        void SetShaderPreparationLimits(Core::BoundedText deviceIdentity, ShaderPreparationLimits limits) noexcept;
+        /// @brief 在 context owner 的帧前轮次推进已登记的原生需求及当前源码候选, 不切换有效代.
+        /// @param request 本次已观察的源码修订, 纯打包会话为零. result 为空时仍可推进未完成的原生准备.
+        /// @note 首次设备初始化前持有最新回执. 初始化失败后由后续 View 规划或新回执重新触发装配.
+        void AdvanceShaderPreparation(std::uint64_t request = 0,
+            std::optional<Shader::ReloadResult> result = {}) noexcept;
+        /// @brief 开始汇总本帧需求和显示资源结果. 槽忙时继续沿用最近一次规划的事实.
+        void BeginShaderRequests() noexcept;
+        /// @brief 本帧须已登记原生键, 候选覆盖全部键, 各路显示输入已通过规划, 且有空间记录旧表.
+        [[nodiscard]] bool ShaderCandidateReady() const noexcept;
+        /// @brief 在本帧所有需求已收集且尚未冻结帧槽时, 以刚观察的源修订核对并提交完整候选.
+        void PublishShaderPreparation(std::uint64_t request = 0,
+            std::optional<Shader::ReloadResult> result = {}) noexcept;
+        [[nodiscard]] ShaderPreparationStatistics ShaderStatistics() const noexcept;
+        /// @brief 将本次原生边界的首错附加到候选, 错误持有随候选身份保留.
+        void RecordShaderDiagnostic(const Core::BoundedText &reason) noexcept;
 
     private:
+        /// @brief 设备准备器首次接管前的当前请求与回执. 更新的修订撤销旧回执, 设备失败后仍可交接.
+        struct InitialShaderPreparation
+        {
+            std::uint64_t request{};
+            std::optional<Shader::ReloadResult> result;
+            std::optional<ForwardFailure> deviceFailure;
+        };
+
+        /// @brief 由首份当前回执或首个有效 View 触发设备装配. 失败时保留请求与回执供恢复.
+        [[nodiscard]] bool InitializeResources() noexcept;
+
         RHI::Device &m_Device;
         ForwardPackagePaths m_Packages;
         std::uint32_t m_MaxTextureSize;
         std::uint32_t m_MaxAttachmentSize;
         std::uint32_t m_UniformAlignment;
+        Core::BoundedText m_ShaderDevice;
+        ShaderPreparationLimits m_ShaderLimits;
+        std::optional<InitialShaderPreparation> m_InitialShaders{std::in_place};
         std::unique_ptr<Detail::ForwardDevice> m_Resources;
     };
 }

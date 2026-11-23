@@ -85,21 +85,33 @@ namespace Physara::Shader
             std::printf("Generated Shader interface %s, ABI %s\n", result.name.c_str(), result.abiHash.c_str());
             return 0;
         }
-        if (count == 8 && std::wstring_view(arguments[1]) == L"build")
+        if ((count == 8 || count == 9) && std::wstring_view(arguments[1]) == L"build")
         {
+            BuildRequest request{arguments[2], arguments[3], arguments[4]};
+            if (count == 9)
+            {
+                // CMake 为产品包传角色名. 独立 build 调用沿用程序声明中的通用 profile 和 define 校验.
+                const auto *program = FindProductProgram(PathText(std::filesystem::path(arguments[8])));
+                if (!program)
+                {
+                    throw BuildError(ErrorCode::UnsupportedProfile, "Unknown product Shader role.");
+                }
+                request.variant = program->key;
+            }
             auto temporary = std::filesystem::path(arguments[5]);
             temporary += L".tmp";
             std::error_code cleanup;
             std::filesystem::remove(temporary, cleanup);
             auto compiler = TakeResult(Compiler::Create());
-            const auto output = TakeResult(compiler->Build({arguments[2], arguments[3], arguments[4]}));
+            const auto output = TakeResult(compiler->Build(request));
             const auto previousTime = std::filesystem::exists(arguments[5])
                                           ? std::filesystem::last_write_time(arguments[5])
                                           : std::filesystem::file_time_type::clock::now();
             // depfile 左侧对应最后发布的包, 与 CMake 首个输出一致, 右侧列出实际读取的输入.
             std::string dependencies = DepfilePath(arguments[5]) + ":";
-            for (const auto &dependency : output.fileDependencies)
+            for (const auto &input : output.inputs)
             {
+                const auto &dependency = input.path;
                 dependencies += " \\\n  " + DepfilePath(dependency);
             }
             dependencies += "\n";
@@ -131,7 +143,7 @@ namespace Physara::Shader
         }
         std::fputs(
             "Usage: PhysaraShaderBuild generate <schema> <directory> <stamp>\n"
-            "       PhysaraShaderBuild build <program> <source-root> <interface-root> <package> <depfile> <stamp>\n"
+            "       PhysaraShaderBuild build <program> <source-root> <interface-root> <package> <depfile> <stamp> [product-role]\n"
             "       PhysaraShaderBuild check <package> <expected-abi>\n",
             stderr);
         return 2;

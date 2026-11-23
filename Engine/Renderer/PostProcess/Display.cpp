@@ -20,69 +20,108 @@ namespace Physara::Renderer::PostProcess
     {
     }
 
-    // 阶段由包内逻辑片元源辨别. FXAA 和缩放的活动槽相同, 两者均须匹配各自的源身份.
-    DisplayStage DisplayDevice::PrepareStage(Stage stage, RHI::Format format)
+    using Shader::ProductShader;
+    static constexpr std::array DisplayRoles{ProductShader::ForwardDisplay, ProductShader::DisplayColorGrading,
+        ProductShader::DisplayFxaa, ProductShader::DisplayScale};
+    static constexpr std::array<std::string_view, 4> DisplayNames{
+        "Forward display clamp", "Display color grading", "Display FXAA", "Display scale"};
+
+    bool DisplayDevice::IsRole(ProductShader role) noexcept
     {
-        static constexpr std::array<std::string_view, 4> Names{
-            "Forward display clamp", "Display color grading", "Display FXAA", "Display scale"};
-        static constexpr std::array<std::string_view, 4> FragmentSources{
-            "Source/Passes/Forward/Display.frag", "Source/PostProcess/DisplayColorGrading.frag",
-            "Source/PostProcess/DisplayFxaa.frag", "Source/PostProcess/DisplayScale.frag"};
+        return std::ranges::find(DisplayRoles, role) != DisplayRoles.end();
+    }
+
+    std::size_t DisplayDevice::ProgramIndex(ProductShader role) noexcept
+    {
+        const auto index = std::ranges::find(DisplayRoles, role);
+        assert(index != DisplayRoles.end());
+        return static_cast<std::size_t>(index - DisplayRoles.begin());
+    }
+
+    DisplayDevice::Requests DisplayDevice::SelectStages(const ViewLayouts &layouts, DisplaySettings settings) noexcept
+    {
+        const bool physical = settings.profile == DisplayProfile::AcesSdr;
+        const bool fxaa = settings.antiAliasing == AntiAliasing::Fxaa;
+        const bool scale = layouts.render != layouts.display;
+        Requests result{};
+        result.keys[result.count++] = {physical ? ProductShader::DisplayColorGrading : ProductShader::ForwardDisplay,
+                                      std::size_t(!fxaa && !scale)};
+        if (fxaa)
+        {
+            result.keys[result.count++] = {ProductShader::DisplayFxaa, std::size_t(!scale)};
+        }
+        if (scale)
+        {
+            result.keys[result.count++] = {ProductShader::DisplayScale, 1};
+        }
+        return result;
+    }
+
+    // 阶段由包内逻辑入口辨别. FXAA 和缩放的活动槽相同, 仍各自匹配源身份.
+    void DisplayDevice::PrepareStage(ProgramTable &programs, Detail::ShaderPipelineRequest key,
+                                     const Shader::ProductPackages &packages)
+    {
         static constexpr std::array<std::string_view, 4> Grade{
             "displayRects", "sourceColor", "colorLut", "linearSampler"};
         static constexpr std::array<std::string_view, 3> Filter{"displayRects", "sourceColor", "linearSampler"};
         namespace ClampAbi = Shader::Generated::ForwardDisplay;
-        const auto index = std::size_t(stage);
-        auto &program = m_Programs[index];
-        if (!program.layout)
+        const auto index = ProgramIndex(key.role);
+        const auto stage = static_cast<Stage>(index);
+        auto &program = programs[index];
+        auto &binding = m_Layouts[index];
+        if (!program.shaders.vertex)
         {
             const auto expected = stage == Stage::Clamp ? std::nullopt :
                 std::optional(Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
                     stage == Stage::Grade ? std::span<const std::string_view>(Grade) :
                                             std::span<const std::string_view>(Filter)});
-            auto shaders = Shader::LoadRhiProgram(m_Device, m_Paths[index],
-                stage == Stage::Clamp ? ClampAbi::AbiHash : Abi::AbiHash, expected, FragmentSources[index]);
+            auto shaders = Detail::LoadProductProgram(m_Device, key.role, m_Paths[index], packages,
+                stage == Stage::Clamp ? ClampAbi::AbiHash : Abi::AbiHash, expected);
             if (const auto *error = std::get_if<Shader::Failure>(&shaders))
             {
-                Core::BoundedText issue(Names[index]);
+                Core::BoundedText issue(DisplayNames[index]);
                 issue.Append(": ");
                 issue.Append(error->context.description.View());
                 throw issue;
             }
-            auto layout = stage == Stage::Clamp ? ClampAbi::MakeBindingLayouts().front() :
-                                                  Abi::MakeBindingLayouts().front();
-            if (stage == Stage::Fxaa || stage == Stage::Scale)
-            {
-                std::erase_if(layout.bindings, [](const auto &item)
-                {
-                    return item.type == RHI::ResourceType::Texture_SRV && item.slot == 1;
-                });
-            }
-            auto binding = m_Device.CreateBindingLayout(layout);
             if (!binding)
             {
-                throw Core::BoundedText("Cannot create display binding layout");
+                // 已验证的角色配方固定, 所有代共用同一个布局对象供实际 BindSet 使用.
+                auto layout = stage == Stage::Clamp ? ClampAbi::MakeBindingLayouts().front() :
+                                                      Abi::MakeBindingLayouts().front();
+                if (stage == Stage::Fxaa || stage == Stage::Scale)
+                {
+                    std::erase_if(layout.bindings, [](const auto &item)
+                    {
+                        return item.type == RHI::ResourceType::Texture_SRV && item.slot == 1;
+                    });
+                }
+                binding = m_Device.CreateBindingLayout(layout);
+                if (!binding)
+                {
+                    throw Core::BoundedText("Cannot create display binding layout");
+                }
             }
             program.shaders = std::get<Shader::RhiProgram>(std::move(shaders));
-            program.layout = std::move(binding);
         }
-        auto &pipeline = program.variants[format == OutputFormat ? 1 : 0];
+        // 同一角色的两种目标共用 Shader 和绑定布局, 只有附件格式不同的 Pipeline 要分别链接.
+        auto &pipeline = program.variants[key.variant];
         if (!pipeline)
         {
+            const auto format = key.variant ? OutputFormat : LinearFormat;
             RHI::GraphicsPipelineDesc desc;
             desc.SetVertexShader(program.shaders.vertex.Get()).SetFragmentShader(program.shaders.fragment.Get())
-                .AddBindingLayout(program.layout.Get());
+                .AddBindingLayout(binding.Get());
             desc.renderState.depthStencilState.DisableDepthTest().DisableDepthWrite().DisableStencil();
             desc.renderState.rasterState.SetCullMode(RHI::RasterCullMode::None);
             pipeline = m_Device.CreateGraphicsPipeline(desc, RHI::FramebufferInfo().AddColorFormat(format));
             if (!pipeline)
             {
                 Core::BoundedText issue("Cannot link ");
-                issue.Append(Names[index]);
+                issue.Append(DisplayNames[index]);
                 throw issue;
             }
         }
-        return {Names[index], program.layout, pipeline};
     }
 
     // 单一固定表的候选可在原字节上重试. 共享纹理以同一 Graphics 序列进出 Common.
@@ -109,9 +148,8 @@ namespace Physara::Renderer::PostProcess
         m_Lut = std::move(entry);
     }
 
-    // 全部阶段准备成功才发布帧内选择. 只有存在后继滤波时保留线性中间目标.
-    std::optional<Core::BoundedText> DisplayDevice::Prepare(DisplayFrame &frame, const ViewLayouts &layouts,
-                                                          DisplaySettings settings)
+    std::optional<Core::BoundedText> DisplayDevice::PrepareInputs(DisplayFrame &frame, const ViewLayouts &layouts,
+                                                                 DisplaySettings settings)
     try
     {
         const bool physical = settings.profile == DisplayProfile::AcesSdr;
@@ -119,17 +157,6 @@ namespace Physara::Renderer::PostProcess
         const bool scale = layouts.render != layouts.display;
         DisplayFrame candidate;
         candidate.m_Layouts = layouts;
-        candidate.m_Stages[candidate.m_StageCount++] = PrepareStage(physical ? Stage::Grade : Stage::Clamp,
-            fxaa || scale ? LinearFormat : OutputFormat);
-        if (fxaa)
-        {
-            candidate.m_Stages[candidate.m_StageCount++] = PrepareStage(Stage::Fxaa,
-                scale ? LinearFormat : OutputFormat);
-        }
-        if (scale)
-        {
-            candidate.m_Stages[candidate.m_StageCount++] = PrepareStage(Stage::Scale, OutputFormat);
-        }
         if (physical || scale)
         {
             if (!m_Sampler)
@@ -165,6 +192,20 @@ namespace Physara::Renderer::PostProcess
     catch (const std::bad_alloc &)
     {
         return Core::BoundedText("Display preparation allocation failed");
+    }
+
+    void DisplayDevice::BindStages(DisplayFrame &frame, const ProgramTable &programs,
+                                   DisplaySettings settings) const noexcept
+    {
+        assert(frame.m_StageCount == 0);
+        const auto requests = SelectStages(frame.m_Layouts, settings);
+        for (const auto key : requests.Stages())
+        {
+            const auto index = ProgramIndex(key.role);
+            const auto &pipeline = programs[index].variants[key.variant];
+            assert(pipeline && m_Layouts[index]);
+            frame.m_Stages[frame.m_StageCount++] = {DisplayNames[index], m_Layouts[index], pipeline};
+        }
     }
 
     std::size_t DisplayFrame::UploadBytes() const noexcept

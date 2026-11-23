@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <map>
 #include <set>
 #include <sstream>
@@ -37,7 +38,8 @@ namespace Physara::Shader
     };
 
     // 按请求的 profile 校验阶段组合及 main 入口, 并拒绝不受支持的 define 值.
-    static Program ParseProgram(const Json &json)
+    static Program ParseProgram(const Json &json, std::string_view origin)
+    try
     {
         CheckFields(json, {"version", "name", "interface", "profile", "stages", "defines"}, "/program");
         if (UInt(json.at("version"), 1, "/program/version") != 1)
@@ -105,12 +107,20 @@ namespace Physara::Shader
         }
         return program;
     }
+    catch (const BuildError &error)
+    {
+        throw BuildError(error.GetFailure().code, std::string(origin) + ": " + error.what());
+    }
+    catch (const Json::exception &error)
+    {
+        throw BuildError(ErrorCode::InvalidInput, std::string(origin) + ": " + error.what());
+    }
 
     // 本次已核对的生成接口快照, 真实路径及身份输入, 字节预算包含全部必要产物.
     struct InterfaceInput
     {
         InterfaceSchema schema;
-        std::vector<std::filesystem::path> files;
+        std::vector<BuildInput> files;
         Json identity;
         std::size_t bytes = 0;
     };
@@ -137,20 +147,21 @@ namespace Physara::Shader
             throw BuildError(ErrorCode::InterfaceMismatch, "Interface manifest does not match the requested profile.");
         }
         InterfaceInput input;
-        input.files.push_back(manifestPath);
+        input.files.push_back({manifestPath, HashText(manifestText)});
         input.bytes = manifestText.size();
         input.identity = {
-            {"manifest", HashText(manifestText)}, {"schema", manifest.at("schemaHash")}, {"artifacts", artifacts}};
+            {"manifest", input.files.front().hash}, {"schema", manifest.at("schemaHash")}, {"artifacts", artifacts}};
         for (const auto *name : names)
         {
             const auto path = CanonicalInputPath(root / name);
             const auto text = ReadText(path, MaxPackageBytes);
-            if (HashText(text) != artifacts.at(name).get<std::string>())
+            auto hash = HashText(text);
+            if (hash != artifacts.at(name).get<std::string>())
             {
                 throw BuildError(ErrorCode::InterfaceMismatch,
                                  std::string("Incomplete/mixed interface artifact: ") + name);
             }
-            input.files.push_back(path);
+            input.files.push_back({path, std::move(hash)});
             if (text.size() > MaxPackageBytes - input.bytes)
             {
                 throw BuildError(ErrorCode::InvalidInput, "Generated interface exceeds input byte budget.");
@@ -206,7 +217,63 @@ namespace Physara::Shader
         return diagnostic;
     }
 
-    Result<BuildOutput> Compiler::Build(const BuildRequest &request) noexcept
+    // 只在真正进入 glslang 时计时, 编译失败的调用也累计实际耗时.
+    struct CompilationTimer
+    {
+        using Clock = std::chrono::steady_clock;
+        CompilationStatistics *statistics;
+        Clock::time_point start = statistics ? Clock::now() : Clock::time_point{};
+
+        ~CompilationTimer()
+        {
+            if (statistics)
+            {
+                statistics->seconds += std::chrono::duration<double>(Clock::now() - start).count();
+            }
+        }
+    };
+
+    // 先核对产品入口的固定字段, 再保留目录返回的组合诊断. 同 ABI 不代表阶段源或结构值可互换.
+    static void CheckProductProgram(const Program &program, VariantKey requested, std::string_view origin)
+    {
+        const auto *expected = FindProductProgram(requested.role);
+        if (!expected)
+        {
+            throw BuildError(ErrorCode::UnsupportedProfile, std::string(origin) + ": unknown requested product role.");
+        }
+        const auto require = [&](std::string_view field, std::string_view actual, std::string_view approved)
+        {
+            if (actual != approved)
+            {
+                throw BuildError(ErrorCode::UnsupportedProfile, std::string(origin) + ": " + std::string(field) +
+                    " = '" + std::string(actual) + "' is not approved; expected '" + std::string(approved) + "'.");
+            }
+        };
+        require("/program/name", program.name, expected->name);
+        require("/program/profile", program.profile, GraphicsProfile);
+        require("/program/interface", program.interfaceName, expected->interfaceName);
+        require("/program/stages/vertex/source", program.stages[0].source, expected->vertex);
+        require("/program/stages/fragment/source", program.stages[1].source, expected->fragment);
+
+        std::vector<VariantField> fields;
+        for (const auto &[name, value] : program.defines)
+        {
+            fields.push_back({name, value});
+        }
+        const auto variant = ResolveVariant(program.name, fields);
+        if (const auto *failure = std::get_if<Failure>(&variant))
+        {
+            throw BuildError(failure->code, std::string(origin) + ": " +
+                             std::string(failure->context.description.View()));
+        }
+        if (const auto approved = std::get<VariantKey>(variant); approved != requested)
+        {
+            require("requested PHYSARA_PHYSICAL_LIGHTING", std::to_string(requested.physicalLighting),
+                    std::to_string(approved.physicalLighting));
+        }
+    }
+
+    Result<BuildOutput> Compiler::Build(const BuildRequest &request, CompilationStatistics *statistics) noexcept
     {
         return GuardBuild<BuildOutput>(
             [&]
@@ -214,7 +281,13 @@ namespace Physara::Shader
                 const auto programPath = CanonicalInputPath(request.programPath);
                 const auto interfaceRoot = CanonicalInputPath(request.interfaceRoot);
                 const auto requestText = ReadText(programPath, MaxDeclarationBytes);
-                const auto program = ParseProgram(ParseJson(requestText, PathText(programPath)));
+                const auto relative = request.programPath.lexically_relative(request.sourceRoot);
+                const auto origin = PathText(!relative.empty() && *relative.begin() != ".." ? relative : programPath);
+                const auto program = ParseProgram(ParseJson(requestText, origin), origin);
+                if (request.variant)
+                {
+                    CheckProductProgram(program, *request.variant, origin);
+                }
                 const auto interfaceInput = ReadInterface(interfaceRoot, program);
                 SourceGraph graph(request.sourceRoot, interfaceRoot);
                 std::array<const SourceFile *, 2> sources{};
@@ -291,7 +364,16 @@ namespace Physara::Shader
                     shader->setEnvInput(glslang::EShSourceGlsl, language, glslang::EShClientVulkan, 450);
                     shader->setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
                     shader->setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
-                    if (!shader->parse(GetDefaultResources(), 450, ECoreProfile, false, false, messages, graph))
+                    bool parsed;
+                    {
+                        const CompilationTimer timer{statistics};
+                        if (statistics)
+                        {
+                            ++statistics->stages;
+                        }
+                        parsed = shader->parse(GetDefaultResources(), 450, ECoreProfile, false, false, messages, graph);
+                    }
+                    if (!parsed)
                     {
                         throw BuildError(ErrorCode::CompilationFailed,
                                          CompileDiagnostic(program.name, StageName(program.stages[index].stage),
@@ -304,7 +386,12 @@ namespace Physara::Shader
                 {
                     linked.addShader(shaders[index].get());
                 }
-                if (!linked.link(messages))
+                bool compiled;
+                {
+                    const CompilationTimer timer{statistics};
+                    compiled = linked.link(messages);
+                }
+                if (!compiled)
                 {
                     throw BuildError(ErrorCode::CompilationFailed,
                                      CompileDiagnostic(program.name, "link", linked.getInfoLog(), graph));
@@ -336,8 +423,11 @@ namespace Physara::Shader
                     spirvOptions.validate = false;
                     spv::SpvBuildLogger logger;
                     const auto language = Languages[static_cast<std::size_t>(module.stage)];
-                    glslang::GlslangToSpv(*linked.getIntermediate(language), module.words, &logger,
-                                          &spirvOptions);
+                    {
+                        const CompilationTimer timer{statistics};
+                        glslang::GlslangToSpv(*linked.getIntermediate(language), module.words, &logger,
+                                             &spirvOptions);
+                    }
                     const auto messagesText = logger.getAllMessages();
                     if (!messagesText.empty())
                     {
@@ -357,12 +447,9 @@ namespace Physara::Shader
                 }
                 CheckProgramInterfaces(package.modules, package.profile);
                 // 包内只存逻辑身份, depfile 单独保存本机路径; 静态图包含未活动分支以保守触发重建.
-                output.fileDependencies = interfaceInput.files;
-                for (auto &file : output.fileDependencies)
-                {
-                    file = std::filesystem::canonical(file);
-                }
-                output.fileDependencies.push_back(programPath);
+                output.inputs = interfaceInput.files;
+                const auto requestHash = HashText(requestText);
+                output.inputs.push_back({programPath, requestHash});
                 Json dependencies = Json::array();
                 for (const auto &[logical, file] : graph.GetFiles())
                 {
@@ -371,7 +458,7 @@ namespace Physara::Shader
                     dependencies.push_back({{"path", logical}, {"hash", hash}});
                     if (!logical.starts_with("Interface/"))
                     {
-                        output.fileDependencies.push_back(file.path);
+                        output.inputs.push_back({file.path, hash});
                     }
                 }
                 package.sourceMap = graph.GetEdges();
@@ -384,7 +471,7 @@ namespace Physara::Shader
                 // JSON 的字段/字符串长度编码避免简单串接歧义. 原始声明格式变化只使内容身份变化.
                 package.contentHash = HashText(Json{
                     {"version", 1},
-                    {"request", HashText(requestText)},
+                    {"request", requestHash},
                     {"interface", interfaceInput.identity},
                     {"sources", dependencies},
                     {"options", options},

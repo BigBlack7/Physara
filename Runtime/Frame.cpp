@@ -196,6 +196,7 @@ namespace Physara::Runtime
         PreparedView prepared;
         PreparedViewOutput outputs;
         std::optional<Core::BoundedText> error;
+        bool planned = false;
     };
 
     /// @brief 仅主输出被实际采样时进入其 Forward 分支.
@@ -521,7 +522,13 @@ namespace Physara::Runtime
         }
         const auto publishView = [&](View &owner, PreparedViewOutput &candidate, TextureId color)
         {
+            // 场景出口须能追溯到本槽的程序表. View 还要用导出纹理和票据确认自己的请求版本.
             const auto *output = FindTextureExport(*execution, color);
+            const auto *planned = candidate.Color();
+            if (planned && planned->scene && planned->scene->shaderGeneration != slot.forward.ShaderGeneration())
+            {
+                return false;
+            }
             return output && owner.Publish(std::move(candidate), output->object, output->retained, receipt.ticket);
         };
         const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
@@ -556,7 +563,8 @@ namespace Physara::Runtime
             const auto retained = measured.LastAcceptedOutput();
             const auto &last = *retained.Color()->scene;
             measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, measured.Id(), last.contentRevision,
-                last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display};
+                last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display,
+                last.shaderGeneration};
             const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
             // 上传账单汇总整张正常图. 几何工作量只取所选出口, 用其深度和颜色 Pass 的存活性分别计数.
             CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
@@ -748,8 +756,44 @@ namespace Physara::Runtime
         return prepared.camera && (prepared.scene.hasGeometry || sky);
     }
 
-    /// @brief 附加 View 在主 View 后分别校验和准备, 局部失败只对对应请求报告结果.
-    static OffscreenCandidate PrepareOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward,
+    void AdvanceFrameShaders(Platform::DeviceHost &host, ForwardRenderer &forward, FrameStatistics &statistics,
+        Shader::SourceReload *reload, std::optional<Shader::ReloadResult> startupFailure, bool hasFramePlan) noexcept
+    {
+        auto result = reload ? reload->Poll() : std::move(startupFailure);
+        const auto errors = host.BeginFrameGraphicsDiagnostics();
+        forward.AdvanceShaderPreparation(reload ? reload->Requested() : 0, std::move(result));
+        if (!errors.IsClear())
+        {
+            if (const auto error = host.FirstGraphicsError())
+            {
+                forward.RecordShaderDiagnostic(*error);
+            }
+        }
+        if (hasFramePlan && !host.HasFatalGraphicsError() && forward.ShaderCandidateReady())
+        {
+            // 原生 link 期间仍可保存. 在提交前以零超时读已到达的通知, 之后只切换拥有关系.
+            result = reload ? reload->Poll() : std::nullopt;
+            forward.PublishShaderPreparation(reload ? reload->Requested() : 0, std::move(result));
+        }
+        statistics.PublishShaders(forward.ShaderStatistics(), reload ? reload->Statistics() : Shader::ReloadStatistics{});
+    }
+
+    /// @brief 将本路准备阶段的原生错误转为明确的 View 结果, 保留已有的具体失败.
+    static std::optional<ForwardFailure> PrepareForwardView(Platform::DeviceHost &host, const auto &prepare)
+    {
+        const auto errors = host.BeginFrameGraphicsDiagnostics();
+        auto failure = prepare();
+        if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending ||
+                                  failure->reason == ViewSettingReason::ShaderPending))
+        {
+            return ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                                  Core::BoundedText("Forward resource preparation failed")};
+        }
+        return failure;
+    }
+
+    /// @brief 附加 View 在主 View 后独立校验和规划, 局部失败只对对应请求报告结果.
+    static OffscreenCandidate PlanOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward,
         FrameSlot &slot, SceneFramePreparation &scene, const View &main,
         std::span<OffscreenViewRequest> requests)
     {
@@ -795,37 +839,60 @@ namespace Physara::Runtime
             return candidate;
         }
 
-        const auto errors = host.BeginFrameGraphicsDiagnostics();
         const auto &prepared = candidate.prepared;
-        auto failure = forward.Prepare(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
-        if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending))
-        {
-            failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
-                                     Core::BoundedText("Offscreen resource preparation failed")};
-        }
+        const auto failure = PrepareForwardView(host, [&] {
+            return forward.PlanView(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
+        });
         if (failure)
         {
             request.reason = failure->reason;
             candidate.outputs = view.Unavailable(request.reason);
             if (request.reason != ViewSettingReason::EnvironmentPending)
             {
+                candidate.error = Failed(host, AttemptStatus::Cancelled, "Frame.OffscreenPlan", failure->description).error;
+            }
+        }
+        candidate.planned = !failure;
+        return candidate;
+    }
+
+    /// @brief 仅已完成规划的附加路从本帧选定代取得句柄并形成正常候选.
+    static void FinishOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward, FrameSlot &slot,
+                                OffscreenCandidate &candidate)
+    {
+        if (!candidate.planned)
+        {
+            return;
+        }
+        auto &request = *candidate.request;
+        auto &view = request.view;
+        const auto &prepared = candidate.prepared;
+        const auto failure = PrepareForwardView(host, [&] {
+            return forward.FinishView(slot.forward, prepared, OffscreenViewIndex);
+        });
+        if (failure)
+        {
+            request.reason = failure->reason;
+            candidate.outputs = view.Unavailable(request.reason);
+            if (request.reason != ViewSettingReason::EnvironmentPending &&
+                request.reason != ViewSettingReason::ShaderPending)
+            {
                 candidate.error = Failed(host, AttemptStatus::Cancelled, "Frame.OffscreenPrepare",
                                          failure->description).error;
             }
-            return candidate;
+            return;
         }
         auto output = view.PreparePreview(prepared, slot.forward.Degradation(OffscreenViewIndex),
-                                          slot.forward.Environment(OffscreenViewIndex));
+                                          slot.forward.Environment(OffscreenViewIndex), slot.forward.ShaderGeneration());
         if (const auto *error = std::get_if<Core::BoundedText>(&output))
         {
             request.reason = ViewSettingReason::ScenePreparationFailed;
             candidate.outputs = view.Unavailable(request.reason);
             candidate.error = *error;
-            return candidate;
+            return;
         }
         candidate.outputs = std::get<PreparedViewOutput>(std::move(output));
         request.reason = ViewSettingReason::SubmissionPending;
-        return candidate;
     }
 
     // 一次取得最多尝试带视口的普通图, 去掉视口的普通图和安全 UI 图.
@@ -836,7 +903,8 @@ namespace Physara::Runtime
         const Editor::EditorFrame &editorFrame, const Platform::PresentationFrame &presentation, FrameSlot &slot,
         std::size_t remainingDiagnosticBytes, RHI::CommandList &commands, Core::Diagnostics &diagnostics,
         FrameStatistics &statistics, GraphResourcePool &graphPool, double editorSeconds,
-        std::span<OffscreenViewRequest> offscreenRequests)
+        std::span<OffscreenViewRequest> offscreenRequests, Shader::SourceReload *reload,
+        std::optional<Shader::ReloadResult> startupShaderFailure)
     {
         statistics.BeginGraphFrame();
         // 即使候选在准备前终止, 复用的请求也不能带回上一帧的接受票据.
@@ -870,6 +938,7 @@ namespace Physara::Runtime
         // 本轮事务已提交且同槽已 Ready. 在图尝试外准备, 安全 UI 和上传重试不再读取 Scene.
         const auto sceneStart = CpuClock::now();
         slot.forward.Reset();
+        forward.BeginShaderRequests();
         const auto *scene = editor.ActiveScene();
         assert(scene);
         const auto &environment = scene->Environment();
@@ -885,25 +954,52 @@ namespace Physara::Runtime
         // 有场景的诊断预览也可选择缩放阶段. 显示准备或上传准入受阻时沿用同一旧图路径.
         const bool retainOnFailure = physical || (hasScene && prepared.layouts.render != prepared.layouts.display);
         auto mode = Editor::UiFrameMode::Normal;
-        // 主 View 的 CPU 索引已准备. 封存命令有可见采样时才为它登记驻留和上传, 出图资格由后面的图回执确认.
-        if (hasScene && editor.HasViewportSample(presentation.target.extentPixels))
+        // 先封存两路的实际计划. 能消费场景的主路才登记驻留和上传, 离屏继续独立声明自己的需求.
+        const bool mainRequested = hasScene && editor.HasViewportSample(presentation.target.extentPixels);
+        std::optional<ForwardFailure> mainFailure;
+        if (mainRequested)
         {
-            const auto errors = host.BeginFrameGraphicsDiagnostics();
-            auto failure = forward.Prepare(slot.forward, prepared, prepared.preview);
-            if (!errors.IsClear() && (!failure || failure->reason == ViewSettingReason::EnvironmentPending))
+            mainFailure = PrepareForwardView(host, [&] {
+                return forward.PlanView(slot.forward, prepared, prepared.preview);
+            });
+        }
+        if (host.HasFatalGraphicsError())
+        {
+            remember(host.FirstGraphicsError());
+            return stop();
+        }
+        auto offscreen = PlanOffscreen(host, forward, slot, shared, view, offscreenRequests);
+        forward.EndEnvironmentRequests();
+        if (!host.HasFatalGraphicsError())
+        {
+            AdvanceFrameShaders(host, forward, statistics, reload, std::move(startupShaderFailure), true);
+        }
+        if (host.HasFatalGraphicsError())
+        {
+            remember(host.FirstGraphicsError());
+            return stop();
+        }
+
+        // 到此本帧代已选定. 正常 View 从同一张表取得句柄, 未就绪的路可沿自己的旧接受输出回退.
+        if (mainRequested)
+        {
+            if (!mainFailure)
             {
-                failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
-                                         Core::BoundedText("Forward resource preparation failed")};
+                mainFailure = PrepareForwardView(host, [&] {
+                    return forward.FinishView(slot.forward, prepared);
+                });
             }
-            if (failure)
+            if (const auto &failure = mainFailure)
             {
-                // CPU 烘焙正常等待只更新 View 原因, 实际拒绝仍写入本次帧诊断.
-                if (failure->reason != ViewSettingReason::EnvironmentPending)
+                // 环境烘焙和 Shader 准备的正常等待只更新 View 原因, 实际拒绝仍写入本次帧诊断.
+                if (failure->reason != ViewSettingReason::EnvironmentPending &&
+                    failure->reason != ViewSettingReason::ShaderPending)
                 {
                     remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
                 }
                 candidate = view.Unavailable(failure->reason);
-                if (retainOnFailure)
+                if (retainOnFailure || failure->reason == ViewSettingReason::ShaderPending ||
+                    failure->reason == ViewSettingReason::ScenePipelineUnavailable)
                 {
                     auto retained = view.LastAcceptedOutput(failure->reason);
                     if (retained.Color())
@@ -915,7 +1011,8 @@ namespace Physara::Runtime
             }
             else
             {
-                candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment());
+                candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment(),
+                                                slot.forward.ShaderGeneration());
             }
             if (host.HasFatalGraphicsError())
             {
@@ -937,8 +1034,7 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
-        auto offscreen = PrepareOffscreen(host, forward, slot, shared, view, offscreenRequests);
-        forward.EndEnvironmentRequests();
+        FinishOffscreen(host, forward, slot, offscreen);
         remember(offscreen.error);
         if (host.HasFatalGraphicsError())
         {

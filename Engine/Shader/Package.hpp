@@ -16,6 +16,10 @@ namespace Physara::Shader
     [[nodiscard]] Result<ShaderPackage> ReadPackage(const std::filesystem::path &path,
                                                     std::string_view expectedAbiHash) noexcept;
 
+    /// @brief 按包写入规则验证后返回头部, 元数据, 对齐填充及模块载荷的总字节数, 供 CPU 缓存准入.
+    /// @return 编码长度或验证及分配失败. 调用方仍持有原包.
+    [[nodiscard]] Result<std::size_t> MeasurePackage(const ShaderPackage &package) noexcept;
+
     /// @brief 通过同目录临时文件原子发布 Shader 包.
     /// @return true 表示内容改变, false 表示与旧文件相同; 失败返回 Failure.
     /// @note 发布失败时保留旧包, 输入仅在调用期间借用.

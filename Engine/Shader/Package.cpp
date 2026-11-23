@@ -348,6 +348,11 @@ namespace Physara::Shader
             });
     }
 
+    Result<std::size_t> MeasurePackage(const ShaderPackage &package) noexcept
+    {
+        return GuardBuild<std::size_t>([&] { return EncodePackage(package).size(); });
+    }
+
     Result<bool> WritePackage(const std::filesystem::path &path, const ShaderPackage &package) noexcept
     {
         return GuardBuild<bool>(

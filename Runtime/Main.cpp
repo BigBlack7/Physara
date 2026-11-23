@@ -36,16 +36,18 @@ namespace Physara::Runtime
     static constexpr std::string_view Usage =
         "Physara - native window and RHI editor runtime\n"
         "Usage: Physara [--help] [--hidden] [--width=N] [--height=N] [--poll-limit=N]\n"
+        "               [--shader-source-root=<checkout>]\n"
         "Dimensions are unsigned 32-bit logical units. Poll limit is a positive unsigned 64-bit value.\n"
         "Visible and hidden modes use the same editor session and require a real graphics context.\n"
         "Renderable frames compose the editor through RHI and present the window color.\n";
 
-    /// @brief 通过命令行语法验证的自持启动配置. 原生尺寸约束由宿主检查.
+    /// @brief 通过语法验证的启动配置. 源码根借用 argv 至装配完成, 窗口尺寸由宿主进一步检查.
     struct StartupOptions
     {
         Platform::HostDesc host{.presentationSlotCount = FrameSlotCount};
         // 按宿主成功发布的输入批次数计数, 与资产发布数量无关; 空值表示由窗口关闭请求决定退出时机.
         std::optional<std::uint64_t> pollLimit;
+        std::string_view shaderSourceRoot; ///< 借用本进程入口的参数字节, 仅供冷路径装配.
         bool help = false;
     };
 
@@ -99,6 +101,12 @@ namespace Physara::Runtime
                 valid = ParseUnsigned(argument.substr(13), limit) && limit > 0;
                 options.pollLimit = limit;
             }
+            else if (argument.starts_with("--shader-source-root="))
+            {
+                bit = 32;
+                options.shaderSourceRoot = argument.substr(std::string_view("--shader-source-root=").size());
+                valid = !options.shaderSourceRoot.empty();
+            }
             else
             {
                 valid = false;
@@ -150,7 +158,8 @@ namespace Physara::Runtime
     // 暂停与槽忙共享发布入口和有限等待; 本函数不等待文件或资产 worker, 退出收拢由外层 owner 负责.
     static int RunEditor(Platform::DeviceHost &host, Editor::EditorSession &editor, Renderer::View &view,
                          Renderer::ForwardRenderer &forward, Asset::AssetManager &assets, Core::Diagnostics &diagnostics,
-                         Renderer::GraphResourcePool &graphPool, std::optional<std::uint64_t> pollLimit)
+                         Renderer::GraphResourcePool &graphPool, std::optional<std::uint64_t> pollLimit,
+                         Shader::SourceReload *reload, std::optional<Shader::ReloadResult> startupShaderFailure)
     {
         std::optional<bool> previousFrame;
         std::array<FrameSlot, FrameSlotCount> slots;
@@ -187,7 +196,6 @@ namespace Physara::Runtime
             }
             // 此时持有宿主 context 且还未打开录制. 上一提交的计时若已可读, 本轮布局即可显示.
             statistics.Poll(host);
-
             // CPU 发布独立于 GPU 槽. 终止轮次在上面直接退出, 不再接受新版本.
             assets.PublishCompleted();
             editor.AdvanceSceneDocument(assets, view);
@@ -282,7 +290,8 @@ namespace Physara::Runtime
                 }
                 const auto rendered =
                     RenderFrame(host, editor, view, forward, frame, *presentation, slot, remaining, *commands,
-                                diagnostics, statistics, graphPool, editorSeconds);
+                                diagnostics, statistics, graphPool, editorSeconds, {}, reload,
+                                std::exchange(startupShaderFailure, std::nullopt));
                 if (const auto *error = std::get_if<Core::BoundedText>(&rendered))
                 {
                     PrintError(*error);
@@ -299,6 +308,14 @@ namespace Physara::Runtime
             }
             else
             {
+                // 没有帧槽时仍可推进通知和预热. 有本轮 View 计划后才有完整的发布条件.
+                AdvanceFrameShaders(host, forward, statistics, reload, std::exchange(startupShaderFailure, std::nullopt),
+                                    false);
+                if (host.HasFatalGraphicsError())
+                {
+                    PrintError(host.FirstGraphicsError().value_or(Core::BoundedText("Fatal Shader preparation")));
+                    return 1;
+                }
                 view.Defer(slotBusy && frame.viewport ? Renderer::ViewSettingReason::SlotPending :
                                                          Renderer::ViewSettingReason::LayoutPending);
             }
@@ -369,7 +386,32 @@ namespace Physara::Runtime
             resources.forward,
             info.maxTextureSizePixels, std::min(info.maxTextureSizePixels, info.maxRenderbufferSizePixels),
             info.uniformBufferOffsetAlignmentBytes);
-        const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, graphPool, options.pollLimit);
+        Core::BoundedText shaderDevice(info.vendor.View());
+        for (const auto component : {info.renderer.View(), info.version.View(), info.shadingLanguageVersion.View()})
+        {
+            shaderDevice.Append("\n");
+            shaderDevice.Append(component);
+        }
+        forward.SetShaderPreparationLimits(shaderDevice, {.frames = FrameSlotCount});
+        std::unique_ptr<Shader::SourceReload> reload;
+        std::optional<Shader::ReloadResult> startupShaderFailure;
+        if (!options.shaderSourceRoot.empty())
+        {
+            auto source = Shader::SourceReload::Create(std::filesystem::path(options.shaderSourceRoot),
+                                                        resources.projectRoot);
+            if (const auto *failure = std::get_if<Shader::Failure>(&source))
+            {
+                startupShaderFailure.emplace(Shader::ReloadResult{.failure = *failure});
+            }
+            else
+            {
+                reload = std::get<std::unique_ptr<Shader::SourceReload>>(std::move(source));
+            }
+        }
+        const auto result = RunEditor(host, editor, *view, forward, manager, diagnostics, graphPool, options.pollLimit,
+                                      reload.get(), std::move(startupShaderFailure));
+        // 此时循环已结束. 收拢可能仍在编译的 CPU 作业, 此后才析构设备侧的 Forward 表.
+        reload.reset();
         editor.ShutdownSceneDocument();
         manager.Shutdown();
         return result;

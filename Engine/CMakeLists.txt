@@ -27,6 +27,7 @@ add_subdirectory(Scene)
 # 独立图目标提供 CPU 声明和计划, 并通过公共 RHI 在借用的即时录制中执行.
 add_subdirectory(Renderer/RenderGraph)
 
+# PRODUCT 将目录角色传给打包驱动, 与热重载共用同一组阶段和结构值检查.
 # 三个颜色变体和深度包共用 StaticForward 接口与顶点入口. 颜色变体按 DFG 和环境采样需求分别生成.
 # 天空混入工作色. 显示分级, FXAA 和缩放各自生成包; 后两者共用 DisplayPost 的同一组活动绑定.
 add_subdirectory(Shader)
@@ -34,14 +35,14 @@ physara_add_shader_interface(StaticForward Shader/Interface/StaticForward.json)
 physara_add_shader_interface(ForwardDisplay Shader/Interface/ForwardDisplay.json)
 physara_add_shader_interface(ForwardSky Shader/Interface/ForwardSky.json)
 physara_add_shader_interface(DisplayPost Shader/Interface/DisplayPost.json)
-physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders)
-physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders)
-physara_add_shader_program(StaticForwardPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPhysical.json ../Shaders)
-physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forward/StaticForwardIbl.json ../Shaders)
-physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders)
-physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders)
+physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPhysical.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forward/StaticForwardIbl.json ../Shaders PRODUCT)
+physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders PRODUCT)
+physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders PRODUCT)
 foreach(program DisplayColorGrading DisplayFxaa DisplayScale)
-    physara_add_shader_program(${program} DisplayPost ../Shaders/PostProcess/${program}.json ../Shaders)
+    physara_add_shader_program(${program} DisplayPost ../Shaders/PostProcess/${program}.json ../Shaders PRODUCT)
 endforeach()
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
@@ -63,6 +64,7 @@ add_library(PhysaraRenderer STATIC
     Renderer/PostProcess/ColorLut.hpp Renderer/PostProcess/ColorLut.cpp
     Renderer/PostProcess/Display.hpp Renderer/PostProcess/Display.cpp
     Renderer/Paths/Forward.hpp Renderer/Paths/Forward.cpp
+    Renderer/Paths/ForwardShaderKeys.hpp Renderer/Paths/ForwardShaderPreparation.cpp
 )
 target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph
     PRIVATE PhysaraShader glm filament_display)

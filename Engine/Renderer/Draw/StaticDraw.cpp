@@ -267,7 +267,7 @@ namespace Physara::Renderer::Detail
                 .SetSubresources(row.textures[i]->sampling));
             bindings.AddItem(RHI::BindingSetItem::Sampler(i, row.samplers[i].Get()));
         }
-        auto binding = device.device.CreateBindingSet(bindings, device.programs.layouts[2].Get());
+        auto binding = device.device.CreateBindingSet(bindings, device.activeShaders->programs.layouts[2].Get());
         if (!binding)
         {
             Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward material table binding");
@@ -652,7 +652,8 @@ namespace Physara::Renderer::Detail
             Reject(ViewSettingReason::ScenePreparationFailed, "Forward sort depth is not finite");
         }
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
-            slot->second, {}, {}, PipelineKey(attributes, mirror, doubleSided, phase),
+            slot->second, {}, {}, static_cast<std::uint32_t>(
+                GeometryRequest(attributes, mirror, doubleSided, phase, LightingProgram::Legacy).variant),
             -z, index, attributes, mirror, doubleSided});
     }
 
@@ -677,11 +678,11 @@ namespace Physara::Renderer::Detail
         });
     }
 
-    /// @brief 比较同一 View 和实例块内仍可能变化的状态. 两个 Pipeline 含布局和光栅状态,
-    /// 材质集合含表页和采样组合. 同一顶点页固定布局和步长, 本路径的索引页固定为 R32.
+    /// @brief 比较同一 View 和实例块内仍可能变化的状态. 光照角色和前置深度由本路统一选择,
+    /// 固定状态槽同时确定颜色和深度的布局及光栅组合. 材质集合含表页和采样组合.
     static bool SameBatch(const ForwardFrameData &frame, const DrawRecord &a, const DrawRecord &b) noexcept
     {
-        return a.pipeline == b.pipeline && a.depthPipeline == b.depthPipeline &&
+        return a.pipelineKey == b.pipelineKey &&
                a.geometry->vertices.page == b.geometry->vertices.page &&
                a.geometry->indices.page == b.geometry->indices.page &&
                a.object->storage.page == b.object->storage.page &&
@@ -772,7 +773,7 @@ namespace Physara::Renderer::Detail
                     RHI::BindingSetDesc bindings;
                     bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(0, objects.buffer.Get()));
                     bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(1, storage->buffer.Get()));
-                    renderables = device.device.CreateBindingSet(bindings, device.programs.layouts[1].Get());
+                    renderables = device.device.CreateBindingSet(bindings, device.activeShaders->programs.layouts[1].Get());
                     if (!renderables)
                     {
                         Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward instance binding");
@@ -807,7 +808,14 @@ namespace Physara::Renderer::Detail
                           std::as_bytes(std::span(arguments)));
     }
 
-    void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
+    // 来自本路实际驻留的表面及环境配置, 两个准备阶段共用固定状态选择.
+    static ShaderPipelineRequest DrawShader(const ForwardFrameData &frame, const DrawRecord &draw,
+                                            SurfacePhase phase) noexcept
+    {
+        return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program);
+    }
+
+    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
     {
         // 先收集几何和材质写入, 据实际可绘项选择后续灯表和 View 常量. 各路准备结束后统一封存.
         std::map<MaterialRow *, std::size_t> rows;
@@ -822,29 +830,58 @@ namespace Physara::Renderer::Detail
         const bool litDraws = std::ranges::any_of(frame.materialRows,
             [](const auto &row) { return row->values.unlit == 0; });
         PrepareEnvironment(device, frame, view, mode, litDraws);
-        if (frame.draws.empty())
+        if (!frame.draws.empty())
         {
-            return;
+            const bool usesLighting = litDraws &&
+                (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
+            PrepareLightTable(device, frame, view, usesLighting);
+            PrepareViewRow(device, frame, view, mode, usesLighting);
+            // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
+            SortDraws(frame);
+            PackBatches(device, frame);
         }
-        // 知道实际可绘材质后才选择活动资源形状, 纯 Unlit 工作集不需要 DFG 或环境照明.
-        const auto kind = frame.environment.program;
-        device.programs.PrepareLighting(device.device, kind);
-        frame.lightLayout = device.programs.lightLayouts[std::size_t(kind)];
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
-        for (auto &draw : frame.draws)
+        if (frame.environment.sky)
         {
-            draw.pipeline = device.programs.GeometryPipeline(device.device, draw.attributes, draw.mirrored,
-                                                             draw.doubleSided, phase, kind);
+            device.shaderDemand.Add({Shader::ProductShader::ForwardSky, 0});
+        }
+        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        for (const auto &batch : frame.batches)
+        {
+            const auto &draw = frame.draws[batch.firstDraw];
+            device.shaderDemand.Add(DrawShader(frame, draw, phase));
             if (frame.needs.earlyDepth)
             {
-                draw.depthPipeline = device.programs.GeometryPipeline(device.device, draw.attributes, draw.mirrored,
-                                                                      draw.doubleSided, SurfacePhase::Depth, kind);
+                device.shaderDemand.Add(DrawShader(frame, draw, SurfacePhase::Depth));
             }
         }
-        const bool usesLighting = litDraws && (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
-        PrepareLightTable(device, frame, view, usesLighting);
-        PrepareViewRow(device, frame, view, mode, usesLighting);
-        SortDraws(frame);
-        PackBatches(device, frame);
+    }
+
+    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame)
+    {
+        bool shaderReady = true;
+        if (frame.environment.sky)
+        {
+            frame.environment.skyPipeline = device.RequestShader({Shader::ProductShader::ForwardSky, 0});
+            frame.environment.skyLayout = device.activeShaders->programs.skyLayout;
+            shaderReady = bool(frame.environment.skyPipeline);
+        }
+        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        // 本帧只从已选代取得各批次使用的句柄. 实例及间接参数已按固定状态分组.
+        for (const auto &batch : frame.batches)
+        {
+            auto &draw = frame.draws[batch.firstDraw];
+            draw.pipeline = device.RequestShader(DrawShader(frame, draw, phase));
+            shaderReady &= bool(draw.pipeline);
+            if (frame.needs.earlyDepth)
+            {
+                draw.depthPipeline = device.RequestShader(DrawShader(frame, draw, SurfacePhase::Depth));
+                shaderReady &= bool(draw.depthPipeline);
+            }
+        }
+        if (!shaderReady)
+        {
+            Reject(ViewSettingReason::ShaderPending, "Waiting for prepared Forward pipelines");
+        }
+        frame.lightLayout = device.lightLayouts[std::size_t(frame.environment.program)];
     }
 }

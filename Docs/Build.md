@@ -86,8 +86,11 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 | `--hidden` | 创建隐藏窗口 |
 | `--width=N` / `--height=N` | 十进制无符号 32 位逻辑尺寸, 默认 1280x720; 零值或超过原生 int 范围由宿主配置校验拒绝 |
 | `--poll-limit=N` | 成功消费指定次数的 poll 后退出; N 为正的无符号 64 位整数 |
+| `--shader-source-root=<checkout>` | 从指定工作区绝对路径启用 Forward 与显示 Shader 的开发热重载 |
 
 选项不可重复; 未知选项、位置参数、符号、空值、尾随字符、溢出和零 poll limit 属于参数错误.
+
+在启用 Shader 热重载的会话中保存 `Shaders` 或 `Engine/Shader/Interface` 下的文件。可在 `View > Frame Statistics` 查看 Active 代、当前请求、Pending 或 Failed、原始编译位置和准备额度。失败时视图继续使用有效计划或上次接受的画面。调整 CPU 接口布局后使用普通产品构建生成配套消费者。
 
 | 返回码 | 含义 |
 |---|---|

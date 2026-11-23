@@ -403,7 +403,7 @@ namespace Physara::Renderer
 
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
-        std::optional<RenderedEnvironment> environment)
+        std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -415,12 +415,12 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
-        // 颜色来源和显示选择均使用绘制所依据的准备快照.
+        // 将曝光, 显示设置及程序表编号一起留在颜色候选. Publish 收到匹配图的回执后才更新场景历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
                           std::move(degradation), prepared.documentRevision, std::move(environment),
                           ResolveDisplaySettings(prepared.preview, prepared.requestedAa), prepared.layouts.render,
-                          prepared.layouts.display.outputExtent}};
+                          prepared.layouts.display.outputExtent, shaderGeneration}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }

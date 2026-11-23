@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include <Shader/RhiProgram.hpp>
 
 #include "../View.hpp"
+#include "../Paths/ForwardShaderKeys.hpp"
 #include "ColorLut.hpp"
 
 namespace Physara::Renderer::PostProcess
@@ -79,33 +81,49 @@ namespace Physara::Renderer::PostProcess
         std::size_t m_StageCount = 0;
     };
 
-    /// @brief 设备持有包, 布局, 按附件格式缓存的 Pipeline 及固定 LUT; 帧只选择本次要用的阶段.
+    /// @brief 设备拥有固定布局, 采样器和 LUT. Shader 代持有按附件格式缓存的显示 Pipeline.
     class DisplayDevice final
     {
     public:
-        /// @brief 借用设备并保存按 Clamp, Grade, Fxaa, Scale 排列的包路径; 构造时不读包.
-        DisplayDevice(RHI::Device &device, std::array<std::filesystem::path, 4> paths);
-        /// @brief 按两套布局及已解析的实际配置组装候选; 失败返回原因, 不替换传入的 frame.
-        /// 已取得的设备资源可保留供重试, 不等同于图已接受或上传已完成.
-        [[nodiscard]] std::optional<Core::BoundedText> Prepare(DisplayFrame &frame, const ViewLayouts &layouts,
-                                                               DisplaySettings settings);
-
-    private:
-        enum class Stage : std::uint8_t { Clamp, Grade, Fxaa, Scale };
-        /// @brief 同一阶段共用 Shader 和布局. 两个 Pipeline 槽分别写线性中间附件和 sRGB 终点.
+        /// @brief 同一阶段共用 Shader, 两个 Pipeline 槽分别写线性中间附件和 sRGB 终点.
         struct Program
         {
             Shader::RhiProgram shaders;
-            RHI::BindingLayoutHandle layout;
             std::array<RHI::GraphicsPipelineHandle, 2> variants;
         };
+        using ProgramTable = std::array<Program, 4>;
 
-        [[nodiscard]] DisplayStage PrepareStage(Stage stage, RHI::Format format);
+        /// @brief 借用设备并保存按 Clamp, Grade, Fxaa, Scale 排列的包路径; 构造时不读包.
+        DisplayDevice(RHI::Device &device, std::array<std::filesystem::path, 4> paths);
+        /// @brief 选代前取得实际显示链的矩形常量, 采样器和 LUT. 失败时保留原 frame.
+        /// @note 图接受前, 帧持有定义 LUT 的待上传像素. 设备与图确认状态由 DisplayFrame::Confirm 衔接.
+        [[nodiscard]] std::optional<Core::BoundedText> PrepareInputs(DisplayFrame &frame, const ViewLayouts &layouts,
+                                                                    DisplaySettings settings);
+        /// @brief 将选定代的 Pipeline 和固定布局绑定到已准备的显示输入.
+        /// @pre 本路输入已取得且 programs 中有 settings 所需的全部 Pipeline.
+        void BindStages(DisplayFrame &frame, const ProgramTable &programs, DisplaySettings settings) const noexcept;
+        /// @brief 本路显示链使用的固定状态键, 依图中执行次序排列.
+        struct Requests
+        {
+            std::array<Detail::ShaderPipelineRequest, 3> keys;
+            std::size_t count{};
+            [[nodiscard]] auto Stages() const noexcept { return std::span(keys).first(count); }
+        };
+        /// @brief 按处理顺序选取本路使用的阶段. 末级写 sRGB, 有后继滤波的阶段写线性附件.
+        [[nodiscard]] static Requests SelectStages(const ViewLayouts &layouts, DisplaySettings settings) noexcept;
+        [[nodiscard]] static bool IsRole(Shader::ProductShader role) noexcept;
+        [[nodiscard]] static std::size_t ProgramIndex(Shader::ProductShader role) noexcept;
+        /// @brief 仅在帧前准备器调用. 完成目标键的创建, 失败抛出有界原因.
+        void PrepareStage(ProgramTable &programs, Detail::ShaderPipelineRequest key,
+                          const Shader::ProductPackages &packages);
+
+    private:
+        enum class Stage : std::uint8_t { Clamp, Grade, Fxaa, Scale };
         void PrepareLut();
 
         RHI::Device &m_Device;
         std::array<std::filesystem::path, 4> m_Paths;
-        std::array<Program, 4> m_Programs;
+        std::array<RHI::BindingLayoutHandle, 4> m_Layouts; ///< 每个角色以同一布局贯穿设备会话内的各代.
         std::shared_ptr<ResidentLut> m_Lut;
         RHI::SamplerHandle m_Sampler;
     };

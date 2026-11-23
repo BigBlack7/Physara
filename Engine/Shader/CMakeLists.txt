@@ -3,6 +3,8 @@
 add_library(PhysaraShader STATIC
     Types.hpp Interface.hpp Compiler.hpp Package.hpp
     BuildSupport.hpp BuildSupport.cpp
+    ProductVariants.hpp ProductVariants.cpp
+    Reload.hpp Reload.cpp
     ShaderSchema.hpp ShaderSchema.cpp ReflectionData.cpp
     Interface.cpp CompilerEnvironment.cpp Compiler.cpp
     SourceGraph.hpp SourceGraph.cpp Spirv.hpp Spirv.cpp Package.cpp
@@ -50,13 +52,20 @@ foreach(input IN LISTS shaderFingerprintInputs)
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${shaderFingerprintInputs})
 string(SHA256 shaderInputHash "${shaderFingerprint}")
-set(shaderFlagHash)
-# 多配置生成器分别编码配置 flags, 生成头只在各自 Private/<config> 内可见, 不形成跨配置写入者.
-foreach(configuration IN LISTS CMAKE_CONFIGURATION_TYPES)
-    string(TOUPPER "${configuration}" upperConfiguration)
-    string(SHA256 flagHash "${CMAKE_CXX_FLAGS_${upperConfiguration}}")
-    string(APPEND shaderFlagHash "$<$<CONFIG:${configuration}>:${flagHash}>")
-endforeach()
+# 单配置取实际的 CMAKE_BUILD_TYPE, 多配置按配置生成各自的私有身份头.
+# 两种入口均核对通用及该配置的宿主编译选项.
+get_property(shaderMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(shaderMultiConfig)
+    set(shaderFlagHash)
+    foreach(configuration IN LISTS CMAKE_CONFIGURATION_TYPES)
+        string(TOUPPER "${configuration}" upperConfiguration)
+        string(SHA256 flagHash "${CMAKE_CXX_FLAGS}\n${CMAKE_CXX_FLAGS_${upperConfiguration}}")
+        string(APPEND shaderFlagHash "$<$<CONFIG:${configuration}>:${flagHash}>")
+    endforeach()
+else()
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" upperConfiguration)
+    string(SHA256 shaderFlagHash "${CMAKE_CXX_FLAGS}\n${CMAKE_CXX_FLAGS_${upperConfiguration}}")
+endif()
 set(shaderBuildIdentity "#pragma once\n#include <string_view>\nnamespace Physara::Shader\n{\n")
 string(APPEND shaderBuildIdentity "    inline constexpr std::string_view CompilerInputHash = \"${shaderInputHash}\";\n")
 string(APPEND shaderBuildIdentity "    inline constexpr std::string_view CompilerFlagHash = \"${shaderFlagHash}\";\n")
@@ -101,6 +110,11 @@ endfunction()
 # interfaceName 必须已在同一调用作用域声明; 返回 <name>Package 数据路径与 <name>PackageTarget 共同前置.
 # 源的传递 include 由 depfile 追加, 接口完整输出与构建工具则始终是显式依赖.
 function(physara_add_shader_program name interfaceName program sourceRoot)
+    # 产品角色显式走目录校验. 独立 Shader 客户继续使用通用包入口.
+    set(productRole)
+    if(ARGV4 STREQUAL "PRODUCT")
+        set(productRole "${name}")
+    endif()
     get_filename_component(program "${program}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     get_filename_component(sourceRoot "${sourceRoot}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     set(shaderPackageRoot "${PROJECT_BINARY_DIR}/Shaders/$<CONFIG>")
@@ -113,7 +127,7 @@ function(physara_add_shader_program name interfaceName program sourceRoot)
         COMMAND PhysaraShaderBuild build "${program}"
                 "${sourceRoot}" "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>/${interfaceName}"
                 "${shaderPackageRoot}/${name}.pshader" "${shaderPackageRoot}/${name}.d"
-                "${shaderPackageRoot}/${name}.stamp"
+                "${shaderPackageRoot}/${name}.stamp" ${productRole}
         DEPENDS PhysaraShaderBuild "PhysaraShaderInterface${interfaceName}" ${${interfaceName}Outputs} "${program}"
         DEPFILE "${shaderPackageRoot}/${name}.d"
         COMMENT "Compiling canonical Shader package ${name}"

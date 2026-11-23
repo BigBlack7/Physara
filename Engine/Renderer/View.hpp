@@ -180,6 +180,7 @@ namespace Physara::Renderer
         InvalidSampling,
         ScenePreparationFailed,
         ScenePipelineUnavailable,
+        ShaderPending,
         SceneResidencyPending,
         SceneResidencyLimit,
         SceneAttachmentLimit,
@@ -265,6 +266,7 @@ namespace Physara::Renderer
         DisplaySettings display; ///< 本场景候选选用的配置, 随正常图确认, 不是此刻界面上的请求.
         ViewImageLayout renderLayout; ///< 配对 HDR、深度和相机实际采样的栅格.
         ViewExtent outputExtent; ///< 此次场景输出的显示像素尺寸, 随场景历史保留.
+        std::uint64_t shaderGeneration{}; ///< 正常图实际使用的冻结代, 随颜色提交确认.
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -404,9 +406,11 @@ namespace Physara::Renderer
         /// @brief 通过已准备的场景和相机建立本轮显示色候选, 由 Forward 图生产实际内容.
         /// @pre 场景 Draw 已使用此 View 准备值及其 preview 模式. degradation 只描述局部不支持项.
         /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
+        /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
-                           std::optional<RenderedEnvironment> environment = std::nullopt);
+                           std::optional<RenderedEnvironment> environment = std::nullopt,
+                           std::uint64_t shaderGeneration = 0);
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;

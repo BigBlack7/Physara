@@ -26,7 +26,7 @@ namespace Physara::Shader
     };
 
     /// @brief 同一 ABI 的程序变体在指定阶段、集合内实际需要的全部资源名.
-    /// @note names 按唯一名称列出该角色的资源, 顺序任意. 名称和数组仅在 LoadRhiProgram 调用期间借用.
+    /// @note names 按唯一名称列出该角色的资源, 顺序任意. 文件和内存入口都只在本次调用期间借用它.
     struct ExpectedActiveResources
     {
         Stage stage;
@@ -45,6 +45,12 @@ namespace Physara::Shader
                                                     std::string_view expectedAbiHash,
                                                     std::optional<ExpectedActiveResources> expectedActive = {},
                                                     std::string_view expectedFragmentSource = {}) noexcept;
+    /// @brief 从编译或读取已验证的包取得同一图形阶段集合, 核对调用方所需 ABI 与角色.
+    /// @pre package 来自成功的 Compiler 或 ReadPackage, device 满足创建 Shader 的线程及 context 合同.
+    /// @note 源参数使用包内逻辑路径. 返回值持有两阶段 Shader, 包及期望资源名的存储可在返回后释放.
+    [[nodiscard]] Result<RhiProgram> CreateRhiProgram(RHI::Device &device, const ShaderPackage &package,
+        std::string_view expectedAbiHash, std::optional<ExpectedActiveResources> expectedActive = {},
+        std::string_view expectedFragmentSource = {}, std::string_view expectedVertexSource = {}) noexcept;
     /// @brief 完整计算模块与所验证的包身份, 阶段对象由调用方持有.
     struct RhiComputeProgram
     {

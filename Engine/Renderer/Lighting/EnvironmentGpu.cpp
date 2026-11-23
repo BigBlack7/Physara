@@ -257,9 +257,7 @@ namespace Physara::Renderer::Detail
             }
             if (sky)
             {
-                device.programs.PrepareSky(device.device);
-                environment.skyLayout = device.programs.skyLayout;
-                environment.skyPipeline = device.programs.skyPipeline;
+                // 天空资源已准备后才纳入本路计划. 选定本帧代之后再取得对应的 Pipeline 和布局.
                 if (!background)
                 {
                     background = &PrepareCube(device, frame.uploads, key, products.environment, false);

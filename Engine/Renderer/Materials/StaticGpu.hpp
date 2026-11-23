@@ -4,6 +4,7 @@
 /// @brief Forward 的设备缓存、拥有型写区段与可绘记录. 类型仅在 Renderer 实现内共享.
 
 #include <array>
+#include <bitset>
 #include <map>
 #include <tuple>
 #include <utility>
@@ -316,6 +317,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 一个可见表面的有序绘制输入. 几何和对象保有其固定代, material 索引本 View 的 materialRows.
     /// PackBatches 从选中的 MaterialRow::index 取得 Shader 所需的页内行号.
+    /// 每批首项在本帧代确定后持有 Pipeline, 其余实例共享首项的状态.
     struct DrawRecord
     {
         std::shared_ptr<GeometryRef> geometry;
@@ -382,48 +384,95 @@ namespace Physara::Renderer::Detail
         ForwardEncodingCounts encodings;
     };
 
+    struct ForwardShaderGeneration;
+
     /// @brief 同槽的两份 Draw 各自保活, 通过 uploads 引用向一个图候选登记所需的写入.
     /// lutReserved 记录共享 atlas 的 CPU 预算. GPU 是否已获得它的内容由图执行后的确认决定.
     struct ForwardFrameStorage
     {
         UploadBatch uploads;
         std::array<ForwardFrameData, ForwardViewCount> views{ForwardFrameData(uploads), ForwardFrameData(uploads)};
+        std::shared_ptr<const ForwardShaderGeneration> shaders; ///< 保留本槽已冻结的原生代直至真实完成.
+        std::bitset<ForwardViewCount> planned; ///< 本路资源和工作集已准备, 等候 FinishView 绑定选定代.
         bool begun = false;
         bool lutReserved = false;
         bool hasPreparedView = false;
     };
 
-    /// @brief 初始化完整程序代, 按真实布局和阶段从固定数量的 Pipeline 中准备所需变体.
+    /// @brief 一代 Forward 几何和天空程序的原生表. 同一固定状态槽持有该代已准备的 Pipeline.
     struct ForwardPrograms
     {
-        /// @brief 取得基线场景程序及布局, 任一失败由构造展开释放局部资源.
-        ForwardPrograms(RHI::Device &device, const ForwardPackagePaths &paths);
-        /// @brief 按属性, 镜像, 双面和阶段惰性创建并缓存 Pipeline, 失败抛 ForwardFailure.
-        [[nodiscard]] RHI::GraphicsPipelineHandle GeometryPipeline(RHI::Device &device, std::uint8_t layout,
-            bool mirrored, bool doubleSided, SurfacePhase phase, LightingProgram kind);
-        /// @brief 按颜色角色准备程序和 set 3 布局. 物理变体的片元活动资源须与该角色完全匹配.
-        /// @note 包或布局被拒绝时抛出 ForwardFailure, 只有完整就绪的角色才可命中缓存.
-        void PrepareLighting(RHI::Device &device, LightingProgram kind);
-        /// @brief 首次实际需要天空时准备独立颜色混合管线.
-        void PrepareSky(RHI::Device &device);
+        /// @brief 取得 ABI 约定的场景布局. 程序和 Pipeline 只在帧前按需求准备.
+        explicit ForwardPrograms(RHI::Device &device);
+        /// @brief 从该角色的几何或天空槽取拥有型句柄. 槽为空时由帧前准备器补办.
+        [[nodiscard]] RHI::GraphicsPipelineHandle FindPipeline(ShaderPipelineRequest key) const noexcept;
+        /// @brief 在当前设备 context 创建缺少的角色程序, 布局与指定槽. 创建被拒时抛出 ForwardFailure.
+        void PreparePipeline(ForwardDevice &owner, ShaderPipelineRequest key, const Shader::ProductPackages &packages);
+        /// @brief 借用该角色已载入包的内容摘要, 尚未载入时为空. 替换程序后重新取值.
+        [[nodiscard]] std::string_view ProgramContent(Shader::ProductShader role) const noexcept;
+        /// @brief 接续同设备同角色, 包内容及固定状态相同的 Pipeline. 天空槽随带布局, 颜色角色共用设备布局.
+        /// @note 成功后目标表持有句柄, 源表仍按自身帧的完成时点退休.
+        [[nodiscard]] bool ReusePipeline(const ForwardPrograms &source, ShaderPipelineRequest key,
+                                         std::string_view content);
+        /// @brief 清除由该角色派生的程序和 Pipeline 槽, 兼容的顶点布局和其他角色的句柄可沿用.
+        void ReplaceProgram(Shader::ProductShader role) noexcept;
 
         std::array<Shader::RhiProgram, 3> colors;
         Shader::RhiProgram depth;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
-        std::array<RHI::BindingLayoutHandle, 3> lightLayouts;
-        std::array<std::filesystem::path, 2> physicalPaths;
-        std::filesystem::path skyPath;
+        std::string skyContent;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, 8 * 4 * 3 * 3> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineSlots * 3> pipelines;
+
+    private:
+        /// @brief 核对颜色角色在 set 3 的活动资源, 接续设备为该角色共享的固定布局.
+        void PrepareLighting(ForwardDevice &owner, LightingProgram kind, const Shader::ProductPackages &packages);
+        /// @brief 准备只写工作色 RGB 的天空 Pipeline, 成功后保存其包摘要供下次换代比较.
+        void PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths, const Shader::ProductPackages &packages);
+    };
+
+    /// @brief 一个设备会话内原子选择的程序表. 旧表由冻结帧持有, 未变化的兼容项可在候选间共用.
+    struct ForwardShaderGeneration
+    {
+        ForwardShaderGeneration(RHI::Device &owner, Core::BoundedText nativeIdentity)
+            : device(&owner), driver(nativeIdentity), programs(owner) {}
+        RHI::Device *device;
+        Core::BoundedText driver;
+        ForwardPrograms programs;
+        PostProcess::DisplayDevice::ProgramTable display;
+        std::uint64_t generation = 1;
+    };
+
+    /// @brief 带程序角色的自持诊断. 初始化或全局观察失败时, role 可为 Count.
+    struct ShaderPreparationFailure
+    {
+        Shader::ProductShader role;
+        Core::BoundedText text;
+        std::optional<std::size_t> variant; ///< 原生失败的固定状态槽, 源诊断可不涉及原生键.
     };
 
     /// @brief 缓存映射只拥有可复用代或本次准备候选. 单线程推进 stamp, 前一帧槽保有退役代.
     struct ForwardDevice
     {
+        enum class ShaderPreparationPhase : std::uint8_t { Admission, Active, Candidate };
+
         ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit,
-                      std::uint32_t uniformAlignment);
+                      std::uint32_t uniformAlignment, Core::BoundedText nativeIdentity,
+                      ShaderPreparationLimits shaderLimits);
+        /// @brief 登记几何或天空键并查询 Active. 缺项返回空句柄, 已登记的硬失败抛出 ForwardFailure.
+        [[nodiscard]] RHI::GraphicsPipelineHandle RequestShader(ShaderPipelineRequest key);
+        /// @brief 登记本 View 的整条显示链. 返回 true 时, 该链可从 Active 取得全部阶段.
+        [[nodiscard]] bool RequestDisplay(const ViewLayouts &layouts, DisplaySettings settings);
+        /// @brief 仅在帧前 owner 阶段尝试接纳当前包并推进一次有界的原生工作.
+        void AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result) noexcept;
+        /// @brief 候选表及本帧显示资源就绪, 且切换后仍有空间记录旧表.
+        [[nodiscard]] bool ShaderCandidateReady() const noexcept;
+        /// @brief 构图前核对最新源修订, 只在已准备的候选仍具备资格时切换.
+        void PublishShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result) noexcept;
+        /// @brief 将上下文首个错误附加到本轮刚失败的原生工作, 供同一诊断快照读取.
+        void RecordShaderDiagnostic(const Core::BoundedText &reason) noexcept;
         /// @brief 分配共享图候选的准备代.
         void Begin();
         /// @brief 按当前 SceneFrame 的完整模型版本表撤销旧几何代的命中资格.
@@ -446,8 +495,25 @@ namespace Physara::Renderer::Detail
         RHI::Device &device;
         std::uint32_t maxTextureSize;
         std::uint32_t uniformAlignment;
-        ForwardPrograms programs;
+        const ForwardPackagePaths packagePaths;
+        const Core::BoundedText shaderDevice;
+        const ShaderPreparationLimits shaderLimits;
+        ShaderDemand shaderDemand; ///< 本轮各路实际请求的键并集.
+        ShaderPreparationStatistics shaderStatistics;
+        std::shared_ptr<ForwardShaderGeneration> activeShaders;
+        std::shared_ptr<ForwardShaderGeneration> candidateShaders;
+        std::vector<std::weak_ptr<const ForwardShaderGeneration>> retiredShaders;
+        std::vector<RHI::GraphicsPipeline *> countedPipelines; ///< 预留全部表的计数空间, 只在 owner 内借用.
+        Shader::ProductPackages activePackages;
+        std::optional<Shader::ReloadResult> candidateInput; ///< 最新请求的 CPU 包. 原生键失败后保留至重选或请求换代.
+        bool sourcePending{};
+        bool shaderCacheDirty{};
+        bool retryOnReselection{}; ///< 已观察到候选的原生失败键退出计划, 同一键再出现时重试.
+        std::optional<ShaderPreparationFailure> sourceFailure, displayFailure;
+        std::vector<ShaderPreparationFailure> activeFailures; ///< 按失败顺序保留仍在需求中的键及首因.
+        std::optional<ShaderPreparationPhase> lastShaderFailure; ///< 记录本次推进失败的诊断归属.
         PostProcess::DisplayDevice display;
+        std::array<RHI::BindingLayoutHandle, 3> lightLayouts; ///< 每个颜色角色的固定配方贯穿设备会话.
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
         std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.
@@ -483,9 +549,9 @@ namespace Physara::Renderer::Detail
     [[noreturn]] void Reject(ViewSettingReason reason, std::string_view description);
     /// @brief 从三个属性位生成交错流偏移和步长, 必有 position/normal/color.
     [[nodiscard]] VertexLayout StaticVertexLayout(std::uint8_t attributes) noexcept;
-    /// @brief 把已验证的属性位与光栅组合映射到固定 96 项表, 不截断或哈希状态.
-    [[nodiscard]] std::uint32_t PipelineKey(std::uint8_t layout, bool mirrored, bool doubleSided,
-                                           SurfacePhase phase) noexcept;
+    /// @brief 把实际阶段及光照角色和固定状态映射到一个无碰撞的准备槽.
+    [[nodiscard]] ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided,
+                                                        SurfacePhase phase, LightingProgram kind) noexcept;
     /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
     [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
                                                    std::uint32_t stride = 0);
@@ -510,6 +576,8 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] SamplerKey EffectiveSampler(const Asset::ModelSampler &sampler) noexcept;
     /// @brief 共享合法枚举组合的 sampler, LOD 可访问范围由对应纹理层数约束.
     [[nodiscard]] RHI::SamplerHandle PrepareSampler(ForwardDevice &device, const SamplerKey &key);
-    /// @brief 解析可见集, 记录局部不支持项并排序. 全部可见项不可绘时失败, 视锥空集可输出背景.
-    void PrepareDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode);
+    /// @brief 解析可见集和驻留资源, 登记实际几何及天空键, 允许视锥空集输出背景.
+    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode);
+    /// @brief 从本帧选定代取得每个批次和天空所需的句柄. 缺项报告等待或硬失败, 不创建 Pipeline.
+    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame);
 }

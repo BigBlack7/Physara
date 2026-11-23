@@ -212,14 +212,14 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 包读取失败保留包角色及首个编译/反射诊断, 不交付半套 Shader.
-    static Shader::RhiProgram LoadProgram(RHI::Device &device, const std::filesystem::path &file,
-                                          std::string_view abi, std::string_view role,
-                                          std::optional<Shader::ExpectedActiveResources> expectedActive = {})
+    static Shader::RhiProgram LoadProgram(RHI::Device &device, Shader::ProductShader role,
+        const std::filesystem::path &file, const Shader::ProductPackages &packages, std::string_view abi,
+        std::optional<Shader::ExpectedActiveResources> expectedActive = {})
     {
-        auto program = Shader::LoadRhiProgram(device, file, abi, expectedActive);
+        auto program = LoadProductProgram(device, role, file, packages, abi, expectedActive);
         if (const auto *error = std::get_if<Shader::Failure>(&program))
         {
-            Core::BoundedText text(role);
+            Core::BoundedText text(Shader::FindProductProgram(role)->name);
             text.Append(": ");
             text.Append(error->context.description.View());
             throw ForwardFailure{ViewSettingReason::ScenePipelineUnavailable, text};
@@ -238,11 +238,19 @@ namespace Physara::Renderer::Detail
         return {Shader::Stage::Fragment, 3, names[std::size_t(kind)]};
     }
 
-    ForwardPrograms::ForwardPrograms(RHI::Device &device, const ForwardPackagePaths &paths)
-        : colors{LoadProgram(device, paths.color, StaticAbi::AbiHash, "StaticForward package",
-                             LightingResources(LightingProgram::Legacy))},
-          depth(LoadProgram(device, paths.depth, StaticAbi::AbiHash, "StaticDepth package")),
-          physicalPaths{paths.physical, paths.ibl}, skyPath(paths.sky)
+    using Shader::ProductShader;
+    static constexpr std::array LightingRoles{
+        ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl};
+
+    // 颜色程序, 片元活动集和 set 3 布局共用同一个光照索引.
+    static std::size_t LightingIndex(ProductShader role) noexcept
+    {
+        const auto found = std::ranges::find(LightingRoles, role);
+        assert(found != LightingRoles.end());
+        return static_cast<std::size_t>(found - LightingRoles.begin());
+    }
+
+    ForwardPrograms::ForwardPrograms(RHI::Device &device)
     {
         const auto sceneLayout = StaticAbi::MakeBindingLayouts();
         for (std::size_t i = 0; i < layouts.size(); ++i)
@@ -253,51 +261,54 @@ namespace Physara::Renderer::Detail
                 Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward scene binding layout");
             }
         }
-        PrepareLighting(device, LightingProgram::Legacy);
     }
 
-    void ForwardPrograms::PrepareLighting(RHI::Device &device, LightingProgram kind)
+    void ForwardPrograms::PrepareLighting(ForwardDevice &owner, LightingProgram kind,
+                                          const Shader::ProductPackages &packages)
     {
         const auto index = std::size_t(kind);
-        if (lightLayouts[index])
+        if (colors[index].vertex)
         {
             return;
         }
-        // 同一 schema 给出 set 3 的所有槽. 按角色裁出预期槽, 加载时核对 ABI 和实际活动资源.
-        auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
-        auto &desc = layoutsForProgram.back();
-        std::erase_if(desc.bindings, [kind](const auto &item) {
-            if (kind == LightingProgram::Legacy)
-            {
-                return item.type != RHI::ResourceType::StructuredBuffer_SRV;
-            }
-            return kind == LightingProgram::Physical &&
-                (item.type == RHI::ResourceType::ConstantBuffer ||
-                 (item.type == RHI::ResourceType::Texture_SRV && item.slot == ReflectionSlot));
-        });
-        auto layout = device.CreateBindingLayout(desc);
+        const auto &paths = owner.packagePaths;
+        const std::array<const std::filesystem::path *, 3> inputs{&paths.color, &paths.physical, &paths.ibl};
+        auto program = LoadProgram(owner.device, LightingRoles[index], *inputs[index], packages,
+            StaticAbi::AbiHash, LightingResources(kind));
+        auto &layout = owner.lightLayouts[index];
         if (!layout)
         {
-            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward lighting layout");
+            // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
+            auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
+            auto &desc = layoutsForProgram.back();
+            std::erase_if(desc.bindings, [kind](const auto &item) {
+                if (kind == LightingProgram::Legacy)
+                {
+                    return item.type != RHI::ResourceType::StructuredBuffer_SRV;
+                }
+                return kind == LightingProgram::Physical &&
+                    (item.type == RHI::ResourceType::ConstantBuffer ||
+                     (item.type == RHI::ResourceType::Texture_SRV && item.slot == ReflectionSlot));
+            });
+            layout = owner.device.CreateBindingLayout(desc);
+            if (!layout)
+            {
+                Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward lighting layout");
+            }
         }
-        if (kind != LightingProgram::Legacy)
-        {
-            colors[index] = LoadProgram(device, physicalPaths[index - 1], StaticAbi::AbiHash,
-                kind == LightingProgram::Ibl ? "StaticForwardIbl package" : "StaticForwardPhysical package",
-                LightingResources(kind));
-        }
-        lightLayouts[index] = std::move(layout);
+        colors[index] = std::move(program);
     }
 
-    void ForwardPrograms::PrepareSky(RHI::Device &device)
+    void ForwardPrograms::PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths,
+                                     const Shader::ProductPackages &packages)
     {
         if (skyPipeline)
         {
             return;
         }
         namespace SkyAbi = Shader::Generated::ForwardSky;
-        const auto program = LoadProgram(device, skyPath, SkyAbi::AbiHash, "ForwardSky package");
-        auto layout = device.CreateBindingLayout(SkyAbi::MakeBindingLayouts().front());
+        auto program = LoadProgram(device, ProductShader::ForwardSky, paths.sky, packages, SkyAbi::AbiHash);
+        auto layout = skyLayout ? skyLayout : device.CreateBindingLayout(SkyAbi::MakeBindingLayouts().front());
         if (!layout)
         {
             Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward sky layout");
@@ -318,6 +329,7 @@ namespace Physara::Renderer::Detail
         }
         skyLayout = std::move(layout);
         skyPipeline = std::move(pipeline);
+        skyContent = std::move(program.contentHash);
     }
 
     VertexLayout StaticVertexLayout(std::uint8_t attributes) noexcept
@@ -335,22 +347,130 @@ namespace Physara::Renderer::Detail
         return layout;
     }
 
-    std::uint32_t PipelineKey(std::uint8_t layout, bool mirrored, bool doubleSided, SurfacePhase phase) noexcept
+    ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided, SurfacePhase phase,
+                                          LightingProgram kind) noexcept
     {
-        return static_cast<std::uint32_t>(phase) * 32 + (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u) + layout;
+        assert(layout < 8);
+        return {phase == SurfacePhase::Depth ? ProductShader::StaticDepth : LightingRoles[std::size_t(kind)],
+            std::size_t(phase) * 32 + (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u) + layout};
     }
 
-    RHI::GraphicsPipelineHandle ForwardPrograms::GeometryPipeline(RHI::Device &device, std::uint8_t layout,
-        bool mirrored, bool doubleSided, SurfacePhase phase, LightingProgram kind)
+    // 深度预通过在第一张表占专属阶段的 32 个槽. 各光照角色的两个颜色阶段占其它区间.
+    static std::size_t GeometrySlot(ShaderPipelineRequest key) noexcept
     {
-        const auto mode = phase == SurfacePhase::Depth ? std::size_t(LightingProgram::Legacy) : std::size_t(kind);
-        constexpr std::size_t pipelinesPerMode = 8 * 4 * 3;
-        auto &pipeline = pipelines[mode * pipelinesPerMode + PipelineKey(layout, mirrored, doubleSided, phase)];
+        return (key.role == ProductShader::StaticDepth ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
+    }
+
+    RHI::GraphicsPipelineHandle ForwardPrograms::FindPipeline(ShaderPipelineRequest key) const noexcept
+    {
+        return key.role == ProductShader::ForwardSky ? skyPipeline : pipelines[GeometrySlot(key)];
+    }
+
+    std::string_view ForwardPrograms::ProgramContent(ProductShader role) const noexcept
+    {
+        switch (role)
+        {
+        case ProductShader::ForwardSky: return skyContent;
+        case ProductShader::StaticDepth: return depth.contentHash;
+        default: return colors[LightingIndex(role)].contentHash;
+        }
+    }
+
+    bool ForwardPrograms::ReusePipeline(const ForwardPrograms &source, ShaderPipelineRequest key,
+                                        std::string_view content)
+    {
+        auto existing = source.FindPipeline(key);
+        if (!existing || source.ProgramContent(key.role) != content)
+        {
+            return false;
+        }
+        if (key.role == ProductShader::ForwardSky)
+        {
+            skyContent = source.skyContent;
+            skyLayout = source.skyLayout;
+            skyPipeline = std::move(existing);
+            return true;
+        }
+        if (key.role == ProductShader::StaticDepth)
+        {
+            if (!depth.vertex)
+            {
+                auto shaders = source.depth;
+                depth = std::move(shaders);
+            }
+        }
+        else
+        {
+            const auto mode = LightingIndex(key.role);
+            if (!colors[mode].vertex)
+            {
+                auto shaders = source.colors[mode];
+                colors[mode] = std::move(shaders);
+            }
+        }
+        pipelines[GeometrySlot(key)] = std::move(existing);
+        return true;
+    }
+
+    void ForwardPrograms::ReplaceProgram(ProductShader role) noexcept
+    {
+        if (role == ProductShader::ForwardSky)
+        {
+            skyPipeline = nullptr;
+            skyContent.clear();
+        }
+        else if (role == ProductShader::StaticDepth)
+        {
+            depth = {};
+            std::fill_n(pipelines.begin() + std::size_t(SurfacePhase::Depth) * 32, 32, RHI::GraphicsPipelineHandle{});
+        }
+        else
+        {
+            const auto mode = LightingIndex(role);
+            colors[mode] = {};
+            const auto begin = pipelines.begin() + mode * GeometryPipelineSlots;
+            std::fill_n(begin + std::size_t(SurfacePhase::Combined) * 32, 32, RHI::GraphicsPipelineHandle{});
+            std::fill_n(begin + std::size_t(SurfacePhase::ReadOnlyDepth) * 32, 32, RHI::GraphicsPipelineHandle{});
+        }
+    }
+
+    void ForwardPrograms::PreparePipeline(ForwardDevice &owner, ShaderPipelineRequest key,
+                                          const Shader::ProductPackages &packages)
+    {
+        auto &device = owner.device;
+        const auto &paths = owner.packagePaths;
+        if (key.role == ProductShader::ForwardSky)
+        {
+            PrepareSky(device, paths, packages);
+            return;
+        }
+        auto &pipeline = pipelines[GeometrySlot(key)];
         if (pipeline)
         {
-            return pipeline;
+            return;
+        }
+        const auto phase = static_cast<SurfacePhase>(key.variant / 32);
+        const auto layout = static_cast<std::uint8_t>(key.variant % 8);
+        const bool mirrored = (key.variant & 8) != 0;
+        const bool doubleSided = (key.variant & 16) != 0;
+        const auto mode = key.role == ProductShader::StaticDepth ? 0 : LightingIndex(key.role);
+        if (phase == SurfacePhase::Depth)
+        {
+            if (!depth.vertex)
+            {
+                // 深度图只为覆盖配方授权基色槽. 同 ABI 的包也须匹配片元实际使用的材质资源.
+                static constexpr std::array<std::string_view, 3> Coverage{
+                    "materialRows", "baseColorImage", "baseColorSampler"};
+                depth = LoadProgram(device, key.role, paths.depth, packages, StaticAbi::AbiHash,
+                                   Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, Coverage});
+            }
+        }
+        else
+        {
+            PrepareLighting(owner, static_cast<LightingProgram>(mode), packages);
         }
         const auto &shaders = phase == SurfacePhase::Depth ? depth : colors[mode];
+        // 顶点存储仅依属性位决定, 同一格式可跨深度和颜色角色复用. 实际 Shader 输入由 Pipeline 核对.
         if (!inputLayouts[layout])
         {
             const auto storage = StaticVertexLayout(layout);
@@ -379,7 +499,7 @@ namespace Physara::Renderer::Detail
         }
         if (phase != SurfacePhase::Depth)
         {
-            desc.AddBindingLayout(lightLayouts[mode].Get());
+            desc.AddBindingLayout(owner.lightLayouts[mode].Get());
         }
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
@@ -398,14 +518,24 @@ namespace Physara::Renderer::Detail
         {
             Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot link Forward geometry pipeline");
         }
-        return pipeline;
     }
 
     ForwardDevice::ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit,
-                                 std::uint32_t alignment)
-        : device(source), maxTextureSize(textureLimit), uniformAlignment(alignment), programs(source, paths),
+                                 std::uint32_t alignment, Core::BoundedText nativeIdentity,
+                                 ShaderPreparationLimits limits)
+        : device(source), maxTextureSize(textureLimit), uniformAlignment(alignment), packagePaths(paths),
+          shaderDevice(nativeIdentity), shaderLimits(limits),
+          activeShaders(std::make_shared<ForwardShaderGeneration>(source, nativeIdentity)),
           display(source, {paths.display, paths.grading, paths.fxaa, paths.scale})
     {
+        shaderStatistics.budget = limits.perStep;
+        const auto tableSlots = ForwardPipelineLimit * (limits.frames + 2);
+        shaderStatistics.cacheLimit = limits.entryLimit ? limits.entryLimit : tableSlots;
+        // Active, 候选和在途旧表最多同时占 frames + 2 张. 提交阶段按此空间记账, 以及时归还已释放的槽.
+        retiredShaders.reserve(limits.frames + 1);
+        countedPipelines.reserve(tableSlots);
+        // 每个有效键最多一条原生失败. 捕获创建异常后可直接保留原因.
+        activeFailures.reserve(ForwardPipelineLimit);
         if (uniformAlignment == 0)
         {
             Reject(ViewSettingReason::ScenePipelineUnavailable, "Forward requires known constant-buffer alignment");
@@ -642,7 +772,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<ConstantRow>(device.capacity, bytes);
         row->buffer = AllocateBuffer(device.device, GraphUsage::ConstantBuffer, bytes);
         const auto desc = RHI::BindingSetDesc().AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->buffer.Get()));
-        row->binding = device.device.CreateBindingSet(desc, device.programs.layouts[set].Get());
+        row->binding = device.device.CreateBindingSet(desc, device.activeShaders->programs.layouts[set].Get());
         if (!row->binding)
         {
             Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward constant binding");

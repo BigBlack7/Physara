@@ -99,7 +99,14 @@ namespace Physara::Renderer
             }
             m_Data->begun = m_Data->lutReserved = false;
             m_Data->hasPreparedView = false;
+            m_Data->planned.reset();
+            m_Data->shaders.reset();
         }
+    }
+
+    std::uint64_t ForwardFrame::ShaderGeneration() const noexcept
+    {
+        return m_Data && m_Data->shaders ? m_Data->shaders->generation : 0;
     }
 
     const std::optional<Core::BoundedText> &ForwardFrame::Degradation(std::size_t index) const noexcept
@@ -141,6 +148,130 @@ namespace Physara::Renderer
     }
 
     ForwardRenderer::~ForwardRenderer() = default;
+
+    void ForwardRenderer::SetShaderPreparationLimits(Core::BoundedText deviceIdentity,
+                                                       ShaderPreparationLimits limits) noexcept
+    {
+        assert(!m_Resources && limits.frames && limits.perStep);
+        m_ShaderDevice = deviceIdentity;
+        m_ShaderLimits = limits;
+    }
+
+    bool ForwardRenderer::InitializeResources() noexcept
+    {
+        assert(!m_Resources && m_InitialShaders);
+        auto &failure = m_InitialShaders->deviceFailure;
+        try
+        {
+            m_Resources = std::make_unique<Detail::ForwardDevice>(m_Device, m_Packages, m_MaxTextureSize,
+                m_UniformAlignment, m_ShaderDevice, m_ShaderLimits);
+            failure.reset();
+            return true;
+        }
+        catch (const ForwardFailure &error)
+        {
+            failure = error;
+        }
+        catch (const std::bad_alloc &)
+        {
+            failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                                     Core::BoundedText("Shader preparation allocation failed")};
+        }
+        catch (const std::exception &error)
+        {
+            failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed, Core::BoundedText(error.what())};
+        }
+        return false;
+    }
+
+    void ForwardRenderer::AdvanceShaderPreparation(std::uint64_t request,
+                                                    std::optional<Shader::ReloadResult> result) noexcept
+    {
+        if (m_InitialShaders)
+        {
+            auto &initial = *m_InitialShaders;
+            if (request < initial.request)
+            {
+                return;
+            }
+            if (request != initial.request)
+            {
+                initial.request = request;
+                initial.result.reset();
+            }
+            const bool delivered = result && result->request == request;
+            if (delivered)
+            {
+                initial.result = std::move(result);
+            }
+            // 首份回执可在无 View 时装配设备. 若分配失败, 空闲轮询继续持有回执, 下次有效规划可重新装配.
+            if (!m_Resources && (!delivered || !InitializeResources()))
+            {
+                return;
+            }
+            // 以本轮确认过的修订交给设备准备器, 从此由它管理该请求和后续候选.
+            result = std::move(initial.result);
+            m_InitialShaders.reset();
+        }
+        m_Resources->AdvanceShaders(request, std::move(result));
+    }
+
+    void ForwardRenderer::BeginShaderRequests() noexcept
+    {
+        if (m_Resources)
+        {
+            m_Resources->shaderDemand = {};
+            m_Resources->displayFailure.reset();
+        }
+    }
+
+    bool ForwardRenderer::ShaderCandidateReady() const noexcept
+    {
+        return m_Resources && m_Resources->ShaderCandidateReady();
+    }
+
+    void ForwardRenderer::PublishShaderPreparation(std::uint64_t request,
+                                                    std::optional<Shader::ReloadResult> result) noexcept
+    {
+        if (m_Resources)
+        {
+            m_Resources->PublishShaders(request, std::move(result));
+        }
+    }
+
+    ShaderPreparationStatistics ForwardRenderer::ShaderStatistics() const noexcept
+    {
+        if (!m_InitialShaders)
+        {
+            return m_Resources->shaderStatistics;
+        }
+        ShaderPreparationStatistics statistics;
+        statistics.request = m_InitialShaders->request;
+        statistics.budget = m_ShaderLimits.perStep;
+        if (const auto &failure = m_InitialShaders->deviceFailure)
+        {
+            statistics.state = ShaderPreparationState::Failed;
+            statistics.reason = failure->description;
+        }
+        return statistics;
+    }
+
+    void ForwardRenderer::RecordShaderDiagnostic(const Core::BoundedText &reason) noexcept
+    {
+        if (m_Resources)
+        {
+            m_Resources->RecordShaderDiagnostic(reason);
+        }
+        else if (m_InitialShaders && m_InitialShaders->deviceFailure)
+        {
+            auto &description = m_InitialShaders->deviceFailure->description;
+            if (description.View() != reason.View())
+            {
+                description.Append("\n");
+                description.Append(reason.View());
+            }
+        }
+    }
 
     void ForwardRenderer::BeginEnvironmentRequests(const Asset::EnvironmentVersion &source) noexcept
     {
@@ -238,21 +369,67 @@ namespace Physara::Renderer
         return std::nullopt;
     }
 
-    /// @brief 若尚无合法消费者, 丢弃失败路占用的 CPU 写入额度. 下路从新的准备代开始.
+    /// @brief 已有计划可能依赖共享生产者. 只在没有后续消费者时丢弃批次并归还写入额度.
     static void RejectView(Detail::ForwardFrameStorage &frame, std::size_t index) noexcept
     {
         ResetView(frame.views[index]);
-        if (!frame.hasPreparedView)
+        frame.planned.reset(index);
+        // 另一路可能已经登记了本批写入, 尚在等待 FinishView. 保留它所依赖的上传载荷和准备代.
+        if (!frame.hasPreparedView && frame.planned.none())
         {
             // 这批写入已失去消费者. 下路重新 Begin, 使设备缓存能识别只在旧批次中拥有生产者的代.
             frame.uploads.Clear();
             frame.begun = frame.lutReserved = false;
+            frame.shaders.reset();
+        }
+    }
+
+    // 选代前取得显示输入并预留写入额度. 两路共享的 LUT 只计一次, 实际上传由使用它的图声明.
+    static void PlanDisplay(Detail::ForwardDevice &device, Detail::ForwardFrameStorage &frame,
+                            PostProcess::DisplayFrame &display, const ViewLayouts &layouts, DisplaySettings settings)
+    {
+        const auto requests = PostProcess::DisplayDevice::SelectStages(layouts, settings);
+        for (const auto key : requests.Stages())
+        {
+            device.shaderDemand.Add(key);
+        }
+        try
+        {
+            if (const auto failure = device.display.PrepareInputs(display, layouts, settings))
+            {
+                Detail::Reject(ViewSettingReason::DisplayUnavailable, failure->View());
+            }
+            const auto lutBytes = display.LutUploadBytes();
+            const bool sharedLut = lutBytes != 0 && frame.lutReserved;
+            frame.uploads.ReserveWrites(display.UploadBytes() - (sharedLut ? lutBytes : 0),
+                                        display.UploadCount() - std::size_t(sharedLut));
+            frame.lutReserved |= lutBytes != 0;
+        }
+        catch (const ForwardFailure &failure)
+        {
+            // 一路所需的分级或重采样输入未就绪时, 其它路可消费旧代, 本帧的候选切换继续等待.
+            if (!device.displayFailure)
+            {
+                const auto key = settings.profile == DisplayProfile::AcesSdr
+                    ? requests.Stages().front() : requests.Stages().back();
+                device.displayFailure = Detail::ShaderPreparationFailure{key.role, failure.description, key.variant};
+            }
+            throw;
         }
     }
 
     std::optional<ForwardFailure> ForwardRenderer::Prepare(ForwardFrame &frame, const PreparedView &view,
-                                                            PreviewMode mode, ViewResourceNeeds needs,
-                                                            std::size_t index)
+        PreviewMode mode, ViewResourceNeeds needs, std::size_t index)
+    {
+        if (auto failure = PlanView(frame, view, mode, needs, index))
+        {
+            return failure;
+        }
+        return FinishView(frame, view, index);
+    }
+
+    std::optional<ForwardFailure> ForwardRenderer::PlanView(ForwardFrame &frame, const PreparedView &view,
+        PreviewMode mode, ViewResourceNeeds needs, std::size_t index)
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
@@ -262,16 +439,16 @@ namespace Physara::Renderer
         {
             throw *failure;
         }
-        if (!m_Resources)
+        if (!m_Resources && !InitializeResources())
         {
-            m_Resources = std::make_unique<Detail::ForwardDevice>(m_Device, m_Packages, m_MaxTextureSize,
-                                                                  m_UniformAlignment);
+            throw *m_InitialShaders->deviceFailure;
         }
         if (!frame.m_Data)
         {
             frame.m_Data = std::make_unique<Detail::ForwardFrameStorage>();
         }
         assert(!frame.m_Data->uploads.sealed);
+        assert(!frame.m_Data->planned[index]);
         if (!frame.m_Data->begun)
         {
             m_Resources->ObserveGeometry(view.scene);
@@ -294,17 +471,9 @@ namespace Physara::Renderer
         data.source = {view.view, view.scene.scene, view.scene.contentRevision, mode, *view.camera, view.layouts.render};
         data.needs = needs;
         m_Resources->BeginView();
-        Detail::PrepareDraws(*m_Resources, data, view, mode);
-        if (const auto failure = m_Resources->display.Prepare(data.display, view.layouts, display))
-        {
-            Detail::Reject(ViewSettingReason::DisplayUnavailable, failure->View());
-        }
-        const auto lutBytes = data.display.LutUploadBytes();
-        const bool sharedLut = lutBytes != 0 && frame.m_Data->lutReserved;
-        data.uploads.ReserveWrites(data.display.UploadBytes() - (sharedLut ? lutBytes : 0),
-                                   data.display.UploadCount() - std::size_t(sharedLut));
-        frame.m_Data->lutReserved |= lutBytes != 0;
-        frame.m_Data->hasPreparedView = true;
+        Detail::PlanDraws(*m_Resources, data, view, mode);
+        PlanDisplay(*m_Resources, *frame.m_Data, data.display, view.layouts, display);
+        frame.m_Data->planned.set(index);
         return std::nullopt;
     }
     catch (const ForwardFailure &failure)
@@ -321,9 +490,39 @@ namespace Physara::Renderer
         {
             RejectView(*frame.m_Data, index);
         }
-        return ForwardFailure{ViewSettingReason::ScenePreparationFailed, Core::BoundedText("Forward preparation allocation failed")};
+        return ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                              Core::BoundedText("Forward plan allocation failed")};
     }
 
+    std::optional<ForwardFailure> ForwardRenderer::FinishView(ForwardFrame &frame, const PreparedView &view,
+                                                              std::size_t index)
+    try
+    {
+        assert(m_Resources && frame.m_Data && frame.m_Data->planned[index]);
+        auto &data = frame.m_Data->views[index];
+        assert(data.source.view == view.view);
+        if (!frame.m_Data->shaders)
+        {
+            // 同一帧的两路 View 固定使用这张表, 直至槽安全 Reset.
+            frame.m_Data->shaders = m_Resources->activeShaders;
+        }
+        assert(frame.m_Data->shaders == m_Resources->activeShaders);
+        const auto display = ResolveDisplaySettings(data.source.mode, view.requestedAa);
+        if (!m_Resources->RequestDisplay(view.layouts, display))
+        {
+            Detail::Reject(ViewSettingReason::ShaderPending, "Waiting for prepared display pipelines");
+        }
+        Detail::ApplyDrawShaders(*m_Resources, data);
+        m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
+        frame.m_Data->hasPreparedView = true;
+        frame.m_Data->planned.reset(index);
+        return std::nullopt;
+    }
+    catch (const ForwardFailure &failure)
+    {
+        RejectView(*frame.m_Data, index);
+        return failure;
+    }
     /// @brief 将声明失败交还本次图的唯一入口, 保留图的具体错误.
     template <typename T>
     static T TakeGraph(GraphResult<T> result)
