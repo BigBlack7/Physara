@@ -277,6 +277,10 @@ namespace Physara::Platform
         /// @return 未取得就绪设备或目标没有存储用途时返回 None 并将 maxLayers 置零.
         [[nodiscard]] RHI::FormatSupport QueryStorageImageFormatSupport(RHI::Format format,
             RHI::TextureDimension dimension, std::uint32_t &maxLayers) const noexcept;
+        /// @brief 在就绪宿主的 owner 线程读取 2D array 同时作深度附件和采样源时的设备上限.
+        /// @return 成功时回填单层边长上限 (texel) 和数组层数上限. 设备不可借用或缺少用途时返回 false 并清零二者.
+        [[nodiscard]] bool QueryDepthArrayLimits(RHI::Format format, std::uint32_t &maxEdge,
+                                                 std::uint32_t &maxLayers) const noexcept;
         /// @brief 在 owner/Ready 状态取样 RHI 错误计数. 多个区间各自持有起点, 可以重叠.
         /// @return 无法取样时返回 IsClear 为 false 的值.
         [[nodiscard]] RhiErrorScope CaptureRhiErrors() const noexcept;

@@ -117,7 +117,17 @@ namespace Physara::Editor
         bool safeUi{}, accepted{};
     };
 
-    /// @brief 场景, 计时和最近图准入分别发布. 诊断只保存值并沿现有面板可见性消费.
+    /// @brief 一路 View 最近完成的 CPU 阴影准备. 包含当前布局原因, 与场景接受票据无关.
+    struct ViewShadowStatistics
+    {
+        Renderer::ViewId view;
+        std::uint64_t layoutRevision; ///< 本次像素布局的请求代. 阴影设置的会话请求代另见 plan.requestRevision.
+        Renderer::ViewSettingReason viewReason;
+        Renderer::ShadowPlanStatistics plan;
+    };
+
+    /// @brief 场景, 计时, 图准入和阴影准备分别发布. shadows 可先于首次场景提交出现.
+    /// 读取 CPU 规划时按各路自身的 Scene 和 View 定位, latestScene 带此前被接受的提交身份.
     struct FrameStatistics
     {
         std::optional<SceneFrameStatistics> latestScene;
@@ -127,5 +137,6 @@ namespace Physara::Editor
         std::optional<Core::BoundedText> graphPressure;
         Renderer::ShaderPreparationStatistics shader;
         Shader::ReloadStatistics shaderCpu;
+        std::array<std::optional<ViewShadowStatistics>, 2> shadows; ///< 主 View 和本轮附加 View 的当前规划.
     };
 }

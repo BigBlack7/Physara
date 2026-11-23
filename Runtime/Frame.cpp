@@ -33,6 +33,13 @@ namespace Physara::Runtime
     static constexpr std::size_t MainViewIndex = 0;
     static constexpr std::size_t OffscreenViewIndex = 1;
 
+    /// @brief 复制本次 CPU 规划的值摘要. 外层带 View 和布局请求代, 内层带 Scene 与阴影请求代.
+    /// 快照可以跨图尝试保留, 不借用槽中的计划和可见索引.
+    static Editor::ViewShadowStatistics MeasureShadows(const PreparedView &prepared) noexcept
+    {
+        return {prepared.view, prepared.requestRevision, prepared.reason, prepared.shadowStatistics};
+    }
+
     void CollectSceneChanges(Editor::EditorSession &editor, std::span<FrameSlot, FrameSlotCount> slots) noexcept
     {
         const auto *scene = editor.ActiveScene();
@@ -795,7 +802,7 @@ namespace Physara::Runtime
     /// @brief 附加 View 在主 View 后独立校验和规划, 局部失败只对对应请求报告结果.
     static OffscreenCandidate PlanOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward,
         FrameSlot &slot, SceneFramePreparation &scene, const View &main,
-        std::span<OffscreenViewRequest> requests)
+        std::span<OffscreenViewRequest> requests, const ShadowPlanningLimits &shadowLimits)
     {
         OffscreenCandidate candidate;
         if (requests.size() != 1)
@@ -808,28 +815,46 @@ namespace Physara::Runtime
         }
         auto &request = requests.front();
         auto &view = request.view;
-        if (view.Id() == main.Id() || (request.layout && (request.layout->view != view.Id() ||
-            request.layout->requestRevision != view.Settings().requestRevision)))
+        if (view.Id() == main.Id() || (request.layout && request.layout->view != view.Id()))
         {
+            // 外来布局或重复主 View 没有结算该 View 缓存的资格.
             request.reason = ViewSettingReason::InvalidViewRequest;
             return candidate;
         }
+        // 已确认这一路的 View 身份. 即使其布局过期, Runtime 也可发布归属于它的拒绝摘要.
         candidate.request = &request;
         if (request.layout)
         {
             const auto &layout = *request.layout;
-            const auto display = ResolveDisplaySettings(view.Preview(), view.DocumentRequests().antiAliasing);
-            // 同一相机的两个画布同尺寸时有效矩形相同. 重采样和固定附件额度可在提取前确定.
-            if (const auto failure = forward.CheckAttachments(layout.renderExtent, layout.outputExtent, display,
-                                                               layout.renderExtent != layout.outputExtent))
+            auto layoutReason = ViewSettingReason::InvalidViewRequest;
+            if (layout.requestRevision == view.Settings().requestRevision)
             {
-                request.reason = failure->reason;
+                const auto display = ResolveDisplaySettings(view.Preview(), view.DocumentRequests().antiAliasing);
+                // 同一相机的两个画布同尺寸时有效矩形相同. 重采样和固定附件额度可在提取前确定.
+                const auto failure = forward.CheckAttachments(layout.renderExtent, layout.outputExtent, display,
+                                                              layout.renderExtent != layout.outputExtent);
+                layoutReason = failure ? failure->reason : ViewSettingReason::None;
+                if (failure)
+                {
+                    candidate.error = failure->description;
+                }
+            }
+            if (layoutReason != ViewSettingReason::None)
+            {
+                request.reason = layoutReason;
                 candidate.outputs = view.Unavailable(request.reason);
-                candidate.error = failure->description;
+                // 当前离屏 View 的陈旧布局和附件预检失败均在提取前结算旧区域, 发布本轮拒绝摘要.
+                candidate.prepared.view = view.Id();
+                // 外层布局代记录被拒的输入, 内层阴影统计从 View 读取当前会话请求代.
+                candidate.prepared.requestRevision = layout.requestRevision;
+                candidate.prepared.reason = request.reason;
+                candidate.prepared.shadowStatistics = slot.offscreenView.UnavailableShadows(scene.Source(), view,
+                                                                                           shadowLimits);
                 return candidate;
             }
         }
-        candidate.prepared = slot.offscreenView.Prepare(scene, view, request.layout);
+        candidate.prepared = slot.offscreenView.Prepare(scene, view, request.layout, {}, ViewportUse::DisplayOutput,
+                                                        shadowLimits);
         if (!HasSceneOutput(candidate.prepared))
         {
             request.reason = candidate.prepared.reason != ViewSettingReason::None ?
@@ -943,8 +968,12 @@ namespace Physara::Runtime
         assert(scene);
         const auto &environment = scene->Environment();
         forward.BeginEnvironmentRequests(environment ? environment->source : nullptr);
+        // 同帧各路共用 D32 数组的设备上限, 预算与层地址则按各自的 View 计算.
+        ShadowPlanningLimits shadowLimits;
+        static_cast<void>(host.QueryDepthArrayLimits(ShadowDepthFormat, shadowLimits.maxEdge, shadowLimits.maxLayers));
         SceneFramePreparation shared(slot.sceneFrame, *scene);
-        const auto prepared = slot.mainView.Prepare(shared, view, editorFrame.viewport, {}, ViewportUse::EditorViewport);
+        const auto prepared = slot.mainView.Prepare(shared, view, editorFrame.viewport, {}, ViewportUse::EditorViewport,
+                                                    shadowLimits);
         editor.SetPreparedViewport(&prepared);
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
@@ -965,10 +994,14 @@ namespace Physara::Runtime
         }
         if (host.HasFatalGraphicsError())
         {
+            statistics.PublishShadows(MeasureShadows(prepared));
             remember(host.FirstGraphicsError());
             return stop();
         }
-        auto offscreen = PlanOffscreen(host, forward, slot, shared, view, offscreenRequests);
+        auto offscreen = PlanOffscreen(host, forward, slot, shared, view, offscreenRequests, shadowLimits);
+        // 在图编译和可能的安全 UI 重试之前发布. 此后的接受票据只确认实际提交的场景颜色.
+        statistics.PublishShadows(MeasureShadows(prepared),
+                                  offscreen.request ? std::optional(MeasureShadows(offscreen.prepared)) : std::nullopt);
         forward.EndEnvironmentRequests();
         if (!host.HasFatalGraphicsError())
         {

@@ -127,11 +127,11 @@
 
 **职责位置：** Renderer/Lighting、Prepare、View、Editor/Panels。**前置：** 本阶段入口满足。**架构依据：** [5.4](../Architecture.md#light-preparation)、[8.3](../Architecture.md#shadows)。
 
-**状态** 当前工作包，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-24-prepare-shadow-plans/tasks.md#final-verification)
 
-- [ ] 从稳定有限相机范围生成阴影视图和保守 caster 集，包含相机画外但影响可见区域的物体。
-- [ ] 建立方向/spot/point 的 region/层分配、质量和字节预算、dirty 更新与稳定 light/shadow 索引。
-- [ ] 定义预算耗尽、灯删除、尺寸变化和阴影禁用的有效状态及统计；静态结果按相关版本失效。
+- [x] 从稳定有限相机范围生成阴影视图和保守 caster 集，包含相机画外但影响可见区域的物体。
+- [x] 建立方向/spot/point 的 region/层分配、质量和字节预算、dirty 更新与稳定 light/shadow 索引。
+- [x] 定义预算耗尽、灯删除、尺寸变化和阴影禁用的有效状态及统计；静态结果按相关版本失效。
 
 **完成条件：** 阴影可从 CPU 计划追溯到实际 light/region，不把主视图可见集直接当 caster 集。
 
@@ -139,6 +139,8 @@
 ### D09-T02 · 实现稳定方向光 CSM
 
 **职责位置：** Renderer/Passes、Lighting、Shaders/Shadow。**前置：** [D09-T01](#d09-t01)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.2](../Architecture.md#geometry)、[conventions](../Architecture.md#conventions)。
+
+**状态** 当前工作包，前置已满足，待立项。
 
 - [ ] 实现 1–4 cascade split，透视线性/对数混合、正交线性划分；完整 receiver 包围球固定 XY 尺度并按世界 texel 吸附，Z 包含画外 caster，使用常规 shadow depth clear/compare 与 caster bias。
 - [ ] 通过统一几何/alpha Shader 生成深度，处理负缩放、静态实例、mask 和双面投射；由图声明深度写→采样。

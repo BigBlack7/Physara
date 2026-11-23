@@ -515,6 +515,14 @@ namespace Physara::Platform
                                                           format, dimension, maxLayers);
     }
 
+    bool DeviceHost::QueryDepthArrayLimits(RHI::Format format, std::uint32_t &maxEdge,
+                                           std::uint32_t &maxLayers) const noexcept
+    {
+        // GetDevice 检查线程和就绪状态. 格式表由同一宿主的原生根持有, 帧准备只取回两个数值.
+        return RHI::OpenGL::QueryDepthArrayLimits(GetDevice() ? m_State->rawDevice.Get() : nullptr,
+                                                 format, maxEdge, maxLayers);
+    }
+
     bool RhiErrorScope::IsClear() const noexcept
     {
         // 同步回调在命令返回前更新计数和 Fatal 锁存. 这里只读取原子事实, 不借此发布其它数据.

@@ -523,6 +523,23 @@ namespace Physara::RHI::OpenGL
         return support;
     }
 
+    bool QueryDepthArrayLimits(Device *device, Format format, std::uint32_t &maxEdge, std::uint32_t &maxLayers) noexcept
+    {
+        maxEdge = 0;
+        maxLayers = 0;
+        const auto *native = dynamic_cast<const OpenGLDevice *>(device);
+        // 只有数组目标本身同时支持写深度与着色采样时, 通用纹理尺寸和层数上限才适用于此规划.
+        const auto required = FormatSupport::DepthStencil | FormatSupport::ShaderSample;
+        if (!native || (native->GetFormatCaps(format, TextureDimension::Texture2DArray).support & required) != required)
+        {
+            return false;
+        }
+        const auto &caps = native->GetCaps();
+        maxEdge = static_cast<std::uint32_t>(caps.maxTextureSize);
+        maxLayers = static_cast<std::uint32_t>(caps.maxArrayLayers);
+        return true;
+    }
+
     bool ValidInitialState(ResourceStates state, bool keepInitialState) noexcept
     {
         // 与通用 GL profile 一致保留普通状态元数据, 不把它解释为当前已交付的执行能力.

@@ -100,6 +100,29 @@ namespace Physara::Editor::Detail
         return "";
     }
 
+    /// @brief CPU 阴影准备的状态及额度用语. 其结果可与上一接受场景同时显示.
+    static const char *ShadowStatus(Renderer::ShadowPlanReason reason) noexcept
+    {
+        using enum Renderer::ShadowPlanReason;
+        switch (reason)
+        {
+        case Planned: return "Planned";
+        case Disabled: return "Disabled";
+        case ViewUnavailable: return "View unavailable";
+        case DepthArrayUnavailable: return "Depth array unsupported";
+        case DeviceSizeLimit: return "Device size limit";
+        case NoLights: return "No visible lights";
+        case NoReceiverCoverage: return "Outside receiver coverage";
+        case InvalidVolume: return "Unrepresentable shadow volume";
+        case DirectionalLimit: return "Primary directional light limit";
+        case Budget: return "Layer or byte budget";
+        case StorageUnavailable: return "CPU allocation failed";
+        case RevisionExhausted: return "Plan revision exhausted";
+        case Count: break;
+        }
+        return "";
+    }
+
     /// @brief 用调用方选定的场景请求或已接受帧显示同一路径可对照的源代、查询参数和角色.
     static void DrawEnvironmentSummary(const char *label, const Scene::SceneEnvironment &environment)
     {
@@ -237,14 +260,65 @@ namespace Physara::Editor::Detail
         }
     }
 
+    /// @brief 按各路实际 View 身份显示 CPU 规划. 灯数统计整组准入, 区域数和层跨度以单层为单位.
+    static void DrawShadowStatistics(const FrameStatistics &statistics)
+    {
+        for (const auto &shadow : statistics.shadows)
+        {
+            if (!shadow)
+            {
+                continue;
+            }
+            const auto &plan = shadow->plan;
+            ImGui::Text("CPU shadows / View #%llu / Scene #%llu: %s",
+                        static_cast<unsigned long long>(shadow->view.generation),
+                        static_cast<unsigned long long>(plan.scene.generation), ShadowStatus(plan.reason));
+            if (!plan.enabled)
+            {
+                continue;
+            }
+            if (plan.reason == Renderer::ShadowPlanReason::ViewUnavailable)
+            {
+                ImGui::TextUnformatted(ViewStatus(shadow->viewReason));
+            }
+            ImGui::Text("Request %llu / plan %llu / allocation %llu",
+                        static_cast<unsigned long long>(plan.requestRevision),
+                        static_cast<unsigned long long>(plan.planRevision),
+                        static_cast<unsigned long long>(plan.allocationRevision));
+            ImGui::Text("Edge %u requested / %u planned tx", plan.requestedEdge, plan.effectiveEdge);
+            if (plan.qualityReason != Renderer::ShadowPlanReason::Planned)
+            {
+                // 降档时 Budget 指单层所需的逻辑字节. 下方逐灯拒绝仍可能来自层数上限.
+                const auto *reason = plan.qualityReason == Renderer::ShadowPlanReason::Budget ?
+                    "Logical byte budget" : ShadowStatus(plan.qualityReason);
+                ImGui::Text("Lower resolution: %s", reason);
+            }
+            ImGui::Text("%u regions / %u layer span of %u / %llu of %llu logical B",
+                        plan.regions, plan.layerSpan, plan.layerLimit, static_cast<unsigned long long>(plan.logicalBytes),
+                        static_cast<unsigned long long>(plan.byteLimit));
+            ImGui::Text("%zu lights planned / %u dirty / %u released%s", plan.plannedLights, plan.dirtyRegions,
+                        plan.releasedRegions, plan.reused ? " / cache hit" : "");
+            for (std::size_t reason = 0; reason < plan.unallocated.size(); ++reason)
+            {
+                if (plan.unallocated[reason] != 0)
+                {
+                    ImGui::Text("%zu lights: %s", plan.unallocated[reason],
+                                ShadowStatus(static_cast<Renderer::ShadowPlanReason>(reason)));
+                }
+            }
+        }
+    }
+
     /// @brief 展示最近一次场景提交. 表面, 批次和参数记录取自 source.view, 原生调用数还包括同图 UI 等消费者.
     /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
     {
         if (state.statistics)
         {
+            // CPU 计划和图准入可以早于首个接受场景, 因此先显示它们, 再判断是否已有场景票据.
             DrawGraphStatistics(*state.statistics);
             DrawShaderStatistics(*state.statistics);
+            DrawShadowStatistics(*state.statistics);
         }
         if (!state.statistics || !state.statistics->latestScene)
         {
@@ -794,6 +868,13 @@ namespace Physara::Editor::Detail
                             ImGui::TextUnformatted("Last scene environment - unused");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
+                        bool planShadows = state.view->RequestedShadows().enabled;
+                        ImGui::BeginDisabled(!allowEdits);
+                        if (ImGui::Checkbox("Plan shadows (CPU)", &planShadows))
+                        {
+                            frame.shadowPlanning = ShadowPlanningToggle{state.view->Id(), planShadows};
+                        }
+                        ImGui::EndDisabled();
                         drawEditError();
                     }
                     break;

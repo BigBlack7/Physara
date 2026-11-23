@@ -86,6 +86,12 @@ namespace Physara::RHI::OpenGL
                                                                 TextureDimension dimension,
                                                                 std::uint32_t &maxLayers) noexcept;
 
+    /// @brief 从已有能力表读取可作深度附件且可采样的单样本 2D array 上限.
+    /// @param device 借用创建该能力表的原生 OpenGL Device. maxEdge 的单位为 texel, maxLayers 的单位为层.
+    /// @return 设备或目标缺少所需用途时返回 false 并清零两项上限. 不查询原生状态.
+    [[nodiscard]] bool QueryDepthArrayLimits(Device *device, Format format, std::uint32_t &maxEdge,
+                                              std::uint32_t &maxLayers) noexcept;
+
     /// @brief 各传输用途的原生准入, 样本掩码第 n 位表示 n 个样本. 具体命令仍校验描述及范围.
     /// @note copy 指两个普通纹理间的同格式复制. stagingRead 是从该纹理下载, stagingWrite 是向它上传.
     struct TransferFormatSupport

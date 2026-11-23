@@ -2,19 +2,25 @@
 
 /// @file
 /// @brief 以相机刚体轴和稳定有限投影准备主可见集, 采样偏移只改变渲染矩阵.
-/// 流程依次核对像素请求, 解析相机与矩形, 取得静态记录, 构造矩阵并筛选索引.
+/// 布局和相机先确定稳定视锥, 再从同一 SceneFrame 选出主可见集并交付每路的阴影计划.
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <limits>
 #include <new>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "ViewFrustum.hpp"
+
 namespace Physara::Renderer
 {
+    using Detail::CullingPlane;
+    using Detail::Outside;
+    using Detail::PlaneTerms;
+    using Detail::SupportPoint;
+
     /// @brief 成对保留正反投影, 解析逆式避免用通用 4x4 行列式放大近远范围的数值风险.
     struct ProjectionMatrices
     {
@@ -39,13 +45,6 @@ namespace Physara::Renderer
     {
         glm::dvec2 jitter;
         glm::dvec2 sideLimit; ///< 展宽后的 NDC 侧面极值, 正负两侧共用.
-    };
-
-    /// @brief 相机相对坐标中的单位法线平面. 局部灯的米制半径可直接与有符号距离比较.
-    struct CullingPlane
-    {
-        glm::dvec3 normal;
-        double offset; ///< 以相机世界位置作原点, 正半空间表示保留侧.
     };
 
     /// @brief 相机数组为列主序的 CPU 值, 无第三方对象寿命依赖.
@@ -162,28 +161,6 @@ namespace Physara::Renderer
         return matrices;
     }
 
-    /// @brief AABB 沿方向最远的支持点, 用于视深上界和保守分离测试.
-    static glm::dvec3 SupportPoint(const Scene::Bounds &bounds, const glm::dvec3 &direction) noexcept
-    {
-        return {direction.x >= 0 ? bounds.maximum[0] : bounds.minimum[0],
-                direction.y >= 0 ? bounds.maximum[1] : bounds.minimum[1],
-                direction.z >= 0 ? bounds.maximum[2] : bounds.minimum[2]};
-    }
-
-    /// @brief 在相机相对空间形成平面各轴贡献, 零系数与极端坐标差均按真实数值解释.
-    static glm::dvec3 PlaneTerms(const glm::dvec3 &point, const glm::dvec3 &origin,
-                                const glm::dvec3 &normal) noexcept
-    {
-        glm::dvec3 terms;
-        for (glm::length_t axis = 0; axis < 3; ++axis)
-        {
-            const auto relative = point[axis] - origin[axis];
-            terms[axis] = std::isfinite(relative) ? relative * normal[axis] :
-                point[axis] * normal[axis] - origin[axis] * normal[axis];
-        }
-        return terms;
-    }
-
     /// @brief 有限相机沿用远面. 无限透视的稳定远面覆盖场景可绘范围的最远正向深度.
     static double CullingFar(const ProjectionParameters &parameters, const std::optional<Scene::Bounds> &bounds,
                              const glm::dvec3 &position, const glm::dvec3 &forward) noexcept
@@ -230,18 +207,6 @@ namespace Physara::Renderer
         return {side(right, sx, sampling.sideLimit.x), side(-right, sx, sampling.sideLimit.x),
                 side(up, sy, sampling.sideLimit.y), side(-up, sy, sampling.sideLimit.y),
                 CullingPlane{forward, -camera.nearPlane}, CullingPlane{-forward, camera.cullingFar}};
-    }
-
-    /// @brief 判定整项处于平面外. 边界舍入误差及不能证明分离的数值保守保留.
-    static bool Outside(const CullingPlane &plane, const glm::dvec3 &point, const glm::dvec3 &origin,
-                        double radius = 0) noexcept
-    {
-        const auto terms = PlaneTerms(point, origin, plane.normal);
-        const double distance = (terms.x + terms.y + terms.z) + plane.offset;
-        constexpr double Rounding = 32 * std::numeric_limits<double>::epsilon();
-        const double allowance = Rounding * std::abs(terms.x) + Rounding * std::abs(terms.y) +
-            Rounding * std::abs(terms.z) + Rounding * std::abs(plane.offset) + Rounding * radius;
-        return std::isfinite(distance) && distance < -radius - allowance;
     }
 
     std::optional<CameraRay> CameraSnapshot::RayAt(double u, double v) const noexcept
@@ -323,26 +288,40 @@ namespace Physara::Renderer
 
     PreparedView ViewWork::Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene, const View &view,
                                    const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
-                                   ViewportUse use)
+                                   ViewportUse use, const ShadowPlanningLimits &shadowLimits)
     {
         SceneFramePreparation frame(sceneStorage, scene);
-        return Prepare(frame, view, request, sampling, use);
+        return Prepare(frame, view, request, sampling, use, shadowLimits);
+    }
+
+    ShadowPlanStatistics ViewWork::UnavailableShadows(const Scene::Scene &scene, const View &view,
+                                                      const ShadowPlanningLimits &limits) noexcept
+    {
+        m_Shadows.reset();
+        return view.m_ShadowPlan.Unavailable(scene.Id(), scene.Versions(), view.m_ShadowSettings,
+                                             view.m_ShadowRequestRevision, limits).statistics;
     }
 
     PreparedView ViewWork::Prepare(SceneFramePreparation &shared, const View &view,
                                    const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
-                                   ViewportUse use)
+                                   ViewportUse use, const ShadowPlanningLimits &shadowLimits)
     {
         m_Primitives.clear();
         m_Lights.clear();
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
                             .preview = view.Preview(), .reason = view.CheckViewport(request, use)};
+        const auto &scene = shared.Source();
+        const auto unavailable = [&]
+        {
+            // 即使本轮在提取前退出, 也要结束上次阴影映射, 并将原因与这次 View 准备一起交付.
+            result.shadowStatistics = UnavailableShadows(scene, view, shadowLimits);
+            return result;
+        };
         if (result.reason != ViewSettingReason::None)
         {
-            return result;
+            return unavailable();
         }
-        const auto &scene = shared.Source();
         const auto &document = view.DocumentRequests();
         // 实体相机读取 Scene 已传播的世界刚体和资产投影, 导航相机读取 View 的位姿和镜头.
         const auto camera = document.cameraEntityId ? scene.FindCamera(*document.cameraEntityId) :
@@ -350,7 +329,7 @@ namespace Physara::Renderer
         if (!camera)
         {
             result.reason = ViewSettingReason::CameraUnavailable;
-            return result;
+            return unavailable();
         }
         const auto parameters = Parameters(camera->projection, request->outputExtent);
         if (!std::isfinite(parameters.aspect) || parameters.aspect <= 0 ||
@@ -358,7 +337,7 @@ namespace Physara::Renderer
             !std::isfinite(parameters.scaleY) || parameters.scaleY <= 0)
         {
             result.reason = ViewSettingReason::InvalidProjection;
-            return result;
+            return unavailable();
         }
         // 固定投影在各栅格独立留边; 自适应透视取显示宽高比, 使用各栅格的全部像素.
         const auto display = FitImage(request->outputExtent, parameters.aspect);
@@ -367,13 +346,13 @@ namespace Physara::Renderer
         if (!display || !render)
         {
             result.reason = ViewSettingReason::InvalidImageRect;
-            return result;
+            return unavailable();
         }
         const auto offsets = SampleOffsets(sampling, render->rect.extent);
         if (!offsets)
         {
             result.reason = ViewSettingReason::InvalidSampling;
-            return result;
+            return unavailable();
         }
         // 后续的无限远裁剪需要场景范围. 到达这里的各路共用提取结果, 裁剪索引分别写到各自的 ViewWork.
         const auto &extracted = shared.Extract();
@@ -381,14 +360,14 @@ namespace Physara::Renderer
         {
             result.reason = ViewSettingReason::ScenePreparationFailed;
             result.failure = *error;
-            return result;
+            return unavailable();
         }
         const auto &frame = std::get<SceneFrame>(extracted);
         const auto snapshot = BuildCamera(*camera, parameters, frame, scene.Versions().camera, sampling, *offsets, view);
         if (!snapshot)
         {
             result.reason = ViewSettingReason::InvalidProjection;
-            return result;
+            return unavailable();
         }
 
         // 仅工作集随相机/采样 profile 重建, 静态记录在同一安全槽内复用.
@@ -426,7 +405,7 @@ namespace Physara::Renderer
         {
             result.reason = ViewSettingReason::ScenePreparationFailed;
             result.failure.emplace("View visibility storage allocation failed");
-            return result;
+            return unavailable();
         }
         result.camera = snapshot;
         result.requestedAa = document.antiAliasing;
@@ -435,6 +414,13 @@ namespace Physara::Renderer
         result.primitives = m_Primitives;
         result.lights = m_Lights;
         result.cullingSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cullingStart).count();
+        // Lighting 读取冻结场景全表. 保持主可见集及其计时口径, 即使阴影预算拒绝也交付完整灯集.
+        auto shadows = view.m_ShadowPlan.Prepare(frame, *snapshot, planes, {offsets->sideLimit.x, offsets->sideLimit.y},
+                                                 m_Lights, view.m_ShadowSettings, view.m_ShadowRequestRevision, shadowLimits);
+        // PreparedView 只借裸指针. 本槽保有这份计划, 让后续槽可以独立替换同一 View 的缓存.
+        m_Shadows = std::move(shadows.plan);
+        result.shadows = m_Shadows.get();
+        result.shadowStatistics = shadows.statistics;
         return result;
     }
 }

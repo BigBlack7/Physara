@@ -47,15 +47,19 @@ endforeach()
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
 # 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
-# 相机和裁剪的 GLM 运算, 以及灯行编码所用的生成头都只由实现消费.
+# 主视锥和阴影体在 Renderer 内共享 GLM 运算. 阴影规划接收设备上限的值, 无需链接具体后端.
+# 灯行编码所用的生成头只由实现消费.
 # Editor 与 Runtime 经此依赖消费公共图接口; Renderer 本身不反向依赖窗口或 UI.
 add_library(PhysaraRenderer STATIC
     Renderer/View.hpp Renderer/View.cpp
     Renderer/FrameGraph.hpp Renderer/FrameGraph.cpp
     Renderer/Prepare/SceneFrame.hpp Renderer/Prepare/SceneFrame.cpp
     Renderer/Prepare/CameraSnapshot.hpp
+    Renderer/Prepare/ViewFrustum.hpp
     Renderer/Prepare/ViewPreparation.hpp Renderer/Prepare/ViewPreparation.cpp
     Renderer/Lighting/PunctualLights.hpp Renderer/Lighting/PunctualLights.cpp
+    Renderer/Lighting/ShadowPlan.hpp Renderer/Lighting/ShadowPlan.cpp
+    Renderer/Lighting/ShadowVolumes.hpp Renderer/Lighting/ShadowVolumes.cpp
     Renderer/Lighting/EnvironmentBake.hpp Renderer/Lighting/EnvironmentBake.cpp
     Renderer/Lighting/EnvironmentCache.hpp Renderer/Lighting/EnvironmentCache.cpp
     Renderer/Lighting/EnvironmentGpu.cpp

@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 每个 View 持有自己的相机, 比例, AA, 预览模式和最近接受的显示色.
+/// @brief 每个 View 持有自己的相机, 比例, AA, 会话预览和阴影请求, 以及最近接受的显示色.
 /// 主视口按编辑器布局请求像素, 附加离屏 View 由调用方提供布局. Runtime 按各自的图出口确认颜色.
 /// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
@@ -18,6 +18,7 @@
 #include <RHI.hpp>
 #include <Scene/Scene.hpp>
 #include "FrameGraph.hpp"
+#include "Lighting/ShadowPlan.hpp"
 #include "Prepare/CameraSnapshot.hpp"
 
 namespace Physara::Core
@@ -28,6 +29,7 @@ namespace Physara::Core
 namespace Physara::Renderer
 {
     struct PreparedView;
+    class ViewWork;
     struct ViewIdentityTag;
     /// @brief 跨布局和纹理换代保持稳定的逻辑 View 身份.
     using ViewId = Core::Identity<ViewIdentityTag>;
@@ -362,6 +364,13 @@ namespace Physara::Renderer
         /// @pre mode 为已声明的枚举值. 修改只进入待确认状态, 上一接受画面的模式随其颜色代保留.
         void RequestPreview(PreviewMode mode) noexcept;
 
+        /// @brief 按值读取本 View 的会话请求. 实际准入的质量与层数见当轮 PreparedView::shadowStatistics.
+        [[nodiscard]] ShadowSettings RequestedShadows() const noexcept { return m_ShadowSettings; }
+        /// @brief 在帧边界接收会话阴影请求. 距离须为有限正米数, 边长须为支持的档位.
+        /// @return 成功返回空, 相同设置沿用原请求代. 身份过期, 参数无效或版号耗尽时返回原因并保留原请求.
+        /// @note 新请求在下次 CPU 准备生效. 文档编辑代和已接受颜色按各自合同发布.
+        [[nodiscard]] std::optional<Core::BoundedText> RequestShadows(ViewId view, ShadowSettings settings) noexcept;
+
         /// @brief 无副作用地校验字段及派生 FOV/曝光, 失败返回可定位原因.
         /// 具体相机实体归 Scene, 由组合调用者校验; 成功不代表布局或 GPU 输出已就绪.
         [[nodiscard]] static std::optional<Core::BoundedText>
@@ -424,6 +433,7 @@ namespace Physara::Renderer
                                    const GraphRetainedResource &retained = {}, std::uint64_t ticket = 0) noexcept;
 
     private:
+        friend class ViewWork;
         View(ViewId id, std::uint32_t maxTextureSize) noexcept;
         void ApplyRenderScale(float scale) noexcept;
 
@@ -438,6 +448,9 @@ namespace Physara::Renderer
         float m_EffectiveScale = MaxRenderScale;
         ViewSettingReason m_Reason = ViewSettingReason::LayoutPending;
         PreviewMode m_Preview = PreviewMode::BaseColor;
+        ShadowSettings m_ShadowSettings;
+        std::uint64_t m_ShadowRequestRevision{};
+        mutable ShadowPlanCache m_ShadowPlan; ///< 只由 owner 线程的 ViewWork 更新派生结果.
         std::optional<ViewOutput> m_Accepted;
         std::optional<RenderedScene> m_RenderedScene;
     };

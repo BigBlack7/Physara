@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 发布实际接受的场景计时, 最近编译图及设备池容量. 各自按产生事实的阶段更新.
+/// @brief 按各自产生的阶段发布 CPU 阴影规划, 最近编译图, 设备池容量及已接受的场景统计.
 
 #include <array>
 
@@ -43,6 +43,13 @@ namespace Physara::Runtime
         /// @brief 编译成功就登记候选. 其后才可为这张图补充原生创建数和宿主回执.
         void PublishGraph(Editor::GraphFrameSummary graph) noexcept { m_Stats.latestGraph = graph; }
         void PublishPool(Renderer::GraphPoolStatistics pool) noexcept { m_Stats.graphPool = pool; }
+        /// @brief 图尝试前替换主路和附加路的规划摘要. offscreen 缺席时清空旧项.
+        /// 后续图取消或仅接受安全 UI 时, 仍可在 Snapshot 中按 View 身份读取此次 CPU 结果.
+        void PublishShadows(Editor::ViewShadowStatistics main,
+                            std::optional<Editor::ViewShadowStatistics> offscreen = std::nullopt) noexcept
+        {
+            m_Stats.shadows = {main, offscreen};
+        }
         /// @brief 复制本轮 owner 准备及最近一次 worker 回报. 场景统计另随实际接受的提交发布.
         void PublishShaders(Renderer::ShaderPreparationStatistics native, Shader::ReloadStatistics cpu) noexcept
         {

@@ -57,6 +57,13 @@ namespace Physara::Editor::Detail
         double value;
     };
 
+    /// @brief Renderer 面板在布局时记录目标 View 和开关值. Session 在封存后合并该 View 当前的其余阴影设置.
+    struct ShadowPlanningToggle
+    {
+        Renderer::ViewId view;
+        bool enabled;
+    };
+
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
     /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
     /// 相机字段意图只在本批当前文档的编辑边界消费, 先于可替换 Scene 的文件操作.
@@ -74,6 +81,7 @@ namespace Physara::Editor::Detail
         bool cancelPhysicalSource = false;
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
+        std::optional<ShadowPlanningToggle> shadowPlanning;
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;

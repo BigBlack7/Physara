@@ -187,6 +187,29 @@ namespace Physara::Renderer
         }
     }
 
+    std::optional<Core::BoundedText> View::RequestShadows(ViewId view, ShadowSettings settings) noexcept
+    {
+        if (view != m_Id)
+        {
+            return Core::BoundedText("Shadow planning requires the active View identity");
+        }
+        if (!std::isfinite(settings.shadowDistanceMeters) || settings.shadowDistanceMeters <= 0 ||
+            (settings.edge != 1024 && settings.edge != 512 && settings.edge != 256))
+        {
+            return Core::BoundedText("Shadow planning requires a finite positive distance and a supported edge");
+        }
+        if (settings != m_ShadowSettings)
+        {
+            // 先为新值取得会话请求代. 阴影设置只由下一次 View 准备消费, 保存和撤销使用独立的文档代.
+            if (!Core::AdvanceGeneration(m_ShadowRequestRevision))
+            {
+                return Core::BoundedText("Shadow request revision exhausted");
+            }
+            m_ShadowSettings = settings;
+        }
+        return std::nullopt;
+    }
+
     std::optional<Core::BoundedText> View::RequestRenderScale(ViewId view, float scale) noexcept
     {
         if (view != m_Id || !(scale >= MinRenderScale && scale <= MaxRenderScale))
