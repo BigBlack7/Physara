@@ -2,6 +2,7 @@
 
 /// @file
 /// @brief Lighting 内部共享的有限接收范围及投射物筛选入口.
+/// 局部灯按其有限体积筛选. 方向光在接收切片与发射轴上拟合, 随每级交付独立的世界投影.
 
 #include "ShadowPlan.hpp"
 
@@ -25,14 +26,17 @@ namespace Physara::Renderer::Detail
         bool operator==(const ShadowReceiver &) const = default;
     };
 
-    /// @brief 交付一盏灯的有限视图或未能构造它的原因. planes 使用相机相对坐标.
-    /// 返回的方向光 fitted 先覆盖接收段, 收集投射物后才得到供消费者读取的深度区间.
-    [[nodiscard]] std::variant<ShadowVolume, ShadowPlanReason> MakeShadowVolume(const ShadowReceiver &receiver,
+    /// @brief 交付一盏局部灯的有限视图或未能构造它的原因. planes 使用相机相对坐标.
+    [[nodiscard]] std::variant<LocalShadowVolume, ShadowPlanReason> MakeLocalShadowVolume(const ShadowReceiver &receiver,
         std::span<const CullingPlane, 6> planes, const LightRecord &light, double shadowDistance) noexcept;
 
-    /// @brief 从冻结的全部 Primitive 选取候选, 并为方向光纳入 caster 所需的光空间深度.
-    /// @pre casters 是新组的空列表. 筛选期间 volume 和列表都可能已写入部分结果.
-    /// @return 方向光拟合范围无法表示时返回 false, 调用方放弃此组. 列表的分配失败由计划入口处理.
-    [[nodiscard]] bool CollectShadowCasters(const SceneFrame &scene, ShadowVolume &volume,
-                                           std::vector<std::uint32_t> &casters);
+    /// @brief 从冻结场景为局部灯选取可影响其阴影体的 caster, 交付完成的记录.
+    [[nodiscard]] LocalShadowPlan CollectLocalShadowCasters(const SceneFrame &scene, LocalShadowVolume volume);
+
+    /// @brief 按准入边长构造完整方向光组. 返回值持有逐级 caster 下标, 使用它们时须沿用 scene.
+    /// 名义切分以米计, 拟合范围包含相邻层的过渡带. 构造失败时返回整组的拒绝原因.
+    /// @note 投射物列表的分配失败由计划入口处理.
+    [[nodiscard]] std::variant<DirectionalShadowPlan, ShadowPlanReason> MakeDirectionalShadowPlan(
+        const SceneFrame &scene, const ShadowReceiver &receiver, const LightRecord &light,
+        const ShadowSettings &settings, std::uint32_t edge);
 }

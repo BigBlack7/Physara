@@ -57,8 +57,8 @@ namespace Physara::Editor::Detail
         double value;
     };
 
-    /// @brief Renderer 面板在布局时记录目标 View 和开关值. Session 在封存后合并该 View 当前的其余阴影设置.
-    struct ShadowPlanningToggle
+    /// @brief Renderer 面板记录针对特定 View 的会话阴影开关. Session 在帧边界应用.
+    struct ShadowToggle
     {
         Renderer::ViewId view;
         bool enabled;
@@ -81,7 +81,8 @@ namespace Physara::Editor::Detail
         bool cancelPhysicalSource = false;
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
-        std::optional<ShadowPlanningToggle> shadowPlanning;
+        std::optional<ShadowToggle> shadowPlanning; ///< 只改规划开关, 沿用目标 View 的距离和级联参数.
+        std::optional<ShadowToggle> cascadePreview; ///< 独立的显示选择, 可先于可用的方向光计划提交.
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;

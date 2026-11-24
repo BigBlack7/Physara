@@ -87,7 +87,7 @@ namespace Physara::Editor::Detail
         case SceneResidencyPending: return "Pending - waiting for scene residency";
         case SceneResidencyLimit: return "Failed - scene residency budget";
         case SceneAttachmentLimit: return "Failed - Forward attachment limit";
-        case SceneUnsupported: return "Failed - unsupported visible surfaces";
+        case SceneUnsupported: return "Failed - unsupported scene geometry";
         case SceneUploadLimit: return "Failed - Forward upload limit";
         case SceneLightTableRejected: return "Failed - visible light table rejected";
         case EnvironmentPending: return "Pending - preparing HDR environment or DFG";
@@ -296,6 +296,8 @@ namespace Physara::Editor::Detail
             ImGui::Text("%u regions / %u layer span of %u / %llu of %llu logical B",
                         plan.regions, plan.layerSpan, plan.layerLimit, static_cast<unsigned long long>(plan.logicalBytes),
                         static_cast<unsigned long long>(plan.byteLimit));
+            ImGui::Text("Directional cascades: %u (%s)", plan.directionalCascades,
+                        ShadowStatus(plan.directionalReason));
             ImGui::Text("%zu lights planned / %u dirty / %u released%s", plan.plannedLights, plan.dirtyRegions,
                         plan.releasedRegions, plan.reused ? " / cache hit" : "");
             for (std::size_t reason = 0; reason < plan.unallocated.size(); ++reason)
@@ -334,7 +336,8 @@ namespace Physara::Editor::Detail
                     static_cast<unsigned long long>(source.view.generation),
                     static_cast<unsigned long long>(source.submission));
         ImGui::Text("Accepted shader generation %llu", static_cast<unsigned long long>(source.shaderGeneration));
-        ImGui::Text("%s / %s / %s", PreviewNames[static_cast<std::size_t>(source.preview)],
+        ImGui::Text("%s / %s / %s", source.directionalCascades ? "Directional CSM" :
+                    PreviewNames[static_cast<std::size_t>(source.preview)],
                     source.display.profile == Renderer::DisplayProfile::AcesSdr ? "Filament ACES SDR" : "Linear clamp",
                     source.display.antiAliasing == Renderer::AntiAliasing::Fxaa ? "FXAA" : "None");
         ImGui::Text("Render %u x %u / Output %u x %u", source.render.outputExtent.width,
@@ -718,8 +721,7 @@ namespace Physara::Editor::Detail
                         ImGui::Separator();
                     }
                     // 通过接受的像素代读取摘要和实际模式. 帧失败诊断仍沿原入口保留.
-                    ImGui::Text("Last accepted Forward preview - %s",
-                                PreviewNames[static_cast<std::size_t>(acceptedPreview->mode)]);
+                    ImGui::Text("Last accepted Forward preview - %s", ScenePreviewName(*acceptedPreview));
                     const auto summary = acceptedPreview->degradation->View();
                     ImGui::TextUnformatted(summary.data(), summary.data() + summary.size());
                 }
@@ -824,8 +826,15 @@ namespace Physara::Editor::Detail
                         if (lastScene)
                         {
                             // 同一文档换到测试图时仍显示最后一次场景实绩, 两个尺寸来自同一个场景记录.
-                            ImGui::Text("Last scene preview - %s",
-                                        PreviewNames[static_cast<std::size_t>(lastScene->mode)]);
+                            if (lastScene->directionalCascades)
+                            {
+                                ImGui::Text("Last scene preview - %s (%u cascades)", ScenePreviewName(*lastScene),
+                                            lastScene->directionalCascades);
+                            }
+                            else
+                            {
+                                ImGui::Text("Last scene preview - %s", ScenePreviewName(*lastScene));
+                            }
                             const auto display = lastScene->display;
                             const auto render = lastScene->renderLayout.outputExtent;
                             const auto output = lastScene->outputExtent;
@@ -863,18 +872,50 @@ namespace Physara::Editor::Detail
                         {
                             DrawEnvironmentSummary("Last scene environment", *lastScene->environment);
                         }
-                        else if (lastScene && lastScene->mode == Renderer::PreviewMode::PhysicalLighting)
+                        else if (lastScene && !lastScene->directionalCascades &&
+                                 lastScene->mode == Renderer::PreviewMode::PhysicalLighting)
                         {
                             ImGui::TextUnformatted("Last scene environment - unused");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
                         bool planShadows = state.view->RequestedShadows().enabled;
+                        bool cascadePreview = state.view->CascadePreviewRequested();
                         ImGui::BeginDisabled(!allowEdits);
                         if (ImGui::Checkbox("Plan shadows (CPU)", &planShadows))
                         {
-                            frame.shadowPlanning = ShadowPlanningToggle{state.view->Id(), planShadows};
+                            frame.shadowPlanning = ShadowToggle{state.view->Id(), planShadows};
+                        }
+                        if (ImGui::Checkbox("Directional CSM diagnostic", &cascadePreview))
+                        {
+                            frame.cascadePreview = ShadowToggle{state.view->Id(), cascadePreview};
                         }
                         ImGui::EndDisabled();
+                        if (cascadePreview)
+                        {
+                            // 请求可以在本次 UI 批次先变化. CPU 计划来自最近一次准备, 颜色来自已接受的 ViewOutput.
+                            if (!planShadows)
+                            {
+                                ImGui::TextUnformatted("Enable shadow planning to view directional cascades.");
+                            }
+                            else if (settings.reason != Renderer::ViewSettingReason::None)
+                            {
+                                ImGui::Text("CSM diagnostic: %s", ViewStatus(settings.reason));
+                            }
+                            else if (state.statistics && state.statistics->shadows[0] &&
+                                     state.statistics->shadows[0]->view == state.view->Id() && state.scene &&
+                                     state.statistics->shadows[0]->plan.scene == state.scene->Id())
+                            {
+                                const auto &plan = state.statistics->shadows[0]->plan;
+                                if (!plan.directionalCascades)
+                                {
+                                    ImGui::Text("CSM diagnostic: %s", ShadowStatus(plan.directionalReason));
+                                }
+                                else if (!acceptedPreview || !acceptedPreview->directionalCascades)
+                                {
+                                    ImGui::TextUnformatted("CSM diagnostic: awaiting accepted geometry.");
+                                }
+                            }
+                        }
                         drawEditError();
                     }
                     break;

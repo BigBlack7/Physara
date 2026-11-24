@@ -6,6 +6,7 @@
 /// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
 #include <array>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <numbers>
@@ -261,7 +262,7 @@ namespace Physara::Renderer
         Scene::SceneId scene;
         std::uint64_t contentRevision;
         CameraSnapshot camera;
-        PreviewMode mode;
+        PreviewMode mode; ///< 该次提交的基础预览请求. 实际颜色还由 directionalCascades 标识.
         std::optional<Core::BoundedText> degradation;
         std::uint64_t documentRevision; ///< 准备时的 View 文档代, 不等于 Scene 内容代或时域历史 key.
         std::optional<RenderedEnvironment> environment; ///< 本颜色代实际使用的源和角色, 无环境消费时为空.
@@ -269,6 +270,27 @@ namespace Physara::Renderer
         ViewImageLayout renderLayout; ///< 配对 HDR、深度和相机实际采样的栅格.
         ViewExtent outputExtent; ///< 此次场景输出的显示像素尺寸, 随场景历史保留.
         std::uint64_t shaderGeneration{}; ///< 正常图实际使用的冻结代, 随颜色提交确认.
+        std::uint32_t directionalCascades{}; ///< 实际诊断的级数, 零表示常规预览.
+        std::uint64_t shadowRequestRevision{}; ///< 场景色所对应的会话阴影请求代, 含诊断退回常规预览的情形.
+    };
+
+    /// @brief 某 View 的方向光深度组. 像素只在对应图提交接受后由 retained 持有.
+    /// 逻辑区域版本与物理层顺序成对. 深度程序摘要和实际变体用于核对换代后的生产需求.
+    struct DirectionalDepth
+    {
+        Scene::SceneId scene;
+        std::uint32_t edge{};
+        std::uint32_t count{};
+        std::array<ShadowRegion, MaxDirectionalCascades> regions{};
+        const RHI::Device *device{};
+        Core::BoundedText program;
+        std::bitset<32> variants; ///< 深度角色的 8 种顶点布局及 4 种绕序/剔面组合, 空组只有清除.
+        std::optional<Core::BoundedText> degradation; ///< 随该组生产确认的 caster 跳过摘要, 与主表面独立.
+        GraphRetainedResource retained;
+
+        /// @brief 对照同 View 的当前 CPU 计划, 核查身份、规格及所需内容代.
+        [[nodiscard]] bool Matches(Scene::SceneId current, const ShadowPlan &plan,
+                                   const ShadowLightPlan &light) const noexcept;
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -366,10 +388,17 @@ namespace Physara::Renderer
 
         /// @brief 按值读取本 View 的会话请求. 实际准入的质量与层数见当轮 PreparedView::shadowStatistics.
         [[nodiscard]] ShadowSettings RequestedShadows() const noexcept { return m_ShadowSettings; }
-        /// @brief 在帧边界接收会话阴影请求. 距离须为有限正米数, 边长须为支持的档位.
+        /// @brief 在帧边界接收会话阴影请求. 距离为有限正米数, 边长为支持档位, 级数为 1 到 4.
+        /// splitLambda 和 transitionFraction 分别接受闭区间 [0,1] 和 [0,0.25].
         /// @return 成功返回空, 相同设置沿用原请求代. 身份过期, 参数无效或版号耗尽时返回原因并保留原请求.
         /// @note 新请求在下次 CPU 准备生效. 文档编辑代和已接受颜色按各自合同发布.
         [[nodiscard]] std::optional<Core::BoundedText> RequestShadows(ViewId view, ShadowSettings settings) noexcept;
+        [[nodiscard]] bool CascadePreviewRequested() const noexcept { return m_CascadePreview; }
+        /// @brief 为匹配的 View 更新诊断请求, 与规划开关共用请求代. 拒绝时保留原值, 成功返回空.
+        /// 关闭时释放本 View 持有的深度组, 原提交继续保活. 画面切换由下一次颜色接受确认.
+        [[nodiscard]] std::optional<Core::BoundedText> RequestCascadePreview(ViewId view, bool enabled) noexcept;
+        /// @brief 在同一 View 的正常诊断颜色发布后接收匹配的已接受深度出口.
+        void AcceptDirectionalDepth(DirectionalDepth depth, std::uint64_t ticket) noexcept;
 
         /// @brief 无副作用地校验字段及派生 FOV/曝光, 失败返回可定位原因.
         /// 具体相机实体归 Scene, 由组合调用者校验; 成功不代表布局或 GPU 输出已就绪.
@@ -416,10 +445,11 @@ namespace Physara::Renderer
         /// @pre 场景 Draw 已使用此 View 准备值及其 preview 模式. degradation 只描述局部不支持项.
         /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
         /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
+        /// @param directional 仅在本路实际准备了诊断时借用. 无匹配深度时释放 View 持有的旧组.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
                            std::optional<RenderedEnvironment> environment = std::nullopt,
-                           std::uint64_t shaderGeneration = 0);
+                           std::uint64_t shaderGeneration = 0, const DirectionalDepth *directional = nullptr);
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
@@ -450,7 +480,9 @@ namespace Physara::Renderer
         PreviewMode m_Preview = PreviewMode::BaseColor;
         ShadowSettings m_ShadowSettings;
         std::uint64_t m_ShadowRequestRevision{};
+        bool m_CascadePreview{};
         mutable ShadowPlanCache m_ShadowPlan; ///< 只由 owner 线程的 ViewWork 更新派生结果.
+        mutable std::optional<DirectionalDepth> m_DirectionalDepth; ///< 当前 View 已接受的只读深度组.
         std::optional<ViewOutput> m_Accepted;
         std::optional<RenderedScene> m_RenderedScene;
     };

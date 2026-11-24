@@ -13,7 +13,10 @@
         { "name": "orthographic", "type": "uint32" },
         { "name": "directionalCount", "type": "uint32" },
         { "name": "localCount", "type": "uint32" },
-        { "name": "viewerLow", "type": "float3" }
+        { "name": "viewerLow", "type": "float3" },
+        { "name": "shadowClipFromOrigin", "type": "float4x4" },
+        { "name": "shadowOriginHigh", "type": "float3" },
+        { "name": "shadowOriginLow", "type": "float3" }
       ]
     },
     {
@@ -40,6 +43,30 @@
         { "name": "radianceExponent", "type": "int32" },
         { "name": "shExponent", "type": "int3" },
         { "name": "maxMip", "type": "float32" }
+      ]
+    },
+    {
+      "name": "ForwardCascades",
+      "layout": "std140",
+      "fields": [
+        { "name": "originHigh", "type": "float4", "array": 4 },
+        { "name": "originLow", "type": "float4", "array": 4 },
+        { "name": "farDepths", "type": "float4" },
+        { "name": "transitionStarts", "type": "float4" },
+        { "name": "transitionEnds", "type": "float4" },
+        { "name": "cameraOriginHigh", "type": "float3" },
+        { "name": "cameraOriginLow", "type": "float3" },
+        { "name": "cameraForward", "type": "float3" },
+        { "name": "nearDepth", "type": "float32" },
+        { "name": "count", "type": "uint32" },
+        { "name": "edge", "type": "uint32" }
+      ]
+    },
+    {
+      "name": "ForwardCascadeMatrices",
+      "layout": "std140",
+      "fields": [
+        { "name": "clipFromOrigin", "type": "float4x4", "array": 4 }
       ]
     },
     {
@@ -98,7 +125,13 @@
     { "name": "environment", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardEnvironment" },
     { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },
     { "name": "reflectionImage", "kind": "texturecube", "set": 3, "slot": 2, "stages": ["fragment"] },
-    { "name": "environmentSampler", "kind": "sampler", "set": 3, "slot": 0, "stages": ["fragment"] }
+    { "name": "environmentSampler", "kind": "sampler", "set": 3, "slot": 0, "stages": ["fragment"] },
+    { "name": "cascades", "kind": "constant-buffer", "set": 3, "slot": 1, "stages": ["fragment"], "block": "ForwardCascades" },
+    { "name": "cascadeMatrices", "kind": "constant-buffer", "set": 3, "slot": 2, "stages": ["fragment"], "block": "ForwardCascadeMatrices" },
+    { "name": "cascadeImage0", "kind": "texture2d", "set": 3, "slot": 3, "stages": ["fragment"] },
+    { "name": "cascadeImage1", "kind": "texture2d", "set": 3, "slot": 4, "stages": ["fragment"] },
+    { "name": "cascadeImage2", "kind": "texture2d", "set": 3, "slot": 5, "stages": ["fragment"] },
+    { "name": "cascadeImage3", "kind": "texture2d", "set": 3, "slot": 6, "stages": ["fragment"] }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },

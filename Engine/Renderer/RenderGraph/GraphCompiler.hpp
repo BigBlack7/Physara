@@ -27,6 +27,7 @@ namespace Physara::Renderer
     /// @pre 调用方为每个组合提供唯一记录. maxDepth 是体深, maxLayers 是数组层或面数.
     /// formatSupport 描述此组合的存储和同格式视图能力, 传输和只读深度联合采样有各自的标记.
     /// maxSampledLayers 限定一次采样视图的层数, 0 表示不支持采样. 普通采样和 ShaderRead 导出均核对视图分量.
+    /// layeredReadExport 允许不可变 2D 数组以逐层视图的联合范围交接. 后继 Pass 仍受 maxSampledLayers 限制.
     /// readOnlyDepthSampling 用于同一 mip/layer 上的采样和只读深度/模板附件.
     /// presentation 标记可交给窗口 owner 的组合, 编译另行核对形状和宿主结束状态.
     struct GraphTextureSupport
@@ -45,6 +46,7 @@ namespace Physara::Renderer
         bool readOnlyDepthSampling = false;
         std::uint32_t maxSampledLayers = 0;
         bool presentation = false;
+        bool layeredReadExport = false;
     };
 
     /// @brief 图编译所用的 Buffer 容量和绑定限制. 常量和结构化视图的容量及偏移对齐均以字节计.

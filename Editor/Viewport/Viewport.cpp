@@ -35,7 +35,7 @@ namespace Physara::Editor::Detail
         case UiFallback::SceneResidencyPending: return "Waiting for scene residency";
         case UiFallback::SceneResidencyLimit: return "Scene residency budget exceeded";
         case UiFallback::SceneAttachmentLimit: return "Forward attachment limit exceeded";
-        case UiFallback::SceneUnsupported: return "No supported visible surface";
+        case UiFallback::SceneUnsupported: return "Unsupported scene geometry";
         case UiFallback::SceneUploadLimit: return "Forward upload limit exceeded";
         case UiFallback::SceneLightTableRejected: return "Visible light table rejected";
         case UiFallback::EnvironmentPending: return "Preparing HDR environment or DFG";
@@ -120,6 +120,11 @@ namespace Physara::Editor::Detail
         {
             // 等待或拒绝原因属于当前候选, 后缀说明图像仍来自旧代.
             label.Append(" - showing last accepted output");
+            if (output && output->scene)
+            {
+                label.Append(" - ");
+                label.Append(ScenePreviewName(*output->scene));
+            }
         }
         else if (reason == UiFallback::None && output)
         {
@@ -127,7 +132,7 @@ namespace Physara::Editor::Detail
             {
                 // 窄视口先显示降级标识. 完整摘要由接受后的 Frame status 菜单显示.
                 label = Core::BoundedText(output->scene->degradation ? "Degraded - " : "Forward preview - ");
-                label.Append(PreviewNames[static_cast<std::size_t>(output->scene->mode)]);
+                label.Append(ScenePreviewName(*output->scene));
             }
             else
             {

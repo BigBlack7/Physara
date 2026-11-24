@@ -23,6 +23,22 @@ namespace Physara::Renderer
     using Detail::ShadowReceiver;
     using Asset::ModelLightKind;
 
+    const ShadowLightPlan *ShadowPlan::Directional() const noexcept
+    {
+        return !admitted.empty() && std::holds_alternative<DirectionalShadowPlan>(admitted.front().views) ?
+            &admitted.front() : nullptr;
+    }
+
+    std::span<const std::uint32_t> ShadowLightPlan::Casters(std::size_t region) const noexcept
+    {
+        assert(region < regionCount);
+        if (const auto *directional = std::get_if<DirectionalShadowPlan>(&views))
+        {
+            return directional->cascades[region].casters;
+        }
+        return std::get<LocalShadowPlan>(views).casters;
+    }
+
     /// @brief 单档布局. 能力和项目上限已收紧到固定最大层数与有限质量档, 字节乘积在 uint64_t 内.
     struct ShadowLayout
     {
@@ -65,22 +81,23 @@ namespace Physara::Renderer
         return std::tuple(kind, light.entity.index, light.entity.generation);
     }
 
-    /// @brief 初始化子视图身份. Point 的六面按照显式顺序, 层地址稍后作为整组保留或分配.
-    static void SetSubviews(ShadowLightPlan &group, ModelLightKind kind) noexcept
+    /// @brief 交付灯组的固定子视图序列. 层地址由分配阶段填充.
+    static std::span<const ShadowSubview> Subviews(ModelLightKind kind, std::uint32_t cascades) noexcept
     {
+        static constexpr std::array directional{ShadowSubview::Cascade0, ShadowSubview::Cascade1,
+                                                ShadowSubview::Cascade2, ShadowSubview::Cascade3};
+        static constexpr std::array spot{ShadowSubview::Spot};
+        static constexpr std::array point{ShadowSubview::PositiveX, ShadowSubview::NegativeX, ShadowSubview::PositiveY,
+                                          ShadowSubview::NegativeY, ShadowSubview::PositiveZ, ShadowSubview::NegativeZ};
+        if (kind == ModelLightKind::Directional)
+        {
+            return std::span(directional).first(cascades);
+        }
         if (kind == ModelLightKind::Point)
         {
-            constexpr std::array faces{ShadowSubview::PositiveX, ShadowSubview::NegativeX, ShadowSubview::PositiveY,
-                                       ShadowSubview::NegativeY, ShadowSubview::PositiveZ, ShadowSubview::NegativeZ};
-            group.regionCount = static_cast<std::uint32_t>(faces.size());
-            for (std::size_t face = 0; face < faces.size(); ++face)
-            {
-                group.regions[face].subview = faces[face];
-            }
-            return;
+            return point;
         }
-        group.regionCount = 1;
-        group.regions[0].subview = kind == ModelLightKind::Directional ? ShadowSubview::Directional : ShadowSubview::Spot;
+        return spot;
     }
 
     /// @brief 保留完整可见灯索引, 按优先级准入有覆盖的投影. 局部拒绝仅改变该条阴影关联.
@@ -114,13 +131,28 @@ namespace Physara::Renderer
                 continue;
             }
 
-            auto volume = Detail::MakeShadowVolume(receiver, planes, light, settings.shadowDistanceMeters);
-            if (const auto *reason = std::get_if<ShadowPlanReason>(&volume))
+            const bool directional = kind == ModelLightKind::Directional;
+            std::optional<LocalShadowVolume> local;
+            if (directional)
             {
-                link.reason = *reason;
-                continue;
+                if (std::min(receiver.farPlane, settings.shadowDistanceMeters) <= receiver.nearPlane)
+                {
+                    link.reason = ShadowPlanReason::NoReceiverCoverage;
+                    continue;
+                }
             }
-            const auto regions = kind == ModelLightKind::Point ? 6u : 1u;
+            else
+            {
+                auto volume = Detail::MakeLocalShadowVolume(receiver, planes, light, settings.shadowDistanceMeters);
+                if (const auto *reason = std::get_if<ShadowPlanReason>(&volume))
+                {
+                    link.reason = *reason;
+                    continue;
+                }
+                local = std::get<LocalShadowVolume>(volume);
+            }
+            const auto subviews = Subviews(kind, settings.directionalCascades);
+            const auto regions = static_cast<std::uint32_t>(subviews.size());
             const auto offer = layout.edge == 0 ? ChooseLayout(settings.edge, regions, limits, statistics.byteLimit) : layout;
             if (regions > offer.layers - statistics.regions)
             {
@@ -128,15 +160,27 @@ namespace Physara::Renderer
                 continue;
             }
 
-            ShadowLightPlan group{.light = link.light, .volume = std::get<ShadowVolume>(std::move(volume))};
-            if (!Detail::CollectShadowCasters(scene, group.volume, group.casters))
+            ShadowLightPlan group{.light = link.light, .regionCount = regions};
+            if (directional)
             {
-                link.reason = ShadowPlanReason::InvalidVolume;
-                continue;
+                auto result = Detail::MakeDirectionalShadowPlan(scene, receiver, light, settings, offer.edge);
+                if (const auto *reason = std::get_if<ShadowPlanReason>(&result))
+                {
+                    link.reason = *reason;
+                    continue;
+                }
+                group.views = std::get<DirectionalShadowPlan>(std::move(result));
             }
-            SetSubviews(group, kind);
+            else
+            {
+                group.views = Detail::CollectLocalShadowCasters(scene, *local);
+            }
+            for (std::size_t i = 0; i < subviews.size(); ++i)
+            {
+                group.regions[i].subview = subviews[i];
+            }
             layout = offer;
-            primaryDirectional |= kind == ModelLightKind::Directional;
+            primaryDirectional |= directional;
             link.plan = static_cast<std::uint32_t>(plan.admitted.size());
             link.reason = ShadowPlanReason::Planned;
             plan.admitted.push_back(std::move(group));
@@ -144,6 +188,23 @@ namespace Physara::Renderer
         }
 
         statistics.plannedLights = plan.admitted.size();
+        statistics.directionalReason = ShadowPlanReason::NoLights;
+        if (const auto *directional = plan.Directional())
+        {
+            statistics.directionalCascades = directional->regionCount;
+            statistics.directionalReason = ShadowPlanReason::Planned;
+        }
+        else
+        {
+            const auto first = std::ranges::find_if(ordered, [&](auto index)
+            {
+                return scene.lights[visible[index]].light.type == ModelLightKind::Directional;
+            });
+            if (first != ordered.end())
+            {
+                statistics.directionalReason = plan.lights[*first].reason;
+            }
+        }
         for (const auto &link : plan.lights)
         {
             if (!link.plan)
@@ -230,26 +291,30 @@ namespace Physara::Renderer
         std::vector<std::optional<ShadowCaster>> inputs(scene.primitives.size());
         for (const auto &group : plan.admitted)
         {
-            for (const auto index : group.casters)
+            const auto sets = std::holds_alternative<DirectionalShadowPlan>(group.views) ? group.regionCount : 1;
+            for (std::size_t region = 0; region < sets; ++region)
             {
-                if (inputs[index])
+                for (const auto index : group.Casters(region))
                 {
-                    continue;
+                    if (inputs[index])
+                    {
+                        continue;
+                    }
+                    const auto &primitive = scene.primitives[index];
+                    const auto &object = scene.objects[primitive.object];
+                    const auto &model = *scene.models[primitive.model];
+                    const auto coverage = primitive.materialOverride ? Coverage(scene.materialOverrides[*primitive.materialOverride]) :
+                        Coverage(Scene::ResolveMaterial(model, model.meshes[primitive.mesh].primitives[primitive.sourceSlot],
+                                                        nullptr));
+                    inputs[index] = ShadowCaster{object.entity, model.asset, model.revision, primitive.mesh,
+                                                 primitive.sourceSlot, object.transformRevision, coverage};
                 }
-                const auto &primitive = scene.primitives[index];
-                const auto &object = scene.objects[primitive.object];
-                const auto &model = *scene.models[primitive.model];
-                const auto coverage = primitive.materialOverride ? Coverage(scene.materialOverrides[*primitive.materialOverride]) :
-                    Coverage(Scene::ResolveMaterial(model, model.meshes[primitive.mesh].primitives[primitive.sourceSlot],
-                                                    nullptr));
-                inputs[index] = ShadowCaster{object.entity, model.asset, model.revision, primitive.mesh,
-                                             primitive.sourceSlot, object.transformRevision, coverage};
             }
         }
         return inputs;
     }
 
-    /// @brief 找出同边长和子视图布局的旧灯组. 地址容量只影响单个旧层的可复用性.
+    /// @brief 按有效边长, 灯身份和首个子视图种类找旧组. 改变级数时仍可保留同序号的前几级.
     static const ShadowLightPlan *MatchingGroup(const ShadowPlan &old, const ShadowLightPlan &group,
                                                 const ShadowLayout &layout) noexcept
     {
@@ -258,12 +323,32 @@ namespace Physara::Renderer
             return nullptr;
         }
         const auto found = std::ranges::find(old.admitted, group.light, &ShadowLightPlan::light);
-        if (found == old.admitted.end() || found->regionCount != group.regionCount ||
-            found->regions[0].subview != group.regions[0].subview)
+        if (found == old.admitted.end() || found->regions[0].subview != group.regions[0].subview)
         {
             return nullptr;
         }
         return &*found;
+    }
+
+    /// @brief 比对同一子视图的投影和投射物. 两份 caster 下标分别解析各自的冻结场景.
+    /// 名义切分距离供查询选级. 过渡区实际改变了投影或投射物时才影响这里的比较.
+    static bool SameShadowContent(const ShadowLightPlan &current, const ShadowLightPlan &previous, std::size_t region,
+        std::span<const std::optional<ShadowCaster>> inputs, std::span<const std::optional<ShadowCaster>> oldInputs)
+    {
+        if (const auto *directional = std::get_if<DirectionalShadowPlan>(&current.views))
+        {
+            if (directional->cascades[region].projection !=
+                std::get<DirectionalShadowPlan>(previous.views).cascades[region].projection)
+            {
+                return false;
+            }
+        }
+        else if (std::get<LocalShadowPlan>(current.views).volume != std::get<LocalShadowPlan>(previous.views).volume)
+        {
+            return false;
+        }
+        return std::ranges::equal(current.Casters(region), previous.Casters(region),
+                                  [&](auto now, auto before) { return inputs[now] == oldInputs[before]; });
     }
 
     /// @brief 先占住相容的单面地址, 再为迁址或新建面定位空层. 灯组仍以完整结果发布.
@@ -279,7 +364,7 @@ namespace Physara::Renderer
             if (const auto *match = MatchingGroup(*previous, current, layout))
             {
                 oldGroups[group] = match;
-                for (std::size_t face = 0; face < current.regionCount; ++face)
+                for (std::size_t face = 0; face < std::min(current.regionCount, match->regionCount); ++face)
                 {
                     const auto &region = match->regions[face];
                     if (region.layer < layout.layers)
@@ -298,12 +383,9 @@ namespace Physara::Renderer
         {
             auto &current = plan.admitted[group];
             const auto *old = oldGroups[group];
-            // 结构编辑可以重排 Primitive 下标. 两边各自索引所属快照, 比较固定来源及实际覆盖.
-            const bool sameContent = old && old->volume == current.volume &&
-                std::ranges::equal(current.casters, old->casters,
-                                   [&](auto now, auto before) { return inputs[now] == oldInputs[before]; });
-            for (auto &region : std::span(current.regions).first(current.regionCount))
+            for (std::size_t face = 0; face < current.regionCount; ++face)
             {
+                auto &region = current.regions[face];
                 // 旧层可沿用时已经复制了两个版本. 分配代为零的面需要新地址, 即使灯和投射物均未改变.
                 const bool newAddress = region.allocationGeneration == 0;
                 if (newAddress)
@@ -316,7 +398,7 @@ namespace Physara::Renderer
                     region.layer = freeLayer++;
                     region.allocationGeneration = revision;
                 }
-                if (newAddress || !sameContent)
+                if (newAddress || !SameShadowContent(current, *old, face, inputs, oldInputs))
                 {
                     region.requiredContentRevision = revision;
                     ++statistics.dirtyRegions;
@@ -379,6 +461,7 @@ namespace Physara::Renderer
         auto statistics = InitialStatistics(scene, revisions.renderStructure, revisions.renderContent, settings,
                                             requestRevision, limits);
         statistics.reason = settings.enabled ? ShadowPlanReason::ViewUnavailable : ShadowPlanReason::Disabled;
+        statistics.directionalReason = statistics.reason;
         Clear(statistics);
         return {{}, statistics};
     }
@@ -404,21 +487,30 @@ namespace Physara::Renderer
     PreparedShadows ShadowPlanCache::Prepare(const SceneFrame &scene, const CameraSnapshot &camera,
         std::span<const Detail::CullingPlane, 6> planes, std::array<double, 2> sideLimit,
         std::span<const std::uint32_t> lights, const ShadowSettings &settings, std::uint64_t requestRevision,
-        const ShadowPlanningLimits &limits) noexcept
+        const ShadowPlanningLimits &limits, bool requireDirectional) noexcept
     {
         const auto initial = InitialStatistics(scene.scene, scene.structureRevision, scene.contentRevision, settings,
                                                requestRevision, limits);
-        const auto unavailable = [&](ShadowPlanReason reason) -> PreparedShadows
+        const auto reject = [&](ShadowPlanReason reason, const decltype(initial.unallocated) &unallocated)
         {
-            // 主可见灯已经确定. 全局拒绝时把该集合计入实际原因, 禁用请求则没有待准入的灯.
+            // reason 字段说明整份计划为何为空, directionalReason 保留方向光的规划结果.
             auto summary = initial;
-            summary.reason = reason;
+            summary.reason = requireDirectional && settings.enabled ? ShadowPlanReason::ViewUnavailable : reason;
+            summary.directionalReason = reason;
+            // 命中缓存时 unallocated 借用 m_State. 必须在 Clear 释放旧计划前复制这次规划的拒绝计数.
+            summary.unallocated = unallocated;
+            Clear(summary);
+            return PreparedShadows{{}, summary};
+        };
+        const auto unavailable = [&](ShadowPlanReason reason)
+        {
+            // 全局规划失败阻止可见灯取得分配, 计数口径与是否要求方向光诊断独立.
+            decltype(initial.unallocated) counts{};
             if (settings.enabled)
             {
-                summary.unallocated[static_cast<std::size_t>(reason)] = lights.size();
+                counts[static_cast<std::size_t>(reason)] = lights.size();
             }
-            Clear(summary);
-            return {{}, summary};
+            return reject(reason, counts);
         };
         if (!settings.enabled || limits.maxLayers == 0 || limits.maxEdge == 0)
         {
@@ -429,6 +521,11 @@ namespace Physara::Renderer
              camera.nearPlane, camera.cullingFar, camera.orthographic}, settings, limits};
         if (m_State && m_State->inputs == inputs)
         {
+            if (requireDirectional && !m_State->plan->Directional())
+            {
+                const auto &cached = m_State->statistics;
+                return reject(cached.directionalReason, cached.unallocated);
+            }
             // 旧槽继续持有原计划. 这次返回自己的请求代和变化计数, 不改写上次发布的摘要.
             auto reused = m_State->statistics;
             reused.requestRevision = requestRevision;
@@ -438,7 +535,9 @@ namespace Physara::Renderer
             return {m_State->plan, reused};
         }
 
-        if (!Core::AdvanceGeneration(m_PlanRevision))
+        // 给候选预留下一版号, 到发布 State 时才提交. 布局拒绝只按旧缓存中的实际区域结算一次.
+        auto revision = m_PlanRevision;
+        if (!Core::AdvanceGeneration(revision))
         {
             return unavailable(ShadowPlanReason::RevisionExhausted);
         }
@@ -447,6 +546,11 @@ namespace Physara::Renderer
             auto statistics = initial;
             auto plan = std::make_shared<ShadowPlan>();
             const auto layout = SelectLights(*plan, scene, inputs.receiver, planes, lights, settings, limits, statistics);
+            if (requireDirectional && !plan->Directional())
+            {
+                // 布局只容纳诊断输出. 用仍活动的旧计划结算, 本次试算不分配区域或推进版号.
+                return reject(statistics.directionalReason, statistics.unallocated);
+            }
             plan->edge = layout.edge;
             auto casters = CasterInputs(scene, *plan);
             // 即使两个 Scene 碰巧使用相同层号, 也只有同一 Scene 的实体和覆盖记录可以配对.
@@ -456,10 +560,10 @@ namespace Physara::Renderer
             const auto oldCasters = sameScene ? std::span<const std::optional<ShadowCaster>>(m_State->casters) :
                 std::span<const std::optional<ShadowCaster>>{};
             const auto oldRegions = statistics.releasedRegions;
-            AssignRegions(*plan, previous, layout, casters, oldCasters, m_PlanRevision, statistics);
-            statistics.planRevision = m_PlanRevision;
+            AssignRegions(*plan, previous, layout, casters, oldCasters, revision, statistics);
+            statistics.planRevision = revision;
             statistics.allocationRevision = statistics.releasedRegions > 0 || statistics.regions != oldRegions ?
-                m_PlanRevision : m_AllocationRevision;
+                revision : m_AllocationRevision;
             statistics.effectiveEdge = plan->edge;
             statistics.layerSpan = plan->layerSpan;
             statistics.logicalBytes = plan->layerSpan * layout.layerBytes;
@@ -471,6 +575,7 @@ namespace Physara::Renderer
             }
             // 地址, 所需内容代和摘要准备齐全后一起发布. 先前帧槽的共享引用继续指向原值.
             m_State = std::make_unique<State>(State{inputs, plan, std::move(casters), statistics});
+            m_PlanRevision = revision;
             m_AllocationRevision = statistics.allocationRevision;
             return {std::move(plan), statistics};
         }

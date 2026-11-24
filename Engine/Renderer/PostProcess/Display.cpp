@@ -71,10 +71,11 @@ namespace Physara::Renderer::PostProcess
         auto &binding = m_Layouts[index];
         if (!program.shaders.vertex)
         {
-            const auto expected = stage == Stage::Clamp ? std::nullopt :
-                std::optional(Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
-                    stage == Stage::Grade ? std::span<const std::string_view>(Grade) :
-                                            std::span<const std::string_view>(Filter)});
+            const Shader::ExpectedActiveResources resources{Shader::Stage::Fragment, 0,
+                stage == Stage::Grade ? std::span<const std::string_view>(Grade) :
+                                        std::span<const std::string_view>(Filter)};
+            const auto expected = stage == Stage::Clamp ? std::span<const Shader::ExpectedActiveResources>{} :
+                std::span(&resources, 1);
             auto shaders = Detail::LoadProductProgram(m_Device, key.role, m_Paths[index], packages,
                 stage == Stage::Clamp ? ClampAbi::AbiHash : Abi::AbiHash, expected);
             if (const auto *error = std::get_if<Shader::Failure>(&shaders))

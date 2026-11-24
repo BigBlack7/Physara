@@ -46,6 +46,11 @@ namespace Physara::Renderer
         double cullingSeconds{}; ///< 主可见几何和灯的筛选用时. 阴影拟合在计时结束后运行.
         const ShadowPlan *shadows{}; ///< 与 scene 同轮的 CPU 计划, 借用持有它的 ViewWork.
         ShadowPlanStatistics shadowStatistics; ///< 规划不可用时仍保留本轮身份及原因.
+        bool cascadePreview{}; ///< 成功准备时取得的会话请求. 实际出图见 RenderedScene::directionalCascades.
+        std::optional<DirectionalDepth> acceptedDirectionalDepth; ///< 与 CPU 计划匹配且持有存储, 帧前另核对设备和深度程序.
+
+        /// @brief 检查会话开关和主可见集这两项诊断前提. 规划器另行决定方向光组能否准入.
+        [[nodiscard]] bool CanPreviewCascades() const noexcept { return cascadePreview && !primitives.empty(); }
     };
 
     /// @brief 一个正常候选的共享 SceneFrame. 首个合法 View 才提取, 后续 View 共享成功值或失败.
@@ -85,13 +90,16 @@ namespace Physara::Renderer
         /// @brief 同帧的各路共用一个 SceneFramePreparation, 每路使用独立 ViewWork 保存索引.
         /// @pre 全部请求准备完毕前保持 Scene 和本槽的提取数组稳定.
         /// 显式离屏的两种像素范围都通过上限检查后, 才会请求共享提取.
+        /// @param requireDirectionalPreview 普通显示附件超出预算时, 只有可消费的级联诊断能使布局通过审核.
         [[nodiscard]] PreparedView Prepare(SceneFramePreparation &scene, const View &view,
                                            const std::optional<ViewportRequest> &request,
                                            const CameraSampling &sampling = {},
                                            ViewportUse use = ViewportUse::DisplayOutput,
-                                           const ShadowPlanningLimits &shadowLimits = {});
+                                           const ShadowPlanningLimits &shadowLimits = {},
+                                           bool requireDirectionalPreview = false);
 
-        /// @brief 布局或附件预检阻止准备时清理该 View 的活动分配, 并以当前场景版本发布空计划摘要.
+        /// @brief 布局或附件预算拒绝时清理该 View 的活动分配, 并以当前场景版本发布空计划摘要.
+        /// 释放数取自上一次交付的活动区域. 调用方负责关联到所属 View 的布局请求.
         /// @note 本工作区的 shadows 借用止于再次 Prepare, 调用本函数或工作区销毁.
         [[nodiscard]] ShadowPlanStatistics UnavailableShadows(const Scene::Scene &scene, const View &view,
                                                             const ShadowPlanningLimits &limits) noexcept;

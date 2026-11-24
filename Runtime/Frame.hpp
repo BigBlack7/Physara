@@ -28,16 +28,18 @@ namespace Physara::Runtime
     {
     public:
         /// @pre 在就绪宿主的 owner 线程构造. sceneViews 为本次候选的场景视图数, 有场景时才追加结构化 UAV 和数组 image 能力.
-        EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic);
+        /// @param directionalViews 已声明级联深度的 View 数, 用于选择 D32 数组能力及整图附件预算.
+        EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic,
+                           std::size_t directionalViews = 0);
         EditorGraphProfile(const EditorGraphProfile &) = delete;
         EditorGraphProfile &operator=(const EditorGraphProfile &) = delete;
 
         [[nodiscard]] const Renderer::GraphCompileOptions &Options() const noexcept { return m_Options; }
 
     private:
-        // 基础 2D 四项、cube 一项、额外 2D 两项和 storage 2DArray 四项.
-        std::array<Renderer::GraphTextureSupport, 11> m_Textures{};
-        std::array<RHI::ResourceStates, 2> m_States{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
+        // 基础 2D 四项、cube 及深度数组各一项、额外 2D 两项和 storage 2DArray 四项.
+        std::array<Renderer::GraphTextureSupport, 12> m_Textures{};
+        std::array<RHI::ResourceStates, 3> m_States{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
         Renderer::GraphCompileOptions m_Options;
     };
 

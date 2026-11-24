@@ -1,7 +1,7 @@
 // Depth/Color 共用位置表达式与 invariant 约束, 保持前置深度的 Equal 比较所需一致性.
 // 光照分别插值相对于世界基点的高位和余量. 每个实例从对象行取得自己的世界基点, 在图元内平坦传递.
 // UV 保持 glTF 行序, 片元阶段完成法线归一化和切线正交化.
-#include <Source/Common/SumRemainder.glsl>
+#include <Source/Geometry/LightingPosition.glsl>
 
 invariant gl_Position;
 
@@ -49,10 +49,18 @@ void FetchStaticVertex()
     DrawInstanceData instance = drawInstances.records[gl_InstanceIndex];
     ForwardObject object = objectRows.records[instance.objectRow];
     vMaterialRow = instance.materialRow;
-    vec4 worldPosition = object.worldFromLocal * vec4(aPosition, 1.0);
-    gl_Position = perView.clipFromWorld * worldPosition;
     vLightingAnchor = object.lightingAnchor;
     FetchLightingOffset(object, vLightingOffsetHigh, vLightingOffsetLow);
+#ifdef PHYSARA_DIRECTIONAL_SHADOW_DEPTH
+    // LightingDelta 给出从表面到投影原点的向量, 取反后得到光空间变换所需的表面相对坐标.
+    // 写入矩阵的常量 z 偏移由 CPU 按半个世界 texel 和本级深度跨度求出.
+    LightingPosition origin = LightingPosition(perView.shadowOriginHigh, perView.shadowOriginLow);
+    LightingSurface surface = LightingSurface(vLightingAnchor, LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
+    gl_Position = perView.shadowClipFromOrigin * vec4(-LightingDelta(origin, surface, 1.0), 1.0);
+#else
+    vec4 worldPosition = object.worldFromLocal * vec4(aPosition, 1.0);
+    gl_Position = perView.clipFromWorld * worldPosition;
+#endif
     vColor = aColor;
     vUv0 = aUv0;
     vUv1 = aUv1;

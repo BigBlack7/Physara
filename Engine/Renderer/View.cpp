@@ -194,9 +194,18 @@ namespace Physara::Renderer
             return Core::BoundedText("Shadow planning requires the active View identity");
         }
         if (!std::isfinite(settings.shadowDistanceMeters) || settings.shadowDistanceMeters <= 0 ||
-            (settings.edge != 1024 && settings.edge != 512 && settings.edge != 256))
+            (settings.edge != MaxShadowEdge && settings.edge != 512 && settings.edge != 256))
         {
             return Core::BoundedText("Shadow planning requires a finite positive distance and a supported edge");
+        }
+        if (settings.directionalCascades < 1 || settings.directionalCascades > MaxDirectionalCascades)
+        {
+            return Core::BoundedText("Directional shadow cascade count must be in [1,4]");
+        }
+        if (!(settings.splitLambda >= 0 && settings.splitLambda <= 1) ||
+            !(settings.transitionFraction >= 0 && settings.transitionFraction <= 0.25))
+        {
+            return Core::BoundedText("Cascade split weight and transition must be finite and in [0,1] and [0,0.25]");
         }
         if (settings != m_ShadowSettings)
         {
@@ -206,8 +215,52 @@ namespace Physara::Renderer
                 return Core::BoundedText("Shadow request revision exhausted");
             }
             m_ShadowSettings = settings;
+            if (!settings.enabled)
+            {
+                m_DirectionalDepth.reset();
+            }
         }
         return std::nullopt;
+    }
+
+    std::optional<Core::BoundedText> View::RequestCascadePreview(ViewId view, bool enabled) noexcept
+    {
+        if (view != m_Id)
+        {
+            return Core::BoundedText("Cascade preview requires the active View identity");
+        }
+        if (enabled != m_CascadePreview)
+        {
+            if (!Core::AdvanceGeneration(m_ShadowRequestRevision))
+            {
+                return Core::BoundedText("Shadow request revision exhausted");
+            }
+            m_CascadePreview = enabled;
+            if (!enabled)
+            {
+                m_DirectionalDepth.reset();
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool DirectionalDepth::Matches(Scene::SceneId current, const ShadowPlan &plan,
+                                   const ShadowLightPlan &light) const noexcept
+    {
+        return scene == current && edge == plan.edge && std::ranges::equal(std::span(regions).first(count),
+                                                                            light.Regions());
+    }
+
+    void View::AcceptDirectionalDepth(DirectionalDepth depth, std::uint64_t ticket) noexcept
+    {
+        // 调用方已发布本 View 的诊断颜色. 只有同票据的 ShaderRead 出口能成为下一帧的深度输入.
+        const auto *scene = AcceptedScenePreview();
+        if (m_CascadePreview && m_ShadowSettings.enabled && scene && scene->scene == depth.scene &&
+            scene->directionalCascades == depth.count && depth.retained.Usage() == ExportUsage::ShaderRead &&
+            depth.retained.Accepted(ticket))
+        {
+            m_DirectionalDepth = std::move(depth);
+        }
     }
 
     std::optional<Core::BoundedText> View::RequestRenderScale(ViewId view, float scale) noexcept
@@ -426,7 +479,8 @@ namespace Physara::Renderer
 
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
-        std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration)
+        std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration,
+        const DirectionalDepth *directional)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -438,12 +492,19 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
+        if (!directional || !directional->retained)
+        {
+            // 即使只有深度程序换代也应让旧组退出 View 记账. 旧图和槽各自保有原访问.
+            m_DirectionalDepth.reset();
+        }
+        const auto displayMode = directional ? PreviewMode::BaseColor : prepared.preview;
         // 将曝光, 显示设置及程序表编号一起留在颜色候选. Publish 收到匹配图的回执后才更新场景历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
                           std::move(degradation), prepared.documentRevision, std::move(environment),
-                          ResolveDisplaySettings(prepared.preview, prepared.requestedAa), prepared.layouts.render,
-                          prepared.layouts.display.outputExtent, shaderGeneration}};
+                          ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
+                          prepared.layouts.display.outputExtent, shaderGeneration, directional ? directional->count : 0,
+                          prepared.shadowStatistics.requestRevision}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -530,6 +591,7 @@ namespace Physara::Renderer
         if (outputs.m_Retained || !color || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
             (outputs.m_Output->scene && (outputs.m_Output->scene->mode != m_Preview ||
+                                         outputs.m_Output->scene->shadowRequestRevision != m_ShadowRequestRevision ||
                                          outputs.m_Output->scene->documentRevision != m_DocumentRevision)))
         {
             return false;

@@ -488,13 +488,23 @@ namespace Physara::Renderer::Detail
         switch (output.usage)
         {
         case ExportUsage::ShaderRead:
-            if (SupportsSampledView(output.range, support))
+        {
+            auto viewRange = output.range;
+            if (support.layeredReadExport && !output.ownerWrite &&
+                desc.dimension == RHI::TextureDimension::Texture2DArray)
+            {
+                // 同一数组的各层共用同一格式能力行, 用一个单层范围检查视图能力.
+                // output.range 仍是完整交接范围, 定义性和后继 Pass 的实际读权限各按原范围核对.
+                viewRange.layerCount = 1;
+            }
+            if (SupportsSampledView(viewRange, support))
             {
                 return std::nullopt;
             }
             return CompileError(GraphErrorCode::UnsupportedCapability,
                                 "Unsupported texture export use: ShaderRead requires a supported sampled view",
                                 location);
+        }
         case ExportUsage::Presentation:
             if (support.presentation && desc.isRenderTarget && desc.sampleCount == 1 &&
                 desc.mipLevels == 1 && desc.arraySize == 1)

@@ -17,9 +17,15 @@
 namespace Physara::Editor::Detail
 {
     enum class UiFallback : std::uint8_t;
-    /// @brief 按 Renderer::PreviewMode 顺序排列. 选择框用请求模式索引, 图像标签用实际颜色代的模式索引.
+    /// @brief 按 Renderer::PreviewMode 顺序排列的基础预览名, 也是选择框的请求选项.
     inline constexpr const char *PreviewNames[] = {
         "Base Color", "World Normal", "Material Channels", "Emissive", "Direct Lighting", "Physical Lighting"};
+
+    /// @brief 按颜色的实际来源命名, 级联使用同一记录中的已渲染级数判定.
+    [[nodiscard]] inline const char *ScenePreviewName(const Renderer::RenderedScene &scene) noexcept
+    {
+        return scene.directionalCascades ? "Directional CSM" : PreviewNames[static_cast<std::size_t>(scene.mode)];
+    }
 
     /// @brief 逻辑窗口中的画布及可见裁剪, 可跨帧比较而不借用 ImGui 数据.
     struct ViewportRegion

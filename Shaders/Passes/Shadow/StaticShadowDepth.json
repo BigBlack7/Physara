@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "StaticShadowDepth",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "Passes/Shadow/Depth.vert", "entry": "main" },
+    { "stage": "fragment", "source": "Passes/Forward/Depth.frag", "entry": "main" }
+  ],
+  "defines": []
+}

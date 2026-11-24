@@ -33,6 +33,8 @@ namespace Physara::Renderer
         std::filesystem::path grading;
         std::filesystem::path fxaa;
         std::filesystem::path scale;
+        std::filesystem::path shadowDepth;
+        std::filesystem::path cascadePreview;
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
@@ -71,8 +73,8 @@ namespace Physara::Renderer
     };
 
     /// @brief 显示前工作色及深度共用的来源. layout 是渲染栅格, camera.exposure 是本帧的曝光快照.
-    /// mode 区分实际生产模式. PhysicalLighting 的受光值和天空为预曝光 linear Rec.709/D65.
-    /// DirectLighting 仅包含预曝光直接光与自发光. 诊断模式输出对应通道, Unlit 仍是标准基色.
+    /// mode 保存该 View 请求的基础预览. directionalCascades 为正时, 工作色编码级联及遮挡.
+    /// 常规 PhysicalLighting 输出预曝光 linear Rec.709/D65, DirectLighting 包含预曝光直接光与自发光.
     struct ForwardWorkingSource
     {
         ViewId view;
@@ -81,10 +83,11 @@ namespace Physara::Renderer
         PreviewMode mode;
         CameraSnapshot camera;
         ViewImageLayout layout;
+        std::uint32_t directionalCascades{}; ///< 当前诊断使用的级数, 常规显示为零.
     };
 
     /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
-    /// 显示色已执行视口映射, 三个图版本均只在本图有效.
+    /// 显示色已执行视口映射. 诊断另有方向光常规深度层组, 所有 TextureId 仅在本图有效.
     struct ForwardOutput
     {
         TextureId workingColor;
@@ -93,6 +96,7 @@ namespace Physara::Renderer
         ForwardWorkingSource source;
         PassId depthPass;
         PassId colorPass;
+        TextureId directionalDepth; ///< 本图用于诊断的分层常规深度, 常规预览时为空.
     };
 
     namespace Detail
@@ -192,6 +196,12 @@ namespace Physara::Renderer
         /// @brief 完整正常图获接受后, 分别确认全部所需写入均存活的存储代.
         /// @pre output 来自本次声明, plan 是接受的同图计划, 前缀提交不具备确认资格.
         void Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept;
+        /// @brief 正常诊断颜色已被该 View 接受后, 将同票据的深度保留出口交给它.
+        void ConfirmDirectionalDepth(View &owner, std::size_t index, const GraphRetainedResource &retained,
+                                     std::uint64_t ticket) const noexcept;
+        /// @brief 取得本路候选的深度身份. 常规预览返回空指针, 有 retained 表示命中已接受组.
+        /// @pre 本路 FinishView 已成功. 返回值只借用到槽 Reset 或再次准备.
+        [[nodiscard]] const DirectionalDepth *PreparedDirectionalDepth(std::size_t index = 0) const noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
         /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;
@@ -241,7 +251,7 @@ namespace Physara::Renderer
         /// @pre frame 已由安全槽 Reset, index 是本帧尚未规划的位置. 局部失败仍允许规划其它路.
         [[nodiscard]] std::optional<ForwardFailure> PlanView(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
-        /// @brief 所有 View 完成计划且本帧 Shader 代已选定后, 将该代的句柄与成功规划的一路绑定.
+        /// @brief 绑定选定代的句柄, 并在匹配深度组因程序换代失效时补办该路的 caster 准备.
         /// @pre view 和 index 与成功的 PlanView 相同, 第一条成功绑定后本帧无 Shader 切换.
         [[nodiscard]] std::optional<ForwardFailure> FinishView(ForwardFrame &frame, const PreparedView &view,
                                                                std::size_t index = 0);

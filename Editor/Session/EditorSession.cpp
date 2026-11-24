@@ -39,19 +39,21 @@ namespace Physara::Editor
             std::uint64_t contentRevision;
             std::uint64_t sceneCameraRevision; ///< 与所属 Scene 一起匹配; View 的相机请求由文档代覆盖.
             std::uint64_t documentRevision;
+            std::uint64_t shadowRequestRevision;
             Renderer::PreviewMode preview;
 
             /// @pre prepared 已成功准备相机及所属场景.
             explicit PreparedViewport(const Renderer::PreparedView &prepared) noexcept
                 : layouts(prepared.layouts), scene(prepared.scene.scene), contentRevision(prepared.scene.contentRevision),
                   sceneCameraRevision(prepared.camera->sceneCameraRevision), documentRevision(prepared.documentRevision),
-                  preview(prepared.preview)
+                  shadowRequestRevision(prepared.shadowStatistics.requestRevision), preview(prepared.preview)
             {
             }
 
             bool operator==(const PreparedViewport &) const noexcept = default;
 
-            /// @brief 测试图核对渲染布局; 场景色核对两套布局及其生产来源. 调用方核对 View 身份和比例请求代.
+            /// @brief 测试图核对渲染布局, 场景色还核对两套布局及生产来源. 调用方核对 View 身份和比例请求代.
+            /// 请求 CSM 却无分配时也可使用本轮普通场景色, 其阴影请求代应与当前准备值相同.
             [[nodiscard]] bool Matches(const Renderer::ViewOutput &output) const noexcept
             {
                 const auto &rendered = output.scene;
@@ -62,7 +64,8 @@ namespace Physara::Editor
                 return output.layout == layouts.display && rendered->renderLayout == layouts.render &&
                        rendered->scene == scene && rendered->contentRevision == contentRevision &&
                        rendered->camera.sceneCameraRevision == sceneCameraRevision &&
-                       rendered->documentRevision == documentRevision && rendered->mode == preview;
+                       rendered->documentRevision == documentRevision && rendered->mode == preview &&
+                       rendered->shadowRequestRevision == shadowRequestRevision;
             }
         };
 
@@ -643,6 +646,15 @@ namespace Physara::Editor
                 auto settings = view->RequestedShadows();
                 settings.enabled = workspace.shadowPlanning->enabled;
                 if (auto error = view->RequestShadows(workspace.shadowPlanning->view, settings))
+                {
+                    state.editError = std::move(error);
+                }
+            }
+            if (view && workspace.cascadePreview && !frozen && !discard)
+            {
+                // 诊断开关属于 View 会话. 封存后与规划开关分别提交, 由同一个 View 校验目标身份.
+                if (auto error = view->RequestCascadePreview(workspace.cascadePreview->view,
+                                                             workspace.cascadePreview->enabled))
                 {
                     state.editError = std::move(error);
                 }

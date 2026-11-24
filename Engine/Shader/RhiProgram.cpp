@@ -10,27 +10,40 @@
 
 namespace Physara::Shader
 {
-    /// @brief 包已验证活动 IR 和唯一资源身份. 按名核对实际活动集合, 这些名称也唯一确定其槽和维度.
-    static bool MatchesActiveResources(const ShaderPackage &package, const ExpectedActiveResources &expected)
+    std::optional<Failure> CheckActiveResources(const ShaderPackage &package,
+        std::span<const ExpectedActiveResources> expected) noexcept
     {
-        const auto module = std::ranges::find(package.modules, expected.stage, &ShaderModule::stage);
-        if (module == package.modules.end())
+        // 包已验证活动 IR 和唯一资源身份. 名称唯一确定 ABI 中的槽和维度.
+        for (const auto &group : expected)
         {
-            return false;
-        }
-        std::size_t count = 0;
-        for (const auto &resource : module->resources)
-        {
-            if (resource.set == expected.set)
+            const auto module = std::ranges::find(package.modules, group.stage, &ShaderModule::stage);
+            if (module == package.modules.end())
             {
-                if (std::ranges::find(expected.names, std::string_view(resource.name)) == expected.names.end())
+                return MakeFailure(ErrorCode::InterfaceMismatch, "Package is missing a required graphics stage");
+            }
+            std::size_t count = 0;
+            for (const auto &resource : module->resources)
+            {
+                if (resource.set == group.set)
                 {
-                    return false;
+                    if (std::ranges::find(group.names, std::string_view(resource.name)) == group.names.end())
+                    {
+                        Core::BoundedText issue(module->sourcePath);
+                        issue.Append(": active resource is outside the required role: ");
+                        issue.Append(resource.name);
+                        return MakeFailure(ErrorCode::InterfaceMismatch, issue.View());
+                    }
+                    ++count;
                 }
-                ++count;
+            }
+            if (count != group.names.size())
+            {
+                Core::BoundedText issue(module->sourcePath);
+                issue.Append(": package is missing active resources required by the role");
+                return MakeFailure(ErrorCode::InterfaceMismatch, issue.View());
             }
         }
-        return count == expected.names.size();
+        return std::nullopt;
     }
 
     Result<RhiProgram> LoadRhiProgram(RHI::Device &device, const std::filesystem::path &path,
@@ -43,12 +56,13 @@ namespace Physara::Shader
         {
             return *failure;
         }
-        return CreateRhiProgram(device, std::get<ShaderPackage>(loaded), expectedAbiHash, expectedActive,
-                                expectedFragmentSource);
+        const auto groups = expectedActive ? std::span<const ExpectedActiveResources>(&*expectedActive, 1) :
+            std::span<const ExpectedActiveResources>{};
+        return CreateRhiProgram(device, std::get<ShaderPackage>(loaded), expectedAbiHash, groups, expectedFragmentSource);
     }
 
     Result<RhiProgram> CreateRhiProgram(RHI::Device &device, const ShaderPackage &package,
-        std::string_view expectedAbiHash, std::optional<ExpectedActiveResources> expectedActive,
+        std::string_view expectedAbiHash, std::span<const ExpectedActiveResources> expectedActive,
         std::string_view expectedFragmentSource, std::string_view expectedVertexSource) noexcept
     {
         return GuardBuild<RhiProgram>([&]() -> Result<RhiProgram> {
@@ -74,9 +88,9 @@ namespace Physara::Shader
                 issue.Append(package.modules[1].sourcePath);
                 return MakeFailure(ErrorCode::InterfaceMismatch, issue.View());
             }
-            if (expectedActive && !MatchesActiveResources(package, *expectedActive))
+            if (const auto failure = CheckActiveResources(package, expectedActive))
             {
-                return MakeFailure(ErrorCode::InterfaceMismatch, "Package active resources do not match the required role");
+                return *failure;
             }
             RhiProgram result;
             result.abiHash = package.abiHash;

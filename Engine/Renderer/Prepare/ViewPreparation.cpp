@@ -298,13 +298,15 @@ namespace Physara::Renderer
                                                       const ShadowPlanningLimits &limits) noexcept
     {
         m_Shadows.reset();
+        view.m_DirectionalDepth.reset();
         return view.m_ShadowPlan.Unavailable(scene.Id(), scene.Versions(), view.m_ShadowSettings,
                                              view.m_ShadowRequestRevision, limits).statistics;
     }
 
     PreparedView ViewWork::Prepare(SceneFramePreparation &shared, const View &view,
                                    const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
-                                   ViewportUse use, const ShadowPlanningLimits &shadowLimits)
+                                   ViewportUse use, const ShadowPlanningLimits &shadowLimits,
+                                   bool requireDirectionalPreview)
     {
         m_Primitives.clear();
         m_Lights.clear();
@@ -414,13 +416,38 @@ namespace Physara::Renderer
         result.primitives = m_Primitives;
         result.lights = m_Lights;
         result.cullingSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cullingStart).count();
+        result.cascadePreview = view.m_CascadePreview;
+        if (requireDirectionalPreview && !result.CanPreviewCascades())
+        {
+            result.reason = ViewSettingReason::SceneAttachmentLimit;
+            return unavailable();
+        }
         // Lighting 读取冻结场景全表. 保持主可见集及其计时口径, 即使阴影预算拒绝也交付完整灯集.
         auto shadows = view.m_ShadowPlan.Prepare(frame, *snapshot, planes, {offsets->sideLimit.x, offsets->sideLimit.y},
-                                                 m_Lights, view.m_ShadowSettings, view.m_ShadowRequestRevision, shadowLimits);
+            m_Lights, view.m_ShadowSettings, view.m_ShadowRequestRevision, shadowLimits, requireDirectionalPreview);
         // PreparedView 只借裸指针. 本槽保有这份计划, 让后续槽可以独立替换同一 View 的缓存.
         m_Shadows = std::move(shadows.plan);
         result.shadows = m_Shadows.get();
         result.shadowStatistics = shadows.statistics;
+        if (requireDirectionalPreview && !result.shadows)
+        {
+            // 规划器已在旧计划上完成释放. 保留该次摘要和实际执行的裁剪记录.
+            result.reason = ViewSettingReason::SceneAttachmentLimit;
+        }
+        const auto *directional = result.shadows ? result.shadows->Directional() : nullptr;
+        // 只把本 View 可继续查询的区域交给 Forward. 即使投影匹配, 程序换代仍可能要求重新生产.
+        if (view.m_DirectionalDepth)
+        {
+            if (result.CanPreviewCascades() && directional &&
+                view.m_DirectionalDepth->Matches(frame.scene, *result.shadows, *directional))
+            {
+                result.acceptedDirectionalDepth = view.m_DirectionalDepth;
+            }
+            else
+            {
+                view.m_DirectionalDepth.reset();
+            }
+        }
         return result;
     }
 }

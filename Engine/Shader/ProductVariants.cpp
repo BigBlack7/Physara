@@ -11,6 +11,7 @@
 namespace Physara::Shader
 {
     // 角色的枚举值也是包数组下标. 两个物理颜色角色共享阶段源, 由固定 define 分别选择活动资源.
+    // 级数和过渡宽度随 View 常量传入, 目录只区分写阴影深度和读深度出诊断色的两个程序.
     static constexpr std::array<ProductProgram, ProductShaderCount> Programs{{
         {{ProductShader::StaticForward}, "StaticForward", "StaticForward",
          "Passes/Forward/StaticForward.json", "Passes/Forward/Static.vert", "Passes/Forward/Color.frag"},
@@ -30,6 +31,10 @@ namespace Physara::Shader
          "PostProcess/DisplayFxaa.json", "Passes/Forward/Display.vert", "PostProcess/DisplayFxaa.frag"},
         {{ProductShader::DisplayScale}, "DisplayScale", "DisplayPost",
          "PostProcess/DisplayScale.json", "Passes/Forward/Display.vert", "PostProcess/DisplayScale.frag"},
+        {{ProductShader::StaticShadowDepth}, "StaticShadowDepth", "StaticForward",
+         "Passes/Shadow/StaticShadowDepth.json", "Passes/Shadow/Depth.vert", "Passes/Forward/Depth.frag"},
+        {{ProductShader::StaticCascadePreview}, "StaticCascadePreview", "StaticForward",
+         "Passes/Shadow/StaticCascadePreview.json", "Passes/Forward/Static.vert", "Passes/Shadow/CascadePreview.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

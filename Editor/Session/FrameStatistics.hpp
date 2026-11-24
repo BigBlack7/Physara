@@ -17,7 +17,8 @@ namespace Physara::Editor
     /// @brief 当前提交的计时状态. Skipped 表示已有查询全在用, Unavailable 表示设备未提供可用查询.
     enum class GpuIntervalState { Unavailable, Skipped, Pending, Ready, Failed };
 
-    /// @brief 标识一次正常场景的完整提交, 所采用的范围与模式冻结在同一记录.
+    /// @brief 标识一次正常场景的完整提交. preview 保存基础请求, directionalCascades 标识实际诊断.
+    /// display 和两个布局均来自该次颜色提交, GPU 计时稍后仍以这个身份配对.
     struct SceneFrameIdentity
     {
         std::uint64_t submission;
@@ -32,6 +33,7 @@ namespace Physara::Editor
         Renderer::ViewImageLayout displayLayout;
         Renderer::DisplaySettings display;
         std::uint64_t shaderGeneration{}; ///< 此票据实际使用的程序代, 后续准备轮可独立推进.
+        std::uint32_t directionalCascades{}; ///< 当前颜色若为级联诊断则交付实际级数.
     };
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.

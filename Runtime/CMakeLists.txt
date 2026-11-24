@@ -8,10 +8,10 @@ add_executable(Physara Main.cpp Frame.hpp Frame.cpp FrameStatistics.hpp FrameSta
 get_target_property(editorUiPackage PhysaraEditor PHYSARA_UI_PACKAGE)
 get_target_property(editorUiPackageTarget PhysaraEditor PHYSARA_UI_PACKAGE_TARGET)
 add_dependencies(Physara ${editorUiPackageTarget})
-# 产品包与 Renderer 使用同一接口生成目标; 不为不同消费者复制场景包的生成规则.
+# 取 Renderer 登记的包路径和生成目标. 两个方向光角色也随产品构建, 运行时各 View 按需求取包.
 set(forwardResourcePaths "")
 foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
-        DisplayColorGrading DisplayFxaa DisplayScale)
+        DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

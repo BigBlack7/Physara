@@ -8,6 +8,8 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <numeric>
+#include <utility>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
@@ -33,22 +35,36 @@ namespace Physara::Renderer::Detail
         return {vector.x, vector.y, vector.z};
     }
 
+    /// @brief 相对相机原点的光空间区间. +Z 沿发射轴, 并为相切保留误差余量.
+    struct ShadowLightBounds
+    {
+        std::array<double, 3> minimum;
+        std::array<double, 3> maximum;
+    };
+
+    /// @brief 方向光的 receiver 以及与已选 caster 合并的范围. 合并范围参与深度拟合和舍入估计.
+    struct DirectionalShadowVolume
+    {
+        glm::dvec3 origin;
+        std::array<glm::dvec3, 3> axes;
+        ShadowLightBounds receiver;
+        ShadowLightBounds fitted;
+    };
+
     /// @brief 将光轴转换到相机局部空间. 对近远截面分别求中心投影和半宽, 得到八角点的投影极值.
     /// 透视截面的宽高随视深放大, 正交截面保持固定. 区间向外留出浮点舍入余量以保留相切物体.
     static std::optional<DirectionalShadowVolume> DirectionalVolume(const ShadowReceiver &receiver,
-        const glm::dvec3 &direction, double farPlane) noexcept
+        const std::array<glm::dvec3, 3> &axes, double nearPlane, double farPlane) noexcept
     {
         const auto world = glm::make_mat4(receiver.worldFromView.data());
-        const auto axes = LightAxes(direction);
-        DirectionalShadowVolume volume{Value(glm::dvec3(world[3])),
-            {Value(axes[0]), Value(axes[1]), Value(axes[2])}, receiver.nearPlane, farPlane, {}, {}};
+        DirectionalShadowVolume volume{glm::dvec3(world[3]), axes, {}, {}};
         const auto viewFromWorld = glm::transpose(glm::dmat3(world));
         for (std::size_t axis = 0; axis < axes.size(); ++axis)
         {
             const auto viewAxis = viewFromWorld * axes[axis];
             double minimum = std::numeric_limits<double>::infinity();
             double maximum = -minimum;
-            for (const double depth : {receiver.nearPlane, farPlane})
+            for (const double depth : {nearPlane, farPlane})
             {
                 const double factor = receiver.orthographic ? 1 : depth;
                 const double halfX = (factor / receiver.projectionScale[0]) * receiver.sideLimit[0];
@@ -383,23 +399,9 @@ namespace Physara::Renderer::Detail
         return !corners.empty() && SpotOutside(corners, axis, volume.outerCone);
     }
 
-    std::variant<ShadowVolume, ShadowPlanReason> MakeShadowVolume(const ShadowReceiver &receiver,
+    std::variant<LocalShadowVolume, ShadowPlanReason> MakeLocalShadowVolume(const ShadowReceiver &receiver,
         std::span<const CullingPlane, 6> planes, const LightRecord &light, double shadowDistance) noexcept
     {
-        if (light.light.type == Asset::ModelLightKind::Directional)
-        {
-            const double farPlane = std::min(receiver.farPlane, shadowDistance);
-            if (farPlane <= receiver.nearPlane)
-            {
-                return ShadowPlanReason::NoReceiverCoverage;
-            }
-            if (const auto volume = DirectionalVolume(receiver, glm::make_vec3(light.direction.data()), farPlane))
-            {
-                return ShadowVolume{*volume};
-            }
-            return ShadowPlanReason::InvalidVolume;
-        }
-
         const double farPlane = std::min(light.light.range.value_or(shadowDistance), shadowDistance);
         const double nearPlane = std::min(0.1, farPlane / 1024);
         if (!(nearPlane > 0 && nearPlane < farPlane))
@@ -423,7 +425,7 @@ namespace Physara::Renderer::Detail
         {
             return ShadowPlanReason::NoReceiverCoverage;
         }
-        return ShadowVolume{volume};
+        return volume;
     }
 
     /// @brief 方向光的 caster 投影区间. 投影原点与 receiver 相同, 上游沿负 Z 延伸.
@@ -431,12 +433,11 @@ namespace Physara::Renderer::Detail
                                                          const DirectionalShadowVolume &volume) noexcept
     {
         ShadowLightBounds projected;
-        const auto origin = glm::make_vec3(volume.origin.data());
         for (std::size_t axis = 0; axis < volume.axes.size(); ++axis)
         {
-            const auto direction = glm::make_vec3(volume.axes[axis].data());
-            const auto lower = PlaneTerms(SupportPoint(bounds, -direction), origin, direction);
-            const auto upper = PlaneTerms(SupportPoint(bounds, direction), origin, direction);
+            const auto direction = volume.axes[axis];
+            const auto lower = PlaneTerms(SupportPoint(bounds, -direction), volume.origin, direction);
+            const auto upper = PlaneTerms(SupportPoint(bounds, direction), volume.origin, direction);
             const auto allowance = [](const glm::dvec3 &terms)
             {
                 return ProjectionRounding * std::abs(terms.x) + ProjectionRounding * std::abs(terms.y) +
@@ -493,44 +494,232 @@ namespace Physara::Renderer::Detail
         }
     };
 
-    bool CollectShadowCasters(const SceneFrame &scene, ShadowVolume &volume, std::vector<std::uint32_t> &casters)
+    /// @brief 从冻结的场景全集取可参与阴影覆盖的有界 Primitive.
+    static bool CanCast(const PrimitiveRef &primitive) noexcept
     {
-        auto *directional = std::get_if<DirectionalShadowVolume>(&volume);
-        const auto local = directional ? std::nullopt :
-            std::optional(LocalCasterVolume(std::get<LocalShadowVolume>(volume)));
+        return primitive.visible && primitive.castsShadow && primitive.bounds.has_value();
+    }
+
+    LocalShadowPlan CollectLocalShadowCasters(const SceneFrame &scene, LocalShadowVolume volume)
+    {
+        LocalShadowPlan result{.volume = volume};
+        const LocalCasterVolume local(volume);
+        for (std::uint32_t index = 0; index < scene.primitives.size(); ++index)
+        {
+            const auto &primitive = scene.primitives[index];
+            if (CanCast(primitive) && local.Intersects(*primitive.bounds))
+            {
+                result.casters.push_back(index);
+            }
+        }
+        return result;
+    }
+
+    /// @brief 以接收切片和单点采样余量找上游 caster, 并将有关几何并入 Z.
+    static bool CollectDirectionalCasters(const SceneFrame &scene, DirectionalShadowVolume &volume,
+                                          double texel, std::vector<std::uint32_t> &casters)
+    {
         // 遍历整个冻结表以保留画外遮挡. 空集合也能描述一个有效区域, 例如上一投射物刚被移除.
         for (std::uint32_t index = 0; index < scene.primitives.size(); ++index)
         {
             const auto &primitive = scene.primitives[index];
-            if (!primitive.visible || !primitive.castsShadow || !primitive.bounds)
+            if (!CanCast(primitive))
             {
                 continue;
             }
-            if (directional)
+            const auto candidate = ProjectBounds(*primitive.bounds, volume);
+            if (!candidate)
             {
-                const auto candidate = ProjectBounds(*primitive.bounds, *directional);
-                if (!candidate)
-                {
-                    return false;
-                }
-                const auto &receiver = directional->receiver;
-                // 沿光方向只排除完全在接收段下游的几何, 上游距离由当前场景范围决定.
-                if (candidate->maximum[0] < receiver.minimum[0] || candidate->minimum[0] > receiver.maximum[0] ||
-                    candidate->maximum[1] < receiver.minimum[1] || candidate->minimum[1] > receiver.maximum[1] ||
-                    candidate->minimum[2] > receiver.maximum[2])
-                {
-                    continue;
-                }
-                auto &fitted = directional->fitted;
-                fitted.minimum[2] = std::min(fitted.minimum[2], candidate->minimum[2]);
-                fitted.maximum[2] = std::max(fitted.maximum[2], candidate->maximum[2]);
+                return false;
             }
-            else if (!local->Intersects(*primitive.bounds))
+            const auto &receiver = volume.receiver;
+            if (candidate->maximum[0] < receiver.minimum[0] - texel ||
+                candidate->minimum[0] > receiver.maximum[0] + texel ||
+                candidate->maximum[1] < receiver.minimum[1] - texel ||
+                candidate->minimum[1] > receiver.maximum[1] + texel ||
+                candidate->minimum[2] > receiver.maximum[2])
             {
                 continue;
+            }
+            for (std::size_t axis = 0; axis < volume.axes.size(); ++axis)
+            {
+                volume.fitted.minimum[axis] = std::min(volume.fitted.minimum[axis], candidate->minimum[axis]);
+                volume.fitted.maximum[axis] = std::max(volume.fitted.maximum[axis], candidate->maximum[axis]);
             }
             casters.push_back(index);
         }
         return true;
+    }
+
+    /// @brief 给出光空间盒相对指定原点时, 各世界分量绝对值的上界.
+    /// 各光轴的贡献取绝对值后相加, 避免把旋转时的抵消计入精度余量.
+    static glm::dvec3 WorldOffsetBound(const std::array<glm::dvec3, 3> &axes, const ShadowLightBounds &bounds,
+                                       const glm::dvec3 &lightOrigin) noexcept
+    {
+        const auto lower = glm::abs(glm::make_vec3(bounds.minimum.data()) - lightOrigin);
+        const auto upper = glm::abs(glm::make_vec3(bounds.maximum.data()) - lightOrigin);
+        const auto extent = glm::max(lower, upper);
+        return glm::abs(axes[0]) * extent.x + glm::abs(axes[1]) * extent.y + glm::abs(axes[2]) * extent.z;
+    }
+
+    /// @brief 按该轴参与点积的世界分量估计 FP32 误差, 包含相对位置、系数和乘加的舍入余量.
+    static double ClipRoundoff(const glm::dvec3 &axis, const glm::dvec3 &worldOffsetBound) noexcept
+    {
+        constexpr double FloatRoundoff = 8 * std::numeric_limits<float>::epsilon();
+        return FloatRoundoff * glm::dot(glm::abs(axis), worldOffsetBound);
+    }
+
+    /// @brief 用 GPU 高低位原点核对覆盖. XY 检查接收切片, Z 检查接收物和已选 caster, 远端预留写入偏移.
+    static bool CoversFittedVolume(const DirectionalShadowVolume &volume, const glm::dvec3 &origin,
+                                   double halfExtent, double depthRange, double biasMeters) noexcept
+    {
+        glm::dvec3 relativeOrigin;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (!(std::abs(origin[axis]) <= std::numeric_limits<float>::max()))
+            {
+                return false;
+            }
+            // 与 GPU 常量相同的高低位. 先减去相机原点再加余量, 避免把小偏移加回绝对世界坐标.
+            const double high = static_cast<float>(origin[axis]);
+            const double low = static_cast<float>(origin[axis] - high);
+            relativeOrigin[axis] = (high - volume.origin[axis]) + low;
+        }
+        const auto &axes = volume.axes;
+        const glm::dvec3 center{glm::dot(axes[0], relativeOrigin), glm::dot(axes[1], relativeOrigin),
+                               glm::dot(axes[2], relativeOrigin)};
+        // XY 只需保证接收切片可查询. Z 另按完整拟合盒估算, 其中可以有远在切片上游的投射物.
+        const auto receiverOffset = WorldOffsetBound(axes, volume.receiver, center);
+        for (std::size_t axis = 0; axis < 2; ++axis)
+        {
+            const double xy = halfExtent - ClipRoundoff(axes[axis], receiverOffset);
+            const double relativeCenter = center[static_cast<int>(axis)];
+            if (!(volume.receiver.minimum[axis] - relativeCenter >= -xy &&
+                  volume.receiver.maximum[axis] - relativeCenter <= xy))
+            {
+                return false;
+            }
+        }
+        const double rounding = ClipRoundoff(axes[2], WorldOffsetBound(axes, volume.fitted, center));
+        return volume.fitted.minimum[2] - center.z >= rounding &&
+               volume.fitted.maximum[2] - center.z <= depthRange - biasMeters - rounding;
+    }
+
+    /// @brief 用接收切片的球固定 XY 尺度. 留一 texel 余量覆盖中心吸附和近邻采样.
+    static std::optional<DirectionalShadowProjection> FitCascade(const SceneFrame &scene,
+        const ShadowReceiver &receiver, const std::array<glm::dvec3, 3> &axes,
+        double nearPlane, double farPlane, std::uint32_t edge, std::vector<std::uint32_t> &casters)
+    {
+        auto volume = DirectionalVolume(receiver, axes, nearPlane, farPlane);
+        const double factor = receiver.orthographic ? 1 : farPlane;
+        const double radius = std::hypot(factor / receiver.projectionScale[0] * receiver.sideLimit[0],
+            factor / receiver.projectionScale[1] * receiver.sideLimit[1], (farPlane - nearPlane) * 0.5);
+        const double halfExtent = radius / (1 - 2.0 / edge);
+        const double texel = halfExtent * (2.0 / edge);
+        if (!volume || !(texel > 0) || !std::isfinite(halfExtent) ||
+            !CollectDirectionalCasters(scene, *volume, texel, casters))
+        {
+            return std::nullopt;
+        }
+
+        // 以固定世界网格为锚, 相机平移只影响中心落在哪个格点.
+        const auto &x = axes[0];
+        const auto &y = axes[1];
+        const auto &z = axes[2];
+        const auto offset = glm::make_vec3(receiver.worldFromView.data() + 8) * -std::midpoint(nearPlane, farPlane);
+        const glm::dvec3 lightCamera{glm::dot(x, volume->origin), glm::dot(y, volume->origin),
+                                    glm::dot(z, volume->origin)};
+        const double cellX = (lightCamera.x + glm::dot(x, offset)) / texel;
+        const double cellY = (lightCamera.y + glm::dot(y, offset)) / texel;
+        // 吸附之前必须还能区分半格. 尺度不足时拒绝整组, 避免交付看似有效却无法随格点移动的投影.
+        constexpr double CellLimit = double(std::uint64_t{1} << (std::numeric_limits<double>::digits - 1));
+        if (!(std::abs(cellX) < CellLimit && std::abs(cellY) < CellLimit))
+        {
+            return std::nullopt;
+        }
+        const auto &fitted = volume->fitted;
+        const double snappedX = std::round(cellX) * texel;
+        const double snappedY = std::round(cellY) * texel;
+        const double biasMeters = texel * DirectionalShadowProjection::CasterBiasTexels;
+        const glm::dvec3 unpaddedNear{snappedX - lightCamera.x, snappedY - lightCamera.y, fitted.minimum[2]};
+        // 至少留一 texel. 长深度范围按实际 Z 轴加大余量, 再用交付原点验证偏移和舍入后的覆盖.
+        const double depthRoundoff = ClipRoundoff(z, WorldOffsetBound(axes, fitted, unpaddedNear));
+        const double padding = std::max(texel, biasMeters + 2 * depthRoundoff);
+        const double nearZ = fitted.minimum[2] - padding;
+        const double depthRange = fitted.maximum[2] + padding - nearZ;
+        const auto origin = x * snappedX + y * snappedY + z * (lightCamera.z + nearZ);
+        // 后续 UBO 保存区间的倒数, 在这里检查其 FP32 正规数范围.
+        const auto usableScale = [](double meters)
+        {
+            const double scale = 1 / meters;
+            return scale >= std::numeric_limits<float>::min() && scale <= std::numeric_limits<float>::max();
+        };
+        if (!usableScale(halfExtent) || !usableScale(depthRange) ||
+            !CoversFittedVolume(*volume, origin, halfExtent, depthRange, biasMeters))
+        {
+            return std::nullopt;
+        }
+        // 光空间 +Z 为前方. 翻转 X 得到与主相机一致的屏幕绕序, 比较深度仍沿 +Z 增大.
+        return DirectionalShadowProjection{Value(origin), {Value(-x), Value(y), Value(z)}, halfExtent, depthRange};
+    }
+
+    std::variant<DirectionalShadowPlan, ShadowPlanReason> MakeDirectionalShadowPlan(
+        const SceneFrame &scene, const ShadowReceiver &receiver, const LightRecord &light,
+        const ShadowSettings &settings, std::uint32_t edge)
+    {
+        const double nearPlane = receiver.nearPlane;
+        const double farPlane = std::min(receiver.farPlane, settings.shadowDistanceMeters);
+        if (!(farPlane > nearPlane))
+        {
+            return ShadowPlanReason::NoReceiverCoverage;
+        }
+        if (farPlane > std::numeric_limits<float>::max())
+        {
+            return ShadowPlanReason::InvalidVolume;
+        }
+        const auto count = settings.directionalCascades;
+        std::array<float, MaxDirectionalCascades + 1> splits{};
+        splits[0] = static_cast<float>(nearPlane);
+        splits[count] = static_cast<float>(farPlane);
+        for (std::uint32_t i = 1; i < count; ++i)
+        {
+            const double t = double(i) / count;
+            const double linear = std::lerp(nearPlane, farPlane, t);
+            const double split = receiver.orthographic ? linear :
+                std::lerp(linear, std::exp(std::lerp(std::log(nearPlane), std::log(farPlane), t)), settings.splitLambda);
+            splits[i] = static_cast<float>(split);
+        }
+        // 先舍入为查询端收到的端点, 再以相邻较短段确定过渡半宽. 末级只需保存远端.
+        std::array<std::array<float, 2>, MaxDirectionalCascades> transition{};
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            if (!(splits[i] < splits[i + 1]))
+            {
+                return ShadowPlanReason::InvalidVolume;
+            }
+            const double center = splits[i + 1];
+            const double halfWidth = i + 1 == count ? 0 : settings.transitionFraction *
+                std::min(center - splits[i], splits[i + 2] - center);
+            transition[i] = {static_cast<float>(center - halfWidth), static_cast<float>(center + halfWidth)};
+        }
+
+        DirectionalShadowPlan plan{.nearDepth = splits.front()};
+        plan.cascades.reserve(count);
+        const auto axes = LightAxes(glm::make_vec3(light.direction.data()));
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            // 投影覆盖 Shader 实际使用的过渡端点, 首末级还保留相机的有限端点精度.
+            const double nearFit = i == 0 ? std::min(nearPlane, double(splits[0])) : transition[i - 1][0];
+            const double farFit = i + 1 == count ? std::max(farPlane, double(splits[count])) : transition[i][1];
+            DirectionalShadowCascade cascade{.farDepth = splits[i + 1], .transition = transition[i]};
+            const auto projection = FitCascade(scene, receiver, axes, nearFit, farFit, edge, cascade.casters);
+            if (!projection)
+            {
+                return ShadowPlanReason::InvalidVolume;
+            }
+            cascade.projection = *projection;
+            plan.cascades.push_back(std::move(cascade));
+        }
+        return plan;
     }
 }

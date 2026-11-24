@@ -6,10 +6,11 @@
 #include <utility>
 
 #include "../Materials/StaticGpu.hpp"
+#include "../RenderGraph/GraphRanges.hpp"
 
 /// @file
-/// @brief 在同一图登记共享上传和各 View 的几何、天空与显示转换.
-/// 回调只访问已声明版本, 提交后按每个存储代的实际生产者确认上传.
+/// @brief 在同一图中登记共享上传及各 View 的几何, 方向光深度, 天空和显示转换.
+/// 级联以单层附件写入并逐层采样. Runtime 按各 View 的颜色回执确认同次生产的深度出口.
 
 namespace Physara::Renderer
 {
@@ -56,17 +57,7 @@ namespace Physara::Renderer
 
     ForwardEncodingCounts ForwardFrame::EncodingCounts() const noexcept
     {
-        ForwardEncodingCounts counts;
-        if (m_Data)
-        {
-            for (const auto &view : m_Data->views)
-            {
-                counts.objects += view.encodings.objects;
-                counts.materials += view.encodings.materials;
-                counts.lights += view.encodings.lights;
-            }
-        }
-        return counts;
+        return m_Data ? m_Data->encodings : ForwardEncodingCounts{};
     }
 
     std::pair<std::size_t, std::size_t> ForwardFrame::UploadDemand() const noexcept
@@ -74,17 +65,31 @@ namespace Physara::Renderer
         return m_Data ? std::pair{m_Data->uploads.writes, m_Data->uploads.bytes} : std::pair<std::size_t, std::size_t>{};
     }
 
-    /// @brief 解除本轮着色引用. 槽内保留 View 行, 普通灯表和批次缓冲, 下轮准备时再比较其内容.
+    /// @brief 解除本轮绘制引用. 槽内保留 View 行、实例块和参数缓冲供下次准备比较.
+    static void ResetDrawWork(Detail::StaticDrawWork &work) noexcept
+    {
+        work.batches.clear();
+        work.draws.clear();
+        work.materialRows.clear();
+        work.degradation.reset();
+    }
+
+    /// @brief 清理本轮主表面、阴影和显示候选. 帧槽已取得安全复用后才调用.
     static void ResetView(Detail::ForwardFrameData &view) noexcept
     {
-        view.batches.clear();
-        view.draws.clear();
-        view.materialRows.clear();
+        ResetDrawWork(view);
+        if (view.directional)
+        {
+            for (auto &level : view.directional->levels)
+            {
+                ResetDrawWork(level);
+            }
+            view.directional->depth = {};
+        }
         view.activeLights.reset();
         view.lightLayout = nullptr;
         view.environment = {};
         view.display = {};
-        view.degradation.reset();
     }
 
     void ForwardFrame::Reset() noexcept
@@ -92,10 +97,11 @@ namespace Physara::Renderer
         if (m_Data)
         {
             m_Data->uploads.Clear();
+            // 主表面与各级 caster 都向槽累计编码. 拒绝一路后, 另一条接受的路仍可报告已发生的工作.
+            m_Data->encodings = {};
             for (auto &view : m_Data->views)
             {
                 ResetView(view);
-                view.encodings = {};
             }
             m_Data->begun = m_Data->lutReserved = false;
             m_Data->hasPreparedView = false;
@@ -107,6 +113,26 @@ namespace Physara::Renderer
     std::uint64_t ForwardFrame::ShaderGeneration() const noexcept
     {
         return m_Data && m_Data->shaders ? m_Data->shaders->generation : 0;
+    }
+
+    const DirectionalDepth *ForwardFrame::PreparedDirectionalDepth(std::size_t index) const noexcept
+    {
+        assert(m_Data);
+        const auto &shadow = m_Data->views[index].directional;
+        return shadow ? &shadow->depth : nullptr;
+    }
+
+    void ForwardFrame::ConfirmDirectionalDepth(View &owner, std::size_t index, const GraphRetainedResource &retained,
+                                               std::uint64_t ticket) const noexcept
+    {
+        assert(m_Data && m_Data->views[index].source.view == owner.Id());
+        const auto &frame = m_Data->views[index].directional;
+        if (frame && retained)
+        {
+            auto depth = frame->depth;
+            depth.retained = retained;
+            owner.AcceptDirectionalDepth(std::move(depth), ticket);
+        }
     }
 
     const std::optional<Core::BoundedText> &ForwardFrame::Degradation(std::size_t index) const noexcept
@@ -125,7 +151,15 @@ namespace Physara::Renderer
     {
         assert(m_Data);
         // 图 arena 只保存上传回调和几个 Pass 描述. Draw 和字节另由帧槽持有.
-        return 4096 * m_Data->views.size() + m_Data->uploads.writes * 256;
+        std::size_t bytes = 4096 * m_Data->views.size() + m_Data->uploads.writes * 256;
+        for (const auto &view : m_Data->views)
+        {
+            if (view.directional && !view.directional->depth.retained)
+            {
+                bytes += view.directional->depth.count * 1024;
+            }
+        }
+        return bytes;
     }
 
     void ForwardFrame::ReleasePayload() noexcept
@@ -433,7 +467,9 @@ namespace Physara::Renderer
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
-        const auto display = ResolveDisplaySettings(mode, view.requestedAa);
+        const auto *directional = view.CanPreviewCascades() && view.shadows ?
+            view.shadows->Directional() : nullptr;
+        const auto display = ResolveDisplaySettings(directional ? PreviewMode::BaseColor : mode, view.requestedAa);
         if (const auto failure = CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
                                                   display, view.layouts.render != view.layouts.display))
         {
@@ -470,8 +506,8 @@ namespace Physara::Renderer
         }
         data.source = {view.view, view.scene.scene, view.scene.contentRevision, mode, *view.camera, view.layouts.render};
         data.needs = needs;
-        m_Resources->BeginView();
-        Detail::PlanDraws(*m_Resources, data, view, mode);
+        m_Resources->BeginView(index);
+        Detail::PlanDraws(*m_Resources, data, view, mode, directional);
         PlanDisplay(*m_Resources, *frame.m_Data, data.display, view.layouts, display);
         frame.m_Data->planned.set(index);
         return std::nullopt;
@@ -507,12 +543,14 @@ namespace Physara::Renderer
             frame.m_Data->shaders = m_Resources->activeShaders;
         }
         assert(frame.m_Data->shaders == m_Resources->activeShaders);
-        const auto display = ResolveDisplaySettings(data.source.mode, view.requestedAa);
+        const auto displayMode = data.source.directionalCascades ? PreviewMode::BaseColor : data.source.mode;
+        const auto display = ResolveDisplaySettings(displayMode, view.requestedAa);
         if (!m_Resources->RequestDisplay(view.layouts, display))
         {
             Detail::Reject(ViewSettingReason::ShaderPending, "Waiting for prepared display pipelines");
         }
-        Detail::ApplyDrawShaders(*m_Resources, data);
+        m_Resources->ResumeView(index);
+        Detail::ApplyDrawShaders(*m_Resources, data, view);
         m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
         frame.m_Data->hasPreparedView = true;
         frame.m_Data->planned.reset(index);
@@ -523,6 +561,14 @@ namespace Physara::Renderer
         RejectView(*frame.m_Data, index);
         return failure;
     }
+    catch (const std::bad_alloc &)
+    {
+        // 换代后的 caster 准备仍会分配. 只撤销本路, 保留另一路可能引用的共享生产者.
+        RejectView(*frame.m_Data, index);
+        return ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                              Core::BoundedText("Forward final preparation allocation failed")};
+    }
+
     /// @brief 将声明失败交还本次图的唯一入口, 保留图的具体错误.
     template <typename T>
     static T TakeGraph(GraphResult<T> result)
@@ -594,11 +640,22 @@ namespace Physara::Renderer
                 continue;
             }
             const auto &view = frame.views[index];
-            for (const auto &draw : view.draws)
+            const auto collect = [&](const Detail::StaticDrawWork &work)
             {
-                consumers[draw.geometry.get()] |= 1u << index;
-                consumers[draw.object.get()] |= 1u << index;
-                consumers[view.materialRows[draw.material].get()] |= 1u << index;
+                for (const auto &draw : work.draws)
+                {
+                    consumers[draw.geometry.get()] |= 1u << index;
+                    consumers[draw.object.get()] |= 1u << index;
+                    consumers[work.materialRows[draw.material].get()] |= 1u << index;
+                }
+            };
+            collect(view);
+            if (view.directional && !view.directional->depth.retained)
+            {
+                for (const auto &level : std::span(view.directional->levels).first(view.directional->depth.count))
+                {
+                    collect(level);
+                }
             }
         }
 
@@ -785,6 +842,10 @@ namespace Physara::Renderer
         std::optional<TextureAccess> dfg;
         std::optional<TextureAccess> reflection;
         RHI::Sampler *environmentSampler = nullptr;
+        std::optional<BufferAccess> cascadeConstants;
+        std::optional<BufferAccess> cascadeMatrices;
+        std::array<TextureAccess, MaxDirectionalCascades> cascadeLayers;
+        std::uint32_t cascadeCount{};
         std::vector<GraphBatch> batches;
     };
 
@@ -806,13 +867,15 @@ namespace Physara::Renderer
         return state;
     }
 
-    /// @brief 将预解析的绑定关联到本图授权. 同一 Pass 的重复资源只声明一次, Depth 只取基色槽.
+    /// @brief 将预解析的 Draw 绑定关联到本 Pass 的读范围. 主深度, 阴影深度和级联诊断只取材质基色槽.
+    /// color 指向主着色工作时才选用 set 3. 阴影附件使用自己的方形 viewport.
     static SceneRaster RasterInputs(RenderGraph &graph, SceneGraphResources &versions,
-                                    const Detail::ForwardFrameData &frame, bool depthOnly, RasterReads &reads)
+        const Detail::StaticDrawWork &work, const ViewImageRect &rect, RasterReads &reads,
+        const Detail::ForwardFrameData *color = nullptr, TextureId shadowDepth = {})
     {
         SceneRaster raster;
-        raster.viewport = RasterViewport(frame.source.layout.rect);
-        if (frame.draws.empty())
+        raster.viewport = RasterViewport(rect);
+        if (work.draws.empty())
         {
             return raster;
         }
@@ -842,13 +905,28 @@ namespace Physara::Renderer
             static_cast<void>(readBuffer(page->buffer, GraphUsage::ShaderRead, range, page.get(),
                                         page->initialized ? std::optional{binding} : std::nullopt));
         };
-        static_cast<void>(buffer(frame.view->buffer, GraphUsage::ConstantBuffer));
-        raster.view = frame.view->binding.Get();
-        if (!depthOnly)
+        static_cast<void>(buffer(work.view->buffer, GraphUsage::ConstantBuffer));
+        raster.view = work.view->binding.Get();
+        if (color)
         {
-            raster.lights = buffer(frame.activeLights->buffer, GraphUsage::ShaderRead);
-            raster.lightLayout = frame.lightLayout.Get();
-            const auto &environment = frame.environment;
+            raster.lightLayout = color->lightLayout.Get();
+        }
+        if (color && color->directional)
+        {
+            const auto &shadow = *color->directional;
+            raster.cascadeConstants = buffer(shadow.constants->buffer, GraphUsage::ConstantBuffer);
+            raster.cascadeMatrices = buffer(shadow.matrices->buffer, GraphUsage::ConstantBuffer);
+            raster.cascadeCount = shadow.depth.count;
+            for (std::uint32_t layer = 0; layer < raster.cascadeCount; ++layer)
+            {
+                raster.cascadeLayers[layer] = {shadowDepth, {.firstLayer = layer, .aspect = TextureAspect::Depth},
+                                               GraphUsage::Sampled};
+            }
+        }
+        else if (color)
+        {
+            raster.lights = buffer(color->activeLights->buffer, GraphUsage::ShaderRead);
+            const auto &environment = color->environment;
             const auto sample = [&](const Detail::ResidentTexture &texture)
             {
                 const auto version = versions.ReadTexture(graph, texture);
@@ -870,21 +948,21 @@ namespace Physara::Renderer
             }
         }
         // 同一批的实例可以选取不同对象行和材质行. 逐表面登记这些行及几何区间, 重复的读由 readBuffer 合并.
-        for (const auto &draw : frame.draws)
+        for (const auto &draw : work.draws)
         {
             static_cast<void>(slice(draw.geometry->vertices));
             static_cast<void>(slice(draw.geometry->indices));
             table(draw.object->storage);
-            table(frame.materialRows[draw.material]->storage);
+            table(work.materialRows[draw.material]->storage);
         }
         constexpr auto commandBytes = sizeof(RHI::DrawIndexedIndirectArguments);
-        raster.batches.reserve(frame.batches.size());
-        for (const auto &batch : frame.batches)
+        raster.batches.reserve(work.batches.size());
+        for (const auto &batch : work.batches)
         {
-            const auto &draw = frame.draws[batch.firstDraw];
-            const auto &material = *frame.materialRows[draw.material];
-            static_cast<void>(buffer(frame.instanceBlocks[batch.instanceBlock]->buffer, GraphUsage::ShaderRead));
-            const auto slots = depthOnly ? 1 : material.textures.size();
+            const auto &draw = work.draws[batch.firstDraw];
+            const auto &material = *work.materialRows[draw.material];
+            static_cast<void>(buffer(work.instanceBlocks[batch.instanceBlock]->buffer, GraphUsage::ShaderRead));
+            const auto slots = !color || color->directional ? Detail::CoverageTextureCount : material.textures.size();
             for (std::size_t i = 0; i < slots; ++i)
             {
                 const auto &product = *material.textures[i];
@@ -893,11 +971,11 @@ namespace Physara::Renderer
                     TextureAccess{version, {.firstMip = product.sampling.baseMipLevel,
                         .mipCount = product.sampling.numMipLevels}, GraphUsage::Sampled});
             }
-            const auto arguments = readBuffer(frame.indirect->buffer, GraphUsage::IndirectArgument,
+            const auto arguments = readBuffer(work.indirect->buffer, GraphUsage::IndirectArgument,
                 {batch.firstCommand * commandBytes, batch.commandCount * commandBytes}, nullptr);
             raster.batches.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices), arguments,
                 batch.renderables.Get(), material.binding->Get(),
-                (depthOnly ? draw.depthPipeline : draw.pipeline).Get(), batch.commandCount});
+                (color ? draw.pipeline : draw.depthPipeline).Get(), batch.commandCount});
         }
         return raster;
     }
@@ -906,8 +984,8 @@ namespace Physara::Renderer
     static GraphFailure DrawScene(PassResources &resources, const SceneRaster &raster,
                                   RHI::CommandList &commands) noexcept
     {
-        auto *lights = raster.lights ? resources.BindingSet(0) : nullptr;
-        if (raster.lights && !lights)
+        auto *passBindings = raster.lightLayout ? resources.BindingSet(0) : nullptr;
+        if (raster.lightLayout && !passBindings)
         {
             // BindingSet 已将失败记入本 Pass. 停止录制, 由执行器返回该原因.
             return std::nullopt;
@@ -928,9 +1006,9 @@ namespace Physara::Renderer
                 .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices).SetOffset(0))
                 .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT)
                     .SetOffset(0)).SetIndirectParams(arguments);
-            if (lights)
+            if (passBindings)
             {
-                state.AddBindingSet(lights);
+                state.AddBindingSet(passBindings);
             }
             commands.SetGraphicsState(state);
             commands.DrawIndexedIndirect(static_cast<std::uint32_t>(batch.arguments.range.byteOffset),
@@ -939,33 +1017,105 @@ namespace Physara::Renderer
         return std::nullopt;
     }
 
+    /// @brief 声明当前静态光栅 Pass 的真实几何、材质与逐层采样范围.
+    static bool DeclareRasterReads(PassBuilder &builder, const RasterReads &reads, const SceneRaster &data)
+    {
+        for (const auto &[index, use] : reads.buffers)
+        {
+            const auto &access = use.access;
+            const bool declared = use.indexedBinding ?
+                builder.ReadIndexedRows(access.resource, access.range, *use.indexedBinding) :
+                builder.Read(access.resource, access.usage, access.range);
+            if (!declared)
+            {
+                return false;
+            }
+        }
+        for (const auto &[index, access] : reads.textures)
+        {
+            if (!builder.Read(access.resource, access.usage, access.range))
+            {
+                return false;
+            }
+        }
+        for (const auto &access : std::span(data.cascadeLayers).first(data.cascadeCount))
+        {
+            if (!builder.Read(access.resource, access.usage, access.range))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// @brief 生成级联诊断或受光 Pass 所需的集合. 每个纹理视图只可取其已声明的逻辑范围.
+    static GraphFailure PrepareRasterBindings(PassPreparation &preparation, const SceneRaster &data)
+    {
+        if (!data.lightLayout)
+        {
+            return std::nullopt;
+        }
+        std::array<RHI::BindingSetItem, MaxDirectionalCascades + 2> items;
+        std::size_t count = 0;
+        for (const auto &slot : data.lightLayout->GetDesc()->bindings)
+        {
+            std::optional<RHI::BindingSetItem> binding;
+            if (slot.type == RHI::ResourceType::StructuredBuffer_SRV)
+            {
+                const auto &access = *data.lights;
+                binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
+            }
+            else if (slot.type == RHI::ResourceType::ConstantBuffer)
+            {
+                const auto &access = !data.cascadeConstants ? *data.environment :
+                    (slot.slot == Detail::CascadeMatricesSlot ? *data.cascadeMatrices : *data.cascadeConstants);
+                binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
+            }
+            else if (slot.type == RHI::ResourceType::Sampler)
+            {
+                binding = RHI::BindingSetItem::Sampler(slot.slot, data.environmentSampler);
+            }
+            else if (data.cascadeCount)
+            {
+                // 活动但超出本轮级数的固定槽指向同一已定义层, Shader 只访问有效级数.
+                const auto layer = std::min(slot.slot - Detail::FirstCascadeImageSlot, data.cascadeCount - 1);
+                const auto &access = data.cascadeLayers[layer];
+                binding = preparation.SampledTexture(slot.slot, access.resource, access.range,
+                                                     RHI::TextureDimension::Texture2D);
+            }
+            else
+            {
+                const bool cube = slot.slot == Detail::ReflectionSlot;
+                assert(cube || slot.slot == Detail::DfgSlot);
+                const auto &access = cube ? *data.reflection : *data.dfg;
+                binding = preparation.SampledTexture(slot.slot, access.resource, access.range,
+                    cube ? RHI::TextureDimension::TextureCube : RHI::TextureDimension::Texture2D);
+            }
+            if (!binding)
+            {
+                return std::nullopt;
+            }
+            items[count++] = *binding;
+        }
+        static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(items).first(count)));
+        return std::nullopt;
+    }
+
     /// @brief 深度和颜色共享 Draw 顺序及声明规则. 读前置深度时使用只读附件, 从而确定 WAW/RAW 关系.
     static PassId AddGeometryPass(RenderGraph &graph, SceneGraphResources &versions,
-        const Detail::ForwardFrameData &frame, TextureId &depth, TextureId *color, bool readOnlyDepth)
+        const Detail::ForwardFrameData &frame, TextureId &depth, TextureId *color, bool readOnlyDepth,
+        TextureId shadowDepth = {})
     {
         RasterReads reads;
-        auto raster = RasterInputs(graph, versions, frame, !color, reads);
+        auto raster = RasterInputs(graph, versions, frame, frame.source.layout.rect, reads,
+                                   color ? &frame : nullptr, shadowDepth);
         return TakeGraph(graph.AddPass<SceneRaster>(color ? "Forward ShadeOpaque" : "Forward PrepareSurface",
             [&](PassBuilder &builder, auto &data)
             {
                 data = std::move(raster);
-                for (const auto &[index, use] : reads.buffers)
+                if (!DeclareRasterReads(builder, reads, data))
                 {
-                    const auto &access = use.access;
-                    const bool declared = use.indexedBinding ?
-                        builder.ReadIndexedRows(access.resource, access.range, *use.indexedBinding) :
-                        builder.Read(access.resource, access.usage, access.range);
-                    if (!declared)
-                    {
-                        return false;
-                    }
-                }
-                for (const auto &[index, access] : reads.textures)
-                {
-                    if (!builder.Read(access.resource, access.usage, access.range))
-                    {
-                        return false;
-                    }
+                    return false;
                 }
                 const TextureRange depthRange{.aspect = TextureAspect::Depth};
                 if (readOnlyDepth)
@@ -986,49 +1136,47 @@ namespace Physara::Renderer
                          {.load = LoadOp::Clear, .clearValue = RHI::Color(0.018f, 0.018f, 0.018f, 0.f)});
                 }
                 return depth.IsValid() && (!color || color->IsValid());
-            }, DrawScene, +[](PassPreparation &preparation, const SceneRaster &data) -> GraphFailure
-            {
-                if (!data.lights)
+            }, DrawScene, PrepareRasterBindings));
+    }
+
+    /// @brief 命中时只读导入已接受的层组. 新组按级联近远次序写连续物理层, 每次 Write 接续上一图版本.
+    /// 空 caster 层也执行 Clear/Store. 新组全层导出后由 Runtime 决定是否交给该 View.
+    static TextureId DeclareDirectionalDepth(RenderGraph &graph, SceneGraphResources &resources,
+                                             const Detail::DirectionalFrame &frame)
+    {
+        const auto &group = frame.depth;
+        const TextureRange all{.layerCount = group.count, .aspect = TextureAspect::Depth};
+        if (group.retained)
+        {
+            return TakeGraph(graph.ImportTexture(group.retained, Detail::SampledState(all.aspect), all));
+        }
+        auto depth = TakeGraph(graph.CreateTexture({.width = group.edge, .height = group.edge, .arraySize = group.count,
+            .format = ShadowDepthFormat, .dimension = RHI::TextureDimension::Texture2DArray,
+            .debugName = "Directional CSM depth", .isRenderTarget = true}));
+        const ViewImageRect rect{.extent = {group.edge, group.edge}};
+        for (std::uint32_t layer = 0; layer < group.count; ++layer)
+        {
+            RasterReads reads;
+            auto raster = RasterInputs(graph, resources, frame.levels[layer], rect, reads);
+            const TextureRange range{.firstLayer = layer, .aspect = TextureAspect::Depth};
+            static_cast<void>(TakeGraph(graph.AddPass<SceneRaster>("Directional CSM depth",
+                [&](PassBuilder &builder, auto &data)
                 {
-                    return std::nullopt;
-                }
-                // 沿生成集合枚举实际使用的字段, 读取必须来自 setup 给出的同一图权限.
-                std::array<RHI::BindingSetItem, 5> items;
-                std::size_t count = 0;
-                for (const auto &slot : data.lightLayout->GetDesc()->bindings)
-                {
-                    std::optional<RHI::BindingSetItem> binding;
-                    if (slot.type == RHI::ResourceType::StructuredBuffer_SRV)
+                    data = std::move(raster);
+                    if (!DeclareRasterReads(builder, reads, data))
                     {
-                        const auto &access = *data.lights;
-                        binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
+                        return false;
                     }
-                    else if (slot.type == RHI::ResourceType::ConstantBuffer)
-                    {
-                        const auto &access = *data.environment;
-                        binding = preparation.ReadBuffer(slot.slot, access.resource, access.usage, access.range);
-                    }
-                    else if (slot.type == RHI::ResourceType::Sampler)
-                    {
-                        binding = RHI::BindingSetItem::Sampler(slot.slot, data.environmentSampler);
-                    }
-                    else
-                    {
-                        const bool cube = slot.slot == Detail::ReflectionSlot;
-                        assert(cube || slot.slot == Detail::DfgSlot);
-                        const auto &access = cube ? *data.reflection : *data.dfg;
-                        binding = preparation.SampledTexture(slot.slot, access.resource, access.range,
-                            cube ? RHI::TextureDimension::TextureCube : RHI::TextureDimension::Texture2D);
-                    }
-                    if (!binding)
-                    {
-                        return std::nullopt;
-                    }
-                    items[count++] = *binding;
-                }
-                static_cast<void>(preparation.CreateBindingSet(*data.lightLayout, std::span(items).first(count)));
-                return std::nullopt;
-            }));
+                    depth = builder.Write(depth, GraphUsage::DepthStencilAttachment,
+                        {.load = LoadOp::Clear, .clearValue = DepthStencilClear{ShadowDepthConvention::Clear, 0}}, range);
+                    return depth.IsValid();
+                }, DrawScene)));
+        }
+        if (const auto failure = graph.Export(depth, ExportUsage::ShaderRead, all))
+        {
+            throw *failure;
+        }
+        return depth;
     }
 
     /// @brief 只有请求真实早期深度的下游才新增几何 Pass.
@@ -1044,9 +1192,9 @@ namespace Physara::Renderer
 
     /// @brief 按准备的路径同时产生颜色和深度, 或读取早期深度并只写颜色.
     static PassId ShadeOpaque(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
-                            TextureId &depth, TextureId &color)
+                            TextureId &depth, TextureId &color, TextureId directionalDepth)
     {
-        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth);
+        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth, directionalDepth);
     }
 
     /// @brief 天空读取本图的一个完整基础 cube, 加载不透明工作色后只填其未覆盖 RGB.
@@ -1114,8 +1262,12 @@ namespace Physara::Renderer
             .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
         output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = WorkingFormat, .debugName = "Forward linear working color", .isRenderTarget = true}));
+        if (frame.directional)
+        {
+            output.directionalDepth = DeclareDirectionalDepth(graph, versions, *frame.directional);
+        }
         output.depthPass = PrepareSurface(graph, versions, frame, output.depth);
-        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor);
+        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor, output.directionalDepth);
         AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();

@@ -34,6 +34,11 @@ namespace Physara::Shader
         std::span<const std::string_view> names;
     };
 
+    /// @brief 在已验证的包中逐组比对指定阶段和 set 的全部活动资源名. 空配方跳过此项检查.
+    /// @return 所有指定组都匹配时返回空, 首个不匹配返回 InterfaceMismatch. 此检查只读取 CPU 反射.
+    [[nodiscard]] std::optional<Failure> CheckActiveResources(const ShaderPackage &package,
+        std::span<const ExpectedActiveResources> expected) noexcept;
+
     /// @brief 校验包及 required ABI 后创建两阶段 Shader, 任一失败不交付部分集合.
     /// @param expectedAbiHash 消费者所需的接口身份, 通常取自生成 Data.hpp 的 AbiHash.
     /// @param expectedActive 需要区分同 ABI 的角色时传入. 指定阶段和集合的活动资源必须恰好匹配,
@@ -47,9 +52,10 @@ namespace Physara::Shader
                                                     std::string_view expectedFragmentSource = {}) noexcept;
     /// @brief 从编译或读取已验证的包取得同一图形阶段集合, 核对调用方所需 ABI 与角色.
     /// @pre package 来自成功的 Compiler 或 ReadPackage, device 满足创建 Shader 的线程及 context 合同.
+    /// @param expectedActive 可同时约束多个绑定集合. 各组及其资源名只借用到返回.
     /// @note 源参数使用包内逻辑路径. 返回值持有两阶段 Shader, 包及期望资源名的存储可在返回后释放.
     [[nodiscard]] Result<RhiProgram> CreateRhiProgram(RHI::Device &device, const ShaderPackage &package,
-        std::string_view expectedAbiHash, std::optional<ExpectedActiveResources> expectedActive = {},
+        std::string_view expectedAbiHash, std::span<const ExpectedActiveResources> expectedActive = {},
         std::string_view expectedFragmentSource = {}, std::string_view expectedVertexSource = {}) noexcept;
     /// @brief 完整计算模块与所验证的包身份, 阶段对象由调用方持有.
     struct RhiComputeProgram

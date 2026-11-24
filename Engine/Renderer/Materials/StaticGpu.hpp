@@ -44,8 +44,9 @@ namespace Physara::Renderer::Detail
     using ObjectKey = std::array<std::uint64_t, 4>; ///< Scene 与对象各自的槽和分配代.
     /// @brief 以对象身份和固定图元的局部基点定位对象行. 命中后核对实际变换代.
     using ObjectRowKey = std::pair<ObjectKey, std::array<float, 3>>;
-    /// @brief 模型版本, 源材质, 覆盖对象及源 Primitive 槽. 无覆盖时后两项为零, 行按源材质共享.
-    using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t>;
+    /// @brief 模型版本, 源材质, 覆盖对象, 源 Primitive 槽和仅覆盖标志. 无实例覆盖时对象与槽取零.
+    /// 末项为 true 的行只为深度或级联诊断准备, 完整颜色材质使用独立键.
+    using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t, bool>;
     using SamplerKey = std::array<std::uint32_t, 4>; ///< min、mag、wrapS、wrapT, 已填充缺省值.
 
     /// @brief 记账附着于资源实际寿命, 被替换而仍由槽保活的代继续占用额度.
@@ -65,11 +66,13 @@ namespace Physara::Renderer::Detail
         ~Allocation();
         Allocation(const Allocation &) = delete;
         Allocation &operator=(const Allocation &) = delete;
+        /// @brief 判断任一路是否自本次共享批开始使用了该代.
+        [[nodiscard]] bool UsedSince(std::uint64_t preparation) const noexcept;
 
         std::shared_ptr<ResidencyCapacity> capacity;
         std::size_t bytes;
         std::size_t chargedBytes; ///< 分页资源的物理容量只由页计入设备账目.
-        std::uint64_t lastUse = 0; ///< 最近一次 View 准备代, 不是 CPU 帧号或提交票据.
+        std::array<std::uint64_t, ForwardViewCount> lastUse{}; ///< 各路最近一次准备代, 不是提交票据.
         bool accepted = false;
     };
 
@@ -206,6 +209,7 @@ namespace Physara::Renderer::Detail
         std::uint8_t attributes{};
         std::int8_t normalUv = -1;
         bool doubleSided{};
+        std::uint8_t shadowAttributes{}; ///< 写阴影时仅依赖 MASK 实际使用的 UV.
     };
 
     /// @brief 保活期间唯一的视图及 sampler 组合. 仅用于查找相等组合, 不是绘制排序值.
@@ -221,7 +225,6 @@ namespace Physara::Renderer::Detail
         PageSlice storage;
         SamplingKey sampling;
         MaterialBinding binding;
-        std::size_t index; ///< 此驻留表页中的逻辑行下标.
         StaticAbi::ForwardMaterial values{};
     };
 
@@ -296,13 +299,20 @@ namespace Physara::Renderer::Detail
         void Clear() noexcept;
     };
 
-    /// @brief 三种光栅组合: 合并写深度/颜色, 只写前置深度, 相等深度测试的只读深度着色.
-    enum class SurfacePhase : std::uint8_t { Combined, Depth, ReadOnlyDepth };
+    /// @brief 主表面及常规阴影光栅角色. 每个角色使用自己对应的深度约定.
+    enum class SurfacePhase : std::uint8_t { Combined, Depth, ReadOnlyDepth, ShadowDepth };
     /// @brief 按实际资源形状选择颜色变体, 与每轮连续创作参数独立.
-    enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl };
+    enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl, CascadePreview };
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
     inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
+    inline constexpr std::uint32_t CascadeConstantsSlot = 1; ///< StaticForward 的 PerPass b1.
+    inline constexpr std::uint32_t CascadeMatricesSlot = 2; ///< StaticForward 的 PerPass b2.
+    inline constexpr std::uint32_t FirstCascadeImageSlot = 3; ///< StaticForward 的 PerPass t3..t6 为分层视图.
     inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
+    inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
+
+    /// @brief 级联诊断的片元活动集合, 同时匹配覆盖材质与图声明的级联常量和逐层采样.
+    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> CascadePreviewResources() noexcept;
 
     /// @brief 明确区分同为 ShaderRead 的对象和材质页, 两者记录步长由生成接口决定.
     enum class TableLayout : std::uint8_t { Objects, Materials };
@@ -316,7 +326,7 @@ namespace Physara::Renderer::Detail
     };
 
     /// @brief 一个可见表面的有序绘制输入. 几何和对象保有其固定代, material 索引本 View 的 materialRows.
-    /// PackBatches 从选中的 MaterialRow::index 取得 Shader 所需的页内行号.
+    /// PackBatches 从对象和材质各自的驻留区间取得 Shader 所需的页内行号.
     /// 每批首项在本帧代确定后持有 Pipeline, 其余实例共享首项的状态.
     struct DrawRecord
     {
@@ -358,30 +368,56 @@ namespace Physara::Renderer::Detail
         std::optional<RenderedEnvironment> applied;
     };
 
-    /// @brief 同槽本轮的只读 Draw, 绑定和上传. View 常量, 普通灯表, 实例块和间接缓冲留待此槽安全后复用.
-    /// Reset 解除本次 Draw, 材质, 活动灯表和显示引用. 下次准备替换 HDR 来源和表面需求.
-    /// @note 图回调借用这里保有的 RHI 对象; graph 析构后才可释放载荷, 同槽完成后才可重置 Draw.
-    struct ForwardFrameData
+    /// @brief 主表面或单个阴影层的静态批次及绑定. 实例行号相对本工作集内的块, 上传批由整个槽共享.
+    /// 当前 Draw 引用在安全复用时解除. 同形的常量和参数存储可在下次准备时比较或重写.
+    struct StaticDrawWork
     {
-        explicit ForwardFrameData(UploadBatch &batch) noexcept : uploads(batch) {}
+        StaticDrawWork(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
+            uploads(batch), encodings(counts) {}
 
-        ForwardWorkingSource source;
-        ViewResourceNeeds needs;
         std::shared_ptr<ConstantRow> view;
         std::optional<StaticAbi::ForwardView> viewValues;
-        std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
-        std::shared_ptr<LightTable> activeLights; ///< 当前颜色 Pass 实际借用的普通表或设备空表.
-        RHI::BindingLayoutHandle lightLayout;
-        EnvironmentFrame environment;
         std::vector<std::shared_ptr<MaterialRow>> materialRows;
         std::vector<DrawRecord> draws;
         std::vector<DrawBatch> batches;
         std::vector<std::shared_ptr<DrawBuffer>> instanceBlocks; ///< 每块从行 0 起索引, 长度固定为生成接口的容量.
         std::shared_ptr<DrawBuffer> indirect; ///< 本 View 各批次的参数按顺序紧排, 跨块延续记录下标.
         UploadBatch &uploads;
-        PostProcess::DisplayFrame display;
         std::optional<Core::BoundedText> degradation;
-        ForwardEncodingCounts encodings;
+        ForwardEncodingCounts &encodings; ///< 直接计入同槽的实际 CPU 编码, 拒绝单路时仍保留事实.
+    };
+
+    /// @brief CSM 的有界逐层绘制和诊断查询. depth.retained 非空时当前图只导入匹配层.
+    struct DirectionalFrame
+    {
+        DirectionalFrame(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
+            levels{StaticDrawWork(batch, counts), StaticDrawWork(batch, counts),
+                   StaticDrawWork(batch, counts), StaticDrawWork(batch, counts)}
+        {}
+
+        std::array<StaticDrawWork, MaxDirectionalCascades> levels;
+        DirectionalDepth depth;
+        std::shared_ptr<ConstantRow> constants;
+        std::shared_ptr<ConstantRow> matrices;
+        std::optional<StaticAbi::ForwardCascades> values;
+        std::optional<StaticAbi::ForwardCascadeMatrices> matrixValues;
+    };
+
+    /// @brief 安全槽中的一个 View 候选. Draw, 灯光和阴影各自在实际消费前准备.
+    /// @note 图回调借用本槽保有的对象. 同槽完成后方可重用常量、实例块和间接缓冲.
+    struct ForwardFrameData : StaticDrawWork
+    {
+        ForwardFrameData(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
+            StaticDrawWork(batch, counts) {}
+
+        ForwardWorkingSource source;
+        ViewResourceNeeds needs;
+        std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
+        std::shared_ptr<LightTable> activeLights;
+        RHI::BindingLayoutHandle lightLayout;
+        EnvironmentFrame environment;
+        std::optional<DirectionalFrame> directional;
+        PostProcess::DisplayFrame display;
     };
 
     struct ForwardShaderGeneration;
@@ -391,7 +427,9 @@ namespace Physara::Renderer::Detail
     struct ForwardFrameStorage
     {
         UploadBatch uploads;
-        std::array<ForwardFrameData, ForwardViewCount> views{ForwardFrameData(uploads), ForwardFrameData(uploads)};
+        ForwardEncodingCounts encodings;
+        std::array<ForwardFrameData, ForwardViewCount> views{
+            ForwardFrameData(uploads, encodings), ForwardFrameData(uploads, encodings)};
         std::shared_ptr<const ForwardShaderGeneration> shaders; ///< 保留本槽已冻结的原生代直至真实完成.
         std::bitset<ForwardViewCount> planned; ///< 本路资源和工作集已准备, 等候 FinishView 绑定选定代.
         bool begun = false;
@@ -417,17 +455,18 @@ namespace Physara::Renderer::Detail
         /// @brief 清除由该角色派生的程序和 Pipeline 槽, 兼容的顶点布局和其他角色的句柄可沿用.
         void ReplaceProgram(Shader::ProductShader role) noexcept;
 
-        std::array<Shader::RhiProgram, 3> colors;
+        std::array<Shader::RhiProgram, ForwardColorPrograms> colors;
         Shader::RhiProgram depth;
+        Shader::RhiProgram shadowDepth;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
         std::string skyContent;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineSlots * 3> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineSlots * ForwardColorPrograms> pipelines;
 
     private:
-        /// @brief 核对颜色角色在 set 3 的活动资源, 接续设备为该角色共享的固定布局.
+        /// @brief 核对颜色角色的活动资源, 级联还须符合基色覆盖配方. 接续该角色的固定布局.
         void PrepareLighting(ForwardDevice &owner, LightingProgram kind, const Shader::ProductPackages &packages);
         /// @brief 准备只写工作色 RGB 的天空 Pipeline, 成功后保存其包摘要供下次换代比较.
         void PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths, const Shader::ProductPackages &packages);
@@ -479,7 +518,9 @@ namespace Physara::Renderer::Detail
         /// @note 空模型表撤销全部几何目录项, 在途 Draw 继续持有页区间直到其槽安全释放.
         void ObserveGeometry(const SceneFrame &scene);
         /// @brief 开始独立 View 的工作集记账, 继续使用当前候选的共享写入.
-        void BeginView();
+        void BeginView(std::size_t index);
+        /// @brief 回到先前已规划的同一路, 继续使用其额度和去重记录.
+        void ResumeView(std::size_t index) noexcept;
         /// @brief 检查该代是否已接受或已在本轮登记使用. 共用待写代的调用方须确保本批已持有生产者.
         [[nodiscard]] bool Current(const Allocation &entry) const noexcept;
         /// @brief 每代每轮只计一次工作集占用, 超出单 View 硬预算时抛 ForwardFailure.
@@ -513,12 +554,19 @@ namespace Physara::Renderer::Detail
         std::vector<ShaderPreparationFailure> activeFailures; ///< 按失败顺序保留仍在需求中的键及首因.
         std::optional<ShaderPreparationPhase> lastShaderFailure; ///< 记录本次推进失败的诊断归属.
         PostProcess::DisplayDevice display;
-        std::array<RHI::BindingLayoutHandle, 3> lightLayouts; ///< 每个颜色角色的固定配方贯穿设备会话.
+        std::array<RHI::BindingLayoutHandle, ForwardColorPrograms> lightLayouts; ///< 每种颜色角色的固定配方贯穿设备会话.
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
         std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.
-        std::size_t preparedBytes = 0;
-        std::size_t preparedEntries = 0;
+        /// @brief 一路 View 从规划到补办 caster 准备共用的额度. 同一存储在该 stamp 内只计一次.
+        struct ViewBudget
+        {
+            std::uint64_t stamp{};
+            std::size_t bytes{};
+            std::size_t entries{};
+        };
+        std::array<ViewBudget, ForwardViewCount> viewBudgets;
+        std::size_t preparingView = 0;
         std::uint64_t materialRequests = 0;
         std::uint64_t materialHits = 0;
         std::uint64_t materialGeneration = 0;
@@ -555,9 +603,9 @@ namespace Physara::Renderer::Detail
     /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
     [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
                                                    std::uint32_t stride = 0);
-    /// @brief 创建并记账 View UBO 及对应集合, 字节由调用者追加到上传包.
+    /// @brief 创建并记账常量. set 有值时建立固定 View 集合, 否则由图声明实际绑定.
     [[nodiscard]] std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
-                                                                  std::size_t set);
+                                                                  std::optional<std::size_t> set);
     /// @brief 为有 Draw 的颜色 Pass 选择普通灯表或共享零表, 将匹配的表留在 frame.activeLights.
     /// @param usesLighting 当前有 Draw 在直接光或物理模式受光. 为假或可见灯为空时使用零表.
     /// @pre frame 所在帧槽已可安全重写. 编码或额度失败沿 Forward 准备入口返回, 整个候选停止.
@@ -576,8 +624,10 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] SamplerKey EffectiveSampler(const Asset::ModelSampler &sampler) noexcept;
     /// @brief 共享合法枚举组合的 sampler, LOD 可访问范围由对应纹理层数约束.
     [[nodiscard]] RHI::SamplerHandle PrepareSampler(ForwardDevice &device, const SamplerKey &key);
-    /// @brief 解析可见集和驻留资源, 登记实际几何及天空键, 允许视锥空集输出背景.
-    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode);
+    /// @brief 准备主可见集, 登记着色及显示所需的几何角色. 有方向光诊断时另从计划读取各级 caster.
+    /// @param directional 借用 view.shadows 中已准入的主方向光组. 空指针选择普通 Forward.
+    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode,
+                   const ShadowLightPlan *directional);
     /// @brief 从本帧选定代取得每个批次和天空所需的句柄. 缺项报告等待或硬失败, 不创建 Pipeline.
-    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame);
+    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view);
 }

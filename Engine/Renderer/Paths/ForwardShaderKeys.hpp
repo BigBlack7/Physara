@@ -6,16 +6,19 @@
 #include <array>
 #include <bitset>
 #include <filesystem>
+#include <span>
 
 #include <Shader/Reload.hpp>
 #include <Shader/RhiProgram.hpp>
 
 namespace Physara::Renderer::Detail
 {
-    // 几何表按八种顶点布局, 四种镜像和双面组合, 三种表面阶段预留槽. 深度角色借用首表的深度区间.
-    // 设备额度按三张几何表, 单个天空槽和四个显示阶段的两种附件格式取上界.
-    inline constexpr std::size_t GeometryPipelineSlots = 8 * 4 * 3;
-    inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineSlots * 3 + 1 + 8;
+    // 每张表按 8 种顶点布局, 4 种绕序/剔面组合及 4 个表面阶段编址. 两个深度角色共用首张表.
+    // 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
+    inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
+    inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
+    inline constexpr std::size_t ForwardColorPrograms = 4;
+    inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineSlots * ForwardColorPrograms + 1 + 8;
 
     /// @brief role 选择程序, variant 选择该程序的固定状态. 天空用槽零, 显示用线性或 sRGB 附件槽.
     struct ShaderPipelineRequest
@@ -38,5 +41,5 @@ namespace Physara::Renderer::Detail
     /// @brief 按已知产品角色消费打包或后台已验证的包, 两条路径使用同一 ABI 和阶段检查.
     [[nodiscard]] Shader::Result<Shader::RhiProgram> LoadProductProgram(RHI::Device &device,
         Shader::ProductShader role, const std::filesystem::path &path, const Shader::ProductPackages &packages,
-        std::string_view abi, std::optional<Shader::ExpectedActiveResources> expected = {});
+        std::string_view abi, std::span<const Shader::ExpectedActiveResources> expected = {});
 }

@@ -140,11 +140,11 @@
 
 **职责位置：** Renderer/Passes、Lighting、Shaders/Shadow。**前置：** [D09-T01](#d09-t01)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.2](../Architecture.md#geometry)、[conventions](../Architecture.md#conventions)。
 
-**状态** 当前工作包，前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-24-add-stable-directional-csm/tasks.md#final-verification)
 
-- [ ] 实现 1–4 cascade split，透视线性/对数混合、正交线性划分；完整 receiver 包围球固定 XY 尺度并按世界 texel 吸附，Z 包含画外 caster，使用常规 shadow depth clear/compare 与 caster bias。
-- [ ] 通过统一几何/alpha Shader 生成深度，处理负缩放、静态实例、mask 和双面投射；由图声明深度写→采样。
-- [ ] 实现级联选择/过渡与调试可视化，测试近远范围、慢速相机移动、画外 caster 和 cascade 边界。
+- [x] 实现 1–4 cascade split，透视线性/对数混合、正交线性划分；完整 receiver 包围球固定 XY 尺度并按世界 texel 吸附，Z 包含画外 caster，使用常规 shadow depth clear/compare 与 caster bias。
+- [x] 通过统一几何/alpha Shader 生成深度，处理负缩放、静态实例、mask 和双面投射；由图声明深度写→采样。
+- [x] 实现级联选择/过渡与调试可视化，测试近远范围、慢速相机移动、画外 caster 和 cascade 边界。
 
 **完成条件：** CSM 深度语义独立于主视图 Reverse-Z，稳定性和遮挡正确性有固定场景验证。
 
@@ -152,6 +152,8 @@
 ### D09-T03 · 实现 spot 与 point shadow
 
 **职责位置：** Renderer/Lighting、Passes、Shaders/Shadow。**前置：** [D09-T01](#d09-t01)、[D09-T02](#d09-t02)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.6](../Architecture.md#lighting)。
+
+**状态** 当前工作包，前置已满足，待立项。 [D09-T02 验收与证据](../../openspec/changes/archive/2026-11-24-add-stable-directional-csm/tasks.md#final-verification)
 
 - [ ] 实现 spot 投影和 point 六面视图、层/atlas 地址及统一近远面；光源无限 range 与有限 shadowDistance 分开，比较量与写入使用相同投影，不能混用径向距离和非线性深度。
 - [ ] 共享几何、bias 和采样合同，处理 cubemap/atlas 接缝、越界及失效 region。

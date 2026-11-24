@@ -46,6 +46,11 @@ namespace Physara::Renderer::Detail
         --capacity->entries;
     }
 
+    bool Allocation::UsedSince(std::uint64_t preparation) const noexcept
+    {
+        return std::ranges::any_of(lastUse, [preparation](auto use) { return use >= preparation; });
+    }
+
     BufferPage::BufferPage(std::shared_ptr<ResidencyCapacity> quota, RHI::BufferHandle storage, GraphUsage use,
                            std::uint8_t layoutKey, std::uint64_t sequence)
         : capacity(std::move(quota)), buffer(std::move(storage)), usage(use), layout(layoutKey), ordinal(sequence),
@@ -214,7 +219,7 @@ namespace Physara::Renderer::Detail
     /// @brief 包读取失败保留包角色及首个编译/反射诊断, 不交付半套 Shader.
     static Shader::RhiProgram LoadProgram(RHI::Device &device, Shader::ProductShader role,
         const std::filesystem::path &file, const Shader::ProductPackages &packages, std::string_view abi,
-        std::optional<Shader::ExpectedActiveResources> expectedActive = {})
+        std::span<const Shader::ExpectedActiveResources> expectedActive = {})
     {
         auto program = LoadProductProgram(device, role, file, packages, abi, expectedActive);
         if (const auto *error = std::get_if<Shader::Failure>(&program))
@@ -227,20 +232,44 @@ namespace Physara::Renderer::Detail
         return std::get<Shader::RhiProgram>(std::move(program));
     }
 
-    /// @brief 共用 StaticForward ABI 的三种颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
-    static Shader::ExpectedActiveResources LightingResources(LightingProgram kind) noexcept
+    static constexpr std::array<std::string_view, 3> CoverageNames{
+        "materialRows", "baseColorImage", "baseColorSampler"};
+    static constexpr Shader::ExpectedActiveResources CoverageResources{Shader::Stage::Fragment, 2, CoverageNames};
+
+    std::span<const Shader::ExpectedActiveResources> CascadePreviewResources() noexcept
+    {
+        static constexpr std::array<std::string_view, 6> Cascades{
+            "cascades", "cascadeMatrices", "cascadeImage0", "cascadeImage1", "cascadeImage2", "cascadeImage3"};
+        static constexpr std::array resources{
+            CoverageResources, Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Cascades}};
+        return resources;
+    }
+
+    /// @brief 共用 StaticForward ABI 的颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
+    static std::span<const Shader::ExpectedActiveResources> LightingResources(LightingProgram kind) noexcept
     {
         static constexpr std::array<std::string_view, 1> Legacy{"lightRows"};
         static constexpr std::array<std::string_view, 3> Physical{"lightRows", "dfgImage", "environmentSampler"};
         static constexpr std::array<std::string_view, 5> Ibl{
             "lightRows", "dfgImage", "environmentSampler", "environment", "reflectionImage"};
-        const std::array<std::span<const std::string_view>, 3> names{Legacy, Physical, Ibl};
-        return {Shader::Stage::Fragment, 3, names[std::size_t(kind)]};
+        static constexpr std::array groups{
+            Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Legacy},
+            Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Physical},
+            Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Ibl}};
+        return kind == LightingProgram::CascadePreview ? CascadePreviewResources() :
+            std::span(&groups[std::size_t(kind)], 1);
     }
 
     using Shader::ProductShader;
     static constexpr std::array LightingRoles{
-        ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl};
+        ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl,
+        ProductShader::StaticCascadePreview};
+
+    /// @brief 两种只写深度的程序使用首张几何表的各自阶段槽.
+    static bool IsDepthRole(ProductShader role) noexcept
+    {
+        return role == ProductShader::StaticDepth || role == ProductShader::StaticShadowDepth;
+    }
 
     // 颜色程序, 片元活动集和 set 3 布局共用同一个光照索引.
     static std::size_t LightingIndex(ProductShader role) noexcept
@@ -272,7 +301,8 @@ namespace Physara::Renderer::Detail
             return;
         }
         const auto &paths = owner.packagePaths;
-        const std::array<const std::filesystem::path *, 3> inputs{&paths.color, &paths.physical, &paths.ibl};
+        const std::array<const std::filesystem::path *, ForwardColorPrograms> inputs{
+            &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview};
         auto program = LoadProgram(owner.device, LightingRoles[index], *inputs[index], packages,
             StaticAbi::AbiHash, LightingResources(kind));
         auto &layout = owner.lightLayouts[index];
@@ -282,6 +312,14 @@ namespace Physara::Renderer::Detail
             auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
             auto &desc = layoutsForProgram.back();
             std::erase_if(desc.bindings, [kind](const auto &item) {
+                const bool cascadeResource =
+                    (item.type == RHI::ResourceType::ConstantBuffer &&
+                     (item.slot == CascadeConstantsSlot || item.slot == CascadeMatricesSlot)) ||
+                    (item.type == RHI::ResourceType::Texture_SRV && item.slot >= FirstCascadeImageSlot);
+                if (kind == LightingProgram::CascadePreview || cascadeResource)
+                {
+                    return kind != LightingProgram::CascadePreview || !cascadeResource;
+                }
                 if (kind == LightingProgram::Legacy)
                 {
                     return item.type != RHI::ResourceType::StructuredBuffer_SRV;
@@ -351,14 +389,23 @@ namespace Physara::Renderer::Detail
                                           LightingProgram kind) noexcept
     {
         assert(layout < 8);
-        return {phase == SurfacePhase::Depth ? ProductShader::StaticDepth : LightingRoles[std::size_t(kind)],
-            std::size_t(phase) * 32 + (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u) + layout};
+        auto role = LightingRoles[std::size_t(kind)];
+        if (phase == SurfacePhase::Depth)
+        {
+            role = ProductShader::StaticDepth;
+        }
+        else if (phase == SurfacePhase::ShadowDepth)
+        {
+            role = ProductShader::StaticShadowDepth;
+        }
+        const auto raster = (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u);
+        return {role, std::size_t(phase) * GeometryPhaseSlots + raster + layout};
     }
 
-    // 深度预通过在第一张表占专属阶段的 32 个槽. 各光照角色的两个颜色阶段占其它区间.
+    // 两个深度角色各占首张表的 32 个槽. 颜色角色用自己的表号和表面阶段定位槽.
     static std::size_t GeometrySlot(ShaderPipelineRequest key) noexcept
     {
-        return (key.role == ProductShader::StaticDepth ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
+        return (IsDepthRole(key.role) ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
     }
 
     RHI::GraphicsPipelineHandle ForwardPrograms::FindPipeline(ShaderPipelineRequest key) const noexcept
@@ -372,6 +419,7 @@ namespace Physara::Renderer::Detail
         {
         case ProductShader::ForwardSky: return skyContent;
         case ProductShader::StaticDepth: return depth.contentHash;
+        case ProductShader::StaticShadowDepth: return shadowDepth.contentHash;
         default: return colors[LightingIndex(role)].contentHash;
         }
     }
@@ -391,12 +439,15 @@ namespace Physara::Renderer::Detail
             skyPipeline = std::move(existing);
             return true;
         }
-        if (key.role == ProductShader::StaticDepth)
+        if (IsDepthRole(key.role))
         {
-            if (!depth.vertex)
+            const bool shadow = key.role == ProductShader::StaticShadowDepth;
+            auto &program = shadow ? shadowDepth : depth;
+            if (!program.vertex)
             {
-                auto shaders = source.depth;
-                depth = std::move(shaders);
+                // 包摘要的复制可能失败. 整个程序集构造成功后才提交目标槽.
+                auto shaders = shadow ? source.shadowDepth : source.depth;
+                program = std::move(shaders);
             }
         }
         else
@@ -419,18 +470,24 @@ namespace Physara::Renderer::Detail
             skyPipeline = nullptr;
             skyContent.clear();
         }
-        else if (role == ProductShader::StaticDepth)
+        else if (IsDepthRole(role))
         {
-            depth = {};
-            std::fill_n(pipelines.begin() + std::size_t(SurfacePhase::Depth) * 32, 32, RHI::GraphicsPipelineHandle{});
+            const bool shadow = role == ProductShader::StaticShadowDepth;
+            auto &program = shadow ? shadowDepth : depth;
+            program = {};
+            const auto phase = shadow ? SurfacePhase::ShadowDepth : SurfacePhase::Depth;
+            std::fill_n(pipelines.begin() + std::size_t(phase) * GeometryPhaseSlots, GeometryPhaseSlots,
+                        RHI::GraphicsPipelineHandle{});
         }
         else
         {
             const auto mode = LightingIndex(role);
             colors[mode] = {};
             const auto begin = pipelines.begin() + mode * GeometryPipelineSlots;
-            std::fill_n(begin + std::size_t(SurfacePhase::Combined) * 32, 32, RHI::GraphicsPipelineHandle{});
-            std::fill_n(begin + std::size_t(SurfacePhase::ReadOnlyDepth) * 32, 32, RHI::GraphicsPipelineHandle{});
+            std::fill_n(begin + std::size_t(SurfacePhase::Combined) * GeometryPhaseSlots, GeometryPhaseSlots,
+                        RHI::GraphicsPipelineHandle{});
+            std::fill_n(begin + std::size_t(SurfacePhase::ReadOnlyDepth) * GeometryPhaseSlots, GeometryPhaseSlots,
+                        RHI::GraphicsPipelineHandle{});
         }
     }
 
@@ -449,27 +506,28 @@ namespace Physara::Renderer::Detail
         {
             return;
         }
-        const auto phase = static_cast<SurfacePhase>(key.variant / 32);
+        const auto phase = static_cast<SurfacePhase>(key.variant / GeometryPhaseSlots);
         const auto layout = static_cast<std::uint8_t>(key.variant % 8);
         const bool mirrored = (key.variant & 8) != 0;
         const bool doubleSided = (key.variant & 16) != 0;
-        const auto mode = key.role == ProductShader::StaticDepth ? 0 : LightingIndex(key.role);
-        if (phase == SurfacePhase::Depth)
+        const bool depthOnly = IsDepthRole(key.role);
+        const bool shadow = phase == SurfacePhase::ShadowDepth;
+        const auto mode = depthOnly ? 0 : LightingIndex(key.role);
+        auto &depthShaders = shadow ? shadowDepth : depth;
+        if (depthOnly)
         {
-            if (!depth.vertex)
+            if (!depthShaders.vertex)
             {
                 // 深度图只为覆盖配方授权基色槽. 同 ABI 的包也须匹配片元实际使用的材质资源.
-                static constexpr std::array<std::string_view, 3> Coverage{
-                    "materialRows", "baseColorImage", "baseColorSampler"};
-                depth = LoadProgram(device, key.role, paths.depth, packages, StaticAbi::AbiHash,
-                                   Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, Coverage});
+                depthShaders = LoadProgram(device, key.role, shadow ? paths.shadowDepth : paths.depth, packages,
+                    StaticAbi::AbiHash, std::span(&CoverageResources, 1));
             }
         }
         else
         {
             PrepareLighting(owner, static_cast<LightingProgram>(mode), packages);
         }
-        const auto &shaders = phase == SurfacePhase::Depth ? depth : colors[mode];
+        const auto &shaders = depthOnly ? depthShaders : colors[mode];
         // 顶点存储仅依属性位决定, 同一格式可跨深度和颜色角色复用. 实际 Shader 输入由 Pipeline 核对.
         if (!inputLayouts[layout])
         {
@@ -497,7 +555,7 @@ namespace Physara::Renderer::Detail
         {
             desc.AddBindingLayout(binding.Get());
         }
-        if (phase != SurfacePhase::Depth)
+        if (!depthOnly)
         {
             desc.AddBindingLayout(owner.lightLayouts[mode].Get());
         }
@@ -505,11 +563,18 @@ namespace Physara::Renderer::Detail
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
             .SetCullMode(doubleSided ? RHI::RasterCullMode::None : RHI::RasterCullMode::Back);
         const bool equal = phase == SurfacePhase::ReadOnlyDepth;
+        const auto compare = shadow ? ShadowDepthConvention::Compare :
+            (equal ? RHI::ComparisonFunc::Equal : RHI::ComparisonFunc::GreaterOrEqual);
         desc.renderState.depthStencilState.SetDepthTestEnable(true).SetDepthWriteEnable(!equal)
-            .SetDepthFunc(equal ? RHI::ComparisonFunc::Equal : RHI::ComparisonFunc::GreaterOrEqual).DisableStencil();
+            .SetDepthFunc(compare).DisableStencil();
+        if (shadow)
+        {
+            // 常量项由每级顶点投影加入. 这里的斜率因子作用于光栅深度, 两项都沿常规深度正向偏移.
+            desc.renderState.rasterState.SetSlopeScaleDepthBias(1.0f);
+        }
         RHI::FramebufferInfo target;
-        target.SetDepthFormat(DepthFormat);
-        if (phase != SurfacePhase::Depth)
+        target.SetDepthFormat(shadow ? ShadowDepthFormat : DepthFormat);
+        if (!depthOnly)
         {
             target.AddColorFormat(WorkingFormat);
         }
@@ -606,19 +671,26 @@ namespace Physara::Renderer::Detail
         geometryContent = scene.contentRevision;
     }
 
-    void ForwardDevice::BeginView()
+    void ForwardDevice::BeginView(std::size_t index)
     {
         // frameBegin 对两路相同. 每路另取一个 stamp, 让共享资源在各自的工作集预算中各计一次.
         if (!Core::AdvanceGeneration(stamp))
         {
             Reject(ViewSettingReason::SceneResidencyLimit, "Forward view preparation identity exhausted");
         }
-        preparedBytes = preparedEntries = 0;
+        viewBudgets[index] = {stamp};
+        ResumeView(index);
+    }
+
+    void ForwardDevice::ResumeView(std::size_t index) noexcept
+    {
+        assert(viewBudgets[index].stamp >= frameBegin);
+        preparingView = index;
     }
 
     bool ForwardDevice::Current(const Allocation &entry) const noexcept
     {
-        return entry.accepted || entry.lastUse >= frameBegin;
+        return entry.accepted || entry.UsedSince(frameBegin);
     }
 
     /// @brief 新分配和缓存命中共用同一 View 工作集预算.
@@ -638,12 +710,14 @@ namespace Physara::Renderer::Detail
 
     void ForwardDevice::Use(Allocation &entry)
     {
-        if (entry.lastUse != stamp)
+        auto &budget = viewBudgets[preparingView];
+        auto &lastUse = entry.lastUse[preparingView];
+        if (lastUse != budget.stamp)
         {
-            CheckViewCapacity(entry.bytes, preparedBytes, preparedEntries);
-            entry.lastUse = stamp;
-            preparedBytes += entry.bytes;
-            ++preparedEntries;
+            CheckViewCapacity(entry.bytes, budget.bytes, budget.entries);
+            lastUse = budget.stamp;
+            budget.bytes += entry.bytes;
+            ++budget.entries;
         }
     }
 
@@ -651,7 +725,7 @@ namespace Physara::Renderer::Detail
     {
         const auto idle = [this](const auto &entry)
         {
-            return entry.use_count() == 1 && entry->lastUse < frameBegin;
+            return entry.use_count() == 1 && !entry->UsedSince(frameBegin);
         };
         // 材质拥有纹理依赖, 先释放它才能识别真正空闲的图像. 留在槽中的代始终占用额度.
         std::erase_if(materials, [&](const auto &pair) { return idle(pair.second.resident); });
@@ -667,7 +741,8 @@ namespace Physara::Renderer::Detail
     void ForwardDevice::Reserve(std::size_t bytes, bool paged)
     {
         // 单 View 超限无法靠等待消除. 仅全缓存被其它引用占用时报告 Pending.
-        CheckViewCapacity(bytes, preparedBytes, preparedEntries);
+        const auto &budget = viewBudgets[preparingView];
+        CheckViewCapacity(bytes, budget.bytes, budget.entries);
         const auto storageBytes = paged ? 0 : bytes;
         const auto full = [&]
         {
@@ -765,17 +840,21 @@ namespace Physara::Renderer::Detail
         return buffer;
     }
 
-    std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes, std::size_t set)
+    std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
+                                                   std::optional<std::size_t> set)
     {
         // 先取得逻辑容量再创建物理对象, 构造中途失败由局部 shared_ptr 归还已记账容量.
         device.Reserve(bytes);
         auto row = std::make_shared<ConstantRow>(device.capacity, bytes);
         row->buffer = AllocateBuffer(device.device, GraphUsage::ConstantBuffer, bytes);
-        const auto desc = RHI::BindingSetDesc().AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->buffer.Get()));
-        row->binding = device.device.CreateBindingSet(desc, device.activeShaders->programs.layouts[set].Get());
-        if (!row->binding)
+        if (set)
         {
-            Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward constant binding");
+            const auto desc = RHI::BindingSetDesc().AddItem(RHI::BindingSetItem::ConstantBuffer(0, row->buffer.Get()));
+            row->binding = device.device.CreateBindingSet(desc, device.activeShaders->programs.layouts[*set].Get());
+            if (!row->binding)
+            {
+                Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward constant binding");
+            }
         }
         device.Use(*row);
         return row;

@@ -15,8 +15,8 @@
 #include <Asset/StaticTangents.hpp>
 
 /// @file
-/// @brief 从 PreparedView 解析静态表面, 排序后构造间接批次及拥有型待写字节.
-/// 收齐可绘材质后选择环境角色和颜色管线, 灯表计数, 观察量及曝光取自同轮 View.
+/// @brief 从同一 SceneFrame 为主可见表面和各级投射物准备静态行, 实例块及间接参数.
+/// 每级分别组织批次. 材质和几何可以跨级共享, 同槽各路的待写字节由一个上传批持有.
 
 namespace Physara::Renderer::Detail
 {
@@ -241,6 +241,11 @@ namespace Physara::Renderer::Detail
             result.attributes |= VertexTangent;
             result.normalUv = static_cast<std::int8_t>(normal->slot.texCoord);
         }
+        const auto &baseColor = material.textures.front();
+        if (material.values.alphaMode == Asset::ModelAlpha::Mask && baseColor)
+        {
+            result.shadowAttributes = baseColor->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
+        }
         return result;
     }
 
@@ -277,7 +282,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 准备新覆盖代或补齐缓存行未获接受的纹理. 相同字段及绑定沿用原存储.
-    static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, ForwardFrameData &frame,
+    static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, StaticDrawWork &frame,
         const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
         const MaterialGeometry &geometry, const MaterialRow *cachedRow)
     {
@@ -321,7 +326,6 @@ namespace Physara::Renderer::Detail
         row->samplers = std::move(samplers);
         device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
                              rowBytes, rowBytes, StaticAbi::MaterialRowsCapacity);
-        row->index = static_cast<std::size_t>(row->storage.range.byteOffset / rowBytes);
         PrepareMaterialBinding(device, *row);
         device.Use(*row);
         uploads.Add(row, row->storage, std::as_bytes(std::span(&values, 1)));
@@ -429,7 +433,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 在有界信息中记录跳过项的源身份. 混合 profile 仍可绘制已支持部分.
-    static void DescribeSkipped(ForwardFrameData &frame, const Asset::ModelRecord &model, const PrimitiveRef &ref,
+    static void DescribeSkipped(StaticDrawWork &frame, const Asset::ModelRecord &model, const PrimitiveRef &ref,
                                 std::string_view reason)
     {
         if (!frame.degradation)
@@ -465,8 +469,11 @@ namespace Physara::Renderer::Detail
         }
         value.mode = static_cast<std::uint32_t>(mode);
         value.preExposure = view.camera->exposure.preExposure;
-        value.directionalCount = frame.activeLights->directionalCount;
-        value.localCount = frame.activeLights->localCount;
+        if (frame.activeLights)
+        {
+            value.directionalCount = frame.activeLights->directionalCount;
+            value.localCount = frame.activeLights->localCount;
+        }
         if (usesLighting)
         {
             const std::span basis(view.camera->worldFromView);
@@ -518,9 +525,10 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 准备当前可见 Primitive 的几何和材质行. 记录光栅键, 颜色管线在全部可绘材质确定后选择.
-    static void PrepareDraw(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-        std::uint32_t index, std::map<MaterialRow *, std::size_t> &rows)
+    /// @brief 将主可见集或级联 caster 集中的一个 Primitive 加入调用方的批次输入.
+    /// coverageOnly 只要求基色覆盖就绪. Shader 句柄由全部 View 完成规划后的选代阶段填写.
+    static void PrepareDraw(ForwardDevice &device, StaticDrawWork &frame, const PreparedView &view,
+        std::uint32_t index, std::map<MaterialRow *, std::size_t> &rows, SurfacePhase phase, bool coverageOnly)
     {
         const auto &ref = view.scene.primitives[index];
         const auto &model = *view.scene.models[ref.model];
@@ -528,10 +536,16 @@ namespace Physara::Renderer::Detail
         const auto &object = view.scene.objects[ref.object];
         const auto version = Version(model.asset, model.revision);
         const auto entity = ObjectIdentity(view.scene.scene, object.entity);
-        const MaterialKey key{version, ref.material, ref.materialOverride ? entity : ObjectKey{},
-                              ref.materialOverride ? ref.sourceSlot : 0};
+        MaterialKey key{version, ref.material, ref.materialOverride ? entity : ObjectKey{},
+                        ref.materialOverride ? ref.sourceSlot : 0, false};
         ++device.materialRequests;
         const auto *cached = FindMaterial(device, key, ref.materialRevision);
+        if (coverageOnly && (!cached || !frame.uploads.HasMaterialTexture(*cached->resident->textures.front())))
+        {
+            // 已有完整材质时复用其覆盖. 仅为阴影准备的材质另按实际使用的基色资源记账.
+            std::get<4>(key) = true;
+            cached = FindMaterial(device, key, ref.materialRevision);
+        }
         std::shared_ptr<MaterialRow> row;
         std::optional<Scene::EffectiveMaterial> sourceMaterial;
         const Scene::EffectiveMaterial *material = nullptr;
@@ -542,7 +556,8 @@ namespace Physara::Renderer::Detail
             row = cached->resident;
         }
         // 深度图可能只确认材质行和基色纹理. 其余槽须各自有已接受内容或本批生产者, 才能直接使用原集合.
-        const bool texturesReady = row && std::ranges::all_of(row->textures, [&](const auto &texture)
+        const auto sampled = coverageOnly ? CoverageTextureCount : Scene::MaterialSlotCount;
+        const bool texturesReady = row && std::ranges::all_of(std::span(row->textures).first(sampled), [&](const auto &texture)
         {
             return frame.uploads.HasMaterialTexture(*texture);
         });
@@ -560,6 +575,20 @@ namespace Physara::Renderer::Detail
             {
                 DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
                 return;
+            }
+            if (std::get<4>(key))
+            {
+                if (ref.materialOverride)
+                {
+                    sourceMaterial = *material;
+                }
+                auto &slots = sourceMaterial->textures;
+                const auto firstUnused = sourceMaterial->values.alphaMode == Asset::ModelAlpha::Mask ? 1u : 0u;
+                for (std::size_t slot = firstUnused; slot < slots.size(); ++slot)
+                {
+                    slots[slot].reset();
+                }
+                material = &*sourceMaterial;
             }
             if (!row)
             {
@@ -579,13 +608,19 @@ namespace Physara::Renderer::Detail
         if (const auto *error = std::get_if<std::string_view>(&objectCandidate))
         {
             DescribeSkipped(frame, model, ref, *error);
+            if (phase == SurfacePhase::ShadowDepth)
+            {
+                throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
+            }
             return;
         }
-        const auto attributes = requirements.attributes;
+        // 深度角色的顶点布局只依赖覆盖. 命中完整材质或重建覆盖行得到相同的原生键.
+        const auto attributes = phase == SurfacePhase::ShadowDepth ? requirements.shadowAttributes :
+                                                                    requirements.attributes;
         std::int8_t tangentUv = -1;
         // 原切线只有在记录的 UV 与有效 normal 槽匹配时复用, 替换框架另建几何而不修改资产.
         const auto &sourceNormal = model.materials[ref.material].slots[NormalSlot];
-        if (requirements.normalUv >= 0 &&
+        if ((attributes & VertexTangent) != 0 &&
             (!source.hasTangent || !sourceNormal || sourceNormal->texCoord != std::uint32_t(requirements.normalUv)))
         {
             tangentUv = requirements.normalUv;
@@ -595,6 +630,10 @@ namespace Physara::Renderer::Detail
         if (const auto *error = std::get_if<Core::BoundedText>(&geometry))
         {
             DescribeSkipped(frame, model, ref, error->View());
+            if (phase == SurfacePhase::ShadowDepth)
+            {
+                throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
+            }
             return;
         }
         std::shared_ptr<ObjectStorage> instance;
@@ -622,7 +661,7 @@ namespace Physara::Renderer::Detail
         {
             // 快速命中跳过了逐槽准备. 本 View 的驻留账单仍须包含绑定集合引用的每个纹理代.
             ++device.materialHits;
-            for (const auto &texture : row->textures)
+            for (const auto &texture : std::span(row->textures).first(sampled))
             {
                 device.Use(*texture);
             }
@@ -637,7 +676,6 @@ namespace Physara::Renderer::Detail
         {
             frame.materialRows.push_back(std::move(row));
         }
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         const bool mirror = object.orientation < 0;
         const bool doubleSided = requirements.doubleSided;
         const auto &matrix = view.camera->viewFromWorld;
@@ -658,7 +696,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 给实际采样集合编号用于排序. 相同冻结输入以首次可见顺序编号, 资源地址只参与相等查找.
-    static void SortDraws(ForwardFrameData &frame)
+    static void SortDraws(StaticDrawWork &frame)
     {
         std::map<SamplingKey, std::size_t> groups;
         std::vector<std::size_t> samplingOrder;
@@ -680,7 +718,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 比较同一 View 和实例块内仍可能变化的状态. 光照角色和前置深度由本路统一选择,
     /// 固定状态槽同时确定颜色和深度的布局及光栅组合. 材质集合含表页和采样组合.
-    static bool SameBatch(const ForwardFrameData &frame, const DrawRecord &a, const DrawRecord &b) noexcept
+    static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b) noexcept
     {
         return a.pipelineKey == b.pipelineKey &&
                a.geometry->vertices.page == b.geometry->vertices.page &&
@@ -709,7 +747,7 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 在当前安全 View 槽复用等形缓冲. 已接受且字节相同的版本可直接导入后继图.
-    static void PrepareDrawBuffer(ForwardDevice &device, ForwardFrameData &frame,
+    static void PrepareDrawBuffer(ForwardDevice &device, StaticDrawWork &frame,
         std::shared_ptr<DrawBuffer> &storage, GraphUsage usage, std::span<const std::byte> values,
         std::uint32_t stride = 0)
     {
@@ -735,7 +773,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
     /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
-    static void PackBatches(ForwardDevice &device, ForwardFrameData &frame)
+    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame)
     {
         constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
         using Argument = RHI::DrawIndexedIndirectArguments;
@@ -753,7 +791,8 @@ namespace Physara::Renderer::Detail
             {
                 const auto &draw = draws[i];
                 const auto objectRow = draw.object->storage.range.byteOffset / sizeof(StaticAbi::ForwardObject);
-                const auto materialRow = frame.materialRows[draw.material]->index;
+                const auto materialRow = frame.materialRows[draw.material]->storage.range.byteOffset /
+                    sizeof(StaticAbi::ForwardMaterial);
                 assert(objectRow < StaticAbi::ObjectRowsCapacity && materialRow < StaticAbi::MaterialRowsCapacity);
                 instances[i] = {static_cast<std::uint32_t>(objectRow), static_cast<std::uint32_t>(materialRow)};
             }
@@ -815,13 +854,225 @@ namespace Physara::Renderer::Detail
         return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program);
     }
 
-    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode)
+    /// @brief 同次 CPU 投影编码为相对原点的列主序 clip 矩阵. caster 常量偏移单独追加.
+    static glm::dmat4 CascadeClip(const DirectionalShadowProjection &projection) noexcept
+    {
+        glm::dmat4 clip(1);
+        const std::array scale{1 / projection.halfExtent, 1 / projection.halfExtent, 1 / projection.depthRange};
+        for (std::uint32_t column = 0; column < 3; ++column)
+        {
+            for (std::uint32_t row = 0; row < 3; ++row)
+            {
+                clip[column][row] = projection.axes[row][column] * scale[row];
+            }
+        }
+        return clip;
+    }
+
+    /// @brief 比较生成矩阵的有效列, 忽略对齐填充.
+    template <typename Columns>
+    static bool SameMatrix(const Columns &left, const Columns &right) noexcept
+    {
+        return std::ranges::equal(left, right, [](const auto &a, const auto &b) { return a.value == b.value; });
+    }
+
+    /// @brief 在安全槽内复用阴影 View 常量, 修改仅登记本轮的图上传.
+    static void PrepareCasterConstants(ForwardDevice &device, StaticDrawWork &work, const auto &value)
+    {
+        if (!work.view || work.view->capacity != device.capacity)
+        {
+            work.view = CreateConstantRow(device, sizeof(value), 0);
+            work.viewValues.reset();
+        }
+        device.Use(*work.view);
+        const auto &previous = work.viewValues;
+        if (!work.view->accepted || !previous || value.shadowOriginHigh != previous->shadowOriginHigh ||
+            value.shadowOriginLow != previous->shadowOriginLow ||
+            !SameMatrix(value.shadowClipFromOrigin, previous->shadowClipFromOrigin))
+        {
+            work.view->accepted = false;
+            work.uploads.Add(work.view, work.view->buffer, std::as_bytes(std::span(&value, 1)),
+                             GraphUploadSource::ForwardView);
+            work.viewValues = value;
+        }
+    }
+
+    /// @brief 比较实际消费的诊断常量, 与曝光、绘制 jitter 和结构体填充独立.
+    static bool SameQuery(const StaticAbi::ForwardCascades &a, const StaticAbi::ForwardCascades &b) noexcept
+    {
+        if (a.count != b.count || a.edge != b.edge || a.nearDepth != b.nearDepth || a.farDepths != b.farDepths ||
+            a.transitionStarts != b.transitionStarts || a.transitionEnds != b.transitionEnds ||
+            a.cameraOriginHigh != b.cameraOriginHigh || a.cameraOriginLow != b.cameraOriginLow ||
+            a.cameraForward != b.cameraForward)
+        {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.count; ++i)
+        {
+            if (a.originHigh[i].value != b.originHigh[i].value || a.originLow[i].value != b.originLow[i].value)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// @brief 按每块生成 ABI 复用常量存储. 实际 Pass 的图准备阶段建立 PerPass 集合.
+    template <typename Block, typename Equal>
+    static void PrepareQueryBlock(ForwardDevice &device, UploadBatch &uploads, std::shared_ptr<ConstantRow> &storage,
+                                  std::optional<Block> &previous, const Block &values, Equal equal)
+    {
+        static_assert(sizeof(Block) <= RHI::ConstantBufferOffsetSizeAlignment);
+        if (!storage || storage->capacity != device.capacity)
+        {
+            storage = CreateConstantRow(device, sizeof(Block), std::nullopt);
+        }
+        device.Use(*storage);
+        if (!storage->accepted || !previous || !equal(*previous, values))
+        {
+            storage->accepted = false;
+            uploads.Add(storage, storage->buffer, std::as_bytes(std::span(&values, 1)), GraphUploadSource::ForwardView);
+            previous = values;
+        }
+    }
+
+    static constexpr auto ShadowVariantBase = std::size_t(SurfacePhase::ShadowDepth) * GeometryPhaseSlots;
+
+    /// @brief 为需要重绘的组准备逐层 caster. 与主表面共用驻留、上传和实际编码统计.
+    /// 首个包含跳过项的层提供本组摘要. 组被接受后, 后继 View 帧可在只读导入时沿用这份说明.
+    static void PrepareDirectionalCasters(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+                                          const DirectionalShadowPlan &plan)
+    {
+        auto &shadow = *frame.directional;
+        auto &depth = shadow.depth;
+        depth.variants.reset();
+        depth.degradation.reset();
+        for (std::size_t i = 0; i < plan.cascades.size(); ++i)
+        {
+            const auto &cascade = plan.cascades[i];
+            auto &level = shadow.levels[i];
+            std::map<MaterialRow *, std::size_t> rows;
+            for (const auto index : cascade.casters)
+            {
+                PrepareDraw(device, level, view, index, rows, SurfacePhase::ShadowDepth, true);
+            }
+            if (level.degradation && !depth.degradation)
+            {
+                depth.degradation = level.degradation;
+            }
+            if (level.draws.empty())
+            {
+                continue;
+            }
+            StaticAbi::ForwardView raster{};
+            std::ranges::copy_n(shadow.values->originHigh[i].value.begin(), 3, raster.shadowOriginHigh.begin());
+            std::ranges::copy_n(shadow.values->originLow[i].value.begin(), 3, raster.shadowOriginLow.begin());
+            const auto &columns = shadow.matrixValues->clipFromOrigin[i].value;
+            for (std::size_t column = 0; column < columns.size(); ++column)
+            {
+                raster.shadowClipFromOrigin[column].value = columns[column].value;
+            }
+            const auto &projection = cascade.projection;
+            const double texel = projection.halfExtent * (2.0 / depth.edge);
+            raster.shadowClipFromOrigin[3].value[2] = static_cast<float>(
+                texel * DirectionalShadowProjection::CasterBiasTexels / projection.depthRange);
+            PrepareCasterConstants(device, level, raster);
+            SortDraws(level);
+            PackBatches(device, level);
+            for (const auto &batch : level.batches)
+            {
+                const auto key = DrawShader(frame, level.draws[batch.firstDraw], SurfacePhase::ShadowDepth);
+                depth.variants.set(key.variant - ShadowVariantBase);
+            }
+        }
+    }
+
+    /// @brief 查询常量取自当前计划. 已接受组携带上次实际绘制的深度变体, 供选代前登记需求.
+    /// 首次生产在本阶段准备 caster. 复用候选留到 FinishView 核对所选深度程序的摘要.
+    static void PlanDirectionalDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+                                     const ShadowLightPlan &light)
+    {
+        if (!frame.directional)
+        {
+            frame.directional.emplace(frame.uploads, frame.encodings);
+        }
+        auto &shadow = *frame.directional;
+        const auto &plan = std::get<DirectionalShadowPlan>(light.views);
+        auto &depth = shadow.depth;
+        const auto &retained = view.acceptedDirectionalDepth;
+        if (retained && retained->device == &device.device)
+        {
+            // View 已按场景、层布局和逐级内容代核对. 着色器选代后才确认是否需要重绘.
+            depth = *retained;
+        }
+        else
+        {
+            depth = {.scene = view.scene.scene, .edge = view.shadows->edge, .count = light.regionCount,
+                     .device = &device.device};
+            std::ranges::copy(light.Regions(), depth.regions.begin());
+        }
+        StaticAbi::ForwardCascades query{};
+        StaticAbi::ForwardCascadeMatrices matrices{};
+        const std::span camera(view.camera->worldFromView);
+        if (!StoreGpuVector(query.cameraOriginHigh, camera.subspan<12, 3>()))
+        {
+            Reject(ViewSettingReason::InvalidProjection, "Cascade preview camera origin exceeds the GPU float range");
+        }
+        query.cameraOriginLow = GpuPositionLow(camera.subspan<12, 3>(), query.cameraOriginHigh);
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            query.cameraForward[axis] = static_cast<float>(-camera[8 + axis]);
+        }
+        query.nearDepth = plan.nearDepth;
+        query.edge = depth.edge;
+        query.count = depth.count;
+        for (std::size_t i = 0; i < plan.cascades.size(); ++i)
+        {
+            const auto &cascade = plan.cascades[i];
+            const auto &projection = cascade.projection;
+            std::array<float, 3> high;
+            if (!StoreGpuVector(high, projection.origin) ||
+                !StoreMatrix(matrices.clipFromOrigin[i].value, CascadeClip(projection)))
+            {
+                Reject(ViewSettingReason::InvalidProjection, "Directional shadow projection exceeds the GPU float range");
+            }
+            std::ranges::copy(high, query.originHigh[i].value.begin());
+            std::ranges::copy(GpuPositionLow(projection.origin, high), query.originLow[i].value.begin());
+            query.farDepths[i] = cascade.farDepth;
+            query.transitionStarts[i] = cascade.transition[0];
+            query.transitionEnds[i] = cascade.transition[1];
+        }
+        PrepareQueryBlock(device, frame.uploads, shadow.constants, shadow.values, query, SameQuery);
+        PrepareQueryBlock(device, frame.uploads, shadow.matrices, shadow.matrixValues, matrices,
+            [](const auto &a, const auto &b)
+            {
+                return std::ranges::equal(a.clipFromOrigin, b.clipFromOrigin,
+                    [](const auto &left, const auto &right) { return SameMatrix(left.value, right.value); });
+            });
+        if (!depth.retained)
+        {
+            PrepareDirectionalCasters(device, frame, view, plan);
+        }
+        static_assert(decltype(depth.variants){}.size() == GeometryPhaseSlots);
+        for (std::size_t slot = 0; slot < depth.variants.size(); ++slot)
+        {
+            if (depth.variants[slot])
+            {
+                device.shaderDemand.Add({Shader::ProductShader::StaticShadowDepth, ShadowVariantBase + slot});
+            }
+        }
+        frame.source.directionalCascades = query.count;
+    }
+
+    void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode,
+                   const ShadowLightPlan *directional)
     {
         // 先收集几何和材质写入, 据实际可绘项选择后续灯表和 View 常量. 各路准备结束后统一封存.
         std::map<MaterialRow *, std::size_t> rows;
+        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         for (const auto index : view.primitives)
         {
-            PrepareDraw(device, frame, view, index, rows);
+            PrepareDraw(device, frame, view, index, rows, phase, directional != nullptr);
         }
         if (frame.draws.empty() && frame.degradation)
         {
@@ -829,13 +1080,25 @@ namespace Physara::Renderer::Detail
         }
         const bool litDraws = std::ranges::any_of(frame.materialRows,
             [](const auto &row) { return row->values.unlit == 0; });
-        PrepareEnvironment(device, frame, view, mode, litDraws);
+        if (directional)
+        {
+            frame.environment.program = LightingProgram::CascadePreview;
+            PlanDirectionalDraws(device, frame, view, *directional);
+        }
+        else
+        {
+            frame.directional.reset();
+            PrepareEnvironment(device, frame, view, mode, litDraws);
+        }
         if (!frame.draws.empty())
         {
             const bool usesLighting = litDraws &&
                 (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
-            PrepareLightTable(device, frame, view, usesLighting);
-            PrepareViewRow(device, frame, view, mode, usesLighting);
+            if (!directional)
+            {
+                PrepareLightTable(device, frame, view, usesLighting);
+            }
+            PrepareViewRow(device, frame, view, mode, !directional && usesLighting);
             // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
             SortDraws(frame);
             PackBatches(device, frame);
@@ -844,7 +1107,6 @@ namespace Physara::Renderer::Detail
         {
             device.shaderDemand.Add({Shader::ProductShader::ForwardSky, 0});
         }
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         for (const auto &batch : frame.batches)
         {
             const auto &draw = frame.draws[batch.firstDraw];
@@ -856,7 +1118,40 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame)
+    /// @brief 从冻结代确认只读导入. 程序变化时才为原计划补办重绘, 沿用该 View 的准备预算.
+    static void ApplyDirectionalShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
+    {
+        auto &shadow = *frame.directional;
+        auto &depth = shadow.depth;
+        // 仅清除的层组与深度程序独立. 含绘制的组用该角色的包摘要识别会改变阴影写入的换代.
+        const auto program = depth.variants.any() ?
+            device.activeShaders->programs.ProgramContent(Shader::ProductShader::StaticShadowDepth) : std::string_view{};
+        if (depth.retained)
+        {
+            if (depth.program.View() == program)
+            {
+                return;
+            }
+            depth.retained = {};
+            const auto &plan = std::get<DirectionalShadowPlan>(view.shadows->Directional()->views);
+            PrepareDirectionalCasters(device, frame, view, plan);
+        }
+        for (auto &level : std::span(shadow.levels).first(depth.count))
+        {
+            for (const auto &batch : level.batches)
+            {
+                auto &draw = level.draws[batch.firstDraw];
+                draw.depthPipeline = device.RequestShader(DrawShader(frame, draw, SurfacePhase::ShadowDepth));
+                if (!draw.depthPipeline)
+                {
+                    Reject(ViewSettingReason::ShaderPending, "Waiting for prepared shadow depth pipelines");
+                }
+            }
+        }
+        depth.program.Assign(program);
+    }
+
+    void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
     {
         bool shaderReady = true;
         if (frame.environment.sky)
@@ -881,6 +1176,23 @@ namespace Physara::Renderer::Detail
         if (!shaderReady)
         {
             Reject(ViewSettingReason::ShaderPending, "Waiting for prepared Forward pipelines");
+        }
+        if (frame.directional)
+        {
+            ApplyDirectionalShaders(device, frame, view);
+            if (const auto &skipped = frame.directional->depth.degradation)
+            {
+                // 新产出与只读导入都取该深度组的实际跳过摘要. 主表面的摘要来自本轮绘制准备.
+                if (frame.degradation)
+                {
+                    frame.degradation->Append(" | Shadow casters - ");
+                    frame.degradation->Append(skipped->View());
+                }
+                else
+                {
+                    frame.degradation = skipped;
+                }
+            }
         }
         frame.lightLayout = device.lightLayouts[std::size_t(frame.environment.program)];
     }

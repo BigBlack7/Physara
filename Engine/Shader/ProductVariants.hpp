@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 产品 Forward 和显示程序目录. 构建驱动及热重载通过统一角色取得合法变体和受控源入口.
+/// @brief 产品 Forward, 阴影和显示程序目录. 构建驱动及热重载通过统一角色取得合法变体和源入口.
 
 #include <span>
 
@@ -21,6 +21,8 @@ namespace Physara::Shader
         DisplayColorGrading,
         DisplayFxaa,
         DisplayScale,
+        StaticShadowDepth,
+        StaticCascadePreview,
         Count
     };
 

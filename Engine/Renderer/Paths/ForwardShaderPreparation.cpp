@@ -45,7 +45,7 @@ namespace Physara::Renderer::Detail
 
     Shader::Result<Shader::RhiProgram> LoadProductProgram(RHI::Device &device, ProductShader role,
         const std::filesystem::path &path, const Shader::ProductPackages &packages, std::string_view abi,
-        std::optional<Shader::ExpectedActiveResources> expected)
+        std::span<const Shader::ExpectedActiveResources> expected)
     {
         const auto *program = Shader::FindProductProgram(role);
         assert(program);
@@ -251,8 +251,8 @@ namespace Physara::Renderer::Detail
         return false;
     }
 
-    // 检查各角色的 CPU ABI 和设备归属, 再复制 Active 表并清除内容变化的槽.
-    // 此处交付待准备的候选, 相应的活动绑定检查随所需 Pipeline 的创建执行.
+    // 先核对整套包的 CPU ABI, 以及级联诊断在材质和逐层采样两个集合上的活动资源.
+    // 通过后按设备身份接续可用槽, 其余原生 Pipeline 随各 View 登记的实际需求准备.
     static void AdmitCandidate(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
         const auto &result = *device.candidateInput;
@@ -265,6 +265,15 @@ namespace Physara::Renderer::Detail
                 checking = ShaderPipelineRequest{role, 0};
                 Reject(ViewSettingReason::ScenePipelineUnavailable,
                        "Candidate Shader ABI does not match the interface compiled into the running renderer");
+            }
+            if (role == ProductShader::StaticCascadePreview)
+            {
+                // 诊断暂未打开时也核对材质与层采样配方. 不相容的包不能随其它角色切换到活动代.
+                if (const auto failure = Shader::CheckActiveResources(*package, CascadePreviewResources()))
+                {
+                    checking = ShaderPipelineRequest{role, 0};
+                    Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());
+                }
             }
         }
         const auto &active = *device.activeShaders;
