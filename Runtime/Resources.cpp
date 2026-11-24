@@ -37,6 +37,8 @@ namespace Physara::Runtime
                                  (directory / DisplayFxaaPackageRelative).lexically_normal(),
                                  (directory / DisplayScalePackageRelative).lexically_normal(),
                                  (directory / StaticShadowDepthPackageRelative).lexically_normal(),
-                                 (directory / StaticCascadePreviewPackageRelative).lexically_normal()}};
+                                 (directory / StaticCascadePreviewPackageRelative).lexically_normal(),
+                                 (directory / StaticSpotShadowPreviewPackageRelative).lexically_normal(),
+                                 (directory / StaticPointShadowPreviewPackageRelative).lexically_normal()}};
     }
 }

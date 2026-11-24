@@ -217,7 +217,7 @@ namespace Physara::Renderer
             m_ShadowSettings = settings;
             if (!settings.enabled)
             {
-                m_DirectionalDepth.reset();
+                m_ShadowDepth.reset();
             }
         }
         return std::nullopt;
@@ -225,41 +225,65 @@ namespace Physara::Renderer
 
     std::optional<Core::BoundedText> View::RequestCascadePreview(ViewId view, bool enabled) noexcept
     {
+        return SetShadowDiagnostic(view, enabled ? ShadowDiagnostic{CascadeDiagnostic{}} : ShadowDiagnostic{});
+    }
+
+    std::optional<Core::BoundedText> View::RequestShadowDiagnostic(ViewId view, const Scene::Scene &scene,
+                                                                  ShadowDiagnostic diagnostic) noexcept
+    {
+        if (const auto *local = std::get_if<LocalShadowSelection>(&diagnostic))
+        {
+            const auto entity = scene.Get(local->light);
+            if (!entity || !entity->record.properties.light || entity->record.properties.light->type != local->kind ||
+                (local->kind != Asset::ModelLightKind::Spot && local->kind != Asset::ModelLightKind::Point))
+            {
+                return Core::BoundedText("Shadow diagnostic requires a current spot or point light");
+            }
+        }
+        return SetShadowDiagnostic(view, diagnostic);
+    }
+
+    std::optional<Core::BoundedText> View::SetShadowDiagnostic(ViewId view, ShadowDiagnostic diagnostic) noexcept
+    {
         if (view != m_Id)
         {
-            return Core::BoundedText("Cascade preview requires the active View identity");
+            return Core::BoundedText("Shadow diagnostic requires the active View identity");
         }
-        if (enabled != m_CascadePreview)
+        if (diagnostic != m_ShadowDiagnostic)
         {
             if (!Core::AdvanceGeneration(m_ShadowRequestRevision))
             {
                 return Core::BoundedText("Shadow request revision exhausted");
             }
-            m_CascadePreview = enabled;
-            if (!enabled)
-            {
-                m_DirectionalDepth.reset();
-            }
+            m_ShadowDiagnostic = diagnostic;
+            m_ShadowDepth.reset();
         }
         return std::nullopt;
     }
 
-    bool DirectionalDepth::Matches(Scene::SceneId current, const ShadowPlan &plan,
-                                   const ShadowLightPlan &light) const noexcept
+    bool ShadowDepthGroup::Matches(ViewId owner, Scene::SceneId current, const ShadowPlan &plan,
+                                   const ShadowLightPlan &group) const noexcept
     {
-        return scene == current && edge == plan.edge && std::ranges::equal(std::span(regions).first(count),
-                                                                            light.Regions());
+        return view == owner && scene == current && light == group.light && edge == plan.edge &&
+            std::ranges::equal(std::span(regions).first(count), group.Regions());
     }
 
-    void View::AcceptDirectionalDepth(DirectionalDepth depth, std::uint64_t ticket) noexcept
+    void View::AcceptShadowDepth(ShadowDepthGroup depth, std::uint64_t ticket) noexcept
     {
         // 调用方已发布本 View 的诊断颜色. 只有同票据的 ShaderRead 出口能成为下一帧的深度输入.
         const auto *scene = AcceptedScenePreview();
-        if (m_CascadePreview && m_ShadowSettings.enabled && scene && scene->scene == depth.scene &&
-            scene->directionalCascades == depth.count && depth.retained.Usage() == ExportUsage::ShaderRead &&
-            depth.retained.Accepted(ticket))
+        if (!m_ShadowSettings.enabled || !scene || depth.view != m_Id || scene->scene != depth.scene ||
+            scene->submission != ticket || scene->shadowRequestRevision != m_ShadowRequestRevision ||
+            depth.retained.Usage() != ExportUsage::ShaderRead || !depth.retained.Accepted(ticket))
         {
-            m_DirectionalDepth = std::move(depth);
+            return;
+        }
+        const auto *local = std::get_if<LocalShadowSelection>(&m_ShadowDiagnostic);
+        const bool matches = local ? scene->localShadow && *scene->localShadow == *local && depth.light == local->light :
+            CascadePreviewRequested() && scene->directionalCascades == depth.count;
+        if (matches)
+        {
+            m_ShadowDepth = std::move(depth);
         }
     }
 
@@ -480,7 +504,7 @@ namespace Physara::Renderer
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
         std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration,
-        const DirectionalDepth *directional)
+        const ShadowDepthGroup *shadow)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -492,19 +516,21 @@ namespace Physara::Renderer
         outputs.m_RequestRevision = prepared.requestRevision;
         outputs.m_CameraRevision = prepared.cameraRevision;
         outputs.m_Scale = m_Document.renderScale;
-        if (!directional || !directional->retained)
+        if (!shadow || !shadow->retained)
         {
             // 即使只有深度程序换代也应让旧组退出 View 记账. 旧图和槽各自保有原访问.
-            m_DirectionalDepth.reset();
+            m_ShadowDepth.reset();
         }
-        const auto displayMode = directional ? PreviewMode::BaseColor : prepared.preview;
+        const auto displayMode = shadow ? PreviewMode::BaseColor : prepared.preview;
+        const auto *local = shadow ? std::get_if<LocalShadowSelection>(&prepared.shadowDiagnostic) : nullptr;
+        const auto cascades = shadow && !local ? shadow->count : 0;
         // 将曝光, 显示设置及程序表编号一起留在颜色候选. Publish 收到匹配图的回执后才更新场景历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
                           std::move(degradation), prepared.documentRevision, std::move(environment),
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
-                          prepared.layouts.display.outputExtent, shaderGeneration, directional ? directional->count : 0,
-                          prepared.shadowStatistics.requestRevision}};
+                          prepared.layouts.display.outputExtent, shaderGeneration, cascades,
+                          prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -605,7 +631,16 @@ namespace Physara::Renderer
         if (outputs.m_Output->scene)
         {
             // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
+            outputs.m_Output->scene->submission = ticket;
             m_RenderedScene = outputs.m_Output->scene;
+            if (m_RenderedScene->directionalCascades != 0 || m_RenderedScene->localShadow)
+            {
+                m_LastShadowDiagnostic = RenderedShadowDiagnostic{m_RenderedScene->scene, m_ShadowDiagnostic, ticket};
+            }
+            else if (m_LastShadowDiagnostic && m_LastShadowDiagnostic->scene != m_RenderedScene->scene)
+            {
+                m_LastShadowDiagnostic.reset();
+            }
         }
         outputs.m_Output->texture = retained ? RHI::TextureHandle{} : acceptedTexture;
         outputs.m_Output->retained = retained;

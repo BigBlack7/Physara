@@ -236,14 +236,34 @@ namespace Physara::Renderer::Detail
         "materialRows", "baseColorImage", "baseColorSampler"};
     static constexpr Shader::ExpectedActiveResources CoverageResources{Shader::Stage::Fragment, 2, CoverageNames};
 
-    std::span<const Shader::ExpectedActiveResources> CascadePreviewResources() noexcept
+    using Shader::ProductShader;
+
+    std::span<const Shader::ExpectedActiveResources> ShadowPreviewResources(ProductShader role) noexcept
     {
         static constexpr std::array<std::string_view, 6> Cascades{
             "cascades", "cascadeMatrices", "cascadeImage0", "cascadeImage1", "cascadeImage2", "cascadeImage3"};
-        static constexpr std::array resources{
+        static constexpr std::array<std::string_view, 2> Spot{"localShadow", "localShadowImage0"};
+        static constexpr std::array<std::string_view, 8> Point{"localShadow", "localShadowMatrices",
+            "localShadowImage0", "localShadowImage1", "localShadowImage2", "localShadowImage3", "localShadowImage4",
+            "localShadowImage5"};
+        static constexpr std::array cascadeResources{
             CoverageResources, Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Cascades}};
-        return resources;
+        static constexpr std::array spotResources{
+            CoverageResources, Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Spot}};
+        static constexpr std::array pointResources{
+            CoverageResources, Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Point}};
+        switch (role)
+        {
+        case ProductShader::StaticCascadePreview: return cascadeResources;
+        case ProductShader::StaticSpotShadowPreview: return spotResources;
+        case ProductShader::StaticPointShadowPreview: return pointResources;
+        default: return {};
+        }
     }
+
+    static constexpr std::array<ProductShader, ForwardColorPrograms> LightingRoles{
+        ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl,
+        ProductShader::StaticCascadePreview, ProductShader::StaticSpotShadowPreview, ProductShader::StaticPointShadowPreview};
 
     /// @brief 共用 StaticForward ABI 的颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
     static std::span<const Shader::ExpectedActiveResources> LightingResources(LightingProgram kind) noexcept
@@ -256,14 +276,38 @@ namespace Physara::Renderer::Detail
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Legacy},
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Physical},
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Ibl}};
-        return kind == LightingProgram::CascadePreview ? CascadePreviewResources() :
-            std::span(&groups[std::size_t(kind)], 1);
+        const auto index = std::size_t(kind);
+        const auto preview = ShadowPreviewResources(LightingRoles[index]);
+        return preview.empty() ? std::span(&groups[index], 1) : preview;
     }
 
-    using Shader::ProductShader;
-    static constexpr std::array LightingRoles{
-        ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl,
-        ProductShader::StaticCascadePreview};
+    /// @brief 从生成的 PerPass 布局筛选实际角色使用的 UBO、灯表和视图.
+    static bool UsesLightingBinding(LightingProgram kind, const RHI::BindingLayoutItem &item) noexcept
+    {
+        using Type = RHI::ResourceType;
+        const auto slot = item.slot;
+        const bool constant = item.type == Type::ConstantBuffer;
+        const bool texture = item.type == Type::Texture_SRV;
+        switch (kind)
+        {
+        case LightingProgram::Legacy:
+            return item.type == Type::StructuredBuffer_SRV;
+        case LightingProgram::Physical:
+            return item.type == Type::StructuredBuffer_SRV || item.type == Type::Sampler || (texture && slot == DfgSlot);
+        case LightingProgram::Ibl:
+            return item.type == Type::StructuredBuffer_SRV || item.type == Type::Sampler || (constant && slot == 0) ||
+                (texture && (slot == DfgSlot || slot == ReflectionSlot));
+        case LightingProgram::CascadePreview:
+            return (constant && (slot == CascadeConstantsSlot || slot == CascadeMatricesSlot)) ||
+                (texture && slot >= FirstCascadeImageSlot && slot < FirstLocalShadowImageSlot);
+        case LightingProgram::SpotPreview:
+            return (constant && slot == LocalShadowConstantsSlot) || (texture && slot == FirstLocalShadowImageSlot);
+        case LightingProgram::PointPreview:
+            return (constant && (slot == LocalShadowConstantsSlot || slot == LocalShadowMatricesSlot)) ||
+                (texture && slot >= FirstLocalShadowImageSlot && slot < FirstLocalShadowImageSlot + MaxShadowSubviews);
+        }
+        return false;
+    }
 
     /// @brief 两种只写深度的程序使用首张几何表的各自阶段槽.
     static bool IsDepthRole(ProductShader role) noexcept
@@ -302,7 +346,8 @@ namespace Physara::Renderer::Detail
         }
         const auto &paths = owner.packagePaths;
         const std::array<const std::filesystem::path *, ForwardColorPrograms> inputs{
-            &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview};
+            &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview, &paths.spotShadowPreview,
+            &paths.pointShadowPreview};
         auto program = LoadProgram(owner.device, LightingRoles[index], *inputs[index], packages,
             StaticAbi::AbiHash, LightingResources(kind));
         auto &layout = owner.lightLayouts[index];
@@ -311,23 +356,7 @@ namespace Physara::Renderer::Detail
             // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
             auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
             auto &desc = layoutsForProgram.back();
-            std::erase_if(desc.bindings, [kind](const auto &item) {
-                const bool cascadeResource =
-                    (item.type == RHI::ResourceType::ConstantBuffer &&
-                     (item.slot == CascadeConstantsSlot || item.slot == CascadeMatricesSlot)) ||
-                    (item.type == RHI::ResourceType::Texture_SRV && item.slot >= FirstCascadeImageSlot);
-                if (kind == LightingProgram::CascadePreview || cascadeResource)
-                {
-                    return kind != LightingProgram::CascadePreview || !cascadeResource;
-                }
-                if (kind == LightingProgram::Legacy)
-                {
-                    return item.type != RHI::ResourceType::StructuredBuffer_SRV;
-                }
-                return kind == LightingProgram::Physical &&
-                    (item.type == RHI::ResourceType::ConstantBuffer ||
-                     (item.type == RHI::ResourceType::Texture_SRV && item.slot == ReflectionSlot));
-            });
+            std::erase_if(desc.bindings, [kind](const auto &item) { return !UsesLightingBinding(kind, item); });
             layout = owner.device.CreateBindingLayout(desc);
             if (!layout)
             {
@@ -569,7 +598,7 @@ namespace Physara::Renderer::Detail
             .SetDepthFunc(compare).DisableStencil();
         if (shadow)
         {
-            // 常量项由每级顶点投影加入. 这里的斜率因子作用于光栅深度, 两项都沿常规深度正向偏移.
+            // 常量项已写入该层的顶点投影. 这里的斜率因子作用于光栅深度, 两项都沿常规深度正向偏移.
             desc.renderState.rasterState.SetSlopeScaleDepthBias(1.0f);
         }
         RHI::FramebufferInfo target;

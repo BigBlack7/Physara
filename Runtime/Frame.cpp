@@ -35,11 +35,13 @@ namespace Physara::Runtime
     static constexpr std::size_t MainViewIndex = 0;
     static constexpr std::size_t OffscreenViewIndex = 1;
 
-    /// @brief 复制本次 CPU 规划的值摘要. 外层带 View 和布局请求代, 内层带 Scene 与阴影请求代.
+    /// @brief 复制本次 CPU 规划的值摘要. 布局、Scene 相机及 View 文档版本也标记准备拒绝的来源.
     /// 快照可以跨图尝试保留, 不借用槽中的计划和可见索引.
-    static Editor::ViewShadowStatistics MeasureShadows(const PreparedView &prepared) noexcept
+    static Editor::ViewShadowStatistics MeasureShadows(const PreparedView &prepared,
+                                                       std::uint64_t sceneCameraRevision) noexcept
     {
-        return {prepared.view, prepared.requestRevision, prepared.reason, prepared.shadowStatistics};
+        return {prepared.view, prepared.requestRevision, sceneCameraRevision, prepared.documentRevision,
+                prepared.reason, prepared.shadowStatistics};
     }
 
     void CollectSceneChanges(Editor::EditorSession &editor, std::span<FrameSlot, FrameSlotCount> slots) noexcept
@@ -87,7 +89,7 @@ namespace Physara::Runtime
     }
 
     EditorGraphProfile::EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews,
-                                           bool diagnostic, std::size_t directionalViews)
+                                           bool diagnostic, std::size_t shadowViews)
     {
         const bool scene = sceneViews != 0;
         const auto info = host.GetInfo();
@@ -119,7 +121,7 @@ namespace Physara::Runtime
                     .formatSupport = support, .copySource = true, .copyDestination = true, .maxSampledLayers = 6};
             }
         }
-        if (directionalViews != 0)
+        if (shadowViews != 0)
         {
             m_States.back() = Renderer::Detail::SampledState(TextureAspect::Depth);
             std::uint32_t edge{}, layers{};
@@ -161,7 +163,7 @@ namespace Physara::Runtime
                 addStorage(format, RHI::TextureDimension::Texture2DArray);
             }
         }
-        const auto directionalBytes = directionalViews * MaxDirectionalCascades * MaxShadowEdge * MaxShadowEdge *
+        const auto shadowBytes = shadowViews * MaxShadowSubviews * MaxShadowEdge * MaxShadowEdge *
             RHI::GetFormatInfo(ShadowDepthFormat).bytesPerBlock;
         m_Options = {.textures = std::span(m_Textures).first(count),
             .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
@@ -170,10 +172,10 @@ namespace Physara::Runtime
                         .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
                         .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
                         .structuredUav = structuredUav},
-            .textureBoundaryStates = std::span(m_States).first(directionalViews != 0 ? 3u : 2u),
+            .textureBoundaryStates = std::span(m_States).first(shadowViews != 0 ? 3u : 2u),
             .bufferBoundaryStates = std::span(m_States).first<2>(), .maxColorAttachments = 1,
             .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
-                directionalBytes + ((!scene || diagnostic) ? DiagnosticUploadBudget : 0),
+                shadowBytes + ((!scene || diagnostic) ? DiagnosticUploadBudget : 0),
             .transientObjectBudget = GraphResourcePool::DefaultLimit.objects};
     }
 
@@ -566,13 +568,13 @@ namespace Physara::Runtime
             slot.forward.Confirm(*declared.scene, plan);
             const auto confirmDepth = [&](View &owner, std::size_t index)
             {
-                // 生产帧导出新组. 命中缓存的图只导入原组, View 继续持有此前接受的内容.
-                const auto depth = declared.scene->views[index]->directionalDepth;
+                // 调用处已确认本路颜色发布成功. 只有新生产的组有深度出口, 只读命中继续沿用原回执.
+                const auto depth = declared.scene->views[index]->shadowDepth;
                 if (depth.IsValid())
                 {
                     if (const auto *output = FindTextureExport(*execution, depth))
                     {
-                        slot.forward.ConfirmDirectionalDepth(owner, index, output->retained, receipt.ticket);
+                        slot.forward.ConfirmShadowDepth(owner, index, output->retained, receipt.ticket);
                     }
                 }
             };
@@ -608,7 +610,7 @@ namespace Physara::Runtime
             const auto &last = *retained.Color()->scene;
             measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, measured.Id(), last.contentRevision,
                 last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display,
-                last.shaderGeneration, last.directionalCascades};
+                last.shaderGeneration, last.directionalCascades, last.localShadow};
             const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
             // 上传账单汇总整张正常图. 几何工作量只取所选出口, 用其深度和颜色 Pass 的存活性分别计数.
             CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
@@ -699,10 +701,10 @@ namespace Physara::Runtime
             const auto &declared = std::get<FrameDeclaration>(declaration);
             const auto sceneCount = declared.scene ? std::ranges::count_if(declared.scene->views,
                 [](const auto &source) { return source.has_value(); }) : 0;
-            const auto directionalCount = declared.scene ? std::ranges::count_if(declared.scene->views,
-                [](const auto &source) { return source && source->directionalDepth.IsValid(); }) : 0;
+            const auto shadowCount = declared.scene ? std::ranges::count_if(declared.scene->views,
+                [](const auto &source) { return source && source->shadowDepth.IsValid(); }) : 0;
             EditorGraphProfile profile(host, static_cast<std::size_t>(sceneCount), declared.diagnosticUpload.IsValid(),
-                                       static_cast<std::size_t>(directionalCount));
+                                       static_cast<std::size_t>(shadowCount));
             if (!errors.IsClear())
             {
                 return Failed(host, preparationFailure, "Frame.Profile",
@@ -873,9 +875,10 @@ namespace Physara::Runtime
                 // 同一相机在同尺寸画布上的有效矩形相同. 用尺寸先核对必需附件, 再核对普通预览的 FXAA.
                 const bool resample = layout.renderExtent != layout.outputExtent;
                 const auto display = ResolveDisplaySettings(view.Preview(), view.DocumentRequests().antiAliasing);
-                const bool cascadeCanAvoidFxaa = view.CascadePreviewRequested() &&
+                const bool diagnosticCanAvoidFxaa = !std::holds_alternative<std::monostate>(
+                    view.RequestedShadowDiagnostic()) &&
                     display.antiAliasing == AntiAliasing::Fxaa;
-                const auto requiredDisplay = cascadeCanAvoidFxaa ? DisplaySettings{} : display;
+                const auto requiredDisplay = diagnosticCanAvoidFxaa ? DisplaySettings{} : display;
                 const auto failure = forward.CheckAttachments(layout.renderExtent, layout.outputExtent,
                                                               requiredDisplay, resample);
                 layoutReason = failure ? failure->reason : ViewSettingReason::None;
@@ -883,9 +886,9 @@ namespace Physara::Runtime
                 {
                     candidate.error = failure->description;
                 }
-                else if (cascadeCanAvoidFxaa)
+                else if (diagnosticCanAvoidFxaa)
                 {
-                    // 线性路径已通过预检. 普通路径若超限, 下一步须在发布阴影区域前确认有可用方向光组.
+                    // 线性路径已通过预检. 普通路径若超限, 先确认所选阴影组可供诊断消费.
                     ordinaryAttachmentFailure = forward.CheckAttachments(layout.renderExtent, layout.outputExtent,
                                                                          display, resample);
                 }
@@ -896,6 +899,7 @@ namespace Physara::Runtime
                 candidate.outputs = view.Unavailable(request.reason);
                 candidate.prepared.view = view.Id();
                 candidate.prepared.requestRevision = layout.requestRevision;
+                candidate.prepared.documentRevision = view.DocumentRevision();
                 candidate.prepared.reason = layoutReason;
                 candidate.prepared.shadowStatistics = slot.offscreenView.UnavailableShadows(scene.Source(), view,
                                                                                               shadowLimits);
@@ -959,7 +963,7 @@ namespace Physara::Runtime
         }
         auto output = view.PreparePreview(prepared, slot.forward.Degradation(OffscreenViewIndex),
             slot.forward.Environment(OffscreenViewIndex), slot.forward.ShaderGeneration(),
-            slot.forward.PreparedDirectionalDepth(OffscreenViewIndex));
+            slot.forward.PreparedShadowDepth(OffscreenViewIndex));
         if (const auto *error = std::get_if<Core::BoundedText>(&output))
         {
             request.reason = ViewSettingReason::ScenePreparationFailed;
@@ -1017,6 +1021,7 @@ namespace Physara::Runtime
         forward.BeginShaderRequests();
         const auto *scene = editor.ActiveScene();
         assert(scene);
+        const auto sceneCameraRevision = scene->Versions().camera;
         const auto &environment = scene->Environment();
         forward.BeginEnvironmentRequests(environment ? environment->source : nullptr);
         // 同帧各路共用 D32 数组的设备上限, 预算与层地址则按各自的 View 计算.
@@ -1031,9 +1036,10 @@ namespace Physara::Runtime
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
         const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
         const bool hasScene = HasSceneOutput(prepared);
-        // 级联、物理预览和缩放的场景候选失败时, 可读旧色仍能由安全 UI 显示.
+        // 阴影诊断、物理预览和缩放的候选失败时, 可读旧色仍能由安全 UI 显示.
         const bool retainOnFailure = physical || (hasScene &&
-            (prepared.cascadePreview || prepared.layouts.render != prepared.layouts.display));
+            (!std::holds_alternative<std::monostate>(prepared.shadowDiagnostic) ||
+             prepared.layouts.render != prepared.layouts.display));
         auto mode = Editor::UiFrameMode::Normal;
         const auto viewportFallback = [&](ViewSettingReason reason, bool canRetain)
         {
@@ -1060,14 +1066,14 @@ namespace Physara::Runtime
         }
         if (host.HasFatalGraphicsError())
         {
-            statistics.PublishShadows(MeasureShadows(prepared));
+            statistics.PublishShadows(MeasureShadows(prepared, sceneCameraRevision));
             remember(host.FirstGraphicsError());
             return stop();
         }
         auto offscreen = PlanOffscreen(host, forward, slot, shared, view, offscreenRequests, shadowLimits);
         // 在图编译和可能的安全 UI 重试之前发布. 此后的接受票据只确认实际提交的场景颜色.
-        statistics.PublishShadows(MeasureShadows(prepared),
-                                  offscreen.request ? std::optional(MeasureShadows(offscreen.prepared)) : std::nullopt);
+        statistics.PublishShadows(MeasureShadows(prepared, sceneCameraRevision),
+            offscreen.request ? std::optional(MeasureShadows(offscreen.prepared, sceneCameraRevision)) : std::nullopt);
         forward.EndEnvironmentRequests();
         if (!host.HasFatalGraphicsError())
         {
@@ -1103,7 +1109,7 @@ namespace Physara::Runtime
             else
             {
                 candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment(),
-                                                slot.forward.ShaderGeneration(), slot.forward.PreparedDirectionalDepth());
+                                                slot.forward.ShaderGeneration(), slot.forward.PreparedShadowDepth());
             }
             if (host.HasFatalGraphicsError())
             {

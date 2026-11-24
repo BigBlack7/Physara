@@ -70,6 +70,25 @@
       ]
     },
     {
+      "name": "ForwardLocalShadow",
+      "layout": "std140",
+      "fields": [
+        { "name": "originHigh", "type": "float3" },
+        { "name": "farPlane", "type": "float32" },
+        { "name": "originLow", "type": "float3" },
+        { "name": "nearPlane", "type": "float32" },
+        { "name": "edge", "type": "uint32" },
+        { "name": "clipFromLight", "type": "float4x4", "array": 3 }
+      ]
+    },
+    {
+      "name": "ForwardLocalShadowMatrices",
+      "layout": "std140",
+      "fields": [
+        { "name": "clipFromLight", "type": "float4x4", "array": 3 }
+      ]
+    },
+    {
       "name": "ForwardObject",
       "layout": "std430",
       "fields": [
@@ -131,7 +150,15 @@
     { "name": "cascadeImage0", "kind": "texture2d", "set": 3, "slot": 3, "stages": ["fragment"] },
     { "name": "cascadeImage1", "kind": "texture2d", "set": 3, "slot": 4, "stages": ["fragment"] },
     { "name": "cascadeImage2", "kind": "texture2d", "set": 3, "slot": 5, "stages": ["fragment"] },
-    { "name": "cascadeImage3", "kind": "texture2d", "set": 3, "slot": 6, "stages": ["fragment"] }
+    { "name": "cascadeImage3", "kind": "texture2d", "set": 3, "slot": 6, "stages": ["fragment"] },
+    { "name": "localShadow", "kind": "constant-buffer", "set": 3, "slot": 3, "stages": ["fragment"], "block": "ForwardLocalShadow" },
+    { "name": "localShadowMatrices", "kind": "constant-buffer", "set": 3, "slot": 4, "stages": ["fragment"], "block": "ForwardLocalShadowMatrices" },
+    { "name": "localShadowImage0", "kind": "texture2d", "set": 3, "slot": 7, "stages": ["fragment"] },
+    { "name": "localShadowImage1", "kind": "texture2d", "set": 3, "slot": 8, "stages": ["fragment"] },
+    { "name": "localShadowImage2", "kind": "texture2d", "set": 3, "slot": 9, "stages": ["fragment"] },
+    { "name": "localShadowImage3", "kind": "texture2d", "set": 3, "slot": 10, "stages": ["fragment"] },
+    { "name": "localShadowImage4", "kind": "texture2d", "set": 3, "slot": 11, "stages": ["fragment"] },
+    { "name": "localShadowImage5", "kind": "texture2d", "set": 3, "slot": 12, "stages": ["fragment"] }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },

@@ -23,6 +23,8 @@ namespace Physara::Shader
         DisplayScale,
         StaticShadowDepth,
         StaticCascadePreview,
+        StaticSpotShadowPreview,
+        StaticPointShadowPreview,
         Count
     };
 

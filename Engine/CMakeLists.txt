@@ -37,9 +37,11 @@ physara_add_shader_interface(ForwardSky Shader/Interface/ForwardSky.json)
 physara_add_shader_interface(DisplayPost Shader/Interface/DisplayPost.json)
 physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders PRODUCT)
-# 阴影深度使用专用投影顶点和共享 MASK 片元. 级联诊断使用主视图顶点和逐层查询片元.
+# 阴影深度使用专用投影顶点和共享 MASK 片元. 三种诊断按实际采样布局交付程序包.
 physara_add_shader_program(StaticShadowDepth StaticForward ../Shaders/Passes/Shadow/StaticShadowDepth.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticCascadePreview StaticForward ../Shaders/Passes/Shadow/StaticCascadePreview.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticSpotShadowPreview StaticForward ../Shaders/Passes/Shadow/StaticSpotShadowPreview.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticPointShadowPreview StaticForward ../Shaders/Passes/Shadow/StaticPointShadowPreview.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPhysical.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forward/StaticForwardIbl.json ../Shaders PRODUCT)
 physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders PRODUCT)
@@ -84,7 +86,8 @@ target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
 foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
-        DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview)
+        DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
+        StaticSpotShadowPreview StaticPointShadowPreview)
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

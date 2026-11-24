@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "StaticPointShadowPreview",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "Passes/Forward/Static.vert", "entry": "main" },
+    { "stage": "fragment", "source": "Passes/Shadow/PointPreview.frag", "entry": "main" }
+  ],
+  "defines": []
+}

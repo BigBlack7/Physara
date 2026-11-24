@@ -53,7 +53,7 @@ namespace Physara::Editor
             bool operator==(const PreparedViewport &) const noexcept = default;
 
             /// @brief 测试图核对渲染布局, 场景色还核对两套布局及生产来源. 调用方核对 View 身份和比例请求代.
-            /// 请求 CSM 却无分配时也可使用本轮普通场景色, 其阴影请求代应与当前准备值相同.
+            /// 选中灯无可用阴影组时也可使用本轮普通场景色, 其阴影请求代仍须与当前准备值相同.
             [[nodiscard]] bool Matches(const Renderer::ViewOutput &output) const noexcept
             {
                 const auto &rendered = output.scene;
@@ -650,11 +650,10 @@ namespace Physara::Editor
                     state.editError = std::move(error);
                 }
             }
-            if (view && workspace.cascadePreview && !frozen && !discard)
+            if (view && scene && workspace.shadowDiagnostic && !frozen && !discard)
             {
-                // 诊断开关属于 View 会话. 封存后与规划开关分别提交, 由同一个 View 校验目标身份.
-                if (auto error = view->RequestCascadePreview(workspace.cascadePreview->view,
-                                                             workspace.cascadePreview->enabled))
+                const auto &request = *workspace.shadowDiagnostic;
+                if (auto error = view->RequestShadowDiagnostic(request.view, *scene, request.selection))
                 {
                     state.editError = std::move(error);
                 }

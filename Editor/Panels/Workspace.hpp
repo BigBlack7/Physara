@@ -64,6 +64,13 @@ namespace Physara::Editor::Detail
         bool enabled;
     };
 
+    /// @brief 封存 UI 后按 View 和灯身份提交这一诊断选择.
+    struct ShadowDiagnosticIntent
+    {
+        Renderer::ViewId view;
+        Renderer::ShadowDiagnostic selection;
+    };
+
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
     /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
     /// 相机字段意图只在本批当前文档的编辑边界消费, 先于可替换 Scene 的文件操作.
@@ -82,7 +89,7 @@ namespace Physara::Editor::Detail
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::optional<ShadowToggle> shadowPlanning; ///< 只改规划开关, 沿用目标 View 的距离和级联参数.
-        std::optional<ShadowToggle> cascadePreview; ///< 独立的显示选择, 可先于可用的方向光计划提交.
+        std::optional<ShadowDiagnosticIntent> shadowDiagnostic;
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;
         std::optional<Platform::SetWindowVSync> vsync;

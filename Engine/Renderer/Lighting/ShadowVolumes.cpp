@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <numeric>
 #include <utility>
 
@@ -404,7 +405,17 @@ namespace Physara::Renderer::Detail
     {
         const double farPlane = std::min(light.light.range.value_or(shadowDistance), shadowDistance);
         const double nearPlane = std::min(0.1, farPlane / 1024);
-        if (!(nearPlane > 0 && nearPlane < farPlane))
+        constexpr double maxGpu = std::numeric_limits<float>::max();
+        // 近远面和灯位由 float Shader 消费. 无法编码时只拒绝该灯的阴影组.
+        if (!(nearPlane >= std::numeric_limits<float>::min() && nearPlane < farPlane &&
+              farPlane <= maxGpu) ||
+            !std::ranges::all_of(light.position, [](double value) { return value >= -maxGpu && value <= maxGpu; }))
+        {
+            return ShadowPlanReason::InvalidVolume;
+        }
+        const bool spot = light.light.type == Asset::ModelLightKind::Spot;
+        const auto cone = light.light.outerConeAngle;
+        if (spot && !(cone < std::numbers::pi / 2 && std::tan(cone) >= 1.0 / maxGpu))
         {
             return ShadowPlanReason::InvalidVolume;
         }
@@ -416,10 +427,10 @@ namespace Physara::Renderer::Detail
             return ShadowPlanReason::NoReceiverCoverage;
         }
         LocalShadowVolume volume{.position = light.position, .nearPlane = nearPlane, .farPlane = farPlane};
-        if (light.light.type == Asset::ModelLightKind::Spot)
+        if (spot)
         {
-            volume.direction = light.direction;
-            volume.outerCone = light.light.outerConeAngle;
+            volume.direction = Value(glm::normalize(glm::make_vec3(light.direction.data())));
+            volume.outerCone = cone;
         }
         if (SeparatedFromReceiver(receiver, volume))
         {
@@ -500,9 +511,86 @@ namespace Physara::Renderer::Detail
         return primitive.visible && primitive.castsShadow && primitive.bounds.has_value();
     }
 
-    LocalShadowPlan CollectLocalShadowCasters(const SceneFrame &scene, LocalShadowVolume volume)
+    /// @brief 按交付精度拟合右手透视相机. 横向投影或近端写入深度不可用时返回空.
+    static std::optional<LocalShadowProjection> LocalProjection(const glm::dvec3 &forward, const glm::dvec3 &up,
+        const LocalShadowVolume &volume, double halfTangent, std::uint32_t edge) noexcept
+    {
+        const auto right = glm::cross(forward, up);
+        const double depthScale = volume.farPlane / (volume.farPlane - volume.nearPlane);
+        const double depthOffset = volume.nearPlane * depthScale;
+        const double biasRatio = 2 * ShadowDepthConvention::CasterBiasTexels * halfTangent / edge;
+        // 轴深 t 沿前向增加到 t*(1+biasRatio) 时, 等效于缩小写入矩阵中齐次 Z 常量的绝对值.
+        // 直接编码偏移后的常量, 避免在 FP32 中相减丢失宽锥的剩余量.
+        LocalShadowProjection result{.casterClipZ = static_cast<float>(-depthOffset / (1 + biasRatio))};
+        // 将方形视锥内的相对坐标除以轴深, 得到各世界分量的幅度上界. 此上界也包住聚光的圆锥.
+        const auto extentPerDepth = glm::abs(forward) + halfTangent * (glm::abs(right) + glm::abs(up));
+        constexpr double MaxGpu = std::numeric_limits<float>::max();
+        constexpr double FloatEpsilon = std::numeric_limits<float>::epsilon();
+        // 三项点积累积乘加舍入, 相对坐标也已编码为 FP32.
+        constexpr double DotRoundoff = 4 * FloatEpsilon;
+        glm::dvec3 clipError(0);
+        double nearGap = -double(result.casterClipZ) / volume.nearPlane;
+        for (glm::length_t i = 0; i < 3; ++i)
+        {
+            const glm::dvec3 coefficients{right[i] / halfTangent, up[i] / halfTangent, forward[i]};
+            if (!(std::abs(coefficients.x) <= MaxGpu && std::abs(coefficients.y) <= MaxGpu))
+            {
+                return std::nullopt;
+            }
+            const glm::vec3 encoded(coefficients);
+            const glm::dvec3 packed(encoded);
+            // 按已编码的 X、Y、W 系数累计窄化误差, 并为相对坐标和点积的 FP32 舍入留余量.
+            clipError += (glm::abs(packed - coefficients) + DotRoundoff * glm::abs(packed)) * extentPerDepth[i];
+            const auto clipZ = static_cast<float>(forward[i] * depthScale);
+            result.clipFromLight[i] = {encoded.x, encoded.y, clipZ, encoded.z};
+            nearGap += (packed.z - clipZ) * forward[i];
+        }
+        // 除以理想轴深后 W 为 1, clipError.z 是 W 的误差上界. 有效画幅内 |X/W| 和 |Y/W| 至多为 1,
+        // 因此两条 NDC 轴的分子误差都需加上 W 的误差, 再按分母下界 1 - clipError.z 衡量位移.
+        const double ndcTexel = 2.0 / edge;
+        const double xyError = glm::length(glm::dvec2(clipError) + clipError.z);
+        // nearGap 是已编码写入投影在近轴端的 (w-z)/near. 保留可写入低于清除值的深度余量.
+        if (!(xyError <= (ndcTexel - FloatEpsilon) * (1 - clipError.z) && nearGap > 8 * FloatEpsilon))
+        {
+            return std::nullopt;
+        }
+        result.clipFromLight[3] = {0, 0, -static_cast<float>(depthOffset), 0};
+        return result;
+    }
+
+    std::optional<LocalShadowPlan> MakeLocalShadowPlan(const SceneFrame &scene, LocalShadowVolume volume,
+                                                       std::uint32_t edge)
     {
         LocalShadowPlan result{.volume = volume};
+        if (volume.outerCone > 0)
+        {
+            const auto axes = LightAxes(glm::make_vec3(volume.direction.data()));
+            const auto projection = LocalProjection(axes[2], axes[1], volume, std::tan(volume.outerCone), edge);
+            if (!projection)
+            {
+                return std::nullopt;
+            }
+            result.projections[0] = *projection;
+        }
+        else
+        {
+            // 与 Point 的 ShadowSubview 顺序一致. 上向决定每层图案的方向, 写入和查询共用此投影.
+            static constexpr glm::dvec3 forward[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            static constexpr glm::dvec3 up[] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1},
+                {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+            // 标称 45 度边缘投到 NDC 的 (edge - 2) / edge, 经 UV 映射后距纹理边缘恰好一个 texel.
+            const double halfTangent = double(edge) / (edge - 2);
+            for (std::size_t i = 0; i < result.projections.size(); ++i)
+            {
+                const auto projection = LocalProjection(forward[i], up[i], volume, halfTangent, edge);
+                if (!projection)
+                {
+                    return std::nullopt;
+                }
+                result.projections[i] = *projection;
+            }
+        }
         const LocalCasterVolume local(volume);
         for (std::uint32_t index = 0; index < scene.primitives.size(); ++index)
         {
@@ -640,7 +728,7 @@ namespace Physara::Renderer::Detail
         const auto &fitted = volume->fitted;
         const double snappedX = std::round(cellX) * texel;
         const double snappedY = std::round(cellY) * texel;
-        const double biasMeters = texel * DirectionalShadowProjection::CasterBiasTexels;
+        const double biasMeters = texel * ShadowDepthConvention::CasterBiasTexels;
         const glm::dvec3 unpaddedNear{snappedX - lightCamera.x, snappedY - lightCamera.y, fitted.minimum[2]};
         // 至少留一 texel. 长深度范围按实际 Z 轴加大余量, 再用交付原点验证偏移和舍入后的覆盖.
         const double depthRoundoff = ClipRoundoff(z, WorldOffsetBound(axes, fitted, unpaddedNear));

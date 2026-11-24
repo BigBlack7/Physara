@@ -28,6 +28,7 @@ namespace Physara::Renderer
     inline constexpr auto ShadowDepthFormat = RHI::Format::D32;
     inline constexpr std::uint32_t MaxShadowEdge = 1024;
     inline constexpr std::uint32_t MaxDirectionalCascades = 4;
+    inline constexpr std::uint32_t MaxShadowSubviews = 6;
     inline constexpr std::uint32_t MaxShadowLayers = 16;
     inline constexpr std::uint64_t MaxShadowBytes = 32ull * 1024 * 1024;
 
@@ -70,22 +71,39 @@ namespace Physara::Renderer
         Budget,
         StorageUnavailable,
         RevisionExhausted,
+        LightUnavailable,
         Count
     };
+
+    /// @brief 请求本次规划选出的主方向光级联, 无需持久保存灯的实体身份.
+    struct CascadeDiagnostic
+    {
+        bool operator==(const CascadeDiagnostic &) const = default;
+    };
+
+    /// @brief 灯的 Scene 与 generation 位于 handle, kind 用于拒绝同一实体的灯型变更.
+    struct LocalShadowSelection
+    {
+        Scene::EntityHandle light;
+        Asset::ModelLightKind kind;
+        bool operator==(const LocalShadowSelection &) const = default;
+    };
+
+    /// @brief 单个 View 的显示选择. monostate 恢复基础预览, 局部诊断持有带代的实体身份.
+    using ShadowDiagnostic = std::variant<std::monostate, CascadeDiagnostic, LocalShadowSelection>;
 
     /// @brief 阴影使用独立的 [0,1] 深度, 近平面为 0.
     struct ShadowDepthConvention
     {
         static constexpr float Clear = 1.0f;
         static constexpr auto Compare = RHI::ComparisonFunc::Less;
+        static constexpr double CasterBiasTexels = 0.5; ///< 沿发射方向的偏移, 按该投影的世界 texel 计.
     };
 
     /// @brief 方向光的正交投影. 原点位于吸附后的近面中心, axes 依次指向 clip 的 +X/+Y/+Z.
     /// XY 以 halfExtent 归一化, Z 随光线在 depthRange 内由 0 增至 1. 长度均为米.
     struct DirectionalShadowProjection
     {
-        static constexpr double CasterBiasTexels = 0.5; ///< 常规深度写入的常量偏移, 以世界 texel 为单位.
-
         std::array<double, 3> origin;
         std::array<std::array<double, 3>, 3> axes;
         double halfExtent;
@@ -111,6 +129,7 @@ namespace Physara::Renderer
     };
 
     /// @brief 有限局部阴影体. Spot 使用发射轴和外锥半角, Point 的各面使用共同的米制近远面.
+    /// farPlane 同时限定灯心到接收点的半径. 投影裁剪按所选面的轴深计算, 斜向样点须满足两项限制.
     struct LocalShadowVolume
     {
         std::array<double, 3> position;
@@ -121,10 +140,19 @@ namespace Physara::Renderer
         bool operator==(const LocalShadowVolume &) const = default;
     };
 
-    /// @brief 局部灯的有限体积和冻结 Primitive 下标. 点光各面共用 caster 集.
+    /// @brief 局部灯单面的列主序齐次投影, 输入为相对灯位的世界向量. w 为米制面轴深度.
+    struct LocalShadowProjection
+    {
+        std::array<std::array<float, 4>, 4> clipFromLight;
+        float casterClipZ; ///< 含 caster 偏移的齐次 Z 常量, 写入时替换矩阵的 [3][2].
+        bool operator==(const LocalShadowProjection &) const = default;
+    };
+
+    /// @brief 局部灯的有限体积、与区域同序的投影以及冻结 Primitive 下标. 点光六面共享 caster 集.
     struct LocalShadowPlan
     {
         LocalShadowVolume volume;
+        std::array<LocalShadowProjection, MaxShadowSubviews> projections{};
         std::vector<std::uint32_t> casters;
     };
 
@@ -150,7 +178,7 @@ namespace Physara::Renderer
     {
         Scene::EntityHandle light;
         std::variant<DirectionalShadowPlan, LocalShadowPlan> views;
-        std::array<ShadowRegion, 6> regions{};
+        std::array<ShadowRegion, MaxShadowSubviews> regions{};
         std::uint32_t regionCount{};
 
         [[nodiscard]] std::span<const ShadowRegion> Regions() const noexcept
@@ -204,6 +232,8 @@ namespace Physara::Renderer
         ShadowPlanReason reason = ShadowPlanReason::Disabled;
         ShadowPlanReason qualityReason = ShadowPlanReason::Planned;
         ShadowPlanReason directionalReason = ShadowPlanReason::Disabled;
+        /// 本 View 选中灯的解析结果. 即使其它灯取得区域, 当前诊断仍可有自己的拒绝原因.
+        ShadowPlanReason diagnosticReason = ShadowPlanReason::Disabled;
         bool enabled{}, reused{};
     };
 
@@ -212,6 +242,7 @@ namespace Physara::Renderer
     {
         std::shared_ptr<const ShadowPlan> plan;
         ShadowPlanStatistics statistics;
+        const ShadowLightPlan *diagnostic{}; ///< 借用本结果的 plan, 空值由 diagnosticReason 说明.
     };
 
     /// @brief View owner 线程持有的缓存. 缓存按 Scene/稳定相机/有效配置匹配, 可以跨安全槽轮转.
@@ -226,11 +257,14 @@ namespace Physara::Renderer
         /// @brief 从已验证 View 输入准备完整计划. 失败或禁用时交付空分配及原因.
         /// @pre 可见索引、相机和裁剪面来自同次稳定 View 准备; settings 已由所属 View 校验.
         /// @return 可消费的计划通过只读共享引用保活. 单灯拒绝保存在该灯的关联记录中.
-        /// @param requireDirectional 该 View 的布局只容纳级联诊断时, 仅交付带主方向光分配的计划.
+        /// @param diagnostic 此帧可消费的会话诊断. 缓存不会因只切换诊断选择而重建 CPU 计划.
+        /// @param requireDiagnostic 布局只容纳线性诊断时, 在选中灯完整准入后才发布分配.
+        /// @param hasVisibleReceivers 在仅容纳诊断的布局中, 没有可见几何时只解析拒绝原因并结算旧分配.
         [[nodiscard]] PreparedShadows Prepare(const SceneFrame &scene, const CameraSnapshot &camera,
             std::span<const Detail::CullingPlane, 6> planes, std::array<double, 2> sideLimit,
             std::span<const std::uint32_t> lights, const ShadowSettings &settings, std::uint64_t requestRevision,
-            const ShadowPlanningLimits &limits, bool requireDirectional = false) noexcept;
+            const ShadowPlanningLimits &limits, const ShadowDiagnostic &diagnostic = {},
+            bool requireDiagnostic = false, bool hasVisibleReceivers = true) noexcept;
 
         /// @brief 当前 View 无可用相机或布局时结束活动分配, 保留已交付值的只读寿命.
         [[nodiscard]] PreparedShadows Unavailable(Scene::SceneId scene, const Scene::Revisions &revisions,

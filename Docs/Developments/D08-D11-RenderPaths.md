@@ -153,11 +153,11 @@
 
 **职责位置：** Renderer/Lighting、Passes、Shaders/Shadow。**前置：** [D09-T01](#d09-t01)、[D09-T02](#d09-t02)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.6](../Architecture.md#lighting)。
 
-**状态** 当前工作包，前置已满足，待立项。 [D09-T02 验收与证据](../../openspec/changes/archive/2026-11-24-add-stable-directional-csm/tasks.md#final-verification)
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-24-add-spot-point-shadows/tasks.md#final-verification)
 
-- [ ] 实现 spot 投影和 point 六面视图、层/atlas 地址及统一近远面；光源无限 range 与有限 shadowDistance 分开，比较量与写入使用相同投影，不能混用径向距离和非线性深度。
-- [ ] 共享几何、bias 和采样合同，处理 cubemap/atlas 接缝、越界及失效 region。
-- [ ] 验证编辑光源/静态物体后的阴影更新、面边界、未指定 range 的光源规划及有界分配的降级显示。
+- [x] 实现 spot 投影和 point 六面视图、层/atlas 地址及统一近远面；光源无限 range 与有限 shadowDistance 分开，比较量与写入使用相同投影，不能混用径向距离和非线性深度。
+- [x] 共享几何、bias 和采样合同，处理 cubemap/atlas 接缝、越界及失效 region。
+- [x] 验证编辑光源/静态物体后的阴影更新、面边界、未指定 range 的光源规划及有界分配的降级显示。
 
 **完成条件：** 三类 punctual/方向灯均能产生可查询可见性，未分配阴影不会读取无效纹理。
 
@@ -165,6 +165,8 @@
 ### D09-T04 · 接入 Hard/PCF 与统一光照查询
 
 **职责位置：** Shaders/Shadow、Lighting、Renderer/Paths。**前置：** [D09-T02](#d09-t02)、[D09-T03](#d09-t03)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.6](../Architecture.md#lighting)、[8.7](../Architecture.md#opaque-shading)。
+
+**状态** 前置已满足，待立项。 [D09-T03 验收与证据](../../openspec/changes/archive/2026-11-24-add-spot-point-shadows/tasks.md#final-verification)
 
 - [ ] 实现基础 Hard/PCF 的深度比较、接收偏移、过滤质量和 cascade/spot/point 查询；PCF 过滤比较结果，atlas guard band 与 point 跨面采样覆盖最大核，明确 Poisson 仅为采样分布。
 - [ ] 让共享 EvaluateLighting 消费同一 visibility 接口，材质响应与阴影采样解耦。

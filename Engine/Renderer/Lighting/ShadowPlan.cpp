@@ -173,7 +173,13 @@ namespace Physara::Renderer
             }
             else
             {
-                group.views = Detail::CollectLocalShadowCasters(scene, *local);
+                auto result = Detail::MakeLocalShadowPlan(scene, *local, offer.edge);
+                if (!result)
+                {
+                    link.reason = ShadowPlanReason::InvalidVolume;
+                    continue;
+                }
+                group.views = std::move(*result);
             }
             for (std::size_t i = 0; i < subviews.size(); ++i)
             {
@@ -343,9 +349,14 @@ namespace Physara::Renderer
                 return false;
             }
         }
-        else if (std::get<LocalShadowPlan>(current.views).volume != std::get<LocalShadowPlan>(previous.views).volume)
+        else
         {
-            return false;
+            const auto &now = std::get<LocalShadowPlan>(current.views);
+            const auto &before = std::get<LocalShadowPlan>(previous.views);
+            if (now.volume != before.volume || now.projections[region] != before.projections[region])
+            {
+                return false;
+            }
         }
         return std::ranges::equal(current.Casters(region), previous.Casters(region),
                                   [&](auto now, auto before) { return inputs[now] == oldInputs[before]; });
@@ -462,6 +473,7 @@ namespace Physara::Renderer
                                             requestRevision, limits);
         statistics.reason = settings.enabled ? ShadowPlanReason::ViewUnavailable : ShadowPlanReason::Disabled;
         statistics.directionalReason = statistics.reason;
+        statistics.diagnosticReason = statistics.reason;
         Clear(statistics);
         return {{}, statistics};
     }
@@ -484,55 +496,93 @@ namespace Physara::Renderer
         return ShadowPlanReason::NoReceiverCoverage;
     }
 
+    /// @brief 在同一冻结场景下把选中身份解析到完整准入组. 保留单灯拒绝原因供 UI 与附件结算使用.
+    static const ShadowLightPlan *ResolveDiagnostic(const ShadowPlan &plan, const SceneFrame &scene,
+        const ShadowDiagnostic &diagnostic, ShadowPlanStatistics &statistics) noexcept
+    {
+        if (std::holds_alternative<CascadeDiagnostic>(diagnostic))
+        {
+            statistics.diagnosticReason = statistics.directionalReason;
+            return plan.Directional();
+        }
+        if (const auto *local = std::get_if<LocalShadowSelection>(&diagnostic))
+        {
+            const auto found = std::ranges::find(plan.lights, local->light, &ShadowLightLink::light);
+            if (found != plan.lights.end() && scene.lights[found->sceneLightIndex].light.type == local->kind)
+            {
+                statistics.diagnosticReason = found->reason;
+                return found->plan ? &plan.admitted[*found->plan] : nullptr;
+            }
+            const auto light = std::ranges::find(scene.lights, local->light, &LightRecord::entity);
+            statistics.diagnosticReason = light != scene.lights.end() && light->light.type == local->kind ?
+                ShadowPlanReason::NoReceiverCoverage : ShadowPlanReason::LightUnavailable;
+        }
+        else
+        {
+            statistics.diagnosticReason = ShadowPlanReason::Disabled;
+        }
+        return nullptr;
+    }
+
     PreparedShadows ShadowPlanCache::Prepare(const SceneFrame &scene, const CameraSnapshot &camera,
         std::span<const Detail::CullingPlane, 6> planes, std::array<double, 2> sideLimit,
         std::span<const std::uint32_t> lights, const ShadowSettings &settings, std::uint64_t requestRevision,
-        const ShadowPlanningLimits &limits, bool requireDirectional) noexcept
+        const ShadowPlanningLimits &limits, const ShadowDiagnostic &diagnostic, bool requireDiagnostic,
+        bool hasVisibleReceivers) noexcept
     {
         const auto initial = InitialStatistics(scene.scene, scene.structureRevision, scene.contentRevision, settings,
                                                requestRevision, limits);
-        const auto reject = [&](ShadowPlanReason reason, const decltype(initial.unallocated) &unallocated)
+        const auto reject = [&](ShadowPlanReason reason, const ShadowPlanStatistics &failed)
         {
-            // reason 字段说明整份计划为何为空, directionalReason 保留方向光的规划结果.
+            // 在旧缓存上结算发布过的区域. 本次试算只交付拒绝原因, 其中灯光诊断和总体摘要各有来源.
             auto summary = initial;
-            summary.reason = requireDirectional && settings.enabled ? ShadowPlanReason::ViewUnavailable : reason;
-            summary.directionalReason = reason;
-            // 命中缓存时 unallocated 借用 m_State. 必须在 Clear 释放旧计划前复制这次规划的拒绝计数.
-            summary.unallocated = unallocated;
+            summary.reason = requireDiagnostic && settings.enabled ? ShadowPlanReason::ViewUnavailable : reason;
+            summary.directionalReason = failed.directionalReason;
+            summary.diagnosticReason = failed.diagnosticReason;
+            summary.unallocated = failed.unallocated;
             Clear(summary);
             return PreparedShadows{{}, summary};
         };
         const auto unavailable = [&](ShadowPlanReason reason)
         {
-            // 全局规划失败阻止可见灯取得分配, 计数口径与是否要求方向光诊断独立.
-            decltype(initial.unallocated) counts{};
+            // 全局规划失败时所有可见灯共用该原因. 普通和仅容纳诊断的布局使用同一计数口径.
+            auto failed = initial;
+            failed.directionalReason = failed.diagnosticReason = reason;
             if (settings.enabled)
             {
-                counts[static_cast<std::size_t>(reason)] = lights.size();
+                failed.unallocated[static_cast<std::size_t>(reason)] = lights.size();
             }
-            return reject(reason, counts);
+            return reject(reason, failed);
         };
         if (!settings.enabled || limits.maxLayers == 0 || limits.maxEdge == 0)
         {
             return unavailable(settings.enabled ? ShadowPlanReason::DepthArrayUnavailable : ShadowPlanReason::Disabled);
+        }
+        if (requireDiagnostic && !hasVisibleReceivers)
+        {
+            // 有同轮冻结场景时仍可区分灯身份失配和空覆盖. 结算旧地址即可, 无需构造候选分配.
+            auto failed = initial;
+            failed.directionalReason = ShadowPlanReason::NoReceiverCoverage;
+            static_cast<void>(ResolveDiagnostic(ShadowPlan{}, scene, diagnostic, failed));
+            return reject(failed.diagnosticReason, failed);
         }
         const ShadowPlanInputs inputs{scene.scene, scene.structureRevision, scene.contentRevision,
             {camera.worldFromView, {camera.stableClipFromView[0], camera.stableClipFromView[5]}, sideLimit,
              camera.nearPlane, camera.cullingFar, camera.orthographic}, settings, limits};
         if (m_State && m_State->inputs == inputs)
         {
-            if (requireDirectional && !m_State->plan->Directional())
+            auto reused = m_State->statistics;
+            const auto *selected = ResolveDiagnostic(*m_State->plan, scene, diagnostic, reused);
+            if (requireDiagnostic && !selected)
             {
-                const auto &cached = m_State->statistics;
-                return reject(cached.directionalReason, cached.unallocated);
+                return reject(reused.diagnosticReason, reused);
             }
             // 旧槽继续持有原计划. 这次返回自己的请求代和变化计数, 不改写上次发布的摘要.
-            auto reused = m_State->statistics;
             reused.requestRevision = requestRevision;
             reused.dirtyRegions = 0;
             reused.releasedRegions = 0;
             reused.reused = true;
-            return {m_State->plan, reused};
+            return {m_State->plan, reused, selected};
         }
 
         // 给候选预留下一版号, 到发布 State 时才提交. 布局拒绝只按旧缓存中的实际区域结算一次.
@@ -546,10 +596,11 @@ namespace Physara::Renderer
             auto statistics = initial;
             auto plan = std::make_shared<ShadowPlan>();
             const auto layout = SelectLights(*plan, scene, inputs.receiver, planes, lights, settings, limits, statistics);
-            if (requireDirectional && !plan->Directional())
+            const auto *selected = ResolveDiagnostic(*plan, scene, diagnostic, statistics);
+            if (requireDiagnostic && !selected)
             {
                 // 布局只容纳诊断输出. 用仍活动的旧计划结算, 本次试算不分配区域或推进版号.
-                return reject(statistics.directionalReason, statistics.unallocated);
+                return reject(statistics.diagnosticReason, statistics);
             }
             plan->edge = layout.edge;
             auto casters = CasterInputs(scene, *plan);
@@ -577,7 +628,7 @@ namespace Physara::Renderer
             m_State = std::make_unique<State>(State{inputs, plan, std::move(casters), statistics});
             m_PlanRevision = revision;
             m_AllocationRevision = statistics.allocationRevision;
-            return {std::move(plan), statistics};
+            return {std::move(plan), statistics, selected};
         }
         catch (const std::bad_alloc &)
         {

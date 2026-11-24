@@ -118,9 +118,116 @@ namespace Physara::Editor::Detail
         case Budget: return "Layer or byte budget";
         case StorageUnavailable: return "CPU allocation failed";
         case RevisionExhausted: return "Plan revision exhausted";
+        case LightUnavailable: return "Selected light unavailable";
         case Count: break;
         }
         return "";
+    }
+
+    /// @brief 用名称及灯型显示选择, 由实体 handle 单独标识同名灯.
+    static std::string ShadowLightLabel(const Scene::EntityRecord &record, Asset::ModelLightKind kind)
+    {
+        std::string label(LocalShadowPreviewName(kind));
+        label.append(" - ");
+        label.append(record.properties.name.empty() ? record.id : record.properties.name);
+        return label;
+    }
+
+    /// @brief 记录本 View 的选择意图, 同时区分当前 CPU 计划、显示退路和最后接受的诊断.
+    static void DrawViewShadows(const WorkspaceState &state, const Renderer::RenderedScene *accepted,
+                                bool allowEdits, WorkspaceFrame &frame)
+    {
+        using namespace Renderer;
+        const auto &view = *state.view;
+        const auto &selection = view.RequestedShadowDiagnostic();
+        const auto *local = std::get_if<LocalShadowSelection>(&selection);
+        const bool cascades = std::holds_alternative<CascadeDiagnostic>(selection);
+        const auto entity = local && state.scene ? state.scene->Get(local->light) : std::nullopt;
+        const std::string label = local ? (entity && entity->record.properties.light &&
+            entity->record.properties.light->type == local->kind ? ShadowLightLabel(entity->record, local->kind) :
+            "Selected light unavailable") : (cascades ? "Directional CSM" : "Off");
+
+        bool planShadows = view.RequestedShadows().enabled;
+        ImGui::BeginDisabled(!allowEdits || !state.scene);
+        if (ImGui::Checkbox("Plan shadows (CPU)", &planShadows))
+        {
+            frame.shadowPlanning = ShadowToggle{view.Id(), planShadows};
+        }
+        if (ImGui::BeginCombo("Shadow diagnostic", label.c_str()))
+        {
+            if (ImGui::Selectable("Off", !local && !cascades))
+            {
+                frame.shadowDiagnostic = ShadowDiagnosticIntent{view.Id(), {}};
+            }
+            if (ImGui::Selectable("Directional CSM", cascades))
+            {
+                frame.shadowDiagnostic = ShadowDiagnosticIntent{view.Id(), CascadeDiagnostic{}};
+            }
+            if (state.scene)
+            {
+                state.scene->VisitEntities([&](Scene::EntityHandle handle, const Scene::EntityView &candidate)
+                {
+                    const auto &light = candidate.record.properties.light;
+                    if (light && light->type != Asset::ModelLightKind::Directional)
+                    {
+                        const LocalShadowSelection option{handle, light->type};
+                        const auto name = ShadowLightLabel(candidate.record, light->type);
+                        ImGui::PushID(static_cast<int>(handle.index));
+                        if (ImGui::Selectable(name.c_str(), local && *local == option))
+                        {
+                            frame.shadowDiagnostic = ShadowDiagnosticIntent{view.Id(), option};
+                        }
+                        ImGui::PopID();
+                    }
+                });
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+
+        if (const auto &last = view.LastShadowDiagnostic(); last && state.scene && last->scene == state.scene->Id())
+        {
+            if (const auto *past = std::get_if<LocalShadowSelection>(&last->selection))
+            {
+                ImGui::Text("Last accepted %s / light %u:%llu / ticket %llu", LocalShadowPreviewName(past->kind),
+                            past->light.index, static_cast<unsigned long long>(past->light.generation),
+                            static_cast<unsigned long long>(last->submission));
+            }
+            else
+            {
+                ImGui::Text("Last accepted CSM / ticket %llu", static_cast<unsigned long long>(last->submission));
+            }
+        }
+        if ((!local && !cascades) || !state.scene)
+        {
+            return;
+        }
+        const auto settings = view.Settings();
+        const auto revisions = state.scene->Versions();
+        const auto scene = state.scene->Id();
+        const auto *planned = state.statistics && state.statistics->shadows[0] ? &*state.statistics->shadows[0] : nullptr;
+        // 计划和颜色分别核对各自的来源. 相机移动时仍可查看上次接受的诊断和票据.
+        if (planned && planned->view == view.Id() && planned->layoutRevision == settings.requestRevision &&
+            planned->plan.scene == scene && planned->plan.contentRevision == revisions.renderContent &&
+            planned->plan.requestRevision == view.ShadowRequestRevision() &&
+            planned->sceneCameraRevision == revisions.camera && planned->documentRevision == view.DocumentRevision())
+        {
+            const auto &plan = planned->plan;
+            ImGui::Text("Shadow plan: %s / %u requested, %u planned texels", ShadowStatus(plan.diagnosticReason),
+                        plan.requestedEdge, plan.effectiveEdge);
+        }
+        if (settings.reason != ViewSettingReason::None)
+        {
+            ImGui::Text("Shadow output: %s", ViewStatus(settings.reason));
+        }
+        else if (accepted && accepted->scene == scene && accepted->contentRevision == revisions.renderContent &&
+                 accepted->shadowRequestRevision == view.ShadowRequestRevision() &&
+                 accepted->camera.sceneCameraRevision == revisions.camera &&
+                 accepted->documentRevision == view.DocumentRevision() &&
+                 (local ? accepted->localShadow == *local : accepted->directionalCascades != 0))
+        {
+            ImGui::TextUnformatted("Shadow output: accepted");
+        }
     }
 
     /// @brief 用调用方选定的场景请求或已接受帧显示同一路径可对照的源代、查询参数和角色.
@@ -336,7 +443,8 @@ namespace Physara::Editor::Detail
                     static_cast<unsigned long long>(source.view.generation),
                     static_cast<unsigned long long>(source.submission));
         ImGui::Text("Accepted shader generation %llu", static_cast<unsigned long long>(source.shaderGeneration));
-        ImGui::Text("%s / %s / %s", source.directionalCascades ? "Directional CSM" :
+        ImGui::Text("%s / %s / %s", source.localShadow ? LocalShadowPreviewName(source.localShadow->kind) :
+                    source.directionalCascades ? "Directional CSM" :
                     PreviewNames[static_cast<std::size_t>(source.preview)],
                     source.display.profile == Renderer::DisplayProfile::AcesSdr ? "Filament ACES SDR" : "Linear clamp",
                     source.display.antiAliasing == Renderer::AntiAliasing::Fxaa ? "FXAA" : "None");
@@ -872,50 +980,13 @@ namespace Physara::Editor::Detail
                         {
                             DrawEnvironmentSummary("Last scene environment", *lastScene->environment);
                         }
-                        else if (lastScene && !lastScene->directionalCascades &&
+                        else if (lastScene && !lastScene->directionalCascades && !lastScene->localShadow &&
                                  lastScene->mode == Renderer::PreviewMode::PhysicalLighting)
                         {
                             ImGui::TextUnformatted("Last scene environment - unused");
                         }
                         DrawViewSettings(settings, allowEdits, frame);
-                        bool planShadows = state.view->RequestedShadows().enabled;
-                        bool cascadePreview = state.view->CascadePreviewRequested();
-                        ImGui::BeginDisabled(!allowEdits);
-                        if (ImGui::Checkbox("Plan shadows (CPU)", &planShadows))
-                        {
-                            frame.shadowPlanning = ShadowToggle{state.view->Id(), planShadows};
-                        }
-                        if (ImGui::Checkbox("Directional CSM diagnostic", &cascadePreview))
-                        {
-                            frame.cascadePreview = ShadowToggle{state.view->Id(), cascadePreview};
-                        }
-                        ImGui::EndDisabled();
-                        if (cascadePreview)
-                        {
-                            // 请求可以在本次 UI 批次先变化. CPU 计划来自最近一次准备, 颜色来自已接受的 ViewOutput.
-                            if (!planShadows)
-                            {
-                                ImGui::TextUnformatted("Enable shadow planning to view directional cascades.");
-                            }
-                            else if (settings.reason != Renderer::ViewSettingReason::None)
-                            {
-                                ImGui::Text("CSM diagnostic: %s", ViewStatus(settings.reason));
-                            }
-                            else if (state.statistics && state.statistics->shadows[0] &&
-                                     state.statistics->shadows[0]->view == state.view->Id() && state.scene &&
-                                     state.statistics->shadows[0]->plan.scene == state.scene->Id())
-                            {
-                                const auto &plan = state.statistics->shadows[0]->plan;
-                                if (!plan.directionalCascades)
-                                {
-                                    ImGui::Text("CSM diagnostic: %s", ShadowStatus(plan.directionalReason));
-                                }
-                                else if (!acceptedPreview || !acceptedPreview->directionalCascades)
-                                {
-                                    ImGui::TextUnformatted("CSM diagnostic: awaiting accepted geometry.");
-                                }
-                            }
-                        }
+                        DrawViewShadows(state, acceptedPreview, allowEdits, frame);
                         drawEditError();
                     }
                     break;

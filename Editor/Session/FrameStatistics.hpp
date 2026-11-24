@@ -17,7 +17,7 @@ namespace Physara::Editor
     /// @brief 当前提交的计时状态. Skipped 表示已有查询全在用, Unavailable 表示设备未提供可用查询.
     enum class GpuIntervalState { Unavailable, Skipped, Pending, Ready, Failed };
 
-    /// @brief 标识一次正常场景的完整提交. preview 保存基础请求, directionalCascades 标识实际诊断.
+    /// @brief 标识一次正常场景的完整提交. 基础预览请求与实际阴影诊断各有标识.
     /// display 和两个布局均来自该次颜色提交, GPU 计时稍后仍以这个身份配对.
     struct SceneFrameIdentity
     {
@@ -34,6 +34,7 @@ namespace Physara::Editor
         Renderer::DisplaySettings display;
         std::uint64_t shaderGeneration{}; ///< 此票据实际使用的程序代, 后续准备轮可独立推进.
         std::uint32_t directionalCascades{}; ///< 当前颜色若为级联诊断则交付实际级数.
+        std::optional<Renderer::LocalShadowSelection> localShadow; ///< 当前颜色查询的局部灯.
     };
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.
@@ -124,6 +125,8 @@ namespace Physara::Editor
     {
         Renderer::ViewId view;
         std::uint64_t layoutRevision; ///< 本次像素布局的请求代. 阴影设置的会话请求代另见 plan.requestRevision.
+        std::uint64_t sceneCameraRevision; ///< 场景相机可独立于光源及几何内容换代.
+        std::uint64_t documentRevision; ///< 所属 View 的文档代, 包含导航相机与相机引用.
         Renderer::ViewSettingReason viewReason;
         Renderer::ShadowPlanStatistics plan;
     };

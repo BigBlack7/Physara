@@ -21,9 +21,19 @@ namespace Physara::Editor::Detail
     inline constexpr const char *PreviewNames[] = {
         "Base Color", "World Normal", "Material Channels", "Emissive", "Direct Lighting", "Physical Lighting"};
 
-    /// @brief 按颜色的实际来源命名, 级联使用同一记录中的已渲染级数判定.
+    /// @brief 以实际诊断光源类型命名当前视口颜色.
+    [[nodiscard]] inline const char *LocalShadowPreviewName(Asset::ModelLightKind kind) noexcept
+    {
+        return kind == Asset::ModelLightKind::Spot ? "Spot shadow" : "Point shadow";
+    }
+
+    /// @brief 按颜色的实际来源命名. 基础预览请求可能同时保留以供恢复.
     [[nodiscard]] inline const char *ScenePreviewName(const Renderer::RenderedScene &scene) noexcept
     {
+        if (scene.localShadow)
+        {
+            return LocalShadowPreviewName(scene.localShadow->kind);
+        }
         return scene.directionalCascades ? "Directional CSM" : PreviewNames[static_cast<std::size_t>(scene.mode)];
     }
 

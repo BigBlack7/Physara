@@ -45,7 +45,7 @@ namespace Physara::Renderer::Detail
     /// @brief 以对象身份和固定图元的局部基点定位对象行. 命中后核对实际变换代.
     using ObjectRowKey = std::pair<ObjectKey, std::array<float, 3>>;
     /// @brief 模型版本, 源材质, 覆盖对象, 源 Primitive 槽和仅覆盖标志. 无实例覆盖时对象与槽取零.
-    /// 末项为 true 的行只为深度或级联诊断准备, 完整颜色材质使用独立键.
+    /// 末项为 true 的行只准备深度写入和阴影诊断所需的覆盖资源, 完整颜色材质使用独立键.
     using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t, bool>;
     using SamplerKey = std::array<std::uint32_t, 4>; ///< min、mag、wrapS、wrapT, 已填充缺省值.
 
@@ -302,17 +302,21 @@ namespace Physara::Renderer::Detail
     /// @brief 主表面及常规阴影光栅角色. 每个角色使用自己对应的深度约定.
     enum class SurfacePhase : std::uint8_t { Combined, Depth, ReadOnlyDepth, ShadowDepth };
     /// @brief 按实际资源形状选择颜色变体, 与每轮连续创作参数独立.
-    enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl, CascadePreview };
+    enum class LightingProgram : std::uint8_t { Legacy, Physical, Ibl, CascadePreview, SpotPreview, PointPreview };
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
     inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
     inline constexpr std::uint32_t CascadeConstantsSlot = 1; ///< StaticForward 的 PerPass b1.
     inline constexpr std::uint32_t CascadeMatricesSlot = 2; ///< StaticForward 的 PerPass b2.
     inline constexpr std::uint32_t FirstCascadeImageSlot = 3; ///< StaticForward 的 PerPass t3..t6 为分层视图.
+    inline constexpr std::uint32_t LocalShadowConstantsSlot = 3; ///< 局部查询的 PerPass b3.
+    inline constexpr std::uint32_t LocalShadowMatricesSlot = 4; ///< 点光后三面使用 PerPass b4.
+    inline constexpr std::uint32_t FirstLocalShadowImageSlot = 7; ///< 局部查询的 PerPass t7..t12.
     inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
 
-    /// @brief 级联诊断的片元活动集合, 同时匹配覆盖材质与图声明的级联常量和逐层采样.
-    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> CascadePreviewResources() noexcept;
+    /// @brief 阴影诊断的片元活动集合. 普通角色返回空, 诊断角色匹配实际覆盖和逐层采样布局.
+    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> ShadowPreviewResources(
+        Shader::ProductShader role) noexcept;
 
     /// @brief 明确区分同为 ShaderRead 的对象和材质页, 两者记录步长由生成接口决定.
     enum class TableLayout : std::uint8_t { Objects, Materials };
@@ -387,20 +391,24 @@ namespace Physara::Renderer::Detail
         ForwardEncodingCounts &encodings; ///< 直接计入同槽的实际 CPU 编码, 拒绝单路时仍保留事实.
     };
 
-    /// @brief CSM 的有界逐层绘制和诊断查询. depth.retained 非空时当前图只导入匹配层.
-    struct DirectionalFrame
+    /// @brief 当前诊断的逐层绘制和查询. levels 的有效前缀按紧凑物理层排列, 与 depth.regions 逐项对应.
+    /// depth.retained 命中后只读导入整组. 查询常量仍随本槽更新, 聚光仅占第一个常量块.
+    struct ShadowFrame
     {
-        DirectionalFrame(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
+        ShadowFrame(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
             levels{StaticDrawWork(batch, counts), StaticDrawWork(batch, counts),
+                   StaticDrawWork(batch, counts), StaticDrawWork(batch, counts),
                    StaticDrawWork(batch, counts), StaticDrawWork(batch, counts)}
         {}
 
-        std::array<StaticDrawWork, MaxDirectionalCascades> levels;
-        DirectionalDepth depth;
+        std::array<StaticDrawWork, MaxShadowSubviews> levels;
+        ShadowDepthGroup depth;
         std::shared_ptr<ConstantRow> constants;
         std::shared_ptr<ConstantRow> matrices;
         std::optional<StaticAbi::ForwardCascades> values;
         std::optional<StaticAbi::ForwardCascadeMatrices> matrixValues;
+        std::optional<StaticAbi::ForwardLocalShadow> localValues;
+        std::optional<StaticAbi::ForwardLocalShadowMatrices> localMatrixValues;
     };
 
     /// @brief 安全槽中的一个 View 候选. Draw, 灯光和阴影各自在实际消费前准备.
@@ -416,7 +424,7 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<LightTable> activeLights;
         RHI::BindingLayoutHandle lightLayout;
         EnvironmentFrame environment;
-        std::optional<DirectionalFrame> directional;
+        std::optional<ShadowFrame> shadow;
         PostProcess::DisplayFrame display;
     };
 
@@ -466,7 +474,7 @@ namespace Physara::Renderer::Detail
         std::array<RHI::GraphicsPipelineHandle, GeometryPipelineSlots * ForwardColorPrograms> pipelines;
 
     private:
-        /// @brief 核对颜色角色的活动资源, 级联还须符合基色覆盖配方. 接续该角色的固定布局.
+        /// @brief 核对颜色角色的活动资源, 三种阴影诊断另核对基色覆盖和各自的层绑定. 接续该角色的固定布局.
         void PrepareLighting(ForwardDevice &owner, LightingProgram kind, const Shader::ProductPackages &packages);
         /// @brief 准备只写工作色 RGB 的天空 Pipeline, 成功后保存其包摘要供下次换代比较.
         void PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths, const Shader::ProductPackages &packages);
@@ -624,10 +632,10 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] SamplerKey EffectiveSampler(const Asset::ModelSampler &sampler) noexcept;
     /// @brief 共享合法枚举组合的 sampler, LOD 可访问范围由对应纹理层数约束.
     [[nodiscard]] RHI::SamplerHandle PrepareSampler(ForwardDevice &device, const SamplerKey &key);
-    /// @brief 准备主可见集, 登记着色及显示所需的几何角色. 有方向光诊断时另从计划读取各级 caster.
-    /// @param directional 借用 view.shadows 中已准入的主方向光组. 空指针选择普通 Forward.
+    /// @brief 准备主可见集并登记所需的程序键. 阴影诊断从同一计划取查询常量和待生产层的 caster.
+    /// @param shadowLight 借用本次 View 选中的完整灯组. 空指针选择普通 Forward.
     void PlanDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view, PreviewMode mode,
-                   const ShadowLightPlan *directional);
+                   const ShadowLightPlan *shadowLight);
     /// @brief 从本帧选定代取得每个批次和天空所需的句柄. 缺项报告等待或硬失败, 不创建 Pipeline.
     void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view);
 }

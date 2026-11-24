@@ -8,10 +8,11 @@ add_executable(Physara Main.cpp Frame.hpp Frame.cpp FrameStatistics.hpp FrameSta
 get_target_property(editorUiPackage PhysaraEditor PHYSARA_UI_PACKAGE)
 get_target_property(editorUiPackageTarget PhysaraEditor PHYSARA_UI_PACKAGE_TARGET)
 add_dependencies(Physara ${editorUiPackageTarget})
-# 取 Renderer 登记的包路径和生成目标. 两个方向光角色也随产品构建, 运行时各 View 按需求取包.
+# 取 Renderer 登记的包路径和生成目标. 运行时各 View 按实际阴影诊断需求取包.
 set(forwardResourcePaths "")
 foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
-        DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview)
+        DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
+        StaticSpotShadowPreview StaticPointShadowPreview)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

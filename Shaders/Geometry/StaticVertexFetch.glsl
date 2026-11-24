@@ -51,9 +51,9 @@ void FetchStaticVertex()
     vMaterialRow = instance.materialRow;
     vLightingAnchor = object.lightingAnchor;
     FetchLightingOffset(object, vLightingOffsetHigh, vLightingOffsetLow);
-#ifdef PHYSARA_DIRECTIONAL_SHADOW_DEPTH
+#ifdef PHYSARA_STATIC_SHADOW_DEPTH
     // LightingDelta 给出从表面到投影原点的向量, 取反后得到光空间变换所需的表面相对坐标.
-    // 写入矩阵的常量 z 偏移由 CPU 按半个世界 texel 和本级深度跨度求出.
+    // 写入矩阵包含按该子视图的投影及世界 texel 换算的齐次 z 偏移.
     LightingPosition origin = LightingPosition(perView.shadowOriginHigh, perView.shadowOriginLow);
     LightingSurface surface = LightingSurface(vLightingAnchor, LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
     gl_Position = perView.shadowClipFromOrigin * vec4(-LightingDelta(origin, surface, 1.0), 1.0);
