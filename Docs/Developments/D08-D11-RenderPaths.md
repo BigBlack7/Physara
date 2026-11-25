@@ -214,11 +214,11 @@
 
 **职责位置：** Renderer/Lighting、UploadBatch、Shaders/Lighting。**前置：** [D10-T01](#d10-t01)。**架构依据：** [5.4](../Architecture.md#light-preparation)、[5.5](../Architecture.md#gpu-residency)、[7.4](../Architecture.md#uploads)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-25-add-froxel-overflow-and-graph-uploads/tasks.md#final-verification)
 
-- [ ] 按网格/索引预算生成正常或 overflow header，溢出 Shader 改走完整可见灯列表，不截断光源。
-- [ ] 把 headers/indices/global lights 放入拥有型上传包，图声明写入和后继 ShaderResource 访问。
-- [ ] 暴露溢出次数、索引量和 fallback 成本，强制小预算测试溢出输出与 full-list 一致。
+- [x] 按网格/索引预算生成正常或 overflow header，溢出 Shader 改走完整可见灯列表，不截断光源。
+- [x] 把 headers/indices/global lights 放入拥有型上传包，图声明写入和后继 ShaderResource 访问。
+- [x] 暴露溢出次数、索引量和 fallback 成本，强制小预算测试溢出输出与 full-list 一致。
 
 **完成条件：** 内存压力影响成本和可见状态，不能改变场景中的光照内容。
 
@@ -226,6 +226,8 @@
 ### D10-T03 · 实现 Forward+ 子图与计划准备
 
 **职责位置：** Renderer/Paths、Shaders/Passes、Engine/Shader。**前置：** [D10-T02](#d10-t02)。**架构依据：** [6.1](../Architecture.md#paths)、[8.7](../Architecture.md#opaque-shading)、[5.7](../Architecture.md#plan-readiness)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 用同一 PrepareSurface 与共享 EvaluateLighting 接入 Froxel candidate provider，材质/阴影/IBL 代码不分叉。
 - [ ] 准备新的结构变体与必要绑定，沿既有 Ready/Pending/Failed 协议进入 View 计划。

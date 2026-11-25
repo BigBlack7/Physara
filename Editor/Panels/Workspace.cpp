@@ -487,6 +487,53 @@ namespace Physara::Editor::Detail
         }
     }
 
+    /// @brief 描述 CPU 网格结果. 溢出仍是可用网格, 其实际数量由调用方单独显示.
+    static const char *FroxelStatusName(Renderer::FroxelStatus status) noexcept
+    {
+        switch (status)
+        {
+        case Renderer::FroxelStatus::Ready: return "Ready";
+        case Renderer::FroxelStatus::ViewUnavailable: return "View unavailable";
+        case Renderer::FroxelStatus::InvalidGrid: return "Invalid grid";
+        case Renderer::FroxelStatus::UnrepresentableGrid: return "Grid cannot be represented";
+        case Renderer::FroxelStatus::HeaderCapacity: return "Header budget exceeded";
+        case Renderer::FroxelStatus::LightCapacity: return "Light row capacity exceeded";
+        case Renderer::FroxelStatus::StorageUnavailable: return "CPU storage unavailable";
+        case Renderer::FroxelStatus::NotRequested: return "Not requested";
+        }
+        return "Unknown";
+    }
+
+    /// @brief 显示各路本次显式请求的准备摘要. 退路灯行数描述单个查询的工作量, 帧上传及 GPU 时间另按票据显示.
+    static void DrawFroxelStatistics(const FrameStatistics &statistics)
+    {
+        for (const auto &entry : statistics.froxels)
+        {
+            if (!entry)
+            {
+                continue;
+            }
+            const auto &plan = entry->plan;
+            ImGui::Text("CPU Froxel / View #%llu / Scene #%llu: %s",
+                        static_cast<unsigned long long>(entry->view.generation),
+                        static_cast<unsigned long long>(plan.scene.generation), FroxelStatusName(entry->status));
+            if (entry->status == Renderer::FroxelStatus::ViewUnavailable)
+            {
+                ImGui::TextUnformatted(ViewStatus(entry->viewReason));
+            }
+            if (entry->deliveryFailure)
+            {
+                ImGui::TextWrapped("%s", entry->deliveryFailure->View().data());
+            }
+            ImGui::Text("%u of %u index entries / %u overflow of %u cells",
+                        plan.indexCount, plan.indexBudget, plan.overflowCellCount, plan.cellCount);
+            if (plan.fallbackLocalCount)
+            {
+                ImGui::Text("%zu local light rows per fallback query", *plan.fallbackLocalCount);
+            }
+        }
+    }
+
     /// @brief 展示最近一次场景提交. 表面, 批次和参数记录取自 source.view, 原生调用数还包括同图 UI 等消费者.
     /// GPU 时长可以稍后就绪, 使用它自己的场景和票据标注.
     static void DrawFrameStatistics(const WorkspaceState &state)
@@ -497,6 +544,7 @@ namespace Physara::Editor::Detail
             DrawGraphStatistics(*state.statistics);
             DrawShaderStatistics(*state.statistics);
             DrawShadowStatistics(*state.statistics);
+            DrawFroxelStatistics(*state.statistics);
         }
         if (!state.statistics || !state.statistics->latestScene)
         {

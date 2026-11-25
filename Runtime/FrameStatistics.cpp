@@ -1,13 +1,22 @@
 #include "FrameStatistics.hpp"
 
 /// @file
-/// @brief 查询可用与包退休是独立事实. 读取到的秒数只交给原票据, 包 lease 继续由 RHI 管理.
+/// @brief 按值保存本次 View 的准备事实. 异步查询读到的秒数另按原提交票据发布, 包的退休由 RHI 管理.
 
 #include <cassert>
 #include <cmath>
 
 namespace Physara::Runtime
 {
+    void FrameStatistics::PublishFroxels(std::size_t index, const Renderer::PreparedView *view,
+                                         std::optional<Core::BoundedText> deliveryFailure) noexcept
+    {
+        auto &entry = m_Stats.froxels[index];
+        entry = view && view->froxelStatistics ? std::optional{Editor::ViewFroxelStatistics{
+            view->view, view->requestRevision, view->cameraRevision, view->documentRevision,
+            view->reason, view->froxelStatus, *view->froxelStatistics, deliveryFailure}} : std::nullopt;
+    }
+
     FrameStatistics::FrameStatistics(Platform::DeviceHost &host)
     {
         auto &device = *host.GetDevice();

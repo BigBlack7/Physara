@@ -68,6 +68,7 @@ add_library(PhysaraRenderer STATIC
     Renderer/Prepare/ViewPreparation.hpp Renderer/Prepare/ViewPreparation.cpp
     Renderer/Lighting/PunctualLights.hpp Renderer/Lighting/PunctualLights.cpp
     Renderer/Lighting/Froxel.hpp Renderer/Lighting/Froxel.cpp
+    Renderer/Lighting/FroxelGpu.hpp Renderer/Lighting/FroxelGpu.cpp
     Renderer/Lighting/LightVolume.hpp
     Renderer/Lighting/ShadowPlan.hpp Renderer/Lighting/ShadowPlan.cpp
     Renderer/Lighting/ShadowVolumes.hpp Renderer/Lighting/ShadowVolumes.cpp

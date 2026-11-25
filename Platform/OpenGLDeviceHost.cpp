@@ -74,6 +74,7 @@ namespace Physara::Platform::Detail
         GLint encoding = 0;
         GLboolean doubleBuffered = GL_FALSE;
         std::array<GLint, 7> limits{};
+        GLint64 uniformBlockBytes = 0;
         GLint64 storageBlockBytes = 0;
     };
 
@@ -93,7 +94,7 @@ namespace Physara::Platform::Detail
             return MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage,
                              "Unexpected default framebuffer, context flags or color encoding");
         }
-        if (observed.storageBlockBytes <= 0 ||
+        if (observed.uniformBlockBytes <= 0 || observed.storageBlockBytes <= 0 ||
             std::ranges::any_of(observed.limits, [](GLint limit) { return limit <= 0; }))
         {
             return MakeError(&state, HostErrorReason::EnvironmentQuery, state.stage,
@@ -114,6 +115,7 @@ namespace Physara::Platform::Detail
         info.maxCombinedTextureUnits = static_cast<std::uint32_t>(observed.limits[4]);
         info.uniformBufferOffsetAlignmentBytes = static_cast<std::uint32_t>(observed.limits[5]);
         info.storageBufferOffsetAlignmentBytes = static_cast<std::uint32_t>(observed.limits[6]);
+        info.maxUniformBufferBlockBytes = static_cast<std::uint64_t>(observed.uniformBlockBytes);
         info.maxStorageBufferBlockBytes = static_cast<std::uint64_t>(observed.storageBlockBytes);
         return std::nullopt;
     }
@@ -173,6 +175,7 @@ namespace Physara::Platform::Detail
             glGetIntegerv(LimitNames[index], &observed.limits[index]);
         }
         // 块大小按 64 位字节数查询. 与绑定起点对齐分别交付, 由图核对每个实际读取区间.
+        glGetInteger64v(GL_MAX_UNIFORM_BLOCK_SIZE, &observed.uniformBlockBytes);
         glGetInteger64v(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &observed.storageBlockBytes);
         const bool stringsValid = ReadGlString(GL_VENDOR, state.info.vendor) &&
                                   ReadGlString(GL_RENDERER, state.info.renderer) &&

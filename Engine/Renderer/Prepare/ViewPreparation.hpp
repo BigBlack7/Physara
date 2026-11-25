@@ -35,13 +35,26 @@ namespace Physara::Renderer
         ViewExtent tileExtent{32, 32};
         std::uint32_t sliceCount{24};
         std::optional<std::uint32_t> indexLimit;
+
+        /// @brief 有限灯索引池的有效额度, 单位为条目, 受生成接口容量约束.
+        [[nodiscard]] std::uint32_t IndexBudget() const noexcept;
     };
 
     /// @brief 单独报告候选准备状态. 非 Ready 状态均不交付部分数组.
     enum class FroxelStatus : std::uint8_t
     {
         NotRequested, ViewUnavailable, Ready, InvalidGrid, UnrepresentableGrid,
-        HeaderCapacity, LightCapacity, IndexCapacity, StorageUnavailable
+        HeaderCapacity, LightCapacity, StorageUnavailable
+    };
+
+    /// @brief 显式请求的当前 CPU 准备事实. 布局拒绝时仍记录输入身份和额度.
+    struct FroxelPreparationStatistics
+    {
+        Scene::SceneId scene;
+        std::uint64_t contentRevision{}, sceneCameraRevision{};
+        /// indexBudget 是本次有限索引额度. 其余三项来自已交付的 CPU 表, GPU 写入字节由图另计.
+        std::uint32_t indexBudget{}, cellCount{}, overflowCellCount{}, indexCount{};
+        std::optional<std::size_t> fallbackLocalCount; ///< 可见集合就绪后才可计算, 单位为每次查询的灯行数.
     };
 
     /// @brief 主准备失败时交付身份与原因. 成功时 SceneFrame 和索引借用当前槽与该 View 的工作区.
@@ -70,6 +83,7 @@ namespace Physara::Renderer
         std::optional<ShadowDepthSet> acceptedShadowDepth; ///< 此 View 原本接受的存储, Forward 对照实际消耗确认可重用性.
         const FroxelLightLists *froxels{}; ///< 同轮工作集, 借用至所属 ViewWork 再次准备或销毁.
         FroxelStatus froxelStatus = FroxelStatus::NotRequested; ///< 候选不可用时仍可消费正常 View 的完整灯集.
+        std::optional<FroxelPreparationStatistics> froxelStatistics; ///< 显式请求时按值提供, 可在工作区复用后读取.
 
         /// @brief 有效诊断只返回选中组. 普通受光返回全部准入组, 其余分支返回空区间.
         /// @note 返回值借用此轮 ViewWork 持有的计划, 调用者在工作区再次准备前消费.

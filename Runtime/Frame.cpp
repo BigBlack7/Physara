@@ -164,9 +164,10 @@ namespace Physara::Runtime
                 addStorage(format, RHI::TextureDimension::Texture2DArray);
             }
         }
+        // 整个 UBO 可绑定到设备的块大小上限. 子区间的起点和长度还须满足图编译器的对齐合同.
         m_Options = {.textures = std::span(m_Textures).first(count),
             .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
-                        .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
+                        .maxConstantBytes = info.maxUniformBufferBlockBytes,
                         .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
                         .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
                         .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
@@ -1102,6 +1103,8 @@ namespace Physara::Runtime
         if (host.HasFatalGraphicsError())
         {
             statistics.PublishShadows(MeasureShadows(prepared, sceneCameraRevision));
+            statistics.PublishFroxels(MainViewIndex, &prepared);
+            statistics.PublishFroxels(OffscreenViewIndex, nullptr);
             remember(host.FirstGraphicsError());
             return stop();
         }
@@ -1114,6 +1117,8 @@ namespace Physara::Runtime
         // 在图编译和可能的安全 UI 重试之前发布. 此后的接受票据只确认实际提交的场景颜色.
         statistics.PublishShadows(MeasureShadows(prepared, sceneCameraRevision),
             offscreen.request ? std::optional(MeasureShadows(offscreen.prepared, sceneCameraRevision)) : std::nullopt);
+        statistics.PublishFroxels(MainViewIndex, &prepared);
+        statistics.PublishFroxels(OffscreenViewIndex, offscreen.request ? &offscreen.prepared : nullptr);
         forward.EndEnvironmentRequests();
         if (!host.HasFatalGraphicsError())
         {

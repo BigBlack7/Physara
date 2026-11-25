@@ -106,6 +106,7 @@ namespace Physara::Platform
         std::uint32_t maxStorageBufferBindings = 0;
         std::uint32_t maxCombinedTextureUnits = 0;
         std::uint32_t uniformBufferOffsetAlignmentBytes = 0;
+        std::uint64_t maxUniformBufferBlockBytes = 0; ///< 设备对单个 UBO 块的字节上限.
         std::uint64_t maxStorageBufferBlockBytes = 0; ///< 设备对单个 SSBO 块的字节上限.
         std::uint32_t storageBufferOffsetAlignmentBytes = 0; ///< SSBO 绑定起始字节偏移的对齐要求.
         // 记录请求的间隔, 不表示驱动实际执行的等待或测得的呈现耗时.

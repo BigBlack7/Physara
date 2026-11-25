@@ -83,20 +83,30 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
                              intensityExponent + exposureExponent - 2 * distanceExponent);
 }
 
-// 以当帧预曝光自发光为起值. 两个有效段在同一数组中相邻, 计数和是首个无效行的下标.
-// 零灯时循环为空. 直接光和自发光各带一次曝光, 两者都不使用材质 AO.
-vec3 EvaluateLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                      vec3 emission, vec3 specularCompensation)
+// 以预曝光自发光为起值, 按完整灯表的前缀顺序累加. 完整模式使用两个有效段, Froxel 使用方向灯段.
+// count 是从第零行起读取的条目数. 返回累加值及预曝光的尾数和指数, 供调用方继续逐行累加后限幅.
+vec3 EvaluateLightingPrefix(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection,
+                            LightingSurface surface, vec3 emission, vec3 specularCompensation,
+                            uint count, out float exposure, out int exponent)
 {
-    int exponent;
-    float exposure = frexp(perView.preExposure, exponent);
+    exposure = frexp(perView.preExposure, exponent);
     vec3 result = ScaleWorkingLight(emission * exposure, exponent);
-    uint count = perView.directionalCount + perView.localCount;
     for (uint index = 0u; index < count; ++index)
     {
         result += EvaluateDirect(lightRows.records[index], index, index < perView.directionalCount, pixel, geometry,
                                  viewDirection, surface,
                                  exposure, exponent, specularCompensation);
     }
-    return min(result, vec3(MaxWorkingLight));
+    return result;
+}
+
+// 完整灯模式也是 Froxel 不可查询或溢出时的着色入口. 直接光和自发光各带一次预曝光.
+vec3 EvaluateLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
+                      vec3 emission, vec3 specularCompensation)
+{
+    float exposure;
+    int exponent;
+    return min(EvaluateLightingPrefix(pixel, geometry, viewDirection, surface, emission, specularCompensation,
+                                      perView.directionalCount + perView.localCount, exposure, exponent),
+               vec3(MaxWorkingLight));
 }

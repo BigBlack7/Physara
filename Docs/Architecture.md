@@ -2642,9 +2642,9 @@ EvaluateLighting(P, G, inputs)
     else
     {
         cell = QueryFroxel(G.screenXY, G.viewDepth);
-        indices = cell.Overflow
+        indices = !cell.Valid || cell.Overflow
             ? inputs.AllVisibleLocalLights
-            : Concat(inputs.UnboundedLocalLights, cell.FiniteRangeLightIndices);
+            : MergeByLightRow(inputs.UnboundedLocalLights, cell.FiniteRangeLightIndices);
     }
 
     for (index : indices)
@@ -2655,6 +2655,8 @@ EvaluateLighting(P, G, inputs)
     return color; // 统一的预曝光线性 HDR
 }
 ```
+
+正常格的两张局部索引表按完整灯表行号归并，使参与贡献的灯在正常格和全灯退路中保持相同的累加顺序。
 
 所有路径共享这段含义；差异只在 local indices 的来源与表面参数来自几何片元还是 GBuffer。EvaluateDirect 在内部按反射/透射分支确定采样位置与对应 shadow visibility，再组合贡献；不把两者相加后统一乘一个以表面位置查询的阴影值。
 

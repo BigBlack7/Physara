@@ -22,6 +22,12 @@
 
 namespace Physara::Renderer
 {
+    std::uint32_t FroxelRequest::IndexBudget() const noexcept
+    {
+        constexpr auto capacity = static_cast<std::uint32_t>(Shader::Generated::StaticForward::FroxelIndicesCapacity);
+        return std::min(indexLimit.value_or(capacity), capacity);
+    }
+
     /// @brief 将 FP32 坐标映射为可排序的整数, 保留次正规值并把正负零归到同一位置.
     /// 零外缘用此顺序比较坐标与抖动量. 随后的稳定区间比较同时排除非有限样点.
     static std::int32_t OrderedPixel(float value) noexcept
@@ -393,17 +399,16 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 在既定灯行和网格容量内完成两遍压紧. 先证明全部区间, 再用 count 作为写入游标.
-    static FroxelStatus PackLightLists(const PreparedView &view, const FroxelRequest &request,
-                                       FroxelLightLists &result)
+    /// @brief 首遍按灯统计候选, 按扁平格序分配有限索引, 再按原灯行顺序填充获准区间.
+    /// 全局局部灯只在首遍登记. 零预算也须保留它们, 并区分空格与有候选的溢出格.
+    static void PackLightLists(const PreparedView &view, std::uint32_t indexBudget, FroxelLightLists &result)
     {
         auto &grid = result.grid;
         const auto &camera = *view.camera;
         result.headers.resize(std::size_t(grid.tileCount[0]) * grid.tileCount[1] * grid.sliceCount);
-        grid.directionalCount = CountDirectionalLights(view.scene.lights, view.lights);
         if (view.lights.size() == grid.directionalCount)
         {
-            return FroxelStatus::Ready;
+            return;
         }
 
         std::array<double, DepthEdgeCapacity> depthStorage;
@@ -420,10 +425,6 @@ namespace Physara::Renderer::Detail
         LightRowCursor cursor{.local = grid.directionalCount};
         std::vector<LocalVolume> finiteLights;
         finiteLights.reserve(view.lights.size() - grid.directionalCount);
-        const auto capacity = std::min<std::size_t>(
-            request.indexLimit.value_or(static_cast<std::uint32_t>(StaticAbi::FroxelIndicesCapacity)),
-            StaticAbi::FroxelIndicesCapacity);
-        std::uint64_t count = 0;
         for (const auto index : view.lights)
         {
             const auto &record = view.scene.lights[index];
@@ -439,13 +440,7 @@ namespace Physara::Renderer::Detail
                 VisitCells(light, tiles, depths, [&](std::size_t cell)
                 {
                     ++result.headers[cell].count;
-                    ++count;
                 });
-                // 一旦已确认的成员超出整份预算, 后续灯无法使这份结果重新可交付.
-                if (count > capacity)
-                {
-                    return FroxelStatus::IndexCapacity;
-                }
             }
             else
             {
@@ -453,32 +448,45 @@ namespace Physara::Renderer::Detail
             }
         }
 
-        // 总数已通过索引容量检查. 前缀和划定各格的独占区间, 第二遍依灯行顺序写入.
+        // 完整接纳一格才划出区间. 溢出格保留后续格可用的额度, 由 Shader 遍历完整局部灯表.
         std::uint32_t offset = 0;
         for (auto &header : result.headers)
         {
+            if (header.count > indexBudget - offset)
+            {
+                header = {.overflow = 1};
+                ++result.overflowCellCount;
+                continue;
+            }
             header.offset = offset;
             offset += header.count;
             header.count = 0;
         }
-        result.indices.resize(static_cast<std::size_t>(count));
-        for (const auto &light : finiteLights)
+        result.indices.resize(offset);
+        if (offset != 0)
         {
-            VisitCells(light, tiles, depths, [&](std::size_t cell)
+            // 复走相同候选, 只填获准的区间. 灯行顺序与计数阶段一致.
+            for (const auto &light : finiteLights)
             {
-                auto &header = result.headers[cell];
-                const auto index = header.offset + header.count++;
-                assert(index < result.indices.size());
-                result.indices[index].lightRow = light.lightRow;
-            });
+                VisitCells(light, tiles, depths, [&](std::size_t cell)
+                {
+                    auto &header = result.headers[cell];
+                    if (header.overflow == 0)
+                    {
+                        const auto index = header.offset + header.count++;
+                        assert(index < result.indices.size());
+                        result.indices[index].lightRow = light.lightRow;
+                    }
+                });
+            }
         }
-        grid.indexCount = static_cast<std::uint32_t>(count);
+        grid.indexCount = offset;
         grid.globalCount = static_cast<std::uint32_t>(result.globalLights.size());
-        return FroxelStatus::Ready;
     }
 
     std::variant<std::unique_ptr<FroxelLightLists>, FroxelStatus> BuildFroxelLightLists(
-        const PreparedView &view, const FroxelRequest &request, std::array<double, 2> sideLimit)
+        const PreparedView &view, const FroxelRequest &request, std::array<double, 2> sideLimit,
+        std::uint32_t directionalCount)
     {
         StaticAbi::FroxelView grid{};
         if (const auto status = PackGrid(view, request, sideLimit, grid); status != FroxelStatus::Ready)
@@ -493,10 +501,8 @@ namespace Physara::Renderer::Detail
         {
             auto result = std::make_unique<FroxelLightLists>();
             result->grid = grid;
-            if (const auto status = PackLightLists(view, request, *result); status != FroxelStatus::Ready)
-            {
-                return status;
-            }
+            result->grid.directionalCount = directionalCount;
+            PackLightLists(view, request.IndexBudget(), *result);
             return result;
         }
         catch (const std::bad_alloc &)

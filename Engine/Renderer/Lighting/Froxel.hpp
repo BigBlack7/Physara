@@ -20,13 +20,15 @@ namespace Physara::Renderer
 
     /// @brief 本轮 ViewWork 拥有的完整载荷. 方向灯仍由前缀读取.
     /// headers 按 X 最快, 其次 Y, 最后 Z 排列. 每个 [offset, offset + count) 以 indices 条目为单位.
-    /// indices 与 globalLights 保存同一完整灯表的绝对行号. 查询一个 cell 时还需读取方向灯前缀及全局局部灯.
+    /// 正常格的 indices 与 globalLights 保存同一灯表的绝对行号. 溢出格直接消费完整灯表.
+    /// 方向灯前缀独立于两种局部灯输入.
     struct FroxelLightLists
     {
         Shader::Generated::StaticForward::FroxelView grid{};
         std::vector<Shader::Generated::StaticForward::FroxelCellHeader> headers;
         std::vector<Shader::Generated::StaticForward::FroxelLightIndex> indices;
         std::vector<Shader::Generated::StaticForward::FroxelLightIndex> globalLights;
+        std::uint32_t overflowCellCount{}; ///< headers 中带 overflow 标记的格数, 用于报告当前 View 的预算压力.
     };
 
     /// @brief 从渲染画布的左上像素坐标和米制正向视深定位 cell.
@@ -39,9 +41,11 @@ namespace Physara::Renderer
     namespace Detail
     {
         /// @brief 准备当前 View 的完整载荷或返回不可用原因.
-        /// @pre view 已成功准备且借用有效. sideLimit 是同轮稳定视锥的两轴 NDC 外缘.
+        /// @pre view 已成功准备且借用有效. directionalCount 来自该次可见灯集合.
+        /// sideLimit 是同轮稳定视锥的两轴 NDC 外缘.
         /// @return 成功时移交整份 CPU 数组的所有权. 失败时临时数组随本次构造释放.
         [[nodiscard]] std::variant<std::unique_ptr<FroxelLightLists>, FroxelStatus> BuildFroxelLightLists(
-            const PreparedView &view, const FroxelRequest &request, std::array<double, 2> sideLimit);
+            const PreparedView &view, const FroxelRequest &request, std::array<double, 2> sideLimit,
+            std::uint32_t directionalCount);
     }
 }

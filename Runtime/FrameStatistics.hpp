@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 按各自产生的阶段发布 CPU 阴影规划, 最近编译图, 设备池容量及已接受的场景统计.
+/// @brief 分别发布当前 View 的阴影和 Froxel 准备结果, 最近编译图, 设备池容量及已接受的场景统计.
 
 #include <array>
 
@@ -50,6 +50,11 @@ namespace Physara::Runtime
         {
             m_Stats.shadows = {main, offscreen};
         }
+        /// @brief 发布本轮显式 Froxel 请求的值快照. 缺席时清空该路当前规划, 不改写场景接受记录.
+        /// @param index 本帧主路或附加路的槽号. view 仅在调用期间借用.
+        /// @param deliveryFailure 此路在 CPU 网格准备之后遇到的交付错误.
+        void PublishFroxels(std::size_t index, const Renderer::PreparedView *view,
+                           std::optional<Core::BoundedText> deliveryFailure = std::nullopt) noexcept;
         /// @brief 从对应 View 复制最近正常接受的场景身份与阴影工作, 首次接受前为空.
         /// 在颜色接受后更新该路. 附加路也可在准备时读取当前选定 View 的旧接受记录.
         void PublishAcceptedShadows(std::size_t index, const Renderer::View &view) noexcept

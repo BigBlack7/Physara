@@ -10,6 +10,7 @@
 
 #include <GraphicsStatistics.hpp>
 #include <Renderer/Paths/Forward.hpp>
+#include <Renderer/Prepare/ViewPreparation.hpp>
 #include <Renderer/RenderGraph/GraphResourcePool.hpp>
 
 namespace Physara::Editor
@@ -141,7 +142,19 @@ namespace Physara::Editor
         Renderer::ShadowPlanStatistics plan;
     };
 
-    /// @brief 场景, 计时, 图准入和阴影准备分别发布. shadows 可先于首次场景提交出现.
+    /// @brief 当前 Froxel 请求的副本. 上传失败时仍保留 CPU 规划和所属输入身份.
+    struct ViewFroxelStatistics
+    {
+        Renderer::ViewId view;
+        /// 三项分别标识布局请求, View 相机和 View 文档代. 场景内容和场景相机代保存在 plan.
+        std::uint64_t layoutRevision{}, cameraRevision{}, documentRevision{};
+        Renderer::ViewSettingReason viewReason;
+        Renderer::FroxelStatus status;
+        Renderer::FroxelPreparationStatistics plan;
+        std::optional<Core::BoundedText> deliveryFailure;
+    };
+
+    /// @brief 场景, 计时, 图准入和灯光准备分别发布. 当前准备可先于首次场景提交出现.
     /// 读取 CPU 规划时按各路自身的 Scene 和 View 定位, latestScene 带此前被接受的提交身份.
     struct FrameStatistics
     {
@@ -153,6 +166,7 @@ namespace Physara::Editor
         Renderer::ShaderPreparationStatistics shader;
         Shader::ReloadStatistics shaderCpu;
         std::array<std::optional<ViewShadowStatistics>, 2> shadows; ///< 主 View 和本轮附加 View 的当前规划.
+        std::array<std::optional<ViewFroxelStatistics>, Renderer::ForwardViewCount> froxels;
         /// 主 View 及最近选定的附加 View 各自的接受事实. 缺席表示该 View 尚未接受正常场景色.
         std::array<std::optional<AcceptedViewShadows>, Renderer::ForwardViewCount> acceptedShadows;
     };

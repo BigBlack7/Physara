@@ -13,6 +13,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "../Lighting/Froxel.hpp"
+#include "../Lighting/PunctualLights.hpp"
 #include "ViewFrustum.hpp"
 
 namespace Physara::Renderer
@@ -324,6 +325,14 @@ namespace Physara::Renderer
                              .froxelStatus = froxelRequest ? FroxelStatus::ViewUnavailable :
                                                             FroxelStatus::NotRequested};
         const auto &scene = shared.Source();
+        if (froxelRequest)
+        {
+            // 布局检查可能先于共享场景提取返回. 此处只复制输入版本和请求额度.
+            const auto versions = scene.Versions();
+            result.froxelStatistics.emplace(FroxelPreparationStatistics{
+                .scene = scene.Id(), .contentRevision = versions.renderContent, .sceneCameraRevision = versions.camera,
+                .indexBudget = froxelRequest->IndexBudget()});
+        }
         const auto unavailable = [&]
         {
             // 即使本轮在提取前退出, 也要结束上次阴影映射, 并将原因与这次 View 准备一起交付.
@@ -426,6 +435,13 @@ namespace Physara::Renderer
         result.primitives = m_Primitives;
         result.lights = m_Lights;
         result.cullingSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cullingStart).count();
+        std::uint32_t directionalCount = 0;
+        if (result.froxelStatistics)
+        {
+            // 灯裁剪已完成, 单次全灯退路的规模可确定. 后续附件拒绝仍使用这份诊断值.
+            directionalCount = Detail::CountDirectionalLights(frame.lights, result.lights);
+            result.froxelStatistics->fallbackLocalCount = result.lights.size() - directionalCount;
+        }
         const bool hasVisibleReceivers = !m_Primitives.empty();
         // Lighting 读取冻结场景全表. 保持主可见集及其计时口径, 即使阴影预算拒绝也交付完整灯集.
         auto shadows = view.m_ShadowPlan.Prepare(frame, *snapshot, planes, {offsets->sideLimit.x, offsets->sideLimit.y},
@@ -462,13 +478,17 @@ namespace Physara::Renderer
         if (froxelRequest && result.reason == ViewSettingReason::None)
         {
             // 只发布完整的本轮工作集. 失败保留相机与完整灯集合供其它消费者使用.
+            auto &stats = *result.froxelStatistics;
             auto froxels = Detail::BuildFroxelLightLists(result, *froxelRequest,
-                                                        {offsets->sideLimit.x, offsets->sideLimit.y});
+                {offsets->sideLimit.x, offsets->sideLimit.y}, directionalCount);
             if (auto *lists = std::get_if<std::unique_ptr<FroxelLightLists>>(&froxels))
             {
                 m_Froxels = std::move(*lists);
                 result.froxels = m_Froxels.get();
                 result.froxelStatus = FroxelStatus::Ready;
+                stats.cellCount = static_cast<std::uint32_t>(m_Froxels->headers.size());
+                stats.overflowCellCount = m_Froxels->overflowCellCount;
+                stats.indexCount = m_Froxels->grid.indexCount;
             }
             else
             {
