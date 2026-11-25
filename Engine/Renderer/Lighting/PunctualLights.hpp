@@ -20,7 +20,7 @@ namespace Physara::Renderer::Detail
 {
     namespace StaticAbi = Shader::Generated::StaticForward;
 
-    /// @brief 按同一可见序列填写灯表和阴影引用表. 两次遍历各自把 local 初始化为方向灯总数.
+    /// @brief 完整灯表, 阴影引用及 Froxel 候选共用的绝对行号. 各次遍历均把 local 初始化为方向灯总数.
     /// 阴影预算只决定行内的组引用, 被拒灯仍占用自己的行号.
     struct LightRowCursor
     {
@@ -32,6 +32,11 @@ namespace Physara::Renderer::Detail
             return kind == Asset::ModelLightKind::Directional ? directional++ : local++;
         }
     };
+
+    /// @brief 按冻结 View 的可见灯序列确定方向灯前缀长度, 同一长度也是局部灯的首行.
+    /// @pre indices 在灯表容量内, 均指向本轮可见灯.
+    [[nodiscard]] std::uint32_t CountDirectionalLights(std::span<const LightRecord> lights,
+                                                       std::span<const std::uint32_t> indices) noexcept;
 
     /// @brief rows 覆盖生成的定长 SSBO, 前 directionalCount 行为方向灯, 随后 localCount 行为点光或聚光.
     /// 两段内分别保留可见索引顺序. 尾部置零以便整块初始化, 着色只遍历两段的有效行.

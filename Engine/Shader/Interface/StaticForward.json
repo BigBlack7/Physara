@@ -84,6 +84,40 @@
       ]
     },
     {
+      "name": "FroxelView",
+      "layout": "std140",
+      "fields": [
+        { "name": "renderRect", "type": "uint4" },
+        { "name": "tileExtent", "type": "uint2" },
+        { "name": "tileCount", "type": "uint2" },
+        { "name": "jitterPixels", "type": "float2" },
+        { "name": "stableMinimum", "type": "float2" },
+        { "name": "stableMaximum", "type": "float2" },
+        { "name": "orthographic", "type": "uint32" },
+        { "name": "sliceCount", "type": "uint32" },
+        { "name": "directionalCount", "type": "uint32" },
+        { "name": "indexCount", "type": "uint32" },
+        { "name": "globalCount", "type": "uint32" },
+        { "name": "depthEdges", "type": "float32", "array": 33 }
+      ]
+    },
+    {
+      "name": "FroxelCellHeader",
+      "layout": "std430",
+      "fields": [
+        { "name": "offset", "type": "uint32" },
+        { "name": "count", "type": "uint32" },
+        { "name": "overflow", "type": "uint32" }
+      ]
+    },
+    {
+      "name": "FroxelLightIndex",
+      "layout": "std430",
+      "fields": [
+        { "name": "lightRow", "type": "uint32" }
+      ]
+    },
+    {
       "name": "ForwardObject",
       "layout": "std430",
       "fields": [
@@ -122,6 +156,10 @@
   ],
   "resources": [
     { "name": "perView", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["vertex", "fragment"], "block": "ForwardView" },
+    { "name": "froxelView", "kind": "constant-buffer", "set": 0, "slot": 1, "stages": ["fragment"], "block": "FroxelView" },
+    { "name": "froxelHeaders", "kind": "structured-buffer", "set": 0, "slot": 0, "stages": ["fragment"], "block": "FroxelCellHeader", "capacity": 87381 },
+    { "name": "froxelIndices", "kind": "structured-buffer", "set": 0, "slot": 1, "stages": ["fragment"], "block": "FroxelLightIndex", "capacity": 262144 },
+    { "name": "froxelGlobalLights", "kind": "structured-buffer", "set": 0, "slot": 2, "stages": ["fragment"], "block": "FroxelLightIndex", "capacity": 16384 },
     { "name": "objectRows", "kind": "structured-buffer", "set": 1, "slot": 0, "stages": ["vertex"], "block": "ForwardObject", "capacity": 512 },
     { "name": "drawInstances", "kind": "structured-buffer", "set": 1, "slot": 1, "stages": ["vertex"], "block": "DrawInstanceData", "capacity": 512 },
     { "name": "materialRows", "kind": "structured-buffer", "set": 2, "slot": 5, "stages": ["vertex", "fragment"], "block": "ForwardMaterial", "capacity": 512 },

@@ -251,20 +251,60 @@ namespace Physara::Renderer::Detail
         return false;
     }
 
-    // 先核对整套包的 CPU ABI, 再核对阴影受光及诊断角色的活动资源.
-    // 通过后按设备身份接续可用槽, 其余原生 Pipeline 随各 View 登记的实际需求准备.
+    /// @brief 核对各阶段在 PerView 中实际使用的资源是否能由现有 Forward 布局提供.
+    /// @pre 包已核对 StaticForward ABI. 当前所有几何角色共用同一份 PerView 常量绑定.
+    /// @return 活动绑定均可提供时返回空. 首项不匹配时返回阶段源路径和资源名, 供准入方报告该角色.
+    static std::optional<Core::BoundedText> CheckCandidatePerViewBindings(const Shader::ShaderPackage &package,
+                                                                          const RHI::BindingLayoutDesc &layout) noexcept
+    {
+        for (const auto &module : package.modules)
+        {
+            const auto unsupported = std::ranges::find_if(module.resources, [&](const auto &resource) {
+                if (resource.set != layout.registerSpace)
+                {
+                    return false;
+                }
+                return resource.kind != Shader::ResourceKind::ConstantBuffer ||
+                       std::ranges::none_of(layout.bindings, [&](const auto &binding) {
+                           return binding.type == RHI::ResourceType::ConstantBuffer && binding.slot == resource.slot;
+                       });
+            });
+            if (unsupported != module.resources.end())
+            {
+                Core::BoundedText issue(module.sourcePath);
+                issue.Append(": active resource has no Forward PerView binding: ");
+                issue.Append(unsupported->name);
+                return issue;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // 包级准入遍历全部角色, 包括当前 View 未选中的角色. 固定布局冲突应在替换活动代之前报告.
+    // 角色通过 CPU 检查后才复用原生槽. 缺少的 Pipeline 随各 View 的实际需求分批创建.
     static void AdmitCandidate(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
         const auto &result = *device.candidateInput;
+        const auto &active = *device.activeShaders;
+        const auto &perView = *active.programs.layouts.front()->GetDesc();
         for (const auto &program : Shader::ProductPrograms())
         {
             const auto role = program.key.role;
             const auto &package = result.packages[std::size_t(role)];
-            if (!package || package->abiHash != ConsumerAbi(role))
+            const auto abi = ConsumerAbi(role);
+            if (!package || package->abiHash != abi)
             {
                 checking = ShaderPipelineRequest{role, 0};
                 Reject(ViewSettingReason::ScenePipelineUnavailable,
                        "Candidate Shader ABI does not match the interface compiled into the running renderer");
+            }
+            if (abi == StaticAbi::AbiHash)
+            {
+                if (const auto failure = CheckCandidatePerViewBindings(*package, perView))
+                {
+                    checking = ShaderPipelineRequest{role, 0};
+                    Reject(ViewSettingReason::ScenePipelineUnavailable, failure->View());
+                }
             }
             if (const auto expected = ShadowProgramResources(role); !expected.empty())
             {
@@ -276,7 +316,6 @@ namespace Physara::Renderer::Detail
                 }
             }
         }
-        const auto &active = *device.activeShaders;
         // 原生表只可在同一设备及驱动身份接续. 角色对应的包内容、ABI 与固定描述确定表中各槽.
         if (active.device != &device.device || active.driver.View() != device.shaderDevice.View())
         {

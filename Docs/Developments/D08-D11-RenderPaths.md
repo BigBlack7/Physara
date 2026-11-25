@@ -201,11 +201,11 @@
 
 **职责位置：** Renderer/Prepare、Lighting。**前置：** 本阶段入口满足。**架构依据：** [5.4](../Architecture.md#light-preparation)、[5.3](../Architecture.md#view-preparation)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-25-prepare-cpu-froxel-light-lists/tasks.md#final-verification)
 
-- [ ] 定义与 Shader 共用的 Froxel 参数、header/index ABI 和 32 位索引语义，网格与有限稳定裁剪范围关联；透视用正 near 的 log-Z，正交用可接受 near=0 的线性 Z，CPU cell 边界与 Shader lookup 配套。
-- [ ] 对有界点/聚光灯做保守相交与列表压缩，directional 和未指定 range 的局部灯进入明确的全局候选集合。
-- [ ] 测试透视/正交及 near=0、边界 cell、极近/极远、spot、空集合、相机变化和大灯数，比较 CPU 候选覆盖参考。
+- [x] 定义与 Shader 共用的 Froxel 参数、header/index ABI 和 32 位索引语义，网格与有限稳定裁剪范围关联；透视用正 near 的 log-Z，正交用可接受 near=0 的线性 Z，CPU cell 边界与 Shader lookup 配套。
+- [x] 对有界点/聚光灯做保守相交与列表压缩，directional 和未指定 range 的局部灯进入明确的全局候选集合。
+- [x] 测试透视/正交及 near=0、边界 cell、极近/极远、spot、空集合、相机变化和大灯数，比较 CPU 候选覆盖参考。
 
 **完成条件：** 网格不会因透视渲染使用无限远而丢失有限分箱定义，索引宽度与容量不隐式截断。
 
@@ -213,6 +213,8 @@
 ### D10-T02 · 实现溢出退路与图内上传
 
 **职责位置：** Renderer/Lighting、UploadBatch、Shaders/Lighting。**前置：** [D10-T01](#d10-t01)。**架构依据：** [5.4](../Architecture.md#light-preparation)、[5.5](../Architecture.md#gpu-residency)、[7.4](../Architecture.md#uploads)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 按网格/索引预算生成正常或 overflow header，溢出 Shader 改走完整可见灯列表，不截断光源。
 - [ ] 把 headers/indices/global lights 放入拥有型上传包，图声明写入和后继 ShaderResource 访问。

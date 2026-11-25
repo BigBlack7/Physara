@@ -1,4 +1,5 @@
 #include "ShadowVolumes.hpp"
+#include "LightVolume.hpp"
 
 /// @file
 /// @brief 拟合稳定接收段及灯空间有限范围, 在冻结场景全表中保守选择阴影投射物.
@@ -288,33 +289,6 @@ namespace Physara::Renderer::Detail
         return std::span(corners).first(cornerCount);
     }
 
-    /// @brief 单位聚光体相对原点的支持点和支持距离.
-    struct SpotSupport
-    {
-        glm::dvec3 point;
-        double distance;
-    };
-
-    /// @brief 搜索方向落入外锥时取球面点, 其余方向取锥缘圆周或锥尖上投影最大的点.
-    static SpotSupport SupportSpot(const glm::dvec3 &direction, const glm::dvec3 &axis,
-                                   double cosine, double sine) noexcept
-    {
-        const auto alignment = glm::dot(direction, axis);
-        if (alignment >= cosine)
-        {
-            return {direction, 1};
-        }
-        const auto lateral = direction - alignment * axis;
-        const auto lateralLength = std::hypot(lateral.x, lateral.y, lateral.z);
-        const auto distance = alignment * cosine + lateralLength * sine;
-        if (distance <= 0)
-        {
-            return {glm::dvec3(0), 0};
-        }
-        const auto rim = cosine * axis + sine * (lateral / lateralLength);
-        return {rim, distance};
-    }
-
     /// @brief 用灯体可达范围内的接收凸体与聚光支持映射寻找分离平面.
     /// GJK 搜索方向来自两体差的最近单纯形特征. 仅支持距离证明有间隔时剔除, 保留相切及数值不确定项.
     static bool SpotOutside(std::span<const glm::dvec3> corners, const glm::dvec3 &axis, double outerCone) noexcept
@@ -337,6 +311,7 @@ namespace Physara::Renderer::Detail
             {
                 return glm::dot(point, direction);
             });
+            // 灯体和接收角点均已按半径归一. 距离用于分离判定, 支点坐标用于更新单纯形.
             const auto local = SupportSpot(-direction, axis, cosine, sine);
             // 接收体沿 d 的最大投影与灯体沿 -d 的最大投影之和, 是两体差在 d 上的上界.
             // 上界留有余量仍为负时, 垂直于 d 的平面可以隔开两个凸体.

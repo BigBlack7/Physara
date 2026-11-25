@@ -108,7 +108,17 @@ namespace Physara::Renderer::Detail
         return {};
     }
 
-    /// @brief 按已有方向灯、局部灯的顺序组装定长表, 按调用者提供的行编码方式取值.
+    std::uint32_t CountDirectionalLights(std::span<const LightRecord> lights,
+                                         std::span<const std::uint32_t> indices) noexcept
+    {
+        return static_cast<std::uint32_t>(std::ranges::count_if(indices, [&](auto index)
+        {
+            assert(index < lights.size() && lights[index].visible);
+            return lights[index].light.type == LightKind::Directional;
+        }));
+    }
+
+    /// @brief 按方向灯和局部灯两段组装定长表. readRow 接收冻结场景下标, 将编码写到游标选中的 GPU 行.
     template <class ReadRow>
     static std::variant<EncodedLightSet, Core::BoundedText> AssembleLightSet(
         std::span<const LightRecord> lights, std::span<const std::uint32_t> indices, ReadRow readRow)
@@ -118,11 +128,7 @@ namespace Physara::Renderer::Detail
             return Core::BoundedText("Visible light set exceeds the Forward light table capacity");
         }
         // 先确定局部段的起点. 第二遍用两个独立写游标保持各段原序, 任一行失败即放弃整表.
-        const auto count = static_cast<std::uint32_t>(std::ranges::count_if(indices, [&](auto index)
-        {
-            assert(index < lights.size() && lights[index].visible);
-            return lights[index].light.type == LightKind::Directional;
-        }));
+        const auto count = CountDirectionalLights(lights, indices);
         EncodedLightSet table{std::vector<StaticAbi::ForwardLight>(StaticAbi::LightRowsCapacity), count,
                              static_cast<std::uint32_t>(indices.size()) - count};
         LightRowCursor cursor{.local = count};

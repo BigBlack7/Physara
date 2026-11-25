@@ -1,13 +1,15 @@
 #pragma once
 
 /// @file
-/// @brief 在图声明前解析相机和像素范围, 从同一份冻结场景交付主可见集及 CPU 阴影计划.
+/// @brief 在图声明前从冻结场景交付相机、主可见集、阴影计划及按需的 Froxel 工作集.
 /// 矩阵按值交付, 安全帧槽保活静态记录, 可见索引和本轮借用的计划.
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #include "SceneFrame.hpp"
@@ -25,9 +27,26 @@ namespace Physara::Renderer
         std::array<double, 2> filterRadiusPixels{1, 1};
     };
 
+    struct FroxelLightLists;
+
+    /// @brief 显式要求 CPU 准备的网格配置. 预算以有限灯索引条目计, 受生成容量上限约束.
+    struct FroxelRequest
+    {
+        ViewExtent tileExtent{32, 32};
+        std::uint32_t sliceCount{24};
+        std::optional<std::uint32_t> indexLimit;
+    };
+
+    /// @brief 单独报告候选准备状态. 非 Ready 状态均不交付部分数组.
+    enum class FroxelStatus : std::uint8_t
+    {
+        NotRequested, ViewUnavailable, Ready, InvalidGrid, UnrepresentableGrid,
+        HeaderCapacity, LightCapacity, IndexCapacity, StorageUnavailable
+    };
+
     /// @brief 主准备失败时交付身份与原因. 成功时 SceneFrame 和索引借用当前槽与该 View 的工作区.
     /// 相机快照按值持有同轮镜头和曝光; documentRevision 只表示 View 请求, 不代替 Scene 内容版本.
-    /// 阴影单独报告成功或拒绝. 主准备成功时即使 shadows 为空, 相机和直接光输入仍可消费.
+    /// 阴影与 Froxel 各自报告准备结果. 主准备成功时, 相机和完整可见灯集可单独消费.
     struct PreparedView
     {
         ViewId view;
@@ -49,6 +68,8 @@ namespace Physara::Renderer
         ShadowDiagnostic shadowDiagnostic; ///< 冻结的会话请求, 可与实际准入结果不同.
         const ShadowLightPlan *previewShadow{}; ///< 借用本次计划, 仅供具备实际可见几何的诊断使用.
         std::optional<ShadowDepthSet> acceptedShadowDepth; ///< 此 View 原本接受的存储, Forward 对照实际消耗确认可重用性.
+        const FroxelLightLists *froxels{}; ///< 同轮工作集, 借用至所属 ViewWork 再次准备或销毁.
+        FroxelStatus froxelStatus = FroxelStatus::NotRequested; ///< 候选不可用时仍可消费正常 View 的完整灯集.
 
         /// @brief 有效诊断只返回选中组. 普通受光返回全部准入组, 其余分支返回空区间.
         /// @note 返回值借用此轮 ViewWork 持有的计划, 调用者在工作区再次准备前消费.
@@ -83,30 +104,37 @@ namespace Physara::Renderer
         std::optional<std::variant<SceneFrame, Core::BoundedText>> m_Extracted;
     };
 
-    /// @brief 一个安全槽中供单个 View 复用的主可见索引和阴影计划借用. 多 View 的工作区各自独立.
-    /// View 保存跨槽缓存, 此处另持本次计划的只读引用. 其他槽推进缓存时仍可读取本槽的旧计划.
+    /// @brief 单个安全槽内一个 View 的工作区. 它持有主可见索引, 当次阴影计划引用与按需生成的 Froxel 数组.
+    /// View 保存跨槽阴影缓存. 其他槽可独立准备下一帧, 本槽再次 Prepare 时结束前一轮索引和 Froxel 借用.
     class ViewWork final
     {
     public:
+        ViewWork();
+        ~ViewWork();
+
         /// @brief 为单个请求打开一次提取作用域, 根据布局和相机写入自己的可见索引.
         /// @pre Scene 已接受本轮事务, sceneStorage 所属槽已安全取得.
         /// @note 本对象再次准备即结束旧索引借用. 调用期间保持 View 请求不变, 以配对其版号和曝光.
-        /// 无有效布局时不提取 Scene; 失败不交付矩阵或部分索引.
+        /// 无有效布局时不提取 Scene. 主可见集生成失败时通过 reason 返回.
+        /// @param froxelRequest 空指针沿用完整灯表. 显式请求的结果由 froxelStatus 单独报告.
         [[nodiscard]] PreparedView Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene,
                                            const View &view, const std::optional<ViewportRequest> &request,
                                            const CameraSampling &sampling = {},
                                            ViewportUse use = ViewportUse::DisplayOutput,
-                                           const ShadowPlanningLimits &shadowLimits = {});
+                                           const ShadowPlanningLimits &shadowLimits = {},
+                                           const FroxelRequest *froxelRequest = nullptr);
         /// @brief 同帧的各路共用一个 SceneFramePreparation, 每路使用独立 ViewWork 保存索引.
         /// @pre 全部请求准备完毕前保持 Scene 和本槽的提取数组稳定.
         /// 显式离屏的两种像素范围都通过上限检查后, 才会请求共享提取.
         /// @param requireShadowPreview 普通显示附件超出预算时, 只有可消费的阴影诊断能使布局通过审核.
+        /// @param froxelRequest 有值时才为有效 View 构造候选. 参数只在本次调用期间借用.
         [[nodiscard]] PreparedView Prepare(SceneFramePreparation &scene, const View &view,
                                            const std::optional<ViewportRequest> &request,
                                            const CameraSampling &sampling = {},
                                            ViewportUse use = ViewportUse::DisplayOutput,
                                            const ShadowPlanningLimits &shadowLimits = {},
-                                           bool requireShadowPreview = false);
+                                           bool requireShadowPreview = false,
+                                           const FroxelRequest *froxelRequest = nullptr);
 
         /// @brief 布局或附件预算拒绝时清理该 View 的活动分配, 并以当前场景版本发布空计划摘要.
         /// 释放数取自上一次交付的活动区域. 调用方负责关联到所属 View 的布局请求.
@@ -118,5 +146,6 @@ namespace Physara::Renderer
         std::vector<std::uint32_t> m_Primitives;
         std::vector<std::uint32_t> m_Lights;
         std::shared_ptr<const ShadowPlan> m_Shadows;
+        std::unique_ptr<FroxelLightLists> m_Froxels;
     };
 }

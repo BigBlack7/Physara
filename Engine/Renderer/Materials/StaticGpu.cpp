@@ -337,7 +337,13 @@ namespace Physara::Renderer::Detail
 
     ForwardPrograms::ForwardPrograms(RHI::Device &device)
     {
-        const auto sceneLayout = StaticAbi::MakeBindingLayouts();
+        auto sceneLayout = StaticAbi::MakeBindingLayouts();
+        // StaticForward 声明包含 Froxel 资源. 当前 Forward 的 set 0 只绑定 perView (b0),
+        // 颜色与深度 Pipeline 共享这一布局. 布局筛选在创建 RHI 对象之前完成.
+        std::erase_if(sceneLayout.front().bindings, [](const auto &item)
+        {
+            return item.type != RHI::ResourceType::ConstantBuffer || item.slot != 0;
+        });
         for (std::size_t i = 0; i < layouts.size(); ++i)
         {
             layouts[i] = device.CreateBindingLayout(sceneLayout[i]);

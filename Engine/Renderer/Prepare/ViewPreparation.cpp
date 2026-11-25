@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief 以相机刚体轴和稳定有限投影准备主可见集, 采样偏移只改变渲染矩阵.
-/// 布局和相机先确定稳定视锥, 再从同一 SceneFrame 选出主可见集并交付每路的阴影计划.
+/// 布局和相机先确定稳定视锥, 再从同一 SceneFrame 选出主可见集. 阴影与可选的 Froxel 各用自己的范围和预算.
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +12,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "../Lighting/Froxel.hpp"
 #include "ViewFrustum.hpp"
 
 namespace Physara::Renderer
@@ -286,12 +287,16 @@ namespace Physara::Renderer
         return m_Extracted ? std::get_if<SceneFrame>(&*m_Extracted) : nullptr;
     }
 
+    ViewWork::ViewWork() = default;
+    ViewWork::~ViewWork() = default;
+
     PreparedView ViewWork::Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene, const View &view,
                                    const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
-                                   ViewportUse use, const ShadowPlanningLimits &shadowLimits)
+                                    ViewportUse use, const ShadowPlanningLimits &shadowLimits,
+                                    const FroxelRequest *froxelRequest)
     {
         SceneFramePreparation frame(sceneStorage, scene);
-        return Prepare(frame, view, request, sampling, use, shadowLimits);
+        return Prepare(frame, view, request, sampling, use, shadowLimits, false, froxelRequest);
     }
 
     ShadowPlanStatistics ViewWork::UnavailableShadows(const Scene::Scene &scene, const View &view,
@@ -306,14 +311,18 @@ namespace Physara::Renderer
     PreparedView ViewWork::Prepare(SceneFramePreparation &shared, const View &view,
                                    const std::optional<ViewportRequest> &request, const CameraSampling &sampling,
                                    ViewportUse use, const ShadowPlanningLimits &shadowLimits,
-                                   bool requireShadowPreview)
+                                    bool requireShadowPreview, const FroxelRequest *froxelRequest)
     {
         m_Primitives.clear();
         m_Lights.clear();
+        // 到这里就结束旧 Froxel 借用. 本轮稍后可能因布局失败提前返回, 也可能只要求完整灯表.
+        m_Froxels.reset();
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
                             .preview = view.Preview(), .reason = view.CheckViewport(request, use),
-                            .shadowDiagnostic = view.RequestedShadowDiagnostic()};
+                             .shadowDiagnostic = view.RequestedShadowDiagnostic(),
+                             .froxelStatus = froxelRequest ? FroxelStatus::ViewUnavailable :
+                                                            FroxelStatus::NotRequested};
         const auto &scene = shared.Source();
         const auto unavailable = [&]
         {
@@ -448,6 +457,22 @@ namespace Physara::Renderer
             else
             {
                 view.m_ShadowDepth.reset();
+            }
+        }
+        if (froxelRequest && result.reason == ViewSettingReason::None)
+        {
+            // 只发布完整的本轮工作集. 失败保留相机与完整灯集合供其它消费者使用.
+            auto froxels = Detail::BuildFroxelLightLists(result, *froxelRequest,
+                                                        {offsets->sideLimit.x, offsets->sideLimit.y});
+            if (auto *lists = std::get_if<std::unique_ptr<FroxelLightLists>>(&froxels))
+            {
+                m_Froxels = std::move(*lists);
+                result.froxels = m_Froxels.get();
+                result.froxelStatus = FroxelStatus::Ready;
+            }
+            else
+            {
+                result.froxelStatus = std::get<FroxelStatus>(froxels);
             }
         }
         return result;
