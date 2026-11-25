@@ -39,13 +39,14 @@ namespace Physara::Editor
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.
     /// scenePreparation 截止于候选构图前, graphCompile 只覆盖 CompileRenderGraph.
-    /// 声明 Pass 及其资源访问发生在这两个区间之外, 四项之和只表示采样到的 CPU 工作.
+    /// graphDeclare 包含构图、资源声明及 Seal. 区间之和只表示采样到的 CPU 工作.
     struct FrameCpuSeconds
     {
         double ui{};
         double scenePreparation{};
         double graphCompile{};
         double graphExecute{};
+        double graphDeclare{};
     };
 
     /// @brief 一路实际完成的裁剪及其输出确认, 暂停或无匹配布局不产生裁剪记录.
@@ -83,6 +84,15 @@ namespace Physara::Editor
         /// 封存前两路合计的原始需求. 各来源的写入只计最终计划中的存活写 Pass.
         ForwardUploadStatistics uploadDemand;
         FrameArenaStatistics payload, graph;
+    };
+
+    /// @brief 一路 View 最近一次正常接受的场景及其阴影工作. work 缺席表示该颜色没有消费阴影.
+    struct AcceptedViewShadows
+    {
+        Renderer::ViewId view;
+        Scene::SceneId scene;
+        std::uint64_t submission;
+        std::optional<Renderer::RenderedShadows> work;
     };
 
     /// @brief CPU 区间, 原生计数与存活 Pass 数属于整图. forward 的表面, 灯及两个几何 Pass 的计数属于 source.view.
@@ -143,5 +153,7 @@ namespace Physara::Editor
         Renderer::ShaderPreparationStatistics shader;
         Shader::ReloadStatistics shaderCpu;
         std::array<std::optional<ViewShadowStatistics>, 2> shadows; ///< 主 View 和本轮附加 View 的当前规划.
+        /// 主 View 及最近选定的附加 View 各自的接受事实. 缺席表示该 View 尚未接受正常场景色.
+        std::array<std::optional<AcceptedViewShadows>, Renderer::ForwardViewCount> acceptedShadows;
     };
 }

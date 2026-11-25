@@ -28,9 +28,9 @@ namespace Physara::Runtime
     {
     public:
         /// @pre 在就绪宿主的 owner 线程构造. sceneViews 为本次候选的场景视图数, 有场景时才追加结构化 UAV 和数组 image 能力.
-        /// @param shadowViews 已声明诊断深度的 View 数, 用于选择 D32 数组能力及整图附件预算.
+        /// @param shadowBytes 当前声明的阴影数组字节, 用于准入与设备能力选择.
         EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic,
-                           std::size_t shadowViews = 0);
+                           std::uint64_t shadowBytes = 0);
         EditorGraphProfile(const EditorGraphProfile &) = delete;
         EditorGraphProfile &operator=(const EditorGraphProfile &) = delete;
 

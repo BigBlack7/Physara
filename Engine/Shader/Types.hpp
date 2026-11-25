@@ -58,7 +58,8 @@ namespace Physara::Shader
         TextureCube,
         StructuredUav,
         Image2D,
-        Image2DArray
+        Image2DArray,
+        Texture2DArray ///< 图形阶段的单个浮点采样图像, 层索引属于图像坐标.
     };
 
     /// @brief 存储绑定的访问权限, 由声明生成并与最终 IR 比较.

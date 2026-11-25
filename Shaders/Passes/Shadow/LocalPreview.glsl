@@ -1,6 +1,7 @@
 #include <Interface/Fragment.glsl>
 #include <Source/Material/StaticCoverage.glsl>
-#include <Source/Shadow/Local.glsl>
+#include <Source/Geometry/SurfaceFrame.glsl>
+#include <Source/Shadow/Visibility.glsl>
 
 // 色相表示所查面, 明暗表示实际深度比较. 覆盖外沿线性诊断显示中性灰.
 void main()
@@ -13,8 +14,8 @@ void main()
 
     LightingSurface surface = LightingSurface(vLightingAnchor,
         LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
-    LocalShadowResult shadow = QueryLocalShadow(surface);
-    if (shadow.face < 0)
+    ShadowResult shadow = QueryShadow(1u, surface, GeometricNormal());
+    if (shadow.subview < 0)
     {
         outColor = vec4(vec3(0.35), 1.0);
         return;
@@ -22,5 +23,5 @@ void main()
 
     const vec3 palette[6] = vec3[6](vec3(0.94, 0.25, 0.21), vec3(0.90, 0.69, 0.12),
         vec3(0.21, 0.78, 0.38), vec3(0.22, 0.51, 0.94), vec3(0.75, 0.36, 0.85), vec3(0.16, 0.74, 0.78));
-    outColor = vec4(palette[shadow.face] * mix(0.25, 1.0, shadow.visibility), 1.0);
+    outColor = vec4(palette[shadow.subview] * mix(0.25, 1.0, shadow.visibility), 1.0);
 }

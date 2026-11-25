@@ -31,6 +31,16 @@ namespace Physara::Renderer
     inline constexpr std::uint32_t MaxShadowSubviews = 6;
     inline constexpr std::uint32_t MaxShadowLayers = 16;
     inline constexpr std::uint64_t MaxShadowBytes = 32ull * 1024 * 1024;
+    inline constexpr std::uint32_t ShadowGuardTexels = 4; ///< 每侧为最大比较核和投影位移保留的物理 texel.
+
+    /// @brief Hard 比较中心 texel, PCF 平均同层九个比较结果. 两档共用深度内容.
+    enum class ShadowFilter : std::uint8_t { Hard, Pcf };
+
+    /// @brief 名义接收域到实际画幅的比例. edge 取已准入的物理边长.
+    [[nodiscard]] constexpr double ShadowInnerScale(std::uint32_t edge) noexcept
+    {
+        return 1.0 - 2.0 * ShadowGuardTexels / edge;
+    }
 
     /// @brief 每 View 的会话请求. edge 以 texel 计, 可取 1024, 512 或 256.
     /// shadowDistanceMeters 限制方向光接收段和局部灯的阴影半径. 方向光按近到远申请 1 到 4 层.
@@ -43,6 +53,8 @@ namespace Physara::Renderer
         std::uint32_t directionalCascades = MaxDirectionalCascades;
         double splitLambda = 0.5; ///< 透视分段的对数权重, 从线性 0 到对数 1.
         double transitionFraction = 0.05; ///< 过渡半宽占相邻较短段的比例.
+        ShadowFilter filter = ShadowFilter::Hard;
+        std::uint64_t byteBudget = MaxShadowBytes; ///< 请求的每 View D32 逻辑字节上限.
         bool operator==(const ShadowSettings &) const = default;
     };
 
@@ -152,6 +164,7 @@ namespace Physara::Renderer
     struct LocalShadowPlan
     {
         LocalShadowVolume volume;
+        float receiverOffsetRatio{}; ///< 接收偏移长度占面轴深的上限, 使投影位移不超过半个 texel.
         std::array<LocalShadowProjection, MaxShadowSubviews> projections{};
         std::vector<std::uint32_t> casters;
     };
@@ -234,6 +247,7 @@ namespace Physara::Renderer
         ShadowPlanReason directionalReason = ShadowPlanReason::Disabled;
         /// 本 View 选中灯的解析结果. 即使其它灯取得区域, 当前诊断仍可有自己的拒绝原因.
         ShadowPlanReason diagnosticReason = ShadowPlanReason::Disabled;
+        ShadowFilter filter = ShadowFilter::Hard; ///< 本次请求的过滤方式, 不属于 CPU 深度内容版本.
         bool enabled{}, reused{};
     };
 

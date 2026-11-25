@@ -186,7 +186,7 @@ namespace Physara::RHI::OpenGL
         throw std::runtime_error(text);
     }
 
-    /// @brief 从同一存储选择二维单层或完整六面的 cube 视图, 保留真实 mip 和 layer 范围.
+    /// @brief 选择二维单层、连续层数组或完整 cube, 保留实际 mip、layer 范围和视图维度.
     static SamplingView InspectTexture(OpenGLDevice &device, const BindingSetItem &item, const BindingLayoutDesc &layout)
     {
         auto *texture = dynamic_cast<OpenGLTexture *>(item.resourceHandle);
@@ -195,13 +195,15 @@ namespace Physara::RHI::OpenGL
         const auto dimension = item.dimension == TextureDimension::Unknown ? TextureDimension::Texture2D :
                                                                            item.dimension;
         const bool cube = dimension == TextureDimension::TextureCube;
+        const bool array = dimension == TextureDimension::Texture2DArray;
         const bool layerStorage = desc.dimension == TextureDimension::Texture2D ||
                                   desc.dimension == TextureDimension::Texture2DArray ||
                                   desc.dimension == TextureDimension::TextureCube ||
                                   desc.dimension == TextureDimension::TextureCubeArray;
         auto range = item.subresources;
-        if (!desc.isShaderResource || desc.sampleCount != 1 || !layerStorage ||
-            (cube ? desc.dimension != TextureDimension::TextureCube : dimension != TextureDimension::Texture2D))
+        const bool compatible = (dimension == TextureDimension::Texture2D && layerStorage) ||
+            ((cube || array) && desc.dimension == dimension);
+        if (!desc.isShaderResource || desc.sampleCount != 1 || !compatible)
         {
             RejectSamplingView("Unsupported: incompatible sampled view dimension", layout, item.slot, dimension,
                                range, desc);
@@ -218,14 +220,22 @@ namespace Physara::RHI::OpenGL
         {
             range.numArraySlices = desc.arraySize - range.baseArraySlice;
         }
-        if (range.numMipLevels == 0 || range.numMipLevels > desc.mipLevels - range.baseMipLevel ||
-            (cube ? range.baseArraySlice != 0 || range.numArraySlices != 6 : range.numArraySlices != 1))
+        // 单层数组的层坐标仍相对视图起点. 保留调用者的数组维度, 供活动 Shader 核对.
+        const bool layersValid = array ? range.numArraySlices > 0 &&
+            range.numArraySlices <= desc.arraySize - range.baseArraySlice :
+            (cube ? range.baseArraySlice == 0 && range.numArraySlices == 6 : range.numArraySlices == 1);
+        if (range.numMipLevels == 0 || range.numMipLevels > desc.mipLevels - range.baseMipLevel || !layersValid)
         {
             RejectSamplingView("InvalidArgument: sampling view mip/layer range", layout, item.slot, dimension,
                                range, desc);
         }
         const auto format = item.format == Format::UNKNOWN ? desc.format : item.format;
         RequirePreparation(format > Format::UNKNOWN && format < Format::COUNT, "InvalidArgument: sampling view format");
+        if (array && format != desc.format)
+        {
+            RejectSamplingView("Unsupported: sampled 2D array view must match the storage format", layout, item.slot,
+                               dimension, range, desc);
+        }
         const auto &info = GetFormatInfo(format);
         const auto &storage = device.GetFormatCaps(desc.format, desc.dimension);
         const auto &view = device.GetFormatCaps(format, dimension);

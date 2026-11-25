@@ -57,11 +57,11 @@ namespace Physara::Editor::Detail
         double value;
     };
 
-    /// @brief Renderer 面板记录针对特定 View 的会话阴影开关. Session 在帧边界应用.
-    struct ShadowToggle
+    /// @brief Renderer 面板对特定 View 的完整阴影会话请求, 由 Session 在帧边界校验.
+    struct ShadowSettingsIntent
     {
         Renderer::ViewId view;
-        bool enabled;
+        Renderer::ShadowSettings settings;
     };
 
     /// @brief 封存 UI 后按 View 和灯身份提交这一诊断选择.
@@ -88,7 +88,7 @@ namespace Physara::Editor::Detail
         bool cancelPhysicalSource = false;
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
-        std::optional<ShadowToggle> shadowPlanning; ///< 只改规划开关, 沿用目标 View 的距离和级联参数.
+        std::optional<ShadowSettingsIntent> shadowSettings;
         std::optional<ShadowDiagnosticIntent> shadowDiagnostic;
         std::vector<EditAction> edits;
         std::optional<Platform::SetWindowTitle> title;

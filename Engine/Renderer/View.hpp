@@ -256,6 +256,20 @@ namespace Physara::Renderer
     /// @brief 正常帧实际消费的源与角色. settings 交付查询参数及活跃角色, 可独立于活动 Scene 保留.
     using RenderedEnvironment = Scene::SceneEnvironment;
 
+    /// @brief 当前颜色候选的实际阴影消耗. 只有该颜色被接受时才作为已渲染事实交付.
+    struct RenderedShadows
+    {
+        ShadowFilter filter;
+        std::uint32_t edge;
+        std::uint32_t groups;
+        std::uint32_t layers;
+        std::uint32_t producedLayers;
+        std::uint32_t reusedLayers;
+        std::size_t drawBatches;
+        std::uint64_t logicalBytes; ///< 本数组的描述符字节, 与 CPU 规划层跨度及池占用独立.
+        bool diagnostic;
+    };
+
     /// @brief 一代场景预览的身份, 相机与模式. 候选携带准备值, View 接受后才成为已渲染记录.
     struct RenderedScene
     {
@@ -274,6 +288,7 @@ namespace Physara::Renderer
         std::uint64_t shadowRequestRevision{}; ///< 场景色所对应的会话阴影请求代, 含诊断退回常规预览的情形.
         std::optional<LocalShadowSelection> localShadow; ///< 局部诊断实际查询的灯与灯型.
         std::uint64_t submission{}; ///< 接受该颜色的正常提交票据.
+        std::optional<RenderedShadows> shadows;
     };
 
     /// @brief 最近一次成功诊断的身份. 普通画面替换颜色后仍可显示这次诊断的记录.
@@ -284,25 +299,38 @@ namespace Physara::Renderer
         std::uint64_t submission;
     };
 
-    /// @brief 某 View 的诊断深度组. 像素只在对应图提交接受后由 retained 持有.
-    /// 逻辑区域版本与物理层顺序成对. 深度程序摘要和实际变体用于核对换代后的生产需求.
-    struct ShadowDepthGroup
+    /// @brief 某 View 使用的完整深度数组. 物理层按实际消费的各组顺序紧排.
+    /// 每层记录灯身份及逻辑区域代. 只有匹配的正常提交接受后 retained 才持有可导入像素.
+    struct ShadowDepthSet
     {
+        struct Layer
+        {
+            Scene::EntityHandle light;
+            ShadowRegion region;
+        };
+
         ViewId view;
         Scene::SceneId scene;
-        Scene::EntityHandle light;
         std::uint32_t edge{};
         std::uint32_t count{};
-        std::array<ShadowRegion, MaxShadowSubviews> regions{};
+        std::uint32_t groups{};
+        std::array<Layer, MaxShadowLayers> layers{};
         const RHI::Device *device{};
         Core::BoundedText program;
         std::bitset<32> variants; ///< 深度角色的 8 种顶点布局及 4 种绕序/剔面组合, 空组只有清除.
         std::optional<Core::BoundedText> degradation; ///< 随该组生产确认的 caster 跳过摘要, 与主表面独立.
         GraphRetainedResource retained;
+        std::size_t drawBatches{}; ///< 本候选中为该数组组织的深度批次, 只读导入时为零.
+        ShadowFilter filter = ShadowFilter::Hard;
 
-        /// @brief 对照同 View 的当前 CPU 计划, 核查身份、规格及所需内容代.
+        /// @brief 核对本次所有消费组的顺序、逻辑地址及内容代, 不依赖计划的容器下标.
         [[nodiscard]] bool Matches(ViewId owner, Scene::SceneId current, const ShadowPlan &plan,
-                                   const ShadowLightPlan &group) const noexcept;
+                                   std::span<const ShadowLightPlan> required) const noexcept;
+
+        [[nodiscard]] std::uint64_t LogicalBytes() const noexcept
+        {
+            return std::uint64_t(edge) * edge * count * RHI::GetFormatInfo(ShadowDepthFormat).bytesPerBlock;
+        }
     };
 
     /// @brief 视口颜色代及其身份. generation 随新候选分配, ViewId 保持稳定.
@@ -406,7 +434,7 @@ namespace Physara::Renderer
         /// @brief 按值读取本 View 的会话请求. 实际准入的质量与层数见当轮 PreparedView::shadowStatistics.
         [[nodiscard]] ShadowSettings RequestedShadows() const noexcept { return m_ShadowSettings; }
         /// @brief 在帧边界接收会话阴影请求. 距离为有限正米数, 边长为支持档位, 级数为 1 到 4.
-        /// splitLambda 和 transitionFraction 分别接受闭区间 [0,1] 和 [0,0.25].
+        /// splitLambda 和 transitionFraction 分别接受 [0,1] 和 [0,0.25]. 过滤可选 Hard 或 PCF, 预算为 4/8/16/32 MiB.
         /// @return 成功返回空, 相同设置沿用原请求代. 身份过期, 参数无效或版号耗尽时返回原因并保留原请求.
         /// @note 新请求在下次 CPU 准备生效. 文档编辑代和已接受颜色按各自合同发布.
         [[nodiscard]] std::optional<Core::BoundedText> RequestShadows(ViewId view, ShadowSettings settings) noexcept;
@@ -417,13 +445,13 @@ namespace Physara::Renderer
             return std::holds_alternative<CascadeDiagnostic>(m_ShadowDiagnostic);
         }
         /// @brief 为匹配的 View 更新诊断请求, 与规划开关共用请求代. 拒绝时保留原值, 成功返回空.
-        /// 关闭时释放本 View 持有的深度组, 原提交继续保活. 画面切换由下一次颜色接受确认.
+        /// 关闭级联诊断恢复基础预览. 下一轮按该分支所需的层匹配深度, 画面切换由新颜色的接受确认.
         [[nodiscard]] std::optional<Core::BoundedText> RequestCascadePreview(ViewId view, bool enabled) noexcept;
         /// @brief 提交当前 Scene 的诊断选择. 局部灯身份和类型必须仍可解析, 拒绝保留原请求.
         [[nodiscard]] std::optional<Core::BoundedText> RequestShadowDiagnostic(
             ViewId view, const Scene::Scene &scene, ShadowDiagnostic diagnostic) noexcept;
-        /// @brief 在同一 View 的正常诊断颜色发布后接收匹配的已接受深度出口.
-        void AcceptShadowDepth(ShadowDepthGroup depth, std::uint64_t ticket) noexcept;
+        /// @brief 在本路受光或诊断颜色发布后接收新生产的数组. 颜色、请求代和深度出口须对应同一接受票据.
+        void AcceptShadowDepth(ShadowDepthSet depth, std::uint64_t ticket) noexcept;
 
         /// @brief 无副作用地校验字段及派生 FOV/曝光, 失败返回可定位原因.
         /// 具体相机实体归 Scene, 由组合调用者校验; 成功不代表布局或 GPU 输出已就绪.
@@ -470,11 +498,11 @@ namespace Physara::Renderer
         /// @pre 场景 Draw 已使用此 View 准备值及其 preview 模式. degradation 只描述局部不支持项.
         /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
         /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
-        /// @param shadow 仅在本路实际准备了诊断时借用. 无匹配深度时释放 View 持有的旧组.
+        /// @param shadow 借用本轮受光或诊断消费的深度集合以记录候选工作量. 重新生产或无消费时解除旧深度引用.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
                            std::optional<RenderedEnvironment> environment = std::nullopt,
-                           std::uint64_t shaderGeneration = 0, const ShadowDepthGroup *shadow = nullptr);
+                           std::uint64_t shaderGeneration = 0, const ShadowDepthSet *shadow = nullptr);
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
@@ -509,7 +537,7 @@ namespace Physara::Renderer
         std::uint64_t m_ShadowRequestRevision{};
         ShadowDiagnostic m_ShadowDiagnostic;
         mutable ShadowPlanCache m_ShadowPlan; ///< 只由 owner 线程的 ViewWork 更新派生结果.
-        mutable std::optional<ShadowDepthGroup> m_ShadowDepth; ///< 当前 View 已接受的只读深度组.
+        mutable std::optional<ShadowDepthSet> m_ShadowDepth; ///< 当前 View 已接受的只读深度数组.
         std::optional<ViewOutput> m_Accepted;
         std::optional<RenderedScene> m_RenderedScene;
         std::optional<RenderedShadowDiagnostic> m_LastShadowDiagnostic;

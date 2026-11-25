@@ -46,46 +46,41 @@
       ]
     },
     {
-      "name": "ForwardCascades",
+      "name": "ForwardShadowView",
       "layout": "std140",
       "fields": [
-        { "name": "originHigh", "type": "float4", "array": 4 },
-        { "name": "originLow", "type": "float4", "array": 4 },
-        { "name": "farDepths", "type": "float4" },
-        { "name": "transitionStarts", "type": "float4" },
-        { "name": "transitionEnds", "type": "float4" },
         { "name": "cameraOriginHigh", "type": "float3" },
-        { "name": "cameraOriginLow", "type": "float3" },
-        { "name": "cameraForward", "type": "float3" },
-        { "name": "nearDepth", "type": "float32" },
-        { "name": "count", "type": "uint32" },
-        { "name": "edge", "type": "uint32" }
-      ]
-    },
-    {
-      "name": "ForwardCascadeMatrices",
-      "layout": "std140",
-      "fields": [
-        { "name": "clipFromOrigin", "type": "float4x4", "array": 4 }
-      ]
-    },
-    {
-      "name": "ForwardLocalShadow",
-      "layout": "std140",
-      "fields": [
-        { "name": "originHigh", "type": "float3" },
-        { "name": "farPlane", "type": "float32" },
-        { "name": "originLow", "type": "float3" },
-        { "name": "nearPlane", "type": "float32" },
         { "name": "edge", "type": "uint32" },
-        { "name": "clipFromLight", "type": "float4x4", "array": 3 }
+        { "name": "cameraOriginLow", "type": "float3" },
+        { "name": "layerCount", "type": "uint32" },
+        { "name": "cameraForward", "type": "float3" },
+        { "name": "pcf", "type": "uint32" },
+        { "name": "innerScale", "type": "float32" }
       ]
     },
     {
-      "name": "ForwardLocalShadowMatrices",
-      "layout": "std140",
+      "name": "ForwardShadowLayer",
+      "layout": "std430",
       "fields": [
-        { "name": "clipFromLight", "type": "float4x4", "array": 3 }
+        { "name": "clipFromOrigin", "type": "float4x4" },
+        { "name": "originHigh", "type": "float3" },
+        { "name": "worldTexel", "type": "float32" },
+        { "name": "originLow", "type": "float3" },
+        { "name": "farDepth", "type": "float32" },
+        { "name": "lightDirection", "type": "float3" },
+        { "name": "count", "type": "uint32" },
+        { "name": "transition", "type": "float2" },
+        { "name": "nearDepth", "type": "float32" },
+        { "name": "farPlane", "type": "float32" },
+        { "name": "receiverOffsetRatio", "type": "float32" },
+        { "name": "kind", "type": "uint32" }
+      ]
+    },
+    {
+      "name": "ForwardShadowReference",
+      "layout": "std430",
+      "fields": [
+        { "name": "group", "type": "uint32" }
       ]
     },
     {
@@ -145,20 +140,10 @@
     { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },
     { "name": "reflectionImage", "kind": "texturecube", "set": 3, "slot": 2, "stages": ["fragment"] },
     { "name": "environmentSampler", "kind": "sampler", "set": 3, "slot": 0, "stages": ["fragment"] },
-    { "name": "cascades", "kind": "constant-buffer", "set": 3, "slot": 1, "stages": ["fragment"], "block": "ForwardCascades" },
-    { "name": "cascadeMatrices", "kind": "constant-buffer", "set": 3, "slot": 2, "stages": ["fragment"], "block": "ForwardCascadeMatrices" },
-    { "name": "cascadeImage0", "kind": "texture2d", "set": 3, "slot": 3, "stages": ["fragment"] },
-    { "name": "cascadeImage1", "kind": "texture2d", "set": 3, "slot": 4, "stages": ["fragment"] },
-    { "name": "cascadeImage2", "kind": "texture2d", "set": 3, "slot": 5, "stages": ["fragment"] },
-    { "name": "cascadeImage3", "kind": "texture2d", "set": 3, "slot": 6, "stages": ["fragment"] },
-    { "name": "localShadow", "kind": "constant-buffer", "set": 3, "slot": 3, "stages": ["fragment"], "block": "ForwardLocalShadow" },
-    { "name": "localShadowMatrices", "kind": "constant-buffer", "set": 3, "slot": 4, "stages": ["fragment"], "block": "ForwardLocalShadowMatrices" },
-    { "name": "localShadowImage0", "kind": "texture2d", "set": 3, "slot": 7, "stages": ["fragment"] },
-    { "name": "localShadowImage1", "kind": "texture2d", "set": 3, "slot": 8, "stages": ["fragment"] },
-    { "name": "localShadowImage2", "kind": "texture2d", "set": 3, "slot": 9, "stages": ["fragment"] },
-    { "name": "localShadowImage3", "kind": "texture2d", "set": 3, "slot": 10, "stages": ["fragment"] },
-    { "name": "localShadowImage4", "kind": "texture2d", "set": 3, "slot": 11, "stages": ["fragment"] },
-    { "name": "localShadowImage5", "kind": "texture2d", "set": 3, "slot": 12, "stages": ["fragment"] }
+    { "name": "shadowView", "kind": "constant-buffer", "set": 3, "slot": 1, "stages": ["fragment"], "block": "ForwardShadowView" },
+    { "name": "shadowImage", "kind": "texture2d-array", "set": 3, "slot": 3, "stages": ["fragment"] },
+    { "name": "shadowLayers", "kind": "structured-buffer", "set": 3, "slot": 4, "stages": ["fragment"], "block": "ForwardShadowLayer", "capacity": 16 },
+    { "name": "shadowReferences", "kind": "structured-buffer", "set": 3, "slot": 5, "stages": ["fragment"], "block": "ForwardShadowReference", "capacity": 16384 }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },

@@ -125,12 +125,11 @@ namespace Physara::Renderer::Detail
         }));
         EncodedLightSet table{std::vector<StaticAbi::ForwardLight>(StaticAbi::LightRowsCapacity), count,
                              static_cast<std::uint32_t>(indices.size()) - count};
-        std::size_t directional = 0;
-        std::size_t local = count;
+        LightRowCursor cursor{.local = count};
         for (const auto index : indices)
         {
             const auto &record = lights[index];
-            auto &row = table.rows[record.light.type == LightKind::Directional ? directional++ : local++];
+            auto &row = table.rows[cursor.Next(record.light.type)];
             if (const auto field = readRow(row, index); !field.empty())
             {
                 Core::BoundedText error("Forward light entity slot ");

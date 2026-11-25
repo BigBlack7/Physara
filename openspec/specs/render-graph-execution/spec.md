@@ -85,7 +85,7 @@ GraphManaged 的 Compute SHALL 按计划授权 Pipeline 的实际活动 storage 
 
 瞬态导出 SHALL 保活至图尾，并按导出范围准备可兑现的着色读或 CopySource 状态。若同一追踪单元有不兼容的瞬态出口请求，执行 SHALL 在发出工作前拒绝并指出冲突。所有 Pass、末端状态准备和恢复正常模式均成功后，执行 SHALL 交付请求的版本、范围、用途及可保活的实际对象。跨录制消费 SHALL 遵守实际 Close 终态和录制接受结果。呈现导出交还原 `PresentColor` 及 `ShaderResource` 状态，由窗口 owner 之后负责复制与交换。
 
-普通采样与 ShaderRead 导出 SHALL 使用同一同格式视图能力判定。首发的 packed depth/stencil 同格式采样视图提供深度分量，声明须明确选择 Depth。具备显式只读层组交接能力的二维数组 SHALL 可将同一已定义范围作为不可变 ShaderRead 输出交接，其中每个层均须通过单层同格式采样能力核对。后继图的实际采样 SHALL 继续满足单个视图允许的层数和本 Pass 的范围权限。
+普通采样与 ShaderRead 导出 SHALL 使用同一同格式视图能力判定。首发的 packed depth/stencil 同格式采样视图提供深度分量，声明须明确选择 Depth。具备显式只读层组交接能力的二维数组 SHALL 可将同一已定义范围作为不可变 ShaderRead 输出交接，其中每个层均须通过单层同格式采样能力核对。后继图的实际采样 SHALL 继续满足单个视图允许的层数和本 Pass 的范围权限。设备支持同格式二维数组采样时，实际采样 SHALL 以所需内容版本、mip 和连续层精确授权，录制的绑定范围和维度须与授权相容。该范围所有层 SHALL 由其匹配生产者或已定义导入提供，且各自在读取前取得所需状态。
 
 使用受保留存储的交接 SHALL 随输出提供原物理对象、精确范围、有定义的内容、用途和可归属本次录制的状态事实。图尾状态 SHALL 标为该阶段的事实。跨录制交接 SHALL 在对应工作 Close 且提交可信后取得实际终态，计入 Close 恢复和图退出后的合法访问。纹理的状态回传 SHALL 保留 mip/layer 差异，Buffer SHALL 回传整对象状态。状态未知的范围 SHALL 不发布为可重新导入。
 
@@ -120,6 +120,11 @@ View 显示输出、历史和读回 SHALL 通过对应 owner 持有实际输出�
 
 - **WHEN** 设备能力仅支持单层采样视图且登记了数组的只读层组交接能力，一张图导出多个已完整定义的层，后续图只读导入该范围
 - **THEN** 各已定义层可按自己的授权独立采样。一次采样超出单视图能力、导出包含未定义层或请求层组 owner 写权限时，图拒绝相应声明或计划
+
+#### Scenario: Authorize a live array read over matching layer versions
+
+- **WHEN** 一个受光 Pass 声明读取同一 D32 数组内的已定义连续层，另一个候选试图读到未定义层或扩大有效绑定范围
+- **THEN** 存活受光 Pass 的声明和真实采样视图对应，各层的深度写或有效导入先于使用。未定义、超能力或超授权访问被拒绝，成功交接仅包含声明的实际层。
 
 ### Requirement: Stop on execution failure and preserve issued work
 

@@ -24,7 +24,7 @@ namespace Physara::Runtime
             return Core::BoundedText("Cannot locate the product executable directory");
         }
         const std::filesystem::path executable(std::wstring_view(module.data(), length));
-        // 各配置的包路径以 exe 为基准. 阴影写入与诊断查询各有入口, 加载由帧前程序准备触发.
+        // 各配置相对 exe 定位包. 阴影写入、诊断和三种带阴影的受光入口随各路实际程序需求加载.
         const auto directory = executable.parent_path();
         return ResourceLocations{directory, (directory / EditorUiPackageRelative).lexically_normal(),
                                 {(directory / StaticForwardPackageRelative).lexically_normal(),
@@ -39,6 +39,9 @@ namespace Physara::Runtime
                                  (directory / StaticShadowDepthPackageRelative).lexically_normal(),
                                  (directory / StaticCascadePreviewPackageRelative).lexically_normal(),
                                  (directory / StaticSpotShadowPreviewPackageRelative).lexically_normal(),
-                                 (directory / StaticPointShadowPreviewPackageRelative).lexically_normal()}};
+                                 (directory / StaticPointShadowPreviewPackageRelative).lexically_normal(),
+                                 (directory / StaticForwardShadowsPackageRelative).lexically_normal(),
+                                 (directory / StaticForwardPhysicalShadowsPackageRelative).lexically_normal(),
+                                 (directory / StaticForwardIblShadowsPackageRelative).lexically_normal()}};
     }
 }

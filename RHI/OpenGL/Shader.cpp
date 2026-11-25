@@ -169,7 +169,7 @@ namespace Physara::RHI::OpenGL
 
     /// @brief 反射一项资源的数值布局, 逻辑 binding 不在此展开为 GL 单元.
     static ShaderResource ReflectResource(const spirv_cross::Compiler &compiler, const spirv_cross::Resource &item,
-                                          ResourceType kind)
+                                          ResourceType kind, ShaderType stage)
     {
         ShaderResource result;
         result.id = item.id;
@@ -226,13 +226,21 @@ namespace Physara::RHI::OpenGL
         else if (kind == ResourceType::Texture_SRV)
         {
             const auto &image = compiler.get_type(item.type_id);
-            RequirePreparation((image.image.dim == spv::Dim2D || image.image.dim == spv::DimCube) &&
-                                   !image.image.arrayed && !image.image.ms &&
+            const bool cube = image.image.dim == spv::DimCube && !image.image.arrayed;
+            const bool plane = image.image.dim == spv::Dim2D && (!image.image.arrayed || stage != ShaderType::Compute);
+            RequirePreparation((cube || plane) && !image.image.ms &&
                                    !image.image.depth && image.image.sampled == 1 &&
                                    Scalar(compiler.get_type(image.image.type)) == GL_FLOAT,
-                               "Unsupported: expected a separate non-array float texture2D or textureCube");
-            result.dimension = image.image.dim == spv::DimCube ? TextureDimension::TextureCube :
-                                                                TextureDimension::Texture2D;
+                               "Unsupported: separate float texture2D, texture2DArray or textureCube shape");
+            result.dimension = TextureDimension::Texture2D;
+            if (image.image.arrayed)
+            {
+                result.dimension = TextureDimension::Texture2DArray;
+            }
+            else if (cube)
+            {
+                result.dimension = TextureDimension::TextureCube;
+            }
         }
         return result;
     }
@@ -295,7 +303,7 @@ namespace Physara::RHI::OpenGL
         const auto append = [&](const auto &items, ResourceType kind) {
             for (const auto &item : items)
             {
-                auto resource = ReflectResource(compiler, item, kind);
+                auto resource = ReflectResource(compiler, item, kind, desc.shaderType);
                 if (activeVariables.contains(item.id))
                 {
                     m_Resources.push_back(std::move(resource));
@@ -321,7 +329,7 @@ namespace Physara::RHI::OpenGL
             const auto access = ReflectStorageAccess(compiler.get_buffer_block_flags(item.id));
             const auto kind = desc.shaderType == ShaderType::Compute && access != StorageAccess::Read ?
                 ResourceType::StructuredBuffer_UAV : ResourceType::StructuredBuffer_SRV;
-            auto resource = ReflectResource(compiler, item, kind);
+            auto resource = ReflectResource(compiler, item, kind, desc.shaderType);
             if (activeVariables.contains(item.id))
             {
                 m_Resources.push_back(std::move(resource));

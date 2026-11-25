@@ -749,7 +749,7 @@ namespace Physara::Renderer::Detail
     /// @brief 在当前安全 View 槽复用等形缓冲. 已接受且字节相同的版本可直接导入后继图.
     static void PrepareDrawBuffer(ForwardDevice &device, StaticDrawWork &frame,
         std::shared_ptr<DrawBuffer> &storage, GraphUsage usage, std::span<const std::byte> values,
-        std::uint32_t stride = 0)
+        std::uint32_t stride = 0, GraphUploadSource source = GraphUploadSource::ForwardDraw)
     {
         if (storage && (storage->capacity != device.capacity || storage->bytes != values.size()))
         {
@@ -766,7 +766,7 @@ namespace Physara::Renderer::Detail
         if (!storage->accepted || !std::ranges::equal(values, storage->contents))
         {
             storage->accepted = false;
-            frame.uploads.Add(storage, storage->buffer, values, GraphUploadSource::ForwardDraw);
+            frame.uploads.Add(storage, storage->buffer, values, source);
             storage->contents.assign(values.begin(), values.end());
         }
     }
@@ -876,14 +876,6 @@ namespace Physara::Renderer::Detail
         return std::ranges::equal(left, right, [](const auto &a, const auto &b) { return a.value == b.value; });
     }
 
-    /// @brief 阴影块中的矩阵数组按实际列值匹配, 不考虑生成接口的对齐填充.
-    template <typename Matrices>
-    static bool SameProjections(const Matrices &a, const Matrices &b) noexcept
-    {
-        return std::ranges::equal(a, b,
-            [](const auto &left, const auto &right) { return SameMatrix(left.value, right.value); });
-    }
-
     /// @brief 在安全槽内复用阴影 View 常量, 修改仅登记本轮的图上传.
     static void PrepareCasterConstants(ForwardDevice &device, StaticDrawWork &work, const auto &value)
     {
@@ -905,252 +897,253 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 比较实际消费的诊断常量, 与曝光、绘制 jitter 和结构体填充独立.
-    static bool SameQuery(const StaticAbi::ForwardCascades &a, const StaticAbi::ForwardCascades &b) noexcept
-    {
-        if (a.count != b.count || a.edge != b.edge || a.nearDepth != b.nearDepth || a.farDepths != b.farDepths ||
-            a.transitionStarts != b.transitionStarts || a.transitionEnds != b.transitionEnds ||
-            a.cameraOriginHigh != b.cameraOriginHigh || a.cameraOriginLow != b.cameraOriginLow ||
-            a.cameraForward != b.cameraForward)
-        {
-            return false;
-        }
-        for (std::size_t i = 0; i < a.count; ++i)
-        {
-            if (a.originHigh[i].value != b.originHigh[i].value || a.originLow[i].value != b.originLow[i].value)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /// @brief 按每块生成 ABI 复用常量存储. 实际 Pass 的图准备阶段建立 PerPass 集合.
-    template <typename Block, typename Equal>
-    static void PrepareQueryBlock(ForwardDevice &device, UploadBatch &uploads, std::shared_ptr<ConstantRow> &storage,
-                                  std::optional<Block> &previous, const Block &values, Equal equal)
-    {
-        static_assert(sizeof(Block) <= RHI::ConstantBufferOffsetSizeAlignment);
-        if (!storage || storage->capacity != device.capacity || storage->buffer->GetDesc().byteSize != sizeof(Block))
-        {
-            storage = CreateConstantRow(device, sizeof(Block), std::nullopt);
-        }
-        device.Use(*storage);
-        if (!storage->accepted || !previous || !equal(*previous, values))
-        {
-            storage->accepted = false;
-            uploads.Add(storage, storage->buffer, std::as_bytes(std::span(&values, 1)), GraphUploadSource::ForwardView);
-            previous = values;
-        }
-    }
-
     static constexpr auto ShadowVariantBase = std::size_t(SurfacePhase::ShadowDepth) * GeometryPhaseSlots;
 
-    /// @brief 将该层的投影转成共享深度顶点入口, 局部灯使用计划中已计入偏移的写入常量.
-    static StaticAbi::ForwardView ShadowRasterView(const ShadowFrame &shadow, const ShadowLightPlan &light,
-                                                   std::size_t index) noexcept
+    /// @brief 按当前 View 的查询设置更新常量. 过滤切换只改变查询输入.
+    static void PrepareShadowConstants(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
     {
-        StaticAbi::ForwardView raster{};
+        auto &shadow = *frame.shadow;
+        StaticAbi::ForwardShadowView value{};
+        // 方向光若获准总是首组. 只有级联选级需要稳定相机的原点及前向.
+        if (shadow.queryRows.front().kind == 0)
+        {
+            const std::span camera(view.camera->worldFromView);
+            if (!StoreGpuVector(value.cameraOriginHigh, camera.subspan<12, 3>()))
+            {
+                Reject(ViewSettingReason::InvalidProjection, "Cascade query camera origin exceeds the GPU float range");
+            }
+            value.cameraOriginLow = GpuPositionLow(camera.subspan<12, 3>(), value.cameraOriginHigh);
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                value.cameraForward[axis] = static_cast<float>(-camera[8 + axis]);
+            }
+        }
+        value.edge = shadow.depth.edge;
+        value.layerCount = shadow.depth.count;
+        value.pcf = shadow.depth.filter == ShadowFilter::Pcf;
+        value.innerScale = static_cast<float>(ShadowInnerScale(value.edge));
+        static_assert(sizeof(value) <= RHI::ConstantBufferOffsetSizeAlignment);
+        if (!shadow.constants || shadow.constants->capacity != device.capacity)
+        {
+            shadow.constants = CreateConstantRow(device, sizeof(value), std::nullopt);
+        }
+        device.Use(*shadow.constants);
+        const auto &previous = shadow.values;
+        if (!shadow.constants->accepted || !previous || previous->cameraOriginHigh != value.cameraOriginHigh ||
+            previous->cameraOriginLow != value.cameraOriginLow || previous->cameraForward != value.cameraForward ||
+            previous->edge != value.edge || previous->layerCount != value.layerCount || previous->pcf != value.pcf)
+        {
+            shadow.constants->accepted = false;
+            frame.uploads.Add(shadow.constants, shadow.constants->buffer, std::as_bytes(std::span(&value, 1)),
+                              GraphUploadSource::ForwardView);
+            shadow.values = value;
+        }
+    }
+
+    /// @brief 组首行同时交付组范围和覆盖参数, 每一行对应一个物理层的无偏投影.
+    static void PackShadowQuery(ShadowFrame &shadow, std::size_t first, const ShadowLightPlan &light)
+    {
+        auto &rows = shadow.queryRows;
+        auto &group = rows[first];
+        group.count = light.regionCount;
+        static_assert(std::uint32_t(Asset::ModelLightKind::Directional) == 0 &&
+                      std::uint32_t(Asset::ModelLightKind::Point) == 1 && std::uint32_t(Asset::ModelLightKind::Spot) == 2);
         if (const auto *plan = std::get_if<DirectionalShadowPlan>(&light.views))
         {
-            std::ranges::copy_n(shadow.values->originHigh[index].value.begin(), 3, raster.shadowOriginHigh.begin());
-            std::ranges::copy_n(shadow.values->originLow[index].value.begin(), 3, raster.shadowOriginLow.begin());
-            const auto &columns = shadow.matrixValues->clipFromOrigin[index].value;
-            for (std::size_t column = 0; column < columns.size(); ++column)
+            group.nearDepth = plan->nearDepth;
+            for (std::size_t i = 0; i < plan->cascades.size(); ++i)
             {
-                raster.shadowClipFromOrigin[column].value = columns[column].value;
+                auto &row = rows[first + i];
+                const auto &cascade = plan->cascades[i];
+                const auto &projection = cascade.projection;
+                if (!StoreGpuVector(row.originHigh, projection.origin) ||
+                    !StoreMatrix(row.clipFromOrigin, CascadeClip(projection)))
+                {
+                    Reject(ViewSettingReason::InvalidProjection, "Directional shadow projection exceeds float range");
+                }
+                row.originLow = GpuPositionLow(projection.origin, row.originHigh);
+                row.worldTexel = static_cast<float>(projection.halfExtent * (2.0 / shadow.depth.edge));
+                row.farDepth = cascade.farDepth;
+                row.transition = cascade.transition;
             }
-            const auto &projection = plan->cascades[index].projection;
-            const double texel = projection.halfExtent * (2.0 / shadow.depth.edge);
-            raster.shadowClipFromOrigin[3].value[2] = static_cast<float>(
-                texel * ShadowDepthConvention::CasterBiasTexels / projection.depthRange);
+            const auto &axis = plan->cascades.front().projection.axes[2];
+            std::ranges::transform(axis, group.lightDirection.begin(), [](double value)
+            {
+                return static_cast<float>(-value);
+            });
         }
         else
         {
-            const auto &projection = std::get<LocalShadowPlan>(light.views).projections[index];
-            raster.shadowOriginHigh = shadow.localValues->originHigh;
-            raster.shadowOriginLow = shadow.localValues->originLow;
-            for (std::size_t column = 0; column < projection.clipFromLight.size(); ++column)
+            const auto &local = std::get<LocalShadowPlan>(light.views);
+            const auto &volume = local.volume;
+            group.kind = std::uint32_t(volume.outerCone > 0 ? Asset::ModelLightKind::Spot : Asset::ModelLightKind::Point);
+            std::ranges::transform(volume.position, group.originHigh.begin(),
+                                   [](double value) { return static_cast<float>(value); });
+            group.originLow = GpuPositionLow(volume.position, group.originHigh);
+            group.nearDepth = static_cast<float>(volume.nearPlane);
+            group.farPlane = static_cast<float>(volume.farPlane);
+            group.receiverOffsetRatio = local.receiverOffsetRatio;
+            for (std::size_t i = 0; i < light.regionCount; ++i)
             {
-                raster.shadowClipFromOrigin[column].value = projection.clipFromLight[column];
+                auto &matrix = rows[first + i].clipFromOrigin;
+                const auto &projection = local.projections[i].clipFromLight;
+                for (std::size_t column = 0; column < projection.size(); ++column)
+                {
+                    matrix[column].value = projection[column];
+                }
             }
-            raster.shadowClipFromOrigin[3].value[2] = projection.casterClipZ;
+        }
+    }
+
+    /// @brief 深度与查询共用同一编码, 写入沿常规深度方向追加 caster 偏移.
+    static StaticAbi::ForwardView ShadowRasterView(const ShadowFrame &shadow, const ShadowLightPlan &light,
+                                                  std::size_t first, std::size_t i) noexcept
+    {
+        const auto &row = shadow.queryRows[first + i];
+        StaticAbi::ForwardView raster{};
+        const auto *directional = std::get_if<DirectionalShadowPlan>(&light.views);
+        const auto &origin = directional ? row : shadow.queryRows[first];
+        raster.shadowOriginHigh = origin.originHigh;
+        raster.shadowOriginLow = origin.originLow;
+        for (std::size_t column = 0; column < row.clipFromOrigin.size(); ++column)
+        {
+            raster.shadowClipFromOrigin[column].value = row.clipFromOrigin[column].value;
+        }
+        if (directional)
+        {
+            const auto &projection = directional->cascades[i].projection;
+            const double texel = projection.halfExtent * (2.0 / shadow.depth.edge);
+            raster.shadowClipFromOrigin[3].value[2] =
+                static_cast<float>(texel * ShadowDepthConvention::CasterBiasTexels / projection.depthRange);
+        }
+        else
+        {
+            raster.shadowClipFromOrigin[3].value[2] = std::get<LocalShadowPlan>(light.views).projections[i].casterClipZ;
         }
         return raster;
     }
 
-    /// @brief 为需要重绘的组准备逐层 caster. 与主表面共用驻留、上传和实际编码统计.
-    /// 首个包含跳过项的层提供本组摘要. 组被接受后, 后继 View 帧可在只读导入时沿用这份说明.
+    /// @brief 同一数组需生产时才逐层准备静态 caster. 各层按原计划组顺序编号.
     static void PrepareShadowCasters(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-                                     const ShadowLightPlan &light)
+                                     std::span<const ShadowLightPlan> groups)
     {
         auto &shadow = *frame.shadow;
         auto &depth = shadow.depth;
         depth.variants.reset();
         depth.degradation.reset();
-        for (std::size_t i = 0; i < depth.count; ++i)
+        depth.drawBatches = 0;
+        shadow.levels.reserve(depth.count);
+        while (shadow.levels.size() < depth.count)
         {
-            auto &level = shadow.levels[i];
-            std::map<MaterialRow *, std::size_t> rows;
-            for (const auto index : light.Casters(i))
-            {
-                PrepareDraw(device, level, view, index, rows, SurfacePhase::ShadowDepth, true);
-            }
-            if (level.degradation && !depth.degradation)
-            {
-                depth.degradation = level.degradation;
-            }
-            if (level.draws.empty())
-            {
-                continue;
-            }
-            PrepareCasterConstants(device, level, ShadowRasterView(shadow, light, i));
-            SortDraws(level);
-            PackBatches(device, level);
-            for (const auto &batch : level.batches)
-            {
-                const auto key = DrawShader(frame, level.draws[batch.firstDraw], SurfacePhase::ShadowDepth);
-                depth.variants.set(key.variant - ShadowVariantBase);
-            }
+            shadow.levels.emplace_back(frame.uploads, frame.encodings);
         }
-    }
-
-    /// @brief 用当前稳定相机和各级投影更新方向光查询常量.
-    static void PrepareCascadeQuery(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-                                    const DirectionalShadowPlan &plan)
-    {
-        auto &shadow = *frame.shadow;
-        StaticAbi::ForwardCascades query{};
-        StaticAbi::ForwardCascadeMatrices matrices{};
-        const std::span camera(view.camera->worldFromView);
-        if (!StoreGpuVector(query.cameraOriginHigh, camera.subspan<12, 3>()))
+        std::size_t first = 0;
+        for (const auto &light : groups)
         {
-            Reject(ViewSettingReason::InvalidProjection, "Cascade preview camera origin exceeds the GPU float range");
-        }
-        query.cameraOriginLow = GpuPositionLow(camera.subspan<12, 3>(), query.cameraOriginHigh);
-        for (std::size_t axis = 0; axis < 3; ++axis)
-        {
-            query.cameraForward[axis] = static_cast<float>(-camera[8 + axis]);
-        }
-        query.nearDepth = plan.nearDepth;
-        query.edge = shadow.depth.edge;
-        query.count = shadow.depth.count;
-        for (std::size_t i = 0; i < plan.cascades.size(); ++i)
-        {
-            const auto &cascade = plan.cascades[i];
-            const auto &projection = cascade.projection;
-            std::array<float, 3> high;
-            if (!StoreGpuVector(high, projection.origin) ||
-                !StoreMatrix(matrices.clipFromOrigin[i].value, CascadeClip(projection)))
+            for (std::size_t i = 0; i < light.regionCount; ++i)
             {
-                Reject(ViewSettingReason::InvalidProjection, "Directional shadow projection exceeds the GPU float range");
-            }
-            std::ranges::copy(high, query.originHigh[i].value.begin());
-            std::ranges::copy(GpuPositionLow(projection.origin, high), query.originLow[i].value.begin());
-            query.farDepths[i] = cascade.farDepth;
-            query.transitionStarts[i] = cascade.transition[0];
-            query.transitionEnds[i] = cascade.transition[1];
-        }
-        shadow.localValues.reset();
-        shadow.localMatrixValues.reset();
-        PrepareQueryBlock(device, frame.uploads, shadow.constants, shadow.values, query, SameQuery);
-        PrepareQueryBlock(device, frame.uploads, shadow.matrices, shadow.matrixValues, matrices,
-            [](const auto &a, const auto &b) { return SameProjections(a.clipFromOrigin, b.clipFromOrigin); });
-        frame.source.directionalCascades = query.count;
-    }
-
-    /// @brief 按生成 ABI 的单块容量拆分局部投影. 聚光只取首块第一项, 点光两块各取三个面.
-    /// 查询和光栅共用高低位灯位. 查询从无偏矩阵取得聚光覆盖及比较深度.
-    static void PrepareLocalShadowQuery(ForwardDevice &device, ForwardFrameData &frame, const LocalShadowPlan &plan)
-    {
-        auto &shadow = *frame.shadow;
-        StaticAbi::ForwardLocalShadow query{};
-        StaticAbi::ForwardLocalShadowMatrices remaining{};
-        const auto &volume = plan.volume;
-        const auto pack = [](double value) { return static_cast<float>(value); };
-        std::ranges::transform(volume.position, query.originHigh.begin(), pack);
-        query.originLow = GpuPositionLow(volume.position, query.originHigh);
-        query.nearPlane = static_cast<float>(volume.nearPlane);
-        query.farPlane = static_cast<float>(volume.farPlane);
-        query.edge = shadow.depth.edge;
-        const auto firstCount = query.clipFromLight.size();
-        for (std::size_t face = 0; face < shadow.depth.count; ++face)
-        {
-            const auto &projection = plan.projections[face];
-            const auto copyProjection = [&](auto &matrix)
-            {
-                for (std::size_t column = 0; column < projection.clipFromLight.size(); ++column)
+                auto &level = shadow.levels[first + i];
+                std::map<MaterialRow *, std::size_t> rows;
+                for (const auto index : light.Casters(i))
                 {
-                    matrix[column].value = projection.clipFromLight[column];
+                    PrepareDraw(device, level, view, index, rows, SurfacePhase::ShadowDepth, true);
                 }
-            };
-            if (face < firstCount)
-            {
-                copyProjection(query.clipFromLight[face].value);
+                if (level.degradation && !depth.degradation)
+                {
+                    depth.degradation = level.degradation;
+                }
+                if (level.draws.empty())
+                {
+                    continue;
+                }
+                PrepareCasterConstants(device, level, ShadowRasterView(shadow, light, first, i));
+                SortDraws(level);
+                PackBatches(device, level);
+                depth.drawBatches += level.batches.size();
+                for (const auto &batch : level.batches)
+                {
+                    const auto key = DrawShader(frame, level.draws[batch.firstDraw], SurfacePhase::ShadowDepth);
+                    depth.variants.set(key.variant - ShadowVariantBase);
+                }
             }
-            else
-            {
-                copyProjection(remaining.clipFromLight[face - firstCount].value);
-            }
-        }
-        shadow.values.reset();
-        shadow.matrixValues.reset();
-        PrepareQueryBlock(device, frame.uploads, shadow.constants, shadow.localValues, query,
-            [](const auto &a, const auto &b)
-            {
-                return a.originHigh == b.originHigh && a.originLow == b.originLow && a.nearPlane == b.nearPlane &&
-                    a.farPlane == b.farPlane && a.edge == b.edge &&
-                    SameProjections(a.clipFromLight, b.clipFromLight);
-            });
-        if (shadow.depth.count > firstCount)
-        {
-            PrepareQueryBlock(device, frame.uploads, shadow.matrices, shadow.localMatrixValues, remaining,
-                [](const auto &a, const auto &b) { return SameProjections(a.clipFromLight, b.clipFromLight); });
-        }
-        else
-        {
-            shadow.matrices.reset();
-            shadow.localMatrixValues.reset();
+            first += light.regionCount;
         }
     }
 
-    /// @brief 建立紧凑层组, 组内下标是物理层, regions 保有各自的逻辑地址及版本.
-    /// 命中已接受存储时仅准备查询常量. 深度程序需求仍登记到该帧的选代.
+    /// @brief 计划的 lights 顺序源自本次可见集合. 用与灯表相同的分段顺序发布组首层引用.
+    static void PrepareShadowReferences(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
+    {
+        static_assert(StaticAbi::ShadowReferencesCapacity == StaticAbi::LightRowsCapacity);
+        StaticAbi::ShadowReferencesData references{};
+        std::array<std::uint32_t, MaxShadowLayers> firstReference{};
+        const auto &plan = *view.shadows;
+        std::uint32_t first = 1;
+        for (std::size_t group = 0; group < plan.admitted.size(); ++group)
+        {
+            firstReference[group] = first;
+            first += plan.admitted[group].regionCount;
+        }
+        // 组引用从 1 起算. 两表使用相同的分段游标, 未准入的灯也推进游标并保留零引用.
+        LightRowCursor cursor{.local = frame.activeLights->directionalCount};
+        for (const auto &link : plan.lights)
+        {
+            const auto row = cursor.Next(view.scene.lights[link.sceneLightIndex].light.type);
+            if (link.plan)
+            {
+                references[row].group = firstReference[*link.plan];
+            }
+        }
+        PrepareDrawBuffer(device, frame, frame.shadow->references, GraphUsage::ShaderRead,
+                          std::as_bytes(std::span(references)), sizeof(StaticAbi::ForwardShadowReference),
+                          GraphUploadSource::ForwardView);
+    }
+
+    /// @brief 按组枚举次序紧排物理层, 同步生成查询行. 导入候选须有可读出口且逐层身份和内容代匹配.
+    /// 命中时仍登记旧深度使用过的程序键, 待本帧选代后由 ApplyShadowShaders 决定是否补画.
     static void PlanShadowDraws(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-                                 const ShadowLightPlan &light)
+                                 std::span<const ShadowLightPlan> groups)
     {
         if (!frame.shadow)
         {
-            frame.shadow.emplace(frame.uploads, frame.encodings);
+            frame.shadow.emplace();
         }
-        auto &depth = frame.shadow->depth;
+        auto &shadow = *frame.shadow;
+        auto &depth = shadow.depth;
         const auto &retained = view.acceptedShadowDepth;
-        if (retained && retained->device == &device.device)
+        if (retained && retained->device == &device.device && retained->retained.Readable() &&
+            retained->Matches(view.view, view.scene.scene, *view.shadows, groups))
         {
             depth = *retained;
         }
         else
         {
-            depth = {.view = view.view, .scene = view.scene.scene, .light = light.light,
-                     .edge = view.shadows->edge, .count = light.regionCount, .device = &device.device};
-            std::ranges::copy(light.Regions(), depth.regions.begin());
+            depth = {.view = view.view, .scene = view.scene.scene, .edge = view.shadows->edge,
+                     .groups = static_cast<std::uint32_t>(groups.size()), .device = &device.device};
+            for (const auto &group : groups)
+            {
+                for (const auto &region : group.Regions())
+                {
+                    depth.layers[depth.count++] = {group.light, region};
+                }
+            }
         }
-        if (const auto *cascade = std::get_if<DirectionalShadowPlan>(&light.views))
+        depth.drawBatches = 0;
+        depth.filter = view.shadowStatistics.filter;
+        shadow.queryRows = {};
+        std::size_t first = 0;
+        for (const auto &group : groups)
         {
-            frame.environment.program = LightingProgram::CascadePreview;
-            PrepareCascadeQuery(device, frame, view, *cascade);
+            PackShadowQuery(shadow, first, group);
+            first += group.regionCount;
         }
-        else
-        {
-            const auto &local = std::get<LocalShadowSelection>(view.shadowDiagnostic);
-            frame.source.localShadow = local;
-            frame.environment.program = local.kind == Asset::ModelLightKind::Spot ?
-                LightingProgram::SpotPreview : LightingProgram::PointPreview;
-            PrepareLocalShadowQuery(device, frame, std::get<LocalShadowPlan>(light.views));
-        }
+        static_assert(StaticAbi::ShadowLayersCapacity == MaxShadowLayers);
+        PrepareShadowConstants(device, frame, view);
+        PrepareDrawBuffer(device, frame, shadow.layerRows, GraphUsage::ShaderRead,
+                          std::as_bytes(std::span(shadow.queryRows)), sizeof(StaticAbi::ForwardShadowLayer),
+                          GraphUploadSource::ForwardView);
         if (!depth.retained)
         {
-            PrepareShadowCasters(device, frame, view, light);
+            PrepareShadowCasters(device, frame, view, groups);
         }
         static_assert(decltype(depth.variants){}.size() == GeometryPhaseSlots);
         for (std::size_t slot = 0; slot < depth.variants.size(); ++slot)
@@ -1178,22 +1171,50 @@ namespace Physara::Renderer::Detail
         }
         const bool litDraws = std::ranges::any_of(frame.materialRows,
             [](const auto &row) { return row->values.unlit == 0; });
+        const bool usesLighting = !shadowLight && litDraws &&
+            (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
         if (shadowLight)
         {
-            PlanShadowDraws(device, frame, view, *shadowLight);
+            if (const auto *local = std::get_if<LocalShadowSelection>(&view.shadowDiagnostic))
+            {
+                frame.source.localShadow = *local;
+                frame.environment.program = local->kind == Asset::ModelLightKind::Spot ?
+                    LightingProgram::SpotPreview : LightingProgram::PointPreview;
+            }
+            else
+            {
+                frame.source.directionalCascades = shadowLight->regionCount;
+                frame.environment.program = LightingProgram::CascadePreview;
+            }
+        }
+        else
+        {
+            PrepareEnvironment(device, frame, view, mode, litDraws);
+        }
+        const auto groups = view.ShadowGroups(usesLighting);
+        if (!groups.empty() && !frame.draws.empty())
+        {
+            if (usesLighting)
+            {
+                // 三个受光布局对应相同顺序的数组变体. 查询档在常量中切换.
+                frame.environment.program = static_cast<LightingProgram>(
+                    std::size_t(LightingProgram::LegacyShadows) + std::size_t(frame.environment.program));
+            }
+            PlanShadowDraws(device, frame, view, groups);
         }
         else
         {
             frame.shadow.reset();
-            PrepareEnvironment(device, frame, view, mode, litDraws);
         }
         if (!frame.draws.empty())
         {
-            const bool usesLighting = litDraws &&
-                (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
             if (!shadowLight)
             {
                 PrepareLightTable(device, frame, view, usesLighting);
+                if (frame.shadow)
+                {
+                    PrepareShadowReferences(device, frame, view);
+                }
             }
             PrepareViewRow(device, frame, view, mode, !shadowLight && usesLighting);
             // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
@@ -1230,7 +1251,7 @@ namespace Physara::Renderer::Detail
                 return;
             }
             depth.retained = {};
-            PrepareShadowCasters(device, frame, view, *view.previewShadow);
+            PrepareShadowCasters(device, frame, view, view.ShadowGroups(true));
         }
         for (auto &level : std::span(shadow.levels).first(depth.count))
         {

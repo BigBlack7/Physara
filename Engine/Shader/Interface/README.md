@@ -18,7 +18,7 @@ type 支持 float32/int32/uint32、float/int/uint 的 2/3/4 分量向量和 floa
 
 std140/std430 分别计算 offset、实际字段 extent、矩阵列 stride、数组 stride 和 block 分配大小. 例如 std140 单 float 的 extent=4、分配大小=16; vec3 后的 float 可位于 offset=12; 标量数组在 std140 的 stride=16、std430 的 stride=4. CPU 头用固定宽度类型、显式 padding/stride 和 static_assert 表达这些量, 不假定宿主向量/矩阵类型与 GPU 一致.
 
-set=0/1/2/3 分别为 PerView/PerRenderable/PerMaterial/PerPass, slot=0..127. kind 为 constant-buffer (std140)、structured-buffer (readonly/std430)、texture2d、texturecube、sampler. 实际 canonical binding 从公开 RHI::VulkanBindingOffsets 推导, 不另建可修改 offset 配置. b/t/s/u 同号合法, storage 绑定使用 u 类别, structured-buffer 与两种独立浮点采样图像共用 t 类别, 同 set/binding 不能重复. 生成 RHI 描述显式采用 descriptor-set 模式, 集合 visibility 是各项声明 visibility 的并集. 二维与单 cube 的维度进入 ABI 和 IR 活动反射, 两者均使用普通 Texture SRV.
+set=0/1/2/3 分别为 PerView/PerRenderable/PerMaterial/PerPass, slot=0..127. kind 为 constant-buffer (std140)、structured-buffer (readonly/std430)、texture2d、texture2d-array、texturecube、sampler. 实际 canonical binding 从公开 RHI::VulkanBindingOffsets 推导, 不另建可修改 offset 配置. b/t/s/u 同号合法, storage 绑定使用 u 类别, structured-buffer 与独立浮点采样图像共用 t 类别, 同 set/binding 不能重复. 生成 RHI 描述显式采用 descriptor-set 模式, 集合 visibility 是各项声明 visibility 的并集. 二维、二维数组与单 cube 的维度进入 ABI 和 IR 活动反射, 使用普通 Texture SRV. 二维数组表示单个图像的层, 每次绑定仍对应一个资源.
 
 每个接口输出 Data.hpp、Bindings.hpp、Vertex.glsl、Fragment.glsl、Expected.json、Manifest.json. Compute 接口另生成 Compute.glsl, 包的 IR 核对工作组、image 格式/维度与 storage 访问方向. CPU 数据头只需标准库, 绑定头另需公开 RHI. Manifest 最后发布并含全部 artifact 摘要; 编译前逐份校验, 缺失/修改/混合代会失败. 不变内容不重写. 单个输出目录必须串行只有一个写入者; 多文件生成失败可留下新旧文件, 但不能被原 manifest 认作完整新代, 修复后重新 generate.
 

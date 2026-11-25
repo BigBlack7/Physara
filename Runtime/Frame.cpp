@@ -89,7 +89,7 @@ namespace Physara::Runtime
     }
 
     EditorGraphProfile::EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews,
-                                           bool diagnostic, std::size_t shadowViews)
+                                           bool diagnostic, std::uint64_t shadowBytes)
     {
         const bool scene = sceneViews != 0;
         const auto info = host.GetInfo();
@@ -121,18 +121,19 @@ namespace Physara::Runtime
                     .formatSupport = support, .copySource = true, .copyDestination = true, .maxSampledLayers = 6};
             }
         }
-        if (shadowViews != 0)
+        if (shadowBytes != 0)
         {
             m_States.back() = Renderer::Detail::SampledState(TextureAspect::Depth);
             std::uint32_t edge{}, layers{};
             if (host.QueryDepthArrayLimits(ShadowDepthFormat, edge, layers))
             {
-                // 只声明经设备核对的数组深度和采样能力. 当前诊断各采样视图取一个层.
+                // 按实际数组目标的深度写入及采样能力准入. 下游绑定覆盖本 View 的连续层.
                 m_Textures[count++] = {.format = ShadowDepthFormat, .dimension = RHI::TextureDimension::Texture2DArray,
                     .sampleCount = 1, .maxWidth = edge, .maxHeight = edge, .maxDepth = 1, .maxLayers = layers,
                     .formatSupport = RHI::FormatSupport::Texture | RHI::FormatSupport::DepthStencil |
                         RHI::FormatSupport::ShaderLoad | RHI::FormatSupport::ShaderSample,
-                    .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
+                    .copySource = true, .copyDestination = true, .clear = true,
+                    .maxSampledLayers = std::min(layers, MaxShadowLayers),
                     .layeredReadExport = true};
             }
         }
@@ -163,8 +164,6 @@ namespace Physara::Runtime
                 addStorage(format, RHI::TextureDimension::Texture2DArray);
             }
         }
-        const auto shadowBytes = shadowViews * MaxShadowSubviews * MaxShadowEdge * MaxShadowEdge *
-            RHI::GetFormatInfo(ShadowDepthFormat).bytesPerBlock;
         m_Options = {.textures = std::span(m_Textures).first(count),
             .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
                         .maxConstantBytes = RHI::ConstantBufferOffsetSizeAlignment,
@@ -172,7 +171,7 @@ namespace Physara::Runtime
                         .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
                         .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
                         .structuredUav = structuredUav},
-            .textureBoundaryStates = std::span(m_States).first(shadowViews != 0 ? 3u : 2u),
+            .textureBoundaryStates = std::span(m_States).first(shadowBytes != 0 ? 3u : 2u),
             .bufferBoundaryStates = std::span(m_States).first<2>(), .maxColorAttachments = 1,
             .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
                 shadowBytes + ((!scene || diagnostic) ? DiagnosticUploadBudget : 0),
@@ -320,6 +319,28 @@ namespace Physara::Runtime
         if (auto error = graph.Export(declared.color, ExportUsage::Presentation))
         {
             return *error;
+        }
+        if (declared.scene)
+        {
+            // 主路已接入窗口的 UI 采样, 附加路已导出显示色. 只为这些消费者保留新生产的完整数组.
+            for (std::size_t index = 0; index < ForwardViewCount; ++index)
+            {
+                const auto &output = declared.scene->views[index];
+                if (!output || !output->shadowDepth.IsValid())
+                {
+                    continue;
+                }
+                const auto &depth = *slot.forward.PreparedShadowDepth(index);
+                if (depth.retained)
+                {
+                    continue;
+                }
+                if (auto error = graph.Export(output->shadowDepth, ExportUsage::ShaderRead,
+                    TextureRange{.layerCount = depth.count, .aspect = TextureAspect::Depth}))
+                {
+                    return *error;
+                }
+            }
         }
         return declared;
     }
@@ -581,6 +602,7 @@ namespace Physara::Runtime
             if (published && declared.scene->views[MainViewIndex])
             {
                 confirmDepth(view, MainViewIndex);
+                measurements.statistics.PublishAcceptedShadows(MainViewIndex, view);
             }
             if (offscreen)
             {
@@ -589,6 +611,7 @@ namespace Physara::Runtime
                 if (publishView(request.view, offscreen->outputs, color))
                 {
                     confirmDepth(request.view, OffscreenViewIndex);
+                    measurements.statistics.PublishAcceptedShadows(OffscreenViewIndex, request.view);
                     request.reason = ViewSettingReason::None;
                     request.submission = receipt.ticket;
                 }
@@ -674,6 +697,7 @@ namespace Physara::Runtime
                 return Failed(host, preparationFailure, "Frame.UiPrepare", Core::BoundedText("UI preparation failed"));
             }
             auto *prepared = std::get_if<Editor::PreparedUiFrame>(&ui);
+            const auto declareStart = CpuClock::now();
             const auto sceneBytes = UsesMainScene(outputs, prepared, mode) || offscreen ?
                 slot.forward.GraphStorageBytes() : 0;
             if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024 + sceneBytes))
@@ -698,13 +722,23 @@ namespace Physara::Runtime
             {
                 return Failed(host, AttemptStatus::GraphRejected, "Frame.Seal", error->description);
             }
+            measurements.cpu.graphDeclare = SecondsSince(declareStart);
             const auto &declared = std::get<FrameDeclaration>(declaration);
             const auto sceneCount = declared.scene ? std::ranges::count_if(declared.scene->views,
                 [](const auto &source) { return source.has_value(); }) : 0;
-            const auto shadowCount = declared.scene ? std::ranges::count_if(declared.scene->views,
-                [](const auto &source) { return source && source->shadowDepth.IsValid(); }) : 0;
+            std::uint64_t shadowBytes = 0;
+            if (declared.scene)
+            {
+                for (const auto &source : declared.scene->views)
+                {
+                    if (source)
+                    {
+                        shadowBytes += source->shadowBytes;
+                    }
+                }
+            }
             EditorGraphProfile profile(host, static_cast<std::size_t>(sceneCount), declared.diagnosticUpload.IsValid(),
-                                       static_cast<std::size_t>(shadowCount));
+                                       shadowBytes);
             if (!errors.IsClear())
             {
                 return Failed(host, preparationFailure, "Frame.Profile",
@@ -1036,9 +1070,10 @@ namespace Physara::Runtime
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
         const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
         const bool hasScene = HasSceneOutput(prepared);
-        // 阴影诊断、物理预览和缩放的候选失败时, 可读旧色仍能由安全 UI 显示.
+        // 阴影、物理预览和缩放的候选失败时, 可读旧色仍能由安全 UI 显示.
         const bool retainOnFailure = physical || (hasScene &&
             (!std::holds_alternative<std::monostate>(prepared.shadowDiagnostic) ||
+             (prepared.preview == PreviewMode::DirectLighting && prepared.shadowStatistics.enabled) ||
              prepared.layouts.render != prepared.layouts.display));
         auto mode = Editor::UiFrameMode::Normal;
         const auto viewportFallback = [&](ViewSettingReason reason, bool canRetain)
@@ -1071,6 +1106,11 @@ namespace Physara::Runtime
             return stop();
         }
         auto offscreen = PlanOffscreen(host, forward, slot, shared, view, offscreenRequests, shadowLimits);
+        if (offscreen.request)
+        {
+            // 附加路可能换成另一 View. 先从其 owner 读取自己的接受历史, 即使本轮布局已被拒绝.
+            statistics.PublishAcceptedShadows(OffscreenViewIndex, offscreen.request->view);
+        }
         // 在图编译和可能的安全 UI 重试之前发布. 此后的接受票据只确认实际提交的场景颜色.
         statistics.PublishShadows(MeasureShadows(prepared, sceneCameraRevision),
             offscreen.request ? std::optional(MeasureShadows(offscreen.prepared, sceneCameraRevision)) : std::nullopt);

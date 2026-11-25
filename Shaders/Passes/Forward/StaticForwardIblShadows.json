@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "name": "StaticForwardIblShadows",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Static.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/ShadowColor.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": [
+    {
+      "name": "PHYSARA_PHYSICAL_LIGHTING",
+      "allowed": [
+        1,
+        2
+      ],
+      "value": 2
+    }
+  ]
+}

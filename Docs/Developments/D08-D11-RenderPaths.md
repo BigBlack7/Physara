@@ -166,11 +166,11 @@
 
 **职责位置：** Shaders/Shadow、Lighting、Renderer/Paths。**前置：** [D09-T02](#d09-t02)、[D09-T03](#d09-t03)。**架构依据：** [8.3](../Architecture.md#shadows)、[8.6](../Architecture.md#lighting)、[8.7](../Architecture.md#opaque-shading)。
 
-**状态** 前置已满足，待立项。 [D09-T03 验收与证据](../../openspec/changes/archive/2026-11-24-add-spot-point-shadows/tasks.md#final-verification)
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-25-add-hard-pcf-shadow-visibility/tasks.md#final-verification)
 
-- [ ] 实现基础 Hard/PCF 的深度比较、接收偏移、过滤质量和 cascade/spot/point 查询；PCF 过滤比较结果，atlas guard band 与 point 跨面采样覆盖最大核，明确 Poisson 仅为采样分布。
-- [ ] 让共享 EvaluateLighting 消费同一 visibility 接口，材质响应与阴影采样解耦。
-- [ ] 接入质量/预算 UI 和统计，比较开关阴影的 HDR 输出及性能，PCSS/moments 留到可选 profile。
+- [x] 实现基础 Hard/PCF 的深度比较、接收偏移、过滤质量和 cascade/spot/point 查询；PCF 过滤比较结果，atlas guard band 与 point 跨面采样覆盖最大核，明确 Poisson 仅为采样分布。
+- [x] 让共享 EvaluateLighting 消费同一 visibility 接口，材质响应与阴影采样解耦。
+- [x] 接入质量/预算 UI 和统计，比较开关阴影的 HDR 输出及性能，PCSS/moments 留到可选 profile。
 
 **完成条件：** 基础阴影与灯光、材质和环境参数相互独立，后续路径无需复制阴影实现。
 
@@ -178,6 +178,8 @@
 ### D09-T05 · 建立阴影回归与资源压力门槛
 
 **职责位置：** Renderer、RenderGraph、RHI。**前置：** [D09-T01](#d09-t01)、[D09-T02](#d09-t02)、[D09-T03](#d09-t03)、[D09-T04](#d09-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[8.3](../Architecture.md#shadows)、[12.2](../Architecture.md#benchmark)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 固定 CSM 稳定、spot 边缘、point 六面、薄片/mask、负缩放和多实例 和画外 caster 回归。
 - [ ] 压力测试大灯数、region 重分配、关闭阴影、resize 及在途资源退休，核对图访问与实际成本。

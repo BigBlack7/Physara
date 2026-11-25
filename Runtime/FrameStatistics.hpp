@@ -50,6 +50,15 @@ namespace Physara::Runtime
         {
             m_Stats.shadows = {main, offscreen};
         }
+        /// @brief 从对应 View 复制最近正常接受的场景身份与阴影工作, 首次接受前为空.
+        /// 在颜色接受后更新该路. 附加路也可在准备时读取当前选定 View 的旧接受记录.
+        void PublishAcceptedShadows(std::size_t index, const Renderer::View &view) noexcept
+        {
+            const auto &scene = view.LastRenderedScene();
+            m_Stats.acceptedShadows[index] = scene ?
+                std::optional{Editor::AcceptedViewShadows{view.Id(), scene->scene, scene->submission, scene->shadows}} :
+                std::nullopt;
+        }
         /// @brief 复制本轮 owner 准备及最近一次 worker 回报. 场景统计另随实际接受的提交发布.
         void PublishShaders(Renderer::ShaderPreparationStatistics native, Shader::ReloadStatistics cpu) noexcept
         {

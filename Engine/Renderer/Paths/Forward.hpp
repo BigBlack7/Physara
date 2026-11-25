@@ -37,6 +37,9 @@ namespace Physara::Renderer
         std::filesystem::path cascadePreview;
         std::filesystem::path spotShadowPreview;
         std::filesystem::path pointShadowPreview;
+        std::filesystem::path colorShadows;
+        std::filesystem::path physicalShadows;
+        std::filesystem::path iblShadows;
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
@@ -90,7 +93,7 @@ namespace Physara::Renderer
     };
 
     /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
-    /// 显示色已执行视口映射. 实际诊断另有常规深度层组, 所有 TextureId 仅在本图有效.
+    /// 显示色已执行视口映射. 受光或诊断可另带实际消费的常规深度数组, 所有 TextureId 仅在本图有效.
     struct ForwardOutput
     {
         TextureId workingColor;
@@ -99,7 +102,8 @@ namespace Physara::Renderer
         ForwardWorkingSource source;
         PassId depthPass;
         PassId colorPass;
-        TextureId shadowDepth; ///< 本图用于诊断的分层常规深度, 常规预览时为空.
+        TextureId shadowDepth; ///< 本图用于受光或诊断的分层常规深度.
+        std::uint64_t shadowBytes{}; ///< 这路消费的紧凑数组字节, 用于图准入.
     };
 
     namespace Detail
@@ -193,18 +197,20 @@ namespace Physara::Renderer
 
         /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
         /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
-        /// @note 返回值带各路独立的显示色版本. 调用方按 UI 采样或显式导出建立各自的消费者.
+        /// @note 调用方用 UI 采样或显式导出建立颜色消费者. 本路新生产的 shadowDepth 若要跨帧复用,
+        /// 调用方为其声明完整层范围的 ShaderRead 出口, 在本路颜色获接受后确认. 只读导入沿用原回执.
+        /// 调用方也可按实际范围为 shadowDepth 独立声明读回.
         [[nodiscard]] GraphResult<ForwardGraph> Declare(RenderGraph &graph, std::vector<GraphUpload> &uploads,
             const std::array<bool, ForwardViewCount> &selected = {true, false});
         /// @brief 完整正常图获接受后, 分别确认全部所需写入均存活的存储代.
         /// @pre output 来自本次声明, plan 是接受的同图计划, 前缀提交不具备确认资格.
         void Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept;
-        /// @brief 正常诊断颜色已被该 View 接受后, 将同票据的深度保留出口交给它.
+        /// @brief 本 View 的受光或诊断颜色发布后, 用同一正常提交的出口确认本次生产的深度数组.
         void ConfirmShadowDepth(View &owner, std::size_t index, const GraphRetainedResource &retained,
                                      std::uint64_t ticket) const noexcept;
-        /// @brief 取得本路候选的深度身份. 常规预览返回空指针, 有 retained 表示命中已接受组.
+        /// @brief 借出该路实际消费的深度集合, 无消费时返回空指针. retained 有值表示本次使用已接受的数组.
         /// @pre 本路 FinishView 已成功. 返回值只借用到槽 Reset 或再次准备.
-        [[nodiscard]] const ShadowDepthGroup *PreparedShadowDepth(std::size_t index = 0) const noexcept;
+        [[nodiscard]] const ShadowDepthSet *PreparedShadowDepth(std::size_t index = 0) const noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
         /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;

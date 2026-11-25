@@ -464,7 +464,7 @@ namespace Physara::Renderer::Detail
         return projected;
     }
 
-    /// @brief 保守局部体. 影响球限制距离, 聚光另有包住外锥的四侧平面. 不用近面剔除 caster.
+    /// @brief 包住最大核射线沿途的 caster, 近面交给实际绘制裁剪.
     struct LocalCasterVolume
     {
         glm::dvec3 origin;
@@ -472,14 +472,17 @@ namespace Physara::Renderer::Detail
         std::array<CullingPlane, 4> sides{};
         bool spot;
 
-        explicit LocalCasterVolume(const LocalShadowVolume &volume) noexcept
+        LocalCasterVolume(const LocalShadowVolume &volume, double halfTangent, std::uint32_t edge) noexcept
             : origin(glm::make_vec3(volume.position.data())), radius(volume.farPlane), spot(volume.outerCone > 0)
         {
+            // 同一轴深上, 核、取整与投影误差可沿两轴伸入边带. 再纳入接收偏移的半个世界 texel.
+            const double texelAtFar = (2 * halfTangent / edge) * volume.farPlane;
+            radius += (std::numbers::sqrt2 * ShadowGuardTexels + 0.5) * texelAtFar;
             if (spot)
             {
                 const auto axes = LightAxes(glm::make_vec3(volume.direction.data()));
-                const auto axis = axes[2] * std::sin(volume.outerCone);
-                const auto cosine = std::cos(volume.outerCone);
+                const auto cosine = 1 / std::hypot(halfTangent, 1.0);
+                const auto axis = axes[2] * (halfTangent * cosine);
                 const auto sideX = axes[0] * cosine;
                 const auto sideY = axes[1] * cosine;
                 sides = {CullingPlane{axis + sideX, 0}, CullingPlane{axis - sideX, 0},
@@ -561,11 +564,15 @@ namespace Physara::Renderer::Detail
     std::optional<LocalShadowPlan> MakeLocalShadowPlan(const SceneFrame &scene, LocalShadowVolume volume,
                                                        std::uint32_t edge)
     {
-        LocalShadowPlan result{.volume = volume};
+        // 名义外锥或 90 度面落在内区, 扩展边带供写入与查询共用.
+        const double halfTangent = (volume.outerCone > 0 ? std::tan(volume.outerCone) : 1.0) / ShadowInnerScale(edge);
+        // 透视除法中的分子和轴深都会随法线偏移改变. 此比例限住最外接收点在任一 XY 轴上的半 texel 位移.
+        const double offsetRatio = halfTangent / (edge * (1.0 + halfTangent) + halfTangent);
+        LocalShadowPlan result{.volume = volume, .receiverOffsetRatio = static_cast<float>(offsetRatio)};
         if (volume.outerCone > 0)
         {
             const auto axes = LightAxes(glm::make_vec3(volume.direction.data()));
-            const auto projection = LocalProjection(axes[2], axes[1], volume, std::tan(volume.outerCone), edge);
+            const auto projection = LocalProjection(axes[2], axes[1], volume, halfTangent, edge);
             if (!projection)
             {
                 return std::nullopt;
@@ -579,8 +586,6 @@ namespace Physara::Renderer::Detail
                 {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
             static constexpr glm::dvec3 up[] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1},
                 {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
-            // 标称 45 度边缘投到 NDC 的 (edge - 2) / edge, 经 UV 映射后距纹理边缘恰好一个 texel.
-            const double halfTangent = double(edge) / (edge - 2);
             for (std::size_t i = 0; i < result.projections.size(); ++i)
             {
                 const auto projection = LocalProjection(forward[i], up[i], volume, halfTangent, edge);
@@ -591,7 +596,7 @@ namespace Physara::Renderer::Detail
                 result.projections[i] = *projection;
             }
         }
-        const LocalCasterVolume local(volume);
+        const LocalCasterVolume local(volume, halfTangent, edge);
         for (std::uint32_t index = 0; index < scene.primitives.size(); ++index)
         {
             const auto &primitive = scene.primitives[index];
@@ -603,9 +608,9 @@ namespace Physara::Renderer::Detail
         return result;
     }
 
-    /// @brief 以接收切片和单点采样余量找上游 caster, 并将有关几何并入 Z.
+    /// @brief 按接收切片和过滤余量找上游 caster, 并将有关几何并入 Z.
     static bool CollectDirectionalCasters(const SceneFrame &scene, DirectionalShadowVolume &volume,
-                                          double texel, std::vector<std::uint32_t> &casters)
+                                          double margin, std::vector<std::uint32_t> &casters)
     {
         // 遍历整个冻结表以保留画外遮挡. 空集合也能描述一个有效区域, 例如上一投射物刚被移除.
         for (std::uint32_t index = 0; index < scene.primitives.size(); ++index)
@@ -621,10 +626,10 @@ namespace Physara::Renderer::Detail
                 return false;
             }
             const auto &receiver = volume.receiver;
-            if (candidate->maximum[0] < receiver.minimum[0] - texel ||
-                candidate->minimum[0] > receiver.maximum[0] + texel ||
-                candidate->maximum[1] < receiver.minimum[1] - texel ||
-                candidate->minimum[1] > receiver.maximum[1] + texel ||
+            if (candidate->maximum[0] < receiver.minimum[0] - margin ||
+                candidate->minimum[0] > receiver.maximum[0] + margin ||
+                candidate->maximum[1] < receiver.minimum[1] - margin ||
+                candidate->minimum[1] > receiver.maximum[1] + margin ||
                 candidate->minimum[2] > receiver.maximum[2])
             {
                 continue;
@@ -659,7 +664,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 用 GPU 高低位原点核对覆盖. XY 检查接收切片, Z 检查接收物和已选 caster, 远端预留写入偏移.
     static bool CoversFittedVolume(const DirectionalShadowVolume &volume, const glm::dvec3 &origin,
-                                   double halfExtent, double depthRange, double biasMeters) noexcept
+                                   double halfExtent, double depthRange, double biasMeters, double texel) noexcept
     {
         glm::dvec3 relativeOrigin;
         for (int axis = 0; axis < 3; ++axis)
@@ -680,20 +685,22 @@ namespace Physara::Renderer::Detail
         const auto receiverOffset = WorldOffsetBound(axes, volume.receiver, center);
         for (std::size_t axis = 0; axis < 2; ++axis)
         {
-            const double xy = halfExtent - ClipRoundoff(axes[axis], receiverOffset);
+            const double error = ClipRoundoff(axes[axis], receiverOffset);
+            // 先扣交付误差, 再留偏移和最外样点所需的距离. 吸附后的中心已参与范围计算.
+            const double xy = halfExtent - error - 2 * texel;
             const double relativeCenter = center[static_cast<int>(axis)];
-            if (!(volume.receiver.minimum[axis] - relativeCenter >= -xy &&
+            if (!(error <= texel && volume.receiver.minimum[axis] - relativeCenter >= -xy &&
                   volume.receiver.maximum[axis] - relativeCenter <= xy))
             {
                 return false;
             }
         }
         const double rounding = ClipRoundoff(axes[2], WorldOffsetBound(axes, volume.fitted, center));
-        return volume.fitted.minimum[2] - center.z >= rounding &&
+        return volume.fitted.minimum[2] - center.z >= biasMeters + rounding &&
                volume.fitted.maximum[2] - center.z <= depthRange - biasMeters - rounding;
     }
 
-    /// @brief 用接收切片的球固定 XY 尺度. 留一 texel 余量覆盖中心吸附和近邻采样.
+    /// @brief 用完整接收切片的球固定内区尺度, 按物理 texel 吸附并校核最大核覆盖.
     static std::optional<DirectionalShadowProjection> FitCascade(const SceneFrame &scene,
         const ShadowReceiver &receiver, const std::array<glm::dvec3, 3> &axes,
         double nearPlane, double farPlane, std::uint32_t edge, std::vector<std::uint32_t> &casters)
@@ -702,10 +709,10 @@ namespace Physara::Renderer::Detail
         const double factor = receiver.orthographic ? 1 : farPlane;
         const double radius = std::hypot(factor / receiver.projectionScale[0] * receiver.sideLimit[0],
             factor / receiver.projectionScale[1] * receiver.sideLimit[1], (farPlane - nearPlane) * 0.5);
-        const double halfExtent = radius / (1 - 2.0 / edge);
+        const double halfExtent = radius / ShadowInnerScale(edge);
         const double texel = halfExtent * (2.0 / edge);
         if (!volume || !(texel > 0) || !std::isfinite(halfExtent) ||
-            !CollectDirectionalCasters(scene, *volume, texel, casters))
+            !CollectDirectionalCasters(scene, *volume, ShadowGuardTexels * texel, casters))
         {
             return std::nullopt;
         }
@@ -743,7 +750,7 @@ namespace Physara::Renderer::Detail
             return scale >= std::numeric_limits<float>::min() && scale <= std::numeric_limits<float>::max();
         };
         if (!usableScale(halfExtent) || !usableScale(depthRange) ||
-            !CoversFittedVolume(*volume, origin, halfExtent, depthRange, biasMeters))
+            !CoversFittedVolume(*volume, origin, halfExtent, depthRange, biasMeters, texel))
         {
             return std::nullopt;
         }

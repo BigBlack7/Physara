@@ -448,9 +448,10 @@ namespace Physara::Renderer
         const ShadowSettings &settings, std::uint64_t requestRevision, const ShadowPlanningLimits &limits) noexcept
     {
         return {.scene = scene, .structureRevision = structure, .contentRevision = content,
-                .requestRevision = requestRevision, .byteLimit = std::min(limits.byteBudget, MaxShadowBytes),
+                .requestRevision = requestRevision,
+                .byteLimit = std::min({limits.byteBudget, settings.byteBudget, MaxShadowBytes}),
                 .requestedEdge = settings.edge, .layerLimit = std::min(limits.maxLayers, MaxShadowLayers),
-                .reason = ShadowPlanReason::Disabled, .enabled = settings.enabled};
+                .reason = ShadowPlanReason::Disabled, .filter = settings.filter, .enabled = settings.enabled};
     }
 
     void ShadowPlanCache::Clear(ShadowPlanStatistics &statistics) noexcept
@@ -566,9 +567,12 @@ namespace Physara::Renderer
             static_cast<void>(ResolveDiagnostic(ShadowPlan{}, scene, diagnostic, failed));
             return reject(failed.diagnosticReason, failed);
         }
+        auto productionSettings = settings;
+        // 深度始终覆盖最大核. 仅切换比较方式时, 计划输入和所需内容保持一致.
+        productionSettings.filter = ShadowFilter::Hard;
         const ShadowPlanInputs inputs{scene.scene, scene.structureRevision, scene.contentRevision,
             {camera.worldFromView, {camera.stableClipFromView[0], camera.stableClipFromView[5]}, sideLimit,
-             camera.nearPlane, camera.cullingFar, camera.orthographic}, settings, limits};
+             camera.nearPlane, camera.cullingFar, camera.orthographic}, productionSettings, limits};
         if (m_State && m_State->inputs == inputs)
         {
             auto reused = m_State->statistics;
@@ -579,6 +583,7 @@ namespace Physara::Renderer
             }
             // 旧槽继续持有原计划. 这次返回自己的请求代和变化计数, 不改写上次发布的摘要.
             reused.requestRevision = requestRevision;
+            reused.filter = settings.filter;
             reused.dirtyRegions = 0;
             reused.releasedRegions = 0;
             reused.reused = true;

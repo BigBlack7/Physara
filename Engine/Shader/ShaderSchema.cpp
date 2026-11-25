@@ -96,6 +96,10 @@ namespace Physara::Shader
         {
             return ResourceKind::TextureCube;
         }
+        if (name == "texture2d-array")
+        {
+            return ResourceKind::Texture2DArray;
+        }
         if (name == "sampler")
         {
             return ResourceKind::Sampler;
@@ -127,6 +131,8 @@ namespace Physara::Shader
             return "texture2d";
         case ResourceKind::TextureCube:
             return "texturecube";
+        case ResourceKind::Texture2DArray:
+            return "texture2d-array";
         case ResourceKind::Sampler:
             return "sampler";
         case ResourceKind::StructuredUav:
@@ -349,6 +355,11 @@ namespace Physara::Shader
             binding.stageMask |= mask;
         }
         constexpr auto ComputeMask = 1u << static_cast<unsigned>(Stage::Compute);
+        if (resource.kind == ResourceKind::Texture2DArray && (binding.stageMask & ComputeMask) != 0)
+        {
+            throw BuildError(ErrorCode::InvalidInput,
+                             "Resource " + resource.name + ": texture2d-array is not supported in the compute stage.");
+        }
         if ((schema.localSize[0] != 0 && binding.stageMask != ComputeMask) ||
             (schema.localSize[0] == 0 && (binding.stageMask & ComputeMask) != 0) ||
             (IsUnordered(resource.kind) && binding.stageMask != ComputeMask))

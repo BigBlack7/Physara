@@ -640,12 +640,10 @@ namespace Physara::Editor
             {
                 view->RequestPreview(*workspace.preview);
             }
-            if (view && workspace.shadowPlanning && !frozen && !discard)
+            if (view && workspace.shadowSettings && !frozen && !discard)
             {
-                // 控件只提交开关. 在帧边界取该 View 当前的距离与档位一起校验, 会话设置无需写入撤销历史.
-                auto settings = view->RequestedShadows();
-                settings.enabled = workspace.shadowPlanning->enabled;
-                if (auto error = view->RequestShadows(workspace.shadowPlanning->view, settings))
+                const auto &request = *workspace.shadowSettings;
+                if (auto error = view->RequestShadows(request.view, request.settings))
                 {
                     state.editError = std::move(error);
                 }

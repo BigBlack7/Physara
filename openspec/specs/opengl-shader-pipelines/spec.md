@@ -8,7 +8,7 @@
 
 ### Requirement: Consume canonical modules through the existing Shader and RHI boundaries
 
-包消费入口 SHALL 在创建 RHI Shader 前核对包完整性、所需 ABI 和已声明 profile，并以全有或全无的结果交付对应阶段。OpenGL Shader 创建 SHALL 接收自持的 canonical Vulkan SPIR-V，保留原字节码、入口和阶段，拒绝非法字节范围、入口或执行模型不匹配及受限 profile 之外的输入。产品包继续采用 `GraphicsBaselineV1` 的 Vertex/Fragment、main 入口、常量、只读定长结构化 buffer、独立采样图像和 Sampler 及 stage IO；浮点采样图像支持 `texture2D` 与 `textureCube`。公共 `CreateShader` 图形路径 SHALL 另接收符合当前布局合同、可按 UBO 保留 ABI 的 canonical push constant 块。公共 RHI SHALL 无需了解包格式或 Engine 类型。
+包消费入口 SHALL 在创建 RHI Shader 前核对包完整性、所需 ABI 和已声明 profile，并以全有或全无的结果交付对应阶段。OpenGL Shader 创建 SHALL 接收自持的 canonical Vulkan SPIR-V，保留原字节码、入口和阶段，拒绝非法字节范围、入口或执行模型不匹配及受限 profile 之外的输入。产品包继续采用 `GraphicsBaselineV1` 的 Vertex/Fragment、main 入口、常量、只读定长结构化 buffer、独立采样图像和 Sampler 及 stage IO；浮点采样图像支持 `texture2D`、`textureCube` 与非多样本普通 `texture2DArray`。公共 `CreateShader` 图形路径 SHALL 另接收符合当前布局合同、可按 UBO 保留 ABI 的 canonical push constant 块。公共 RHI SHALL 无需了解包格式或 Engine 类型。
 
 包消费入口 SHALL 接受 `ComputeBaselineV1` 的单个已验证 Compute module，并核对入口、profile 与 ABI。直接 `CreateShader` 的 Compute 路径 SHALL 接受对应的 canonical 存储声明、固定工作组尺寸和可保持公共 ABI 的有限 push constant 块。
 
@@ -47,7 +47,7 @@
 
 ### Requirement: Create immutable binding sets with exact resource ownership and views
 
-绑定集 SHALL 对应同一设备的常规布局，按布局核对独立资源类型、slot 与范围，保存不可变描述及预解析视图和实际范围。Buffer range SHALL 满足资源用途、已知记录粒度、UBO/SSBO offset 对齐和实际设备限制。Texture SRV SHALL 保留所请求的兼容二维单层视图或单个 cube 视图，以及 format、mip/layer 范围和分量映射。cube 采样视图 SHALL 选择完整六面和合法 mip 区间，并支持启用时的跨面线性过滤。不可用或不兼容的资源和视图 SHALL 拒绝。图形状态 SHALL 在原生绑定和 Draw 前核对活动图像类型与实际视图维度。绑定集 SHALL 强持有布局与实际资源依赖。`trackLiveness` SHALL 保持其公开的命令列表保活含义及集合自身的依赖所有权。
+绑定集 SHALL 对应同一设备的常规布局，按布局核对独立资源类型、slot 与范围，保存不可变描述及预解析视图和实际范围。Buffer range SHALL 满足资源用途、已知记录粒度、UBO/SSBO offset 对齐和实际设备限制。Texture SRV SHALL 保留所请求的兼容二维单层视图、单个 cube 视图或设备支持的二维数组视图，以及 format、mip/layer 范围和分量映射。二维数组视图 SHALL 保留明确的连续层范围及数组维度，单层数组亦保持数组维度。D32 阴影 SHALL 仅使用同格式深度分量及普通浮点采样。cube 采样视图 SHALL 选择完整六面和合法 mip 区间，并支持启用时的跨面线性过滤。不可用或不兼容的资源和视图 SHALL 拒绝。图形状态 SHALL 在原生绑定和 Draw 前核对活动图像类型与实际视图维度。绑定集 SHALL 强持有布局与实际资源依赖。`trackLiveness` SHALL 保持其公开的命令列表保活含义及集合自身的依赖所有权。
 
 Buffer 绑定的 `byteSize=0` 与全一长度哨兵 SHALL 按公共范围语义解释为从合法 byteOffset 到 Buffer 末尾，与该剩余长度的显式表示等价。解析后的范围 SHALL 非空并满足既有约束。显式越界起点或长度 SHALL 被拒绝。Debug/Release 和 raw/Validation 消费 SHALL 保持同一合法范围语义。
 
@@ -80,6 +80,11 @@ Volatile 位置 SHALL 接收类型匹配且覆盖整个逻辑 Buffer 的绑定�
 #### Scenario: Reject cube dimension or face range mismatches before a draw
 - **WHEN** cube 采样位置收到二维视图，或一个请求的 cube 视图缺面或超出允许 mip 范围
 - **THEN** 对应准备阶段报告实际不匹配及位置，Debug 和 Release 均拒绝发出 Draw
+
+#### Scenario: Bind an exact D32 array sampling view
+
+- **WHEN** 活动浮点二维数组采样位置读取 D32 数组中一个合法非零起始层的区间，随后请求超界区间或在活动位置绑定二维单层视图
+- **THEN** 原生绘制只读取所选区间，视图索引 0 对应请求起始层。允许的单层数组视图维度保持。超界或维度失配在成功绘制前拒绝。
 
 ### Requirement: Allocate a deterministic compact plan from active cross-stage resources
 

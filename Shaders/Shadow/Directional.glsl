@@ -1,59 +1,44 @@
-// 场景位置、相机轴和每级光空间投影来自同一帧. 采样仅访问实际分配且已定义的单层视图.
-#include <Source/Geometry/LightingPosition.glsl>
-
-// first 等于有效级数表示超出覆盖. 非零 nextWeight 对应下一层的比较权重.
-struct CascadeSelection
+// 级联使用正交投影, w 恒为 1. 相对原点的位置与米制偏移分别投影, 以该级自己的世界 texel 决定偏移量.
+float CascadeVisibility(uint layer, ForwardShadowLayer entry, LightingSurface surface,
+                        vec3 geometricNormal, vec3 toLight)
 {
-    uint first;
-    float nextWeight;
-};
-
-// 内部区间按左闭右开选层. 过渡带同时覆盖相邻两级, 末级包含有限远端.
-CascadeSelection SelectCascade(float viewDepth)
-{
-    if (!(viewDepth >= cascades.nearDepth && viewDepth <= cascades.farDepths[cascades.count - 1u]))
-    {
-        return CascadeSelection(cascades.count, 0.0);
-    }
-    for (uint level = 0u; level + 1u < cascades.count; ++level)
-    {
-        float start = cascades.transitionStarts[level];
-        float end = cascades.transitionEnds[level];
-        if (viewDepth >= start && viewDepth < end)
-        {
-            return CascadeSelection(level, (viewDepth - start) / (end - start));
-        }
-        if (viewDepth < cascades.farDepths[level])
-        {
-            return CascadeSelection(level, 0.0);
-        }
-    }
-    return CascadeSelection(cascades.count - 1u, 0.0);
+    LightingPosition origin = LightingPosition(entry.originHigh, entry.originLow);
+    vec3 position = -LightingDelta(origin, surface, 1.0);
+    vec3 offset = ShadowReceiverOffset(geometricNormal, toLight, 0.5 * entry.worldTexel);
+    vec3 clip = (entry.clipFromOrigin * vec4(position, 1.0)).xyz +
+                (entry.clipFromOrigin * vec4(offset, 0.0)).xyz;
+    bool valid;
+    return FilterShadow(clip, layer, valid);
 }
 
-// 四个常规二维绑定分别解释一个物理层. 各级的存储分辨率相同.
-float CascadeDepth(uint level, ivec2 texel)
+// 内部区间按左闭右开选层. 过渡带混合两次独立过滤的可见性, 末级包含有限远端.
+ShadowResult QueryDirectionalShadow(uint base, ForwardShadowLayer group, LightingSurface surface,
+                                    vec3 geometricNormal)
 {
-    switch (level)
+    LightingPosition camera = LightingPosition(shadowView.cameraOriginHigh, shadowView.cameraOriginLow);
+    float depth = -dot(shadowView.cameraForward, LightingDelta(camera, surface, 1.0));
+    if (!(depth >= group.nearDepth && depth <= shadowLayers.records[base + group.count - 1u].farDepth))
     {
-    case 0u: return texelFetch(cascadeImage0, texel, 0).r;
-    case 1u: return texelFetch(cascadeImage1, texel, 0).r;
-    case 2u: return texelFetch(cascadeImage2, texel, 0).r;
-    default: return texelFetch(cascadeImage3, texel, 0).r;
+        return OutsideShadow;
     }
-}
-
-// 查询矩阵保留接收点的原始深度. 翻转 NDC 的 Y 后按左上纹理原点取单个 texel, 等深返回可见.
-float DirectionalVisibility(uint level, LightingSurface surface)
-{
-    LightingPosition origin = LightingPosition(cascades.originHigh[level].xyz, cascades.originLow[level].xyz);
-    vec3 clip = (cascadeMatrices.clipFromOrigin[level] * vec4(-LightingDelta(origin, surface, 1.0), 1.0)).xyz;
-    vec2 uv = clip.xy * vec2(0.5, -0.5) + 0.5;
-    if (!all(greaterThanEqual(uv, vec2(0.0))) || !all(lessThan(uv, vec2(1.0))) ||
-        !(clip.z >= 0.0 && clip.z <= 1.0))
+    for (uint level = 0u; level < group.count; ++level)
     {
-        return 1.0;
+        uint layer = base + level;
+        ForwardShadowLayer entry = shadowLayers.records[layer];
+        vec2 transition = entry.transition;
+        if (level + 1u < group.count && depth >= transition.x && depth < transition.y)
+        {
+            float weight = (depth - transition.x) / (transition.y - transition.x);
+            float from = CascadeVisibility(layer, entry, surface, geometricNormal, group.lightDirection);
+            float to = CascadeVisibility(layer + 1u, shadowLayers.records[layer + 1u], surface,
+                                         geometricNormal, group.lightDirection);
+            return ShadowResult(int(level), weight, mix(from, to, weight));
+        }
+        if (depth < entry.farDepth || level + 1u == group.count)
+        {
+            return ShadowResult(int(level), 0.0,
+                CascadeVisibility(layer, entry, surface, geometricNormal, group.lightDirection));
+        }
     }
-    ivec2 texel = ivec2(uv * float(cascades.edge));
-    return clip.z <= CascadeDepth(level, texel) ? 1.0 : 0.0;
+    return OutsideShadow;
 }

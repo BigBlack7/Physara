@@ -3,10 +3,14 @@
 #include <Source/BRDF/CoreBrdf.glsl>
 #include <Source/Geometry/LightingPosition.glsl>
 #include <Source/Lighting/WorkingLight.glsl>
+#ifdef PHYSARA_FORWARD_SHADOWS
+#include <Source/Shadow/Visibility.glsl>
+#endif
 
 // 距离按最大分量缩放, 避免 r^2 自身的溢出及除以零. D 为发射轴, L 由表面指向灯.
-vec3 EvaluateDirect(ForwardLight light, bool directional, PixelParams pixel, vec3 normal, vec3 viewDirection,
-                    LightingSurface surface, float exposureMantissa, int exposureExponent, vec3 specularCompensation)
+vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, PixelParams pixel,
+                    SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
+                    float exposureMantissa, int exposureExponent, vec3 specularCompensation)
 {
     if (light.intensity == 0.0)
     {
@@ -59,12 +63,17 @@ vec3 EvaluateDirect(ForwardLight light, bool directional, PixelParams pixel, vec
         attenuation /= lengthSquared;
     }
 
-    float noL = clamp(dot(normal, L), 0.0, 1.0);
+    float noL = clamp(dot(geometry.shadingNormal, L), 0.0, 1.0);
     if (noL == 0.0 || attenuation == 0.0)
     {
         return vec3(0.0);
     }
-    CoreBrdfLobes lobes = EvaluateCoreBrdf(pixel, normal, viewDirection, L);
+#ifdef PHYSARA_FORWARD_SHADOWS
+    // 本灯的可见性只改变它的直接入射量, 反射波瓣继续使用材质法线.
+    attenuation *= QueryShadow(shadowReferences.records[lightIndex].group,
+                               surface, geometry.geometricNormal).visibility;
+#endif
+    CoreBrdfLobes lobes = EvaluateCoreBrdf(pixel, geometry.shadingNormal, viewDirection, L);
     // BRDF 波瓣按 sr^-1 返回. NoL 在权重中乘一次, 强度, 曝光和距离尺度的指数在最后合并.
     int intensityExponent;
     float intensityMantissa = frexp(light.intensity, intensityExponent);
@@ -76,8 +85,8 @@ vec3 EvaluateDirect(ForwardLight light, bool directional, PixelParams pixel, vec
 
 // 以当帧预曝光自发光为起值. 两个有效段在同一数组中相邻, 计数和是首个无效行的下标.
 // 零灯时循环为空. 直接光和自发光各带一次曝光, 两者都不使用材质 AO.
-vec3 EvaluateLighting(PixelParams pixel, vec3 normal, vec3 viewDirection, LightingSurface surface, vec3 emission,
-                      vec3 specularCompensation)
+vec3 EvaluateLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
+                      vec3 emission, vec3 specularCompensation)
 {
     int exponent;
     float exposure = frexp(perView.preExposure, exponent);
@@ -85,7 +94,7 @@ vec3 EvaluateLighting(PixelParams pixel, vec3 normal, vec3 viewDirection, Lighti
     uint count = perView.directionalCount + perView.localCount;
     for (uint index = 0u; index < count; ++index)
     {
-        result += EvaluateDirect(lightRows.records[index], index < perView.directionalCount, pixel, normal,
+        result += EvaluateDirect(lightRows.records[index], index, index < perView.directionalCount, pixel, geometry,
                                  viewDirection, surface,
                                  exposure, exponent, specularCompensation);
     }

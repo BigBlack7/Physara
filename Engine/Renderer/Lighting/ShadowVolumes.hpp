@@ -33,7 +33,8 @@ namespace Physara::Renderer::Detail
 
     /// @brief 在交付精度下拟合局部灯投影, 并从同一冻结场景选取 caster.
     /// @return 横向投影或写入深度不可用时返回空, 该组不会占用层.
-    /// @param edge 候选布局的完整层边长, 用于 caster 偏移及点光的一 texel 跨面边带.
+    /// @param edge 整层的物理边长. 名义外锥和点光面投到扣除两侧边带的内区.
+    /// @note 返回的 receiverOffsetRatio 乘原接收点的面轴深即为米制偏移上限, 已计入透视除法造成的位移.
     [[nodiscard]] std::optional<LocalShadowPlan> MakeLocalShadowPlan(const SceneFrame &scene, LocalShadowVolume volume,
                                                                     std::uint32_t edge);
 

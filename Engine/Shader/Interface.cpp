@@ -133,6 +133,7 @@ namespace Physara::Shader
             return "Texture_UAV";
         case ResourceKind::Texture2D:
         case ResourceKind::TextureCube:
+        case ResourceKind::Texture2DArray:
             return "Texture_SRV";
         case ResourceKind::Sampler:
             return "Sampler";
@@ -249,10 +250,16 @@ namespace Physara::Shader
             const auto &resource = binding.resource;
             output << "layout(set = " << resource.set << ", binding = " << resource.binding;
             if (resource.kind == ResourceKind::Texture2D || resource.kind == ResourceKind::TextureCube ||
-                resource.kind == ResourceKind::Sampler)
+                resource.kind == ResourceKind::Texture2DArray || resource.kind == ResourceKind::Sampler)
             {
-                const auto *type = resource.kind == ResourceKind::Sampler ? "sampler" :
-                    resource.kind == ResourceKind::TextureCube ? "textureCube" : "texture2D";
+                const char *type = "texture2D";
+                switch (resource.kind)
+                {
+                case ResourceKind::Sampler: type = "sampler"; break;
+                case ResourceKind::TextureCube: type = "textureCube"; break;
+                case ResourceKind::Texture2DArray: type = "texture2DArray"; break;
+                default: break;
+                }
                 output << ") uniform " << type << " " << resource.name << ";\n";
                 continue;
             }

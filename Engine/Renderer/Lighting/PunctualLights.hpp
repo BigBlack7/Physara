@@ -5,6 +5,7 @@
 /// 输入借用同一份冻结场景, 结果拥有整块上传数据. 可见性由 ViewWork 决定.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <variant>
@@ -18,6 +19,19 @@
 namespace Physara::Renderer::Detail
 {
     namespace StaticAbi = Shader::Generated::StaticForward;
+
+    /// @brief 按同一可见序列填写灯表和阴影引用表. 两次遍历各自把 local 初始化为方向灯总数.
+    /// 阴影预算只决定行内的组引用, 被拒灯仍占用自己的行号.
+    struct LightRowCursor
+    {
+        std::size_t directional{};
+        std::size_t local{};
+
+        [[nodiscard]] std::size_t Next(Asset::ModelLightKind kind) noexcept
+        {
+            return kind == Asset::ModelLightKind::Directional ? directional++ : local++;
+        }
+    };
 
     /// @brief rows 覆盖生成的定长 SSBO, 前 directionalCount 行为方向灯, 随后 localCount 行为点光或聚光.
     /// 两段内分别保留可见索引顺序. 尾部置零以便整块初始化, 着色只遍历两段的有效行.

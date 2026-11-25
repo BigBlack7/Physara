@@ -251,7 +251,7 @@ namespace Physara::Renderer::Detail
         return false;
     }
 
-    // 先核对整套包的 CPU ABI, 再按诊断角色核对材质覆盖和逐层采样两个集合的活动资源.
+    // 先核对整套包的 CPU ABI, 再核对阴影受光及诊断角色的活动资源.
     // 通过后按设备身份接续可用槽, 其余原生 Pipeline 随各 View 登记的实际需求准备.
     static void AdmitCandidate(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
@@ -266,9 +266,9 @@ namespace Physara::Renderer::Detail
                 Reject(ViewSettingReason::ScenePipelineUnavailable,
                        "Candidate Shader ABI does not match the interface compiled into the running renderer");
             }
-            if (const auto expected = ShadowPreviewResources(role); !expected.empty())
+            if (const auto expected = ShadowProgramResources(role); !expected.empty())
             {
-                // 诊断暂未打开时也核对材质与层采样配方. 不相容的包不能随其它角色切换到活动代.
+                // 当前 View 未请求阴影时也核对变体绑定, 保证已发布代可在后续帧正确准备.
                 if (const auto failure = Shader::CheckActiveResources(*package, expected))
                 {
                     checking = ShaderPipelineRequest{role, 0};

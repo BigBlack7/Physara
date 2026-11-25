@@ -133,6 +133,38 @@ namespace Physara::Editor::Detail
         return label;
     }
 
+    /// @brief 在当前请求的副本上编辑过滤和预算等字段. 调用者在帧边界一次提交, 保留未显示的级联和距离设置.
+    static void EditShadowSettings(Renderer::ShadowSettings &settings)
+    {
+        const char *filters[] = {"Hard", "PCF 3x3"};
+        int filter = settings.filter == Renderer::ShadowFilter::Hard ? 0 : 1;
+        ImGui::Checkbox("Shadows", &settings.enabled);
+        if (ImGui::Combo("Shadow filter", &filter, filters, IM_ARRAYSIZE(filters)))
+        {
+            settings.filter = filter == 0 ? Renderer::ShadowFilter::Hard : Renderer::ShadowFilter::Pcf;
+        }
+        constexpr std::array<std::uint32_t, 3> Edges{1024, 512, 256};
+        const char *edgeNames[] = {"1024 texels", "512 texels", "256 texels"};
+        int edge = static_cast<int>(std::ranges::find(Edges, settings.edge) - Edges.begin());
+        if (ImGui::Combo("Shadow resolution", &edge, edgeNames, IM_ARRAYSIZE(edgeNames)))
+        {
+            settings.edge = Edges[edge];
+        }
+        constexpr std::uint64_t MiB = 1024 * 1024;
+        constexpr std::array Budgets{4 * MiB, 8 * MiB, 16 * MiB, 32 * MiB};
+        const char *budgetNames[] = {"4 MiB", "8 MiB", "16 MiB", "32 MiB"};
+        int budget = static_cast<int>(std::ranges::find(Budgets, settings.byteBudget) - Budgets.begin());
+        if (ImGui::Combo("Shadow budget per view", &budget, budgetNames, IM_ARRAYSIZE(budgetNames)))
+        {
+            settings.byteBudget = Budgets[budget];
+        }
+    }
+
+    static const char *ShadowFilterName(Renderer::ShadowFilter filter) noexcept
+    {
+        return filter == Renderer::ShadowFilter::Hard ? "Hard" : "PCF 3x3";
+    }
+
     /// @brief 记录本 View 的选择意图, 同时区分当前 CPU 计划、显示退路和最后接受的诊断.
     static void DrawViewShadows(const WorkspaceState &state, const Renderer::RenderedScene *accepted,
                                 bool allowEdits, WorkspaceFrame &frame)
@@ -147,11 +179,13 @@ namespace Physara::Editor::Detail
             entity->record.properties.light->type == local->kind ? ShadowLightLabel(entity->record, local->kind) :
             "Selected light unavailable") : (cascades ? "Directional CSM" : "Off");
 
-        bool planShadows = view.RequestedShadows().enabled;
+        const auto requested = view.RequestedShadows();
+        auto shadows = requested;
         ImGui::BeginDisabled(!allowEdits || !state.scene);
-        if (ImGui::Checkbox("Plan shadows (CPU)", &planShadows))
+        EditShadowSettings(shadows);
+        if (shadows != requested)
         {
-            frame.shadowPlanning = ShadowToggle{view.Id(), planShadows};
+            frame.shadowSettings = ShadowSettingsIntent{view.Id(), shadows};
         }
         if (ImGui::BeginCombo("Shadow diagnostic", label.c_str()))
         {
@@ -198,7 +232,7 @@ namespace Physara::Editor::Detail
                 ImGui::Text("Last accepted CSM / ticket %llu", static_cast<unsigned long long>(last->submission));
             }
         }
-        if ((!local && !cascades) || !state.scene)
+        if (!state.scene)
         {
             return;
         }
@@ -213,10 +247,16 @@ namespace Physara::Editor::Detail
             planned->sceneCameraRevision == revisions.camera && planned->documentRevision == view.DocumentRevision())
         {
             const auto &plan = planned->plan;
-            ImGui::Text("Shadow plan: %s / %u requested, %u planned texels", ShadowStatus(plan.diagnosticReason),
+            ImGui::Text("Shadow plan: %s / %u requested, %u planned texels",
+                        ShadowStatus(local || cascades ? plan.diagnosticReason : plan.reason),
                         plan.requestedEdge, plan.effectiveEdge);
+            const auto budgetRejected = plan.unallocated[static_cast<std::size_t>(ShadowPlanReason::Budget)];
+            if (budgetRejected != 0)
+            {
+                ImGui::Text("%zu light groups exceed the shadow budget", budgetRejected);
+            }
         }
-        if (settings.reason != ViewSettingReason::None)
+        if (settings.reason != ViewSettingReason::None && (requested.enabled || local || cascades))
         {
             ImGui::Text("Shadow output: %s", ViewStatus(settings.reason));
         }
@@ -224,9 +264,14 @@ namespace Physara::Editor::Detail
                  accepted->shadowRequestRevision == view.ShadowRequestRevision() &&
                  accepted->camera.sceneCameraRevision == revisions.camera &&
                  accepted->documentRevision == view.DocumentRevision() &&
-                 (local ? accepted->localShadow == *local : accepted->directionalCascades != 0))
+                 (local ? accepted->localShadow == *local :
+                          (cascades ? accepted->directionalCascades != 0 : accepted->shadows.has_value())))
         {
             ImGui::TextUnformatted("Shadow output: accepted");
+            if (const auto &work = accepted->shadows)
+            {
+                ImGui::Text("%s / %u texels / %u layers", ShadowFilterName(work->filter), work->edge, work->layers);
+            }
         }
     }
 
@@ -367,7 +412,7 @@ namespace Physara::Editor::Detail
         }
     }
 
-    /// @brief 按各路实际 View 身份显示 CPU 规划. 灯数统计整组准入, 区域数和层跨度以单层为单位.
+    /// @brief 显示每路 CPU 规划和最近接受的阴影工作. 接受票据来自对应 View 的场景颜色.
     static void DrawShadowStatistics(const FrameStatistics &statistics)
     {
         for (const auto &shadow : statistics.shadows)
@@ -392,7 +437,8 @@ namespace Physara::Editor::Detail
                         static_cast<unsigned long long>(plan.requestRevision),
                         static_cast<unsigned long long>(plan.planRevision),
                         static_cast<unsigned long long>(plan.allocationRevision));
-            ImGui::Text("Edge %u requested / %u planned tx", plan.requestedEdge, plan.effectiveEdge);
+            ImGui::Text("%s / %u requested / %u planned texels", ShadowFilterName(plan.filter),
+                        plan.requestedEdge, plan.effectiveEdge);
             if (plan.qualityReason != Renderer::ShadowPlanReason::Planned)
             {
                 // 降档时 Budget 指单层所需的逻辑字节. 下方逐灯拒绝仍可能来自层数上限.
@@ -414,6 +460,29 @@ namespace Physara::Editor::Detail
                     ImGui::Text("%zu lights: %s", plan.unallocated[reason],
                                 ShadowStatus(static_cast<Renderer::ShadowPlanReason>(reason)));
                 }
+            }
+        }
+        for (const auto &entry : statistics.acceptedShadows)
+        {
+            if (!entry)
+            {
+                continue;
+            }
+            ImGui::Text("Accepted shadows / View #%llu / Scene #%llu / ticket %llu",
+                        static_cast<unsigned long long>(entry->view.generation),
+                        static_cast<unsigned long long>(entry->scene.generation),
+                        static_cast<unsigned long long>(entry->submission));
+            if (const auto &work = entry->work)
+            {
+                ImGui::Text("  %s / %s / %u texels / %u groups / %u layers",
+                            work->diagnostic ? "Diagnostic" : "Lighting", ShadowFilterName(work->filter),
+                            work->edge, work->groups, work->layers);
+                ImGui::Text("  %u produced / %u reused / %zu depth batches / %llu array B", work->producedLayers,
+                            work->reusedLayers, work->drawBatches, static_cast<unsigned long long>(work->logicalBytes));
+            }
+            else
+            {
+                ImGui::TextUnformatted("  No shadow consumption");
             }
         }
     }
@@ -452,8 +521,8 @@ namespace Physara::Editor::Detail
                     source.render.outputExtent.height, source.displayLayout.outputExtent.width,
                     source.displayLayout.outputExtent.height);
         ImGui::Text("CPU (ms) UI %.3f / Scene & View %.3f", frame.cpu.ui * 1000, frame.cpu.scenePreparation * 1000);
-        ImGui::Text("CPU (ms) graph compile %.3f / execute %.3f", frame.cpu.graphCompile * 1000,
-                    frame.cpu.graphExecute * 1000);
+        ImGui::Text("CPU (ms) graph declare %.3f / compile %.3f / execute %.3f", frame.cpu.graphDeclare * 1000,
+                    frame.cpu.graphCompile * 1000, frame.cpu.graphExecute * 1000);
         DrawPreparationStatistics(frame.preparation);
         if (frame.presentWaitSeconds)
         {

@@ -48,8 +48,19 @@ namespace Physara::Renderer
         ShadowPlanStatistics shadowStatistics; ///< 规划不可用时仍保留本轮身份及原因.
         ShadowDiagnostic shadowDiagnostic; ///< 冻结的会话请求, 可与实际准入结果不同.
         const ShadowLightPlan *previewShadow{}; ///< 借用本次计划, 仅供具备实际可见几何的诊断使用.
-        std::optional<ShadowDepthGroup> acceptedShadowDepth; ///< 与 CPU 计划匹配且持有存储, 帧前另核对设备和深度程序.
+        std::optional<ShadowDepthSet> acceptedShadowDepth; ///< 此 View 原本接受的存储, Forward 对照实际消耗确认可重用性.
 
+        /// @brief 有效诊断只返回选中组. 普通受光返回全部准入组, 其余分支返回空区间.
+        /// @note 返回值借用此轮 ViewWork 持有的计划, 调用者在工作区再次准备前消费.
+        [[nodiscard]] std::span<const ShadowLightPlan> ShadowGroups(bool lighting) const noexcept
+        {
+            if (previewShadow)
+            {
+                return std::span(previewShadow, 1);
+            }
+            return lighting && shadows ? std::span<const ShadowLightPlan>(shadows->admitted) :
+                                         std::span<const ShadowLightPlan>{};
+        }
     };
 
     /// @brief 一个正常候选的共享 SceneFrame. 首个合法 View 才提取, 后续 View 共享成功值或失败.

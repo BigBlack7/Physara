@@ -17,7 +17,7 @@ namespace Physara::Renderer::Detail
     // 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
     inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
-    inline constexpr std::size_t ForwardColorPrograms = 6;
+    inline constexpr std::size_t ForwardColorPrograms = 9;
     inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineSlots * ForwardColorPrograms + 1 + 8;
 
     /// @brief role 选择程序, variant 选择该程序的固定状态. 天空用槽零, 显示用线性或 sRGB 附件槽.

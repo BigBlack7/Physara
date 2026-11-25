@@ -207,6 +207,13 @@ namespace Physara::Renderer
         {
             return Core::BoundedText("Cascade split weight and transition must be finite and in [0,1] and [0,0.25]");
         }
+        constexpr std::uint64_t MiB = 1024 * 1024;
+        if ((settings.filter != ShadowFilter::Hard && settings.filter != ShadowFilter::Pcf) ||
+            (settings.byteBudget != 4 * MiB && settings.byteBudget != 8 * MiB &&
+             settings.byteBudget != 16 * MiB && settings.byteBudget != MaxShadowBytes))
+        {
+            return Core::BoundedText("Shadow filtering or logical budget is outside the supported choices");
+        }
         if (settings != m_ShadowSettings)
         {
             // 先为新值取得会话请求代. 阴影设置只由下一次 View 准备消费, 保存和撤销使用独立的文档代.
@@ -256,35 +263,45 @@ namespace Physara::Renderer
                 return Core::BoundedText("Shadow request revision exhausted");
             }
             m_ShadowDiagnostic = diagnostic;
-            m_ShadowDepth.reset();
         }
         return std::nullopt;
     }
 
-    bool ShadowDepthGroup::Matches(ViewId owner, Scene::SceneId current, const ShadowPlan &plan,
-                                   const ShadowLightPlan &group) const noexcept
+    bool ShadowDepthSet::Matches(ViewId owner, Scene::SceneId current, const ShadowPlan &plan,
+                                 std::span<const ShadowLightPlan> required) const noexcept
     {
-        return view == owner && scene == current && light == group.light && edge == plan.edge &&
-            std::ranges::equal(std::span(regions).first(count), group.Regions());
+        if (view != owner || scene != current || edge != plan.edge || groups != required.size())
+        {
+            return false;
+        }
+        // index 是本数组的物理层. 每层保存的逻辑地址和内容代仍可因预算及场景编辑而改变.
+        std::size_t index = 0;
+        for (const auto &group : required)
+        {
+            for (const auto &region : group.Regions())
+            {
+                if (index == count || layers[index].light != group.light || layers[index].region != region)
+                {
+                    return false;
+                }
+                ++index;
+            }
+        }
+        return index == count;
     }
 
-    void View::AcceptShadowDepth(ShadowDepthGroup depth, std::uint64_t ticket) noexcept
+    void View::AcceptShadowDepth(ShadowDepthSet depth, std::uint64_t ticket) noexcept
     {
-        // 调用方已发布本 View 的诊断颜色. 只有同票据的 ShaderRead 出口能成为下一帧的深度输入.
+        // 调用方已发布本 View 的受光或诊断颜色. 数组出口与实际消费对应同一次正常接受.
         const auto *scene = AcceptedScenePreview();
         if (!m_ShadowSettings.enabled || !scene || depth.view != m_Id || scene->scene != depth.scene ||
             scene->submission != ticket || scene->shadowRequestRevision != m_ShadowRequestRevision ||
+            !scene->shadows || scene->shadows->layers != depth.count || scene->shadows->edge != depth.edge ||
             depth.retained.Usage() != ExportUsage::ShaderRead || !depth.retained.Accepted(ticket))
         {
             return;
         }
-        const auto *local = std::get_if<LocalShadowSelection>(&m_ShadowDiagnostic);
-        const bool matches = local ? scene->localShadow && *scene->localShadow == *local && depth.light == local->light :
-            CascadePreviewRequested() && scene->directionalCascades == depth.count;
-        if (matches)
-        {
-            m_ShadowDepth = std::move(depth);
-        }
+        m_ShadowDepth = std::move(depth);
     }
 
     std::optional<Core::BoundedText> View::RequestRenderScale(ViewId view, float scale) noexcept
@@ -504,7 +521,7 @@ namespace Physara::Renderer
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
         std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration,
-        const ShadowDepthGroup *shadow)
+        const ShadowDepthSet *shadow)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -521,16 +538,25 @@ namespace Physara::Renderer
             // 即使只有深度程序换代也应让旧组退出 View 记账. 旧图和槽各自保有原访问.
             m_ShadowDepth.reset();
         }
-        const auto displayMode = shadow ? PreviewMode::BaseColor : prepared.preview;
-        const auto *local = shadow ? std::get_if<LocalShadowSelection>(&prepared.shadowDiagnostic) : nullptr;
-        const auto cascades = shadow && !local ? shadow->count : 0;
+        const bool diagnostic = shadow && prepared.previewShadow;
+        const auto displayMode = diagnostic ? PreviewMode::BaseColor : prepared.preview;
+        const auto *local = diagnostic ? std::get_if<LocalShadowSelection>(&prepared.shadowDiagnostic) : nullptr;
+        const auto cascades = diagnostic && !local ? shadow->count : 0;
+        std::optional<RenderedShadows> shadowWork;
+        if (shadow)
+        {
+            shadowWork = RenderedShadows{shadow->filter, shadow->edge, shadow->groups, shadow->count,
+                shadow->retained ? 0u : shadow->count, shadow->retained ? shadow->count : 0u,
+                shadow->drawBatches, shadow->LogicalBytes(), diagnostic};
+        }
         // 将曝光, 显示设置及程序表编号一起留在颜色候选. Publish 收到匹配图的回执后才更新场景历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
                           std::move(degradation), prepared.documentRevision, std::move(environment),
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
                           prepared.layouts.display.outputExtent, shaderGeneration, cascades,
-                          prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt}};
+                          prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
+                          0, shadowWork}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }

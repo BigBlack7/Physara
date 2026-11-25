@@ -25,6 +25,9 @@ namespace Physara::Shader
         StaticCascadePreview,
         StaticSpotShadowPreview,
         StaticPointShadowPreview,
+        StaticForwardShadows,
+        StaticForwardPhysicalShadows,
+        StaticForwardIblShadows,
         Count
     };
 

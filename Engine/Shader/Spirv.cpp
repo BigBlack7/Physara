@@ -246,12 +246,14 @@ namespace Physara::Shader
         for (const auto &image : all.separate_images)
         {
             const auto &type = compiler.get_type(image.type_id);
-            if ((type.image.dim != spv::Dim2D && type.image.dim != spv::DimCube) || type.image.arrayed ||
+            const bool cube = type.image.dim == spv::DimCube && !type.image.arrayed;
+            const bool plane = type.image.dim == spv::Dim2D && (!type.image.arrayed || stage != Stage::Compute);
+            if (!(cube || plane) ||
                 type.image.ms || type.image.depth ||
                 type.image.sampled != 1 || compiler.get_type(type.image.type).basetype != spirv_cross::SPIRType::Float)
             {
                 throw BuildError(ErrorCode::UnsupportedProfile,
-                                 "The selected profile requires a separate non-array float texture2D or textureCube.");
+                                 "Unsupported separate float texture2D, texture2DArray or textureCube shape.");
             }
         }
         for (const auto &image : all.storage_images)
@@ -454,11 +456,19 @@ namespace Physara::Shader
             RequireInterface(localSize[0] != 0 && localSize == schema.localSize,
                              "IR workgroup size does not match the interface.");
         }
-        // Profile 已验证两种独立图像类型. 从实际 IR 区分维度, 不从请求的 schema 推断.
+        // 从已通过 profile 校验的 IR 取实际层维度, 保留数组图像与 descriptor 数组的区别.
         for (const auto &image : active.separate_images)
         {
-            const auto kind = compiler.get_type(image.type_id).image.dim == spv::DimCube ?
-                ResourceKind::TextureCube : ResourceKind::Texture2D;
+            const auto &shape = compiler.get_type(image.type_id).image;
+            auto kind = ResourceKind::Texture2D;
+            if (shape.arrayed)
+            {
+                kind = ResourceKind::Texture2DArray;
+            }
+            else if (shape.dim == spv::DimCube)
+            {
+                kind = ResourceKind::TextureCube;
+            }
             resources.push_back(ReflectResource(compiler, image, kind, schema, module.stage));
         }
         append(active.separate_samplers, ResourceKind::Sampler);

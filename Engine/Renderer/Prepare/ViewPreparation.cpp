@@ -436,11 +436,12 @@ namespace Physara::Renderer
             // 规划器已在旧计划上完成释放. 保留该次摘要和实际执行的裁剪记录.
             result.reason = ViewSettingReason::SceneAttachmentLimit;
         }
-        // 只把本 View 可继续查询的区域交给 Forward. 即使投影匹配, 程序换代仍可能要求重新生产.
+        // 候选仍有消费时借用本 View 的旧数组. Forward 按实际绘制组、内容和程序匹配它.
         if (view.m_ShadowDepth)
         {
-            if (result.previewShadow &&
-                view.m_ShadowDepth->Matches(view.Id(), frame.scene, *result.shadows, *result.previewShadow))
+            const bool lighting = hasVisibleReceivers &&
+                (result.preview == PreviewMode::DirectLighting || result.preview == PreviewMode::PhysicalLighting);
+            if (!result.ShadowGroups(lighting).empty())
             {
                 result.acceptedShadowDepth = view.m_ShadowDepth;
             }
