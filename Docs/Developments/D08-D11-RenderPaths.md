@@ -179,20 +179,20 @@
 
 **职责位置：** Renderer、RenderGraph、RHI。**前置：** [D09-T01](#d09-t01)、[D09-T02](#d09-t02)、[D09-T03](#d09-t03)、[D09-T04](#d09-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[8.3](../Architecture.md#shadows)、[12.2](../Architecture.md#benchmark)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-25-verify-shadow-regressions-and-resource-pressure/tasks.md#final-verification) · [Forward 阴影参考](../Performance/ForwardShadowReference.md)
 
-- [ ] 固定 CSM 稳定、spot 边缘、point 六面、薄片/mask、负缩放和多实例 和画外 caster 回归。
-- [ ] 压力测试大灯数、region 重分配、关闭阴影、resize 及在途资源退休，核对图访问与实际成本。
-- [ ] 建立不同质量下的画质/成本参考，后续 Forward+/Deferred 对同一阴影结果做一致性检查。
+- [x] 固定 CSM 稳定、spot 边缘、point 六面、薄片/mask、负缩放和多实例 和画外 caster 回归。
+- [x] 压力测试大灯数、region 重分配、关闭阴影、resize 及在途资源退休，核对图访问与实际成本。
+- [x] 建立不同质量下的画质/成本参考，后续 Forward+/Deferred 对同一阴影结果做一致性检查。
 
 **完成条件：** 阴影具有可重现的质量与预算边界，不依赖手动观察单个静态场景。
 
-**D09 阶段出口：** 方向/聚光/点光阴影在 Forward 可用；画外 caster、级联边界、接缝、深度 convention、预算不足与静态覆盖正确。
+**D09 阶段出口：** 已通过。方向光、聚光及点光阴影在 Forward 可用，画外 caster、级联边界、接缝、深度约定、预算不足和静态覆盖已验收。 [验收与证据](../../openspec/changes/archive/2026-11-25-verify-shadow-regressions-and-resource-pressure/tasks.md#final-verification)
 
 <a id="dev-d10"></a>
 ## D10 · 实现 CPU Froxel 与 Forward+
 
-**性质：** 基线。**入口：** [D09](#dev-d09) 的阶段出口通过。
+**性质：** 基线。**入口：** [D09](#dev-d09) 阶段出口已通过。 [验收与证据](../../openspec/changes/archive/2026-11-25-verify-shadow-regressions-and-resource-pressure/tasks.md#final-verification)
 
 **阶段目标：** 保持物理模型不变，以 Filament 式 CPU Froxel 改变局部灯候选集合，形成第二条可切换路径。
 
@@ -200,6 +200,8 @@
 ### D10-T01 · 实现有限视域 Froxel 结构与 CPU 分箱
 
 **职责位置：** Renderer/Prepare、Lighting。**前置：** 本阶段入口满足。**架构依据：** [5.4](../Architecture.md#light-preparation)、[5.3](../Architecture.md#view-preparation)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 定义与 Shader 共用的 Froxel 参数、header/index ABI 和 32 位索引语义，网格与有限稳定裁剪范围关联；透视用正 near 的 log-Z，正交用可接受 near=0 的线性 Z，CPU cell 边界与 Shader lookup 配套。
 - [ ] 对有界点/聚光灯做保守相交与列表压缩，directional 和未指定 range 的局部灯进入明确的全局候选集合。
@@ -244,6 +246,8 @@
 ### D10-T05 · 验证 HDR 等价与多灯成本
 
 **职责位置：** Renderer、Runtime、Editor/Diagnostics。**前置：** [D10-T01](#d10-t01)、[D10-T02](#d10-t02)、[D10-T03](#d10-t03)、[D10-T04](#d10-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[12.2](../Architecture.md#benchmark)、[8.6](../Architecture.md#lighting)。
+
+**阴影参考** [Forward 阴影参考](../Performance/ForwardShadowReference.md)。
 
 - [ ] 固定同一 SceneFrame、曝光、阴影、IBL、分辨率和画质，对两路径线性/HDR 输出做误差比较。
 - [ ] 包含 range 缺省、overflow、极端相机、聚光边界和不同光源规模，核对灯集合无漏项。
@@ -308,6 +312,8 @@
 ### D11-T05 · 建立三路径等价与可视化门槛
 
 **职责位置：** Renderer、Editor/Diagnostics。**前置：** [D11-T01](#d11-t01)、[D11-T02](#d11-t02)、[D11-T03](#d11-t03)、[D11-T04](#d11-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[12.2](../Architecture.md#benchmark)、[10.1](../Architecture.md#editor-output)。
+
+**阴影参考** [Forward 阴影参考](../Performance/ForwardShadowReference.md)。
 
 - [ ] 对核心/Unlit、mask、静态实例、阴影、无穷灯及 Froxel overflow 做同输入 HDR 等价回归。
 - [ ] 提供 GBuffer/深度/法线/路由可视化的 typed preview Pass，UI 不直接解释任意纹理位型。
