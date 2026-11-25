@@ -19,7 +19,7 @@ namespace Physara::Editor
     enum class GpuIntervalState { Unavailable, Skipped, Pending, Ready, Failed };
 
     /// @brief 标识一次正常场景的完整提交. 基础预览请求与实际阴影诊断各有标识.
-    /// display 和两个布局均来自该次颜色提交, GPU 计时稍后仍以这个身份配对.
+    /// 路径, 显示设置和两个布局均来自已接受的颜色. 计时器按值保留这份身份, 查询完成时仍归原票据.
     struct SceneFrameIdentity
     {
         std::uint64_t submission;
@@ -36,6 +36,7 @@ namespace Physara::Editor
         std::uint64_t shaderGeneration{}; ///< 此票据实际使用的程序代, 后续准备轮可独立推进.
         std::uint32_t directionalCascades{}; ///< 当前颜色若为级联诊断则交付实际级数.
         std::optional<Renderer::LocalShadowSelection> localShadow; ///< 当前颜色查询的局部灯.
+        Renderer::OpaquePath opaquePath = Renderer::OpaquePath::Forward; ///< 该票据实际接受的不透明策略.
     };
 
     /// @brief 互不重叠的主要 CPU 区间, 数值为秒. UI 包括编辑器推进和图前 UI 准备.

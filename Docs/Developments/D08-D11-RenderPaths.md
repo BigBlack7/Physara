@@ -227,11 +227,11 @@
 
 **职责位置：** Renderer/Paths、Shaders/Passes、Engine/Shader。**前置：** [D10-T02](#d10-t02)。**架构依据：** [6.1](../Architecture.md#paths)、[8.7](../Architecture.md#opaque-shading)、[5.7](../Architecture.md#plan-readiness)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-26-add-forward-plus-opaque-path/tasks.md#final-verification)
 
-- [ ] 用同一 PrepareSurface 与共享 EvaluateLighting 接入 Froxel candidate provider，材质/阴影/IBL 代码不分叉。
-- [ ] 准备新的结构变体与必要绑定，沿既有 Ready/Pending/Failed 协议进入 View 计划。
-- [ ] 在当前已支持 None/FXAA 配置下于帧边界切换，保留几何/材质驻留和编辑状态。
+- [x] 用同一 PrepareSurface 与共享 EvaluateLighting 接入 Froxel candidate provider，材质/阴影/IBL 代码不分叉。
+- [x] 准备新的结构变体与必要绑定，沿既有 Ready/Pending/Failed 协议进入 View 计划。
+- [x] 在当前已支持 None/FXAA 配置下于帧边界切换，保留几何/材质驻留和编辑状态。
 
 **完成条件：** Forward+ 是同一 Renderer 的不透明策略，不创建第二套 Scene、后处理或资源管理器。
 
@@ -239,6 +239,8 @@
 ### D10-T04 · 实现双路径原子切换与正确历史失效
 
 **职责位置：** View、Renderer/Paths、Editor/Panels。**前置：** [D10-T03](#d10-t03)。**架构依据：** [5.7](../Architecture.md#plan-readiness)、[11.2](../Architecture.md#history-commit)、[2.3](../Architecture.md#edits)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 实现 requested/effective 路径、准备中继续有效计划、失败原因及切换完成的原子发布。
 - [ ] 只替换布局/格式相关资源并按兼容性失效历史，禁止 WaitForIdle 或重新加载场景。

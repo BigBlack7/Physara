@@ -78,12 +78,10 @@ namespace Physara::Renderer::PostProcess
                 std::span(&resources, 1);
             auto shaders = Detail::LoadProductProgram(m_Device, key.role, m_Paths[index], packages,
                 stage == Stage::Clamp ? ClampAbi::AbiHash : Abi::AbiHash, expected);
-            if (const auto *error = std::get_if<Shader::Failure>(&shaders))
+            if (const auto *error = std::get_if<Detail::ProductProgramFailure>(&shaders))
             {
-                Core::BoundedText issue(DisplayNames[index]);
-                issue.Append(": ");
-                issue.Append(error->context.description.View());
-                throw issue;
+                // 线性与 sRGB 目标使用同一阶段包. 将加载首因连同阶段名称交给帧前准备器.
+                Detail::RejectProductProgram(DisplayNames[index], *error);
             }
             if (!binding)
             {

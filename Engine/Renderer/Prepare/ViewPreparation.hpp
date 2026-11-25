@@ -47,7 +47,10 @@ namespace Physara::Renderer
         HeaderCapacity, LightCapacity, StorageUnavailable
     };
 
-    /// @brief 显式请求的当前 CPU 准备事实. 布局拒绝时仍记录输入身份和额度.
+    /// @brief 准备用的固定诊断文本, 也供只读统计显示同一原因.
+    [[nodiscard]] const char *FroxelStatusName(FroxelStatus status) noexcept;
+
+    /// @brief 本次 Froxel 请求的 CPU 准备事实. 自动和显式请求共用此记录, 布局拒绝时仍保有身份和额度.
     struct FroxelPreparationStatistics
     {
         Scene::SceneId scene;
@@ -67,6 +70,7 @@ namespace Physara::Renderer
         std::uint64_t cameraRevision = 0;
         std::uint64_t documentRevision = 0; ///< 场景候选核对此代, 使只变化曝光的旧快照也不能继续确认.
         PreviewMode preview = PreviewMode::BaseColor; ///< 本次准备时的会话预览模式, 供绘制和合成共用.
+        OpaquePath opaquePath = OpaquePath::Forward; ///< 与相机及显示请求一同冻结的会话策略.
         ViewSettingReason reason = ViewSettingReason::LayoutPending;
         std::optional<Core::BoundedText> failure;
         std::optional<CameraSnapshot> camera;
@@ -83,7 +87,7 @@ namespace Physara::Renderer
         std::optional<ShadowDepthSet> acceptedShadowDepth; ///< 此 View 原本接受的存储, Forward 对照实际消耗确认可重用性.
         const FroxelLightLists *froxels{}; ///< 同轮工作集, 借用至所属 ViewWork 再次准备或销毁.
         FroxelStatus froxelStatus = FroxelStatus::NotRequested; ///< 候选不可用时仍可消费正常 View 的完整灯集.
-        std::optional<FroxelPreparationStatistics> froxelStatistics; ///< 显式请求时按值提供, 可在工作区复用后读取.
+        std::optional<FroxelPreparationStatistics> froxelStatistics; ///< 为本次请求按值保存, 可在工作区复用后读取.
 
         /// @brief 有效诊断只返回选中组. 普通受光返回全部准入组, 其余分支返回空区间.
         /// @note 返回值借用此轮 ViewWork 持有的计划, 调用者在工作区再次准备前消费.
@@ -130,7 +134,8 @@ namespace Physara::Renderer
         /// @pre Scene 已接受本轮事务, sceneStorage 所属槽已安全取得.
         /// @note 本对象再次准备即结束旧索引借用. 调用期间保持 View 请求不变, 以配对其版号和曝光.
         /// 无有效布局时不提取 Scene. 主可见集生成失败时通过 reason 返回.
-        /// @param froxelRequest 空指针沿用完整灯表. 显式请求的结果由 froxelStatus 单独报告.
+        /// @param froxelRequest 为空时按 View 的策略和预览选择是否分箱. 传入配置可独立请求 CPU 列表,
+        /// 即使本路沿用全灯着色也会报告该次准备结果.
         [[nodiscard]] PreparedView Prepare(SceneFrameStorage &sceneStorage, const Scene::Scene &scene,
                                            const View &view, const std::optional<ViewportRequest> &request,
                                            const CameraSampling &sampling = {},
@@ -141,7 +146,8 @@ namespace Physara::Renderer
         /// @pre 全部请求准备完毕前保持 Scene 和本槽的提取数组稳定.
         /// 显式离屏的两种像素范围都通过上限检查后, 才会请求共享提取.
         /// @param requireShadowPreview 普通显示附件超出预算时, 只有可消费的阴影诊断能使布局通过审核.
-        /// @param froxelRequest 有值时才为有效 View 构造候选. 参数只在本次调用期间借用.
+        /// @param froxelRequest 只在本次调用期间借用. 为空时, Forward+ 的普通受光预览使用默认网格.
+        /// 有效阴影诊断或无可见几何时跳过自动分箱. 实际材质是否消费该表由后续绘制规划决定.
         [[nodiscard]] PreparedView Prepare(SceneFramePreparation &scene, const View &view,
                                            const std::optional<ViewportRequest> &request,
                                            const CameraSampling &sampling = {},

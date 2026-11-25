@@ -11,6 +11,7 @@
 /// @file
 /// @brief 在同一图中登记共享上传及各 View 的几何, 阴影深度, 天空和显示转换.
 /// 受光分支按准入组紧排深度层, 诊断只取选中组. 深度逐层写入或整体只读导入, 颜色 Pass 绑定连续数组视图.
+/// Forward+ 的颜色 Pass 从本图上传版本取得所属 View 的 Froxel 数据, 后继天空和显示沿用同一工作色.
 
 namespace Physara::Renderer
 {
@@ -88,8 +89,13 @@ namespace Physara::Renderer
         }
         view.activeLights.reset();
         view.lightLayout = nullptr;
+        view.froxelViewLayout = nullptr;
+        view.froxelUpload.reset();
+        view.froxelReserved = false;
         view.environment = {};
         view.display = {};
+        view.displayReserved = false;
+        view.preparationStamp = 0;
     }
 
     void ForwardFrame::Reset() noexcept
@@ -103,7 +109,7 @@ namespace Physara::Renderer
             {
                 ResetView(view);
             }
-            m_Data->begun = m_Data->lutReserved = false;
+            m_Data->begun = false;
             m_Data->hasPreparedView = false;
             m_Data->planned.reset();
             m_Data->shaders.reset();
@@ -248,6 +254,12 @@ namespace Physara::Renderer
             m_InitialShaders.reset();
         }
         m_Resources->AdvanceShaders(request, std::move(result));
+    }
+
+    void ForwardRenderer::ContinueShaderPreparation() noexcept
+    {
+        assert(m_Resources);
+        m_Resources->AdvanceShaders(m_Resources->shaderStatistics.request, std::nullopt, true);
     }
 
     void ForwardRenderer::BeginShaderRequests() noexcept
@@ -403,9 +415,58 @@ namespace Physara::Renderer
         return std::nullopt;
     }
 
-    /// @brief 已有计划可能依赖共享生产者. 只在没有后续消费者时丢弃批次并归还写入额度.
+    /// @brief 同一槽内有任一路为待写的共享 LUT 保留额度.
+    static bool HasLutReservation(const Detail::ForwardFrameStorage &frame) noexcept
+    {
+        return std::ranges::any_of(frame.views, [](const auto &view)
+        {
+            return view.displayReserved && view.display.LutUploadBytes() != 0;
+        });
+    }
+
+    /// @brief 拒绝或取消一路后, 以仍在准备中的 View 或已就绪的 View 重算上传额度.
+    static void DiscardViewUploads(Detail::ForwardFrameStorage &frame, std::size_t index) noexcept
+    {
+        auto &view = frame.views[index];
+        const auto stamp = std::exchange(view.preparationStamp, 0);
+        if (!stamp)
+        {
+            return;
+        }
+        std::array<std::uint64_t, ForwardViewCount> retained;
+        std::ranges::transform(frame.views, retained.begin(), &Detail::ForwardFrameData::preparationStamp);
+        frame.uploads.DiscardView(index, stamp, retained);
+        view.froxelUpload.reset();
+        view.froxelReserved = false;
+        view.displayReserved = false;
+        view.display.ReleasePayload();
+        // DiscardView 已按实际载荷重算额度. 仍在等待收尾的 Froxel 写组各补计一次,
+        // 显示常量按路补计, 共享 LUT 只补一份.
+        bool lutReserved = false;
+        for (const auto &candidate : frame.views)
+        {
+            if (candidate.froxelReserved)
+            {
+                const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+                frame.uploads.bytes += bytes;
+                frame.uploads.writes += writes;
+            }
+            if (candidate.displayReserved)
+            {
+                const auto lutBytes = candidate.display.LutUploadBytes();
+                const bool sharedLut = lutReserved && lutBytes != 0;
+                frame.uploads.bytes += candidate.display.UploadBytes() - (sharedLut ? lutBytes : 0);
+                frame.uploads.writes += candidate.display.UploadCount() - std::size_t(sharedLut);
+                lutReserved |= lutBytes != 0;
+            }
+        }
+        assert(frame.uploads.bytes <= Detail::ForwardUploadBudget && frame.uploads.writes <= Detail::ForwardUploadItems);
+    }
+
+    /// @brief 结束失败候选的独占准备, 在批次还有其它候选时保留可共享的生产者.
     static void RejectView(Detail::ForwardFrameStorage &frame, std::size_t index) noexcept
     {
+        DiscardViewUploads(frame, index);
         ResetView(frame.views[index]);
         frame.planned.reset(index);
         // 另一路可能已经登记了本批写入, 尚在等待 FinishView. 保留它所依赖的上传载荷和准备代.
@@ -413,15 +474,16 @@ namespace Physara::Renderer
         {
             // 这批写入已失去消费者. 下路重新 Begin, 使设备缓存能识别只在旧批次中拥有生产者的代.
             frame.uploads.Clear();
-            frame.begun = frame.lutReserved = false;
+            frame.begun = false;
             frame.shaders.reset();
         }
     }
 
     // 选代前取得显示输入并预留写入额度. 两路共享的 LUT 只计一次, 实际上传由使用它的图声明.
     static void PlanDisplay(Detail::ForwardDevice &device, Detail::ForwardFrameStorage &frame,
-                            PostProcess::DisplayFrame &display, const ViewLayouts &layouts, DisplaySettings settings)
+                            Detail::ForwardFrameData &view, const ViewLayouts &layouts, DisplaySettings settings)
     {
+        auto &display = view.display;
         const auto requests = PostProcess::DisplayDevice::SelectStages(layouts, settings);
         for (const auto key : requests.Stages())
         {
@@ -433,11 +495,6 @@ namespace Physara::Renderer
             {
                 Detail::Reject(ViewSettingReason::DisplayUnavailable, failure->View());
             }
-            const auto lutBytes = display.LutUploadBytes();
-            const bool sharedLut = lutBytes != 0 && frame.lutReserved;
-            frame.uploads.ReserveWrites(display.UploadBytes() - (sharedLut ? lutBytes : 0),
-                                        display.UploadCount() - std::size_t(sharedLut));
-            frame.lutReserved |= lutBytes != 0;
         }
         catch (const ForwardFailure &failure)
         {
@@ -450,16 +507,22 @@ namespace Physara::Renderer
             }
             throw;
         }
+        // 显示输入已就绪, 此后的批次超额由 View 准入报告. 重试可复用已登记的显示键和其它路共享的 LUT.
+        const auto lutBytes = display.LutUploadBytes();
+        const bool sharedLut = lutBytes != 0 && HasLutReservation(frame);
+        frame.uploads.ReserveWrites(display.UploadBytes() - (sharedLut ? lutBytes : 0),
+                                    display.UploadCount() - std::size_t(sharedLut));
+        view.displayReserved = true;
     }
 
     std::optional<ForwardFailure> ForwardRenderer::Prepare(ForwardFrame &frame, const PreparedView &view,
-        PreviewMode mode, ViewResourceNeeds needs, std::size_t index)
+        PreviewMode mode, ViewResourceNeeds needs, std::size_t index, const GraphBufferSupport &buffers)
     {
         if (auto failure = PlanView(frame, view, mode, needs, index))
         {
             return failure;
         }
-        return FinishView(frame, view, index);
+        return FinishView(frame, view, index, buffers);
     }
 
     std::optional<ForwardFailure> ForwardRenderer::PlanView(ForwardFrame &frame, const PreparedView &view,
@@ -503,11 +566,20 @@ namespace Physara::Renderer
         {
             data.lightTable.reset();
         }
-        data.source = {view.view, view.scene.scene, view.scene.contentRevision, mode, *view.camera, view.layouts.render};
+        data.source = {.view = view.view, .scene = view.scene.scene, .contentRevision = view.scene.contentRevision,
+            .mode = mode, .camera = *view.camera, .layout = view.layouts.render, .opaquePath = view.opaquePath};
         data.needs = needs;
         m_Resources->BeginView(index);
+        data.preparationStamp = m_Resources->viewBudgets[index].stamp;
         Detail::PlanDraws(*m_Resources, data, view, mode, view.previewShadow);
-        PlanDisplay(*m_Resources, *frame.m_Data, data.display, view.layouts, display);
+        PlanDisplay(*m_Resources, *frame.m_Data, data, view.layouts, display);
+        if (Detail::UsesFroxels(data.environment.program))
+        {
+            // 规划按 View 顺序准入全部可确定的写入, 避免后一路占用首路收尾才需要的额度.
+            const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+            frame.m_Data->uploads.ReserveWrites(bytes, writes);
+            data.froxelReserved = true;
+        }
         frame.m_Data->planned.set(index);
         return std::nullopt;
     }
@@ -530,12 +602,12 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::FinishView(ForwardFrame &frame, const PreparedView &view,
-                                                              std::size_t index)
+        std::size_t index, const GraphBufferSupport &buffers)
     try
     {
         assert(m_Resources && frame.m_Data && frame.m_Data->planned[index]);
         auto &data = frame.m_Data->views[index];
-        assert(data.source.view == view.view);
+        assert(data.source.view == view.view && data.source.opaquePath == view.opaquePath);
         if (!frame.m_Data->shaders)
         {
             // 同一帧的两路 View 固定使用这张表, 直至槽安全 Reset.
@@ -552,6 +624,16 @@ namespace Physara::Renderer
         m_Resources->ResumeView(index);
         Detail::ApplyDrawShaders(*m_Resources, data, view);
         m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
+        if (data.froxelViewLayout)
+        {
+            // 角色已就绪, 将本 View 的预计额度转换为同样大小的实际写入. 中间没有其它 View 准备.
+            assert(data.froxelReserved);
+            const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+            frame.m_Data->uploads.ReleaseWrites(bytes, writes);
+            data.froxelReserved = false;
+            data.froxelUpload = Detail::FroxelUpload::Prepare(*m_Resources, frame.m_Data->uploads, view, buffers);
+            assert(data.froxelUpload);
+        }
         frame.m_Data->hasPreparedView = true;
         frame.m_Data->planned.reset(index);
         return std::nullopt;
@@ -836,6 +918,9 @@ namespace Physara::Renderer
     {
         RHI::ViewportState viewport;
         RHI::BindingSet *view = nullptr;
+        RHI::BindingLayout *froxelViewLayout = nullptr;
+        std::optional<Detail::FroxelGraphInputs> froxels;
+        BufferAccess viewRow{}; ///< 本图的 b0. Froxel 颜色在预检时与四个块合为一组.
         std::optional<BufferAccess> lights;
         RHI::BindingLayout *lightLayout = nullptr;
         std::optional<BufferAccess> environment;
@@ -871,7 +956,8 @@ namespace Physara::Renderer
     /// color 指向主着色工作时才选用 set 3. 阴影附件使用自己的方形 viewport.
     static SceneRaster RasterInputs(RenderGraph &graph, SceneGraphResources &versions,
         const Detail::StaticDrawWork &work, const ViewImageRect &rect, RasterReads &reads,
-        const Detail::ForwardFrameData *color = nullptr, TextureId shadowDepth = {})
+        const Detail::ForwardFrameData *color = nullptr, TextureId shadowDepth = {},
+        const Detail::FroxelGraphInputs *froxels = nullptr)
     {
         SceneRaster raster;
         raster.viewport = RasterViewport(rect);
@@ -905,8 +991,17 @@ namespace Physara::Renderer
             static_cast<void>(readBuffer(page->buffer, GraphUsage::ShaderRead, range, page.get(),
                                         page->initialized ? std::optional{binding} : std::nullopt));
         };
-        static_cast<void>(buffer(work.view->buffer, GraphUsage::ConstantBuffer));
-        raster.view = work.view->binding.Get();
+        raster.viewRow = buffer(work.view->buffer, GraphUsage::ConstantBuffer);
+        if (froxels)
+        {
+            assert(color && color->froxelViewLayout);
+            raster.froxels = *froxels;
+            raster.froxelViewLayout = color->froxelViewLayout.Get();
+        }
+        else
+        {
+            raster.view = work.view->binding.Get();
+        }
         if (color)
         {
             raster.lightLayout = color->lightLayout.Get();
@@ -987,8 +1082,9 @@ namespace Physara::Renderer
     static GraphFailure DrawScene(PassResources &resources, const SceneRaster &raster,
                                   RHI::CommandList &commands) noexcept
     {
-        auto *passBindings = raster.lightLayout ? resources.BindingSet(0) : nullptr;
-        if (raster.lightLayout && !passBindings)
+        auto *viewBindings = raster.froxels ? resources.BindingSet(0) : raster.view;
+        auto *passBindings = raster.lightLayout ? resources.BindingSet(raster.froxels ? 1 : 0) : nullptr;
+        if ((raster.froxels && !viewBindings) || (raster.lightLayout && !passBindings))
         {
             // BindingSet 已将失败记入本 Pass. 停止录制, 由执行器返回该原因.
             return std::nullopt;
@@ -1005,7 +1101,7 @@ namespace Physara::Renderer
             RHI::GraphicsState state{};
             // firstIndex 和 baseVertex 已含各自的页内起点. 这里按页基准绑定, 仅命令参数另取字节偏移.
             state.SetFramebuffer(resources.Framebuffer()).SetPipeline(batch.pipeline).SetViewport(raster.viewport)
-                .AddBindingSet(raster.view).AddBindingSet(batch.renderables).AddBindingSet(batch.material)
+                .AddBindingSet(viewBindings).AddBindingSet(batch.renderables).AddBindingSet(batch.material)
                 .AddVertexBuffer(RHI::VertexBufferBinding().SetBuffer(vertices).SetOffset(0))
                 .SetIndexBuffer(RHI::IndexBufferBinding().SetBuffer(indices).SetFormat(RHI::Format::R32_UINT)
                     .SetOffset(0)).SetIndirectParams(arguments);
@@ -1047,6 +1143,21 @@ namespace Physara::Renderer
     /// @brief 生成诊断或受光 Pass 所需的集合. 每个纹理视图都限于本 Pass 声明的范围.
     static GraphFailure PrepareRasterBindings(PassPreparation &preparation, const SceneRaster &data)
     {
+        // 预检按创建顺序保存集合. Froxel 颜色先保存 set 0, 再保存 set 3. 普通颜色直接借用已有的 set 0.
+        if (data.froxels)
+        {
+            const auto constants = preparation.ReadBuffer(0, data.viewRow.resource, data.viewRow.usage, data.viewRow.range);
+            const auto froxelItems = data.froxels->Bind(preparation);
+            if (!constants || !froxelItems)
+            {
+                return std::nullopt;
+            }
+            const std::array items{*constants, (*froxelItems)[0], (*froxelItems)[1], (*froxelItems)[2], (*froxelItems)[3]};
+            if (!preparation.CreateBindingSet(*data.froxelViewLayout, items))
+            {
+                return std::nullopt;
+            }
+        }
         if (!data.lightLayout)
         {
             return std::nullopt;
@@ -1099,16 +1210,17 @@ namespace Physara::Renderer
     /// @brief 深度和颜色共享 Draw 顺序及声明规则. 读前置深度时使用只读附件, 从而确定 WAW/RAW 关系.
     static PassId AddGeometryPass(RenderGraph &graph, SceneGraphResources &versions,
         const Detail::ForwardFrameData &frame, TextureId &depth, TextureId *color, bool readOnlyDepth,
-        TextureId shadowDepth = {})
+        TextureId shadowDepth = {}, const Detail::FroxelGraphInputs *froxels = nullptr)
     {
         RasterReads reads;
         auto raster = RasterInputs(graph, versions, frame, frame.source.layout.rect, reads,
-                                   color ? &frame : nullptr, shadowDepth);
-        return TakeGraph(graph.AddPass<SceneRaster>(color ? "Forward ShadeOpaque" : "Forward PrepareSurface",
+                                   color ? &frame : nullptr, shadowDepth, froxels);
+        const auto *label = color ? (froxels ? "Forward+ ShadeOpaque" : "Forward ShadeOpaque") : "Forward PrepareSurface";
+        return TakeGraph(graph.AddPass<SceneRaster>(label,
             [&](PassBuilder &builder, auto &data)
             {
                 data = std::move(raster);
-                if (!DeclareRasterReads(builder, reads))
+                if (!DeclareRasterReads(builder, reads) || (data.froxels && !data.froxels->DeclareReads(builder)))
                 {
                     return false;
                 }
@@ -1184,9 +1296,9 @@ namespace Physara::Renderer
 
     /// @brief 按准备的路径同时产生颜色和深度, 或读取早期深度并只写颜色.
     static PassId ShadeOpaque(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
-                            TextureId &depth, TextureId &color, TextureId shadowDepth)
+        TextureId &depth, TextureId &color, TextureId shadowDepth, const Detail::FroxelGraphInputs *froxels)
     {
-        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth, shadowDepth);
+        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth, shadowDepth, froxels);
     }
 
     /// @brief 天空读取本图的一个完整基础 cube, 加载不透明工作色后只填其未覆盖 RGB.
@@ -1245,7 +1357,7 @@ namespace Physara::Renderer
     /// @brief 声明一个 View 的表面与显示目标, 私有输出不进入共享驻留映射.
     static ForwardOutput DeclareView(RenderGraph &graph, SceneGraphResources &versions,
                                      std::vector<GraphUpload> &uploads, const Detail::ForwardFrameData &frame,
-                                     TextureId lut)
+                                     TextureId lut, const Detail::FroxelGraphInputs *froxels)
     {
         const auto extent = frame.source.layout.outputExtent;
         ForwardOutput output;
@@ -1260,7 +1372,8 @@ namespace Physara::Renderer
             output.shadowBytes = frame.shadow->depth.LogicalBytes();
         }
         output.depthPass = PrepareSurface(graph, versions, frame, output.depth);
-        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor, output.shadowDepth);
+        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor,
+                                       output.shadowDepth, froxels);
         AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();
@@ -1278,6 +1391,14 @@ namespace Physara::Renderer
     try
     {
         assert(m_Data && !m_Data->uploads.sealed);
+        for (std::size_t index = 0; index < selected.size(); ++index)
+        {
+            if (!selected[index])
+            {
+                // 撤回未选路的准备代. 几何等共享写入只在其它路仍使用它时保留, 显示预留另行结算.
+                DiscardViewUploads(*m_Data, index);
+            }
+        }
         m_Data->uploads.sealed = true;
         ForwardGraph output;
         TextureId lut;
@@ -1304,7 +1425,10 @@ namespace Physara::Renderer
         {
             if (selected[index])
             {
-                output.views[index] = DeclareView(graph, versions, uploads, m_Data->views[index], lut);
+                const auto &view = m_Data->views[index];
+                const auto froxels = view.froxelUpload
+                    ? std::optional{TakeGraph(view.froxelUpload->Resolve(m_Data->uploads, versions.buffers))} : std::nullopt;
+                output.views[index] = DeclareView(graph, versions, uploads, view, lut, froxels ? &*froxels : nullptr);
             }
         }
         return output;

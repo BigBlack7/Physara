@@ -11,29 +11,15 @@ ivec2 FroxelOrderedPixels(uvec2 bits)
     return mix(magnitude, -magnitude, greaterThanEqual(bits, uvec2(0x80000000u)));
 }
 
-// renderPixel 为渲染画布左上像素坐标, viewDepth 为 -viewZ, 单位米.
+// pixel 相对去抖动的有效矩形左上角, viewDepth 为米制 -viewZ.
 // 只有稳定外缘内的留量可以归入边缘 tile. 内部边界向后归属, 最后一层包含远端.
-uint QueryFroxelCell(vec2 renderPixel, float viewDepth)
+uint QueryStableFroxelCell(vec2 pixel, float viewDepth)
 {
     // 某些设备将负次正规值比较为零. 按位拒绝负的非零值, 同时允许正交零近面.
     if (floatBitsToUint(viewDepth) > 0x80000000u)
     {
         return FroxelInvalidCell;
     }
-    uvec2 origin = froxelView.renderRect.xy;
-    precise vec2 relative = renderPixel - vec2(origin);
-    bvec2 zeroEdge = equal(froxelView.stableMinimum, vec2(0.0));
-    if (any(zeroEdge))
-    {
-        // 零原点直接读取画布坐标位型, 在减抖动前判断是否越过零外缘.
-        uvec2 bits = mix(floatBitsToUint(relative), floatBitsToUint(renderPixel), equal(origin, uvec2(0u)));
-        bvec2 below = lessThan(FroxelOrderedPixels(bits), FroxelOrderedPixels(floatBitsToUint(froxelView.jitterPixels)));
-        if ((zeroEdge.x && below.x) || (zeroEdge.y && below.y))
-        {
-            return FroxelInvalidCell;
-        }
-    }
-    precise vec2 pixel = relative - froxelView.jitterPixels;
     if (!all(greaterThanEqual(pixel, froxelView.stableMinimum)) ||
         !all(lessThanEqual(pixel, froxelView.stableMaximum)) ||
         !(viewDepth >= froxelView.depthEdges[0] && viewDepth <= froxelView.depthEdges[froxelView.sliceCount]))
@@ -61,6 +47,26 @@ uint QueryFroxelCell(vec2 renderPixel, float viewDepth)
         }
     }
     return (low * froxelView.tileCount.y + tile.y) * froxelView.tileCount.x + tile.x;
+}
+
+// 已拥有可靠光栅坐标的消费者从画布像素查询同一个稳定网格.
+uint QueryFroxelCell(vec2 renderPixel, float viewDepth)
+{
+    uvec2 origin = froxelView.renderRect.xy;
+    precise vec2 relative = renderPixel - vec2(origin);
+    bvec2 zeroEdge = equal(froxelView.stableMinimum, vec2(0.0));
+    if (any(zeroEdge))
+    {
+        // 零原点直接读取画布坐标位型, 在减抖动前判断是否越过零外缘.
+        uvec2 bits = mix(floatBitsToUint(relative), floatBitsToUint(renderPixel), equal(origin, uvec2(0u)));
+        bvec2 below = lessThan(FroxelOrderedPixels(bits), FroxelOrderedPixels(floatBitsToUint(froxelView.jitterPixels)));
+        if ((zeroEdge.x && below.x) || (zeroEdge.y && below.y))
+        {
+            return FroxelInvalidCell;
+        }
+    }
+    precise vec2 pixel = relative - froxelView.jitterPixels;
+    return QueryStableFroxelCell(pixel, viewDepth);
 }
 
 #endif

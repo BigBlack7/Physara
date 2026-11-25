@@ -48,6 +48,13 @@ physara_add_shader_program(StaticForwardIbl StaticForward ../Shaders/Passes/Forw
 physara_add_shader_program(StaticForwardShadows StaticForward ../Shaders/Passes/Forward/StaticForwardShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPhysicalShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPhysicalShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardIblShadows StaticForward ../Shaders/Passes/Forward/StaticForwardIblShadows.json ../Shaders PRODUCT)
+# Froxel 只扩展不透明颜色角色, 资源合同沿用 StaticForward 结构定义.
+physara_add_shader_program(StaticForwardPlus StaticForward ../Shaders/Passes/Forward/StaticForwardPlus.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPlusPhysical StaticForward ../Shaders/Passes/Forward/StaticForwardPlusPhysical.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPlusIbl StaticForward ../Shaders/Passes/Forward/StaticForwardPlusIbl.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPlusShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusShadows.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPlusPhysicalShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusPhysicalShadows.json ../Shaders PRODUCT)
+physara_add_shader_program(StaticForwardPlusIblShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusIblShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders PRODUCT)
 physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders PRODUCT)
 foreach(program DisplayColorGrading DisplayFxaa DisplayScale)
@@ -95,7 +102,8 @@ target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
-        StaticForwardIblShadows)
+        StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
+        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows)
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

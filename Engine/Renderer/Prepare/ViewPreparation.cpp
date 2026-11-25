@@ -300,6 +300,22 @@ namespace Physara::Renderer
         return Prepare(frame, view, request, sampling, use, shadowLimits, false, froxelRequest);
     }
 
+    const char *FroxelStatusName(FroxelStatus status) noexcept
+    {
+        switch (status)
+        {
+        case FroxelStatus::Ready: return "Ready";
+        case FroxelStatus::ViewUnavailable: return "View unavailable";
+        case FroxelStatus::InvalidGrid: return "Invalid grid";
+        case FroxelStatus::UnrepresentableGrid: return "Grid cannot be represented";
+        case FroxelStatus::HeaderCapacity: return "Header budget exceeded";
+        case FroxelStatus::LightCapacity: return "Light row capacity exceeded";
+        case FroxelStatus::StorageUnavailable: return "CPU storage unavailable";
+        case FroxelStatus::NotRequested: return "Not requested";
+        }
+        return "Unknown";
+    }
+
     ShadowPlanStatistics ViewWork::UnavailableShadows(const Scene::Scene &scene, const View &view,
                                                       const ShadowPlanningLimits &limits) noexcept
     {
@@ -318,20 +334,24 @@ namespace Physara::Renderer
         m_Lights.clear();
         // 到这里就结束旧 Froxel 借用. 本轮稍后可能因布局失败提前返回, 也可能只要求完整灯表.
         m_Froxels.reset();
+        const auto path = view.RequestedOpaquePath();
+        const auto preview = view.Preview();
+        const FroxelRequest defaultFroxels;
+        const bool automaticFroxels = !froxelRequest && path == OpaquePath::ForwardPlus && IsLitPreview(preview);
+        const auto *listsRequest = automaticFroxels ? &defaultFroxels : froxelRequest;
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),
-                            .preview = view.Preview(), .reason = view.CheckViewport(request, use),
-                             .shadowDiagnostic = view.RequestedShadowDiagnostic(),
-                             .froxelStatus = froxelRequest ? FroxelStatus::ViewUnavailable :
-                                                            FroxelStatus::NotRequested};
+                            .preview = preview, .opaquePath = path, .reason = view.CheckViewport(request, use),
+                            .shadowDiagnostic = view.RequestedShadowDiagnostic(),
+                            .froxelStatus = listsRequest ? FroxelStatus::ViewUnavailable : FroxelStatus::NotRequested};
         const auto &scene = shared.Source();
-        if (froxelRequest)
+        if (listsRequest)
         {
             // 布局检查可能先于共享场景提取返回. 此处只复制输入版本和请求额度.
             const auto versions = scene.Versions();
             result.froxelStatistics.emplace(FroxelPreparationStatistics{
                 .scene = scene.Id(), .contentRevision = versions.renderContent, .sceneCameraRevision = versions.camera,
-                .indexBudget = froxelRequest->IndexBudget()});
+                .indexBudget = listsRequest->IndexBudget()});
         }
         const auto unavailable = [&]
         {
@@ -452,6 +472,13 @@ namespace Physara::Renderer
         result.shadows = m_Shadows.get();
         result.previewShadow = hasVisibleReceivers ? shadows.diagnostic : nullptr;
         result.shadowStatistics = shadows.statistics;
+        if (automaticFroxels && (result.previewShadow || !hasVisibleReceivers))
+        {
+            // 有效诊断和纯背景无逐灯颜色. 诊断不可用但仍有普通受光候选时保留请求.
+            listsRequest = nullptr;
+            result.froxelStatus = FroxelStatus::NotRequested;
+            result.froxelStatistics.reset();
+        }
         if (shadows.diagnostic && !hasVisibleReceivers)
         {
             result.shadowStatistics.diagnosticReason = ShadowPlanReason::NoReceiverCoverage;
@@ -464,8 +491,7 @@ namespace Physara::Renderer
         // 候选仍有消费时借用本 View 的旧数组. Forward 按实际绘制组、内容和程序匹配它.
         if (view.m_ShadowDepth)
         {
-            const bool lighting = hasVisibleReceivers &&
-                (result.preview == PreviewMode::DirectLighting || result.preview == PreviewMode::PhysicalLighting);
+            const bool lighting = hasVisibleReceivers && IsLitPreview(result.preview);
             if (!result.ShadowGroups(lighting).empty())
             {
                 result.acceptedShadowDepth = view.m_ShadowDepth;
@@ -475,11 +501,11 @@ namespace Physara::Renderer
                 view.m_ShadowDepth.reset();
             }
         }
-        if (froxelRequest && result.reason == ViewSettingReason::None)
+        if (listsRequest && result.reason == ViewSettingReason::None)
         {
             // 只发布完整的本轮工作集. 失败保留相机与完整灯集合供其它消费者使用.
             auto &stats = *result.froxelStatistics;
-            auto froxels = Detail::BuildFroxelLightLists(result, *froxelRequest,
+            auto froxels = Detail::BuildFroxelLightLists(result, *listsRequest,
                 {offsets->sideLimit.x, offsets->sideLimit.y}, directionalCount);
             if (auto *lists = std::get_if<std::unique_ptr<FroxelLightLists>>(&froxels))
             {

@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "../RenderGraph/GraphExecutor.hpp"
 
@@ -41,7 +42,11 @@ namespace Physara::Renderer
         class FroxelUpload final
         {
         public:
+            /// @brief 由生成布局确定的固定预算, 顺序为字节数和写入笔数. 在实际分配前即可预留.
+            [[nodiscard]] static std::pair<std::size_t, std::size_t> UploadRequirements() noexcept;
+
             /// @brief 追加一组拥有型 Buffer 写入. 无可消费 CPU 网格时返回空, 完整灯表可独立使用.
+            /// @note 本调用自行登记实际写入的额度. 已做逻辑预留的调用方须先归还等额预留.
             /// @pre device 已选中该 View 的准备预算, limits 来自同设备的图 profile. 批次尚未封存, CPU 候选仍在借用期内.
             /// @throws ForwardFailure 设备分配或预算拒绝. 失败时不向批次发布部分写入.
             /// @throws std::bad_alloc CPU 载荷或批次容器无法分配, 由帧准备入口处理.

@@ -63,7 +63,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<ConstantRow>(device.capacity, payload.size());
         row->buffer = AllocateBuffer(device.device, GraphUsage::ConstantBuffer, payload.size());
         device.Use(*row);
-        uploads.Add(row, row->buffer, payload, GraphUploadSource::ForwardView);
+        uploads.Add(row, row->buffer, payload, GraphUploadSource::ForwardView, device.preparingView);
         return row;
     }
 

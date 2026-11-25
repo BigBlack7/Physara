@@ -88,6 +88,18 @@ namespace Physara::Runtime
         static_cast<void>(diagnostics.Write(Core::Severity::Info, message.View()));
     }
 
+    /// @brief 准备和图编译共用设备缓冲区范围. 整个 UBO 的容量独立于子区间的偏移对齐.
+    static GraphBufferSupport FrameBufferSupport(const Platform::HostInfo &info, bool scene, bool structuredUav = false)
+        noexcept
+    {
+        return {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
+                .maxConstantBytes = info.maxUniformBufferBlockBytes,
+                .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
+                .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
+                .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
+                .structuredUav = structuredUav};
+    }
+
     EditorGraphProfile::EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews,
                                            bool diagnostic, std::uint64_t shadowBytes)
     {
@@ -164,14 +176,8 @@ namespace Physara::Runtime
                 addStorage(format, RHI::TextureDimension::Texture2DArray);
             }
         }
-        // 整个 UBO 可绑定到设备的块大小上限. 子区间的起点和长度还须满足图编译器的对齐合同.
         m_Options = {.textures = std::span(m_Textures).first(count),
-            .buffers = {.maxBytes = scene ? ForwardBufferLimit : 8 * 1024 * 1024,
-                        .maxConstantBytes = info.maxUniformBufferBlockBytes,
-                        .constantOffsetAlignment = info.uniformBufferOffsetAlignmentBytes,
-                        .maxStructuredBytes = scene ? info.maxStorageBufferBlockBytes : 0,
-                        .structuredOffsetAlignment = scene ? info.storageBufferOffsetAlignmentBytes : 0,
-                        .structuredUav = structuredUav},
+            .buffers = FrameBufferSupport(info, scene, structuredUav),
             .textureBoundaryStates = std::span(m_States).first(shadowBytes != 0 ? 3u : 2u),
             .bufferBoundaryStates = std::span(m_States).first<2>(), .maxColorAttachments = 1,
             .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
@@ -634,7 +640,7 @@ namespace Physara::Runtime
             const auto &last = *retained.Color()->scene;
             measuredSource = Editor::SceneFrameIdentity{receipt.ticket, last.scene, measured.Id(), last.contentRevision,
                 last.documentRevision, last.mode, last.renderLayout, retained.Color()->layout, last.display,
-                last.shaderGeneration, last.directionalCascades, last.localShadow};
+                last.shaderGeneration, last.directionalCascades, last.localShadow, last.opaquePath};
             const auto index = measuredMain ? MainViewIndex : OffscreenViewIndex;
             // 上传账单汇总整张正常图. 几何工作量只取所选出口, 用其深度和颜色 Pass 的存活性分别计数.
             CompletePreparationStatistics(measurements.preparation, slot, declared, plan, measuredMain,
@@ -876,6 +882,28 @@ namespace Physara::Runtime
         return failure;
     }
 
+    /// @brief 消费冻结的附加 View 工作集. 重试沿用原相机, 可见集及布局, 成功规划后由 FinishOffscreen 接续.
+    static void PlanOffscreenDraws(Platform::DeviceHost &host, ForwardRenderer &forward, FrameSlot &slot,
+                                   OffscreenCandidate &candidate)
+    {
+        auto &request = *candidate.request;
+        const auto &prepared = candidate.prepared;
+        const auto failure = PrepareForwardView(host, [&] {
+            return forward.PlanView(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
+        });
+        candidate.error.reset();
+        candidate.planned = !failure;
+        if (failure)
+        {
+            request.reason = failure->reason;
+            candidate.outputs = request.view.Unavailable(request.reason);
+            if (request.reason != ViewSettingReason::EnvironmentPending)
+            {
+                candidate.error = Failed(host, AttemptStatus::Cancelled, "Frame.OffscreenPlan", failure->description).error;
+            }
+        }
+    }
+
     /// @brief 附加 View 在主 View 后独立校验和规划, 局部失败只对对应请求报告结果.
     static OffscreenCandidate PlanOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward,
         FrameSlot &slot, SceneFramePreparation &scene, const View &main,
@@ -953,26 +981,13 @@ namespace Physara::Runtime
             return candidate;
         }
 
-        const auto &prepared = candidate.prepared;
-        const auto failure = PrepareForwardView(host, [&] {
-            return forward.PlanView(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
-        });
-        if (failure)
-        {
-            request.reason = failure->reason;
-            candidate.outputs = view.Unavailable(request.reason);
-            if (request.reason != ViewSettingReason::EnvironmentPending)
-            {
-                candidate.error = Failed(host, AttemptStatus::Cancelled, "Frame.OffscreenPlan", failure->description).error;
-            }
-        }
-        candidate.planned = !failure;
+        PlanOffscreenDraws(host, forward, slot, candidate);
         return candidate;
     }
 
     /// @brief 仅已完成规划的附加路从本帧选定代取得句柄并形成正常候选.
     static void FinishOffscreen(Platform::DeviceHost &host, ForwardRenderer &forward, FrameSlot &slot,
-                                OffscreenCandidate &candidate)
+                                OffscreenCandidate &candidate, const GraphBufferSupport &buffers)
     {
         if (!candidate.planned)
         {
@@ -982,7 +997,7 @@ namespace Physara::Runtime
         auto &view = request.view;
         const auto &prepared = candidate.prepared;
         const auto failure = PrepareForwardView(host, [&] {
-            return forward.FinishView(slot.forward, prepared, OffscreenViewIndex);
+            return forward.FinishView(slot.forward, prepared, OffscreenViewIndex, buffers);
         });
         if (failure)
         {
@@ -1071,9 +1086,12 @@ namespace Physara::Runtime
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
         const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
         const bool hasScene = HasSceneOutput(prepared);
-        // 阴影、物理预览和缩放的候选失败时, 可读旧色仍能由安全 UI 显示.
+        const auto *accepted = view.AcceptedScenePreview();
+        const bool changingPath = accepted && accepted->opaquePath != prepared.opaquePath;
+        // 路径切换及现有可恢复配置失败时, 可读旧色仍能由安全 UI 显示.
         const bool retainOnFailure = physical || (hasScene &&
-            (!std::holds_alternative<std::monostate>(prepared.shadowDiagnostic) ||
+            (changingPath || prepared.opaquePath == OpaquePath::ForwardPlus ||
+             !std::holds_alternative<std::monostate>(prepared.shadowDiagnostic) ||
              (prepared.preview == PreviewMode::DirectLighting && prepared.shadowStatistics.enabled) ||
              prepared.layouts.render != prepared.layouts.display));
         auto mode = Editor::UiFrameMode::Normal;
@@ -1130,13 +1148,16 @@ namespace Physara::Runtime
             return stop();
         }
 
-        // 到此本帧代已选定. 正常 View 从同一张表取得句柄, 未就绪的路可沿自己的旧接受输出回退.
+        // 两路从本帧同一程序代取句柄. Froxel 的范围准入取自场景图使用的设备上限.
+        // 主视口的旧色可交给安全 UI 采样, 离屏请求另按自己的准备及导出结果确认.
+        const auto sceneBuffers = FrameBufferSupport(host.GetInfo(), true);
+        const auto mainHeldDemand = slot.forward.UploadDemand();
         if (mainRequested)
         {
             if (!mainFailure)
             {
                 mainFailure = PrepareForwardView(host, [&] {
-                    return forward.FinishView(slot.forward, prepared);
+                    return forward.FinishView(slot.forward, prepared, MainViewIndex, sceneBuffers);
                 });
             }
             if (const auto &failure = mainFailure)
@@ -1145,9 +1166,11 @@ namespace Physara::Runtime
                 if (failure->reason != ViewSettingReason::EnvironmentPending &&
                     failure->reason != ViewSettingReason::ShaderPending)
                 {
+                    statistics.PublishFroxels(MainViewIndex, &prepared, failure->description);
                     remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
                 }
                 candidate = viewportFallback(failure->reason, retainOnFailure ||
+                    failure->reason == ViewSettingReason::SceneLightTableRejected ||
                     failure->reason == ViewSettingReason::ShaderPending ||
                     failure->reason == ViewSettingReason::ScenePipelineUnavailable);
             }
@@ -1176,7 +1199,44 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
-        FinishOffscreen(host, forward, slot, offscreen);
+        if (mainFailure && offscreen.request && !offscreen.planned &&
+            offscreen.request->reason == ViewSettingReason::SceneUploadLimit)
+        {
+            const auto remaining = slot.forward.UploadDemand();
+            if (remaining.first < mainHeldDemand.first || remaining.second < mainHeldDemand.second)
+            {
+                // 首次离屏规划因上传上限退出, 主路收尾后可用额度确已增加. 这里重试一次,
+                // PlanView 将离屏键追加到帧首建立的需求集合. 快照与无新计划时的预热都读取这个合集,
+                // 同帧补备沿用先前已计费的原生创建次数.
+                forward.BeginEnvironmentRequests(environment ? environment->source : nullptr);
+                PlanOffscreenDraws(host, forward, slot, offscreen);
+                forward.EndEnvironmentRequests();
+                if (offscreen.planned && !host.HasFatalGraphicsError())
+                {
+                    const auto errors = host.BeginFrameGraphicsDiagnostics();
+                    forward.ContinueShaderPreparation();
+                    if (!errors.IsClear())
+                    {
+                        if (const auto error = host.FirstGraphicsError())
+                        {
+                            forward.RecordShaderDiagnostic(*error);
+                        }
+                    }
+                    statistics.PublishShaders(forward.ShaderStatistics(),
+                                              reload ? reload->Statistics() : Shader::ReloadStatistics{});
+                }
+            }
+        }
+        if (host.HasFatalGraphicsError())
+        {
+            remember(host.FirstGraphicsError());
+            return stop();
+        }
+        FinishOffscreen(host, forward, slot, offscreen, sceneBuffers);
+        if (offscreen.error)
+        {
+            statistics.PublishFroxels(OffscreenViewIndex, &offscreen.prepared, offscreen.error);
+        }
         remember(offscreen.error);
         if (host.HasFatalGraphicsError())
         {

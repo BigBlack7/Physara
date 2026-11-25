@@ -22,18 +22,25 @@ namespace Physara::Renderer::Detail
         std::uint32_t stride;
         GraphUsage usage;
         std::uint32_t slot;
+        const char *name;
     };
 
     // Prepare 的载荷顺序, Resolve 取得的写版本以及 Bind 交给 PerView 的条目顺序共用本表.
     static constexpr std::array Bindings{
-        FroxelBinding{sizeof(StaticAbi::FroxelView), 0, GraphUsage::ConstantBuffer, 1},
+        FroxelBinding{sizeof(StaticAbi::FroxelView), 0, GraphUsage::ConstantBuffer, 1, "Froxel view"},
         FroxelBinding{sizeof(StaticAbi::FroxelHeadersData), sizeof(StaticAbi::FroxelCellHeader),
-                      GraphUsage::ShaderRead, 0},
+                      GraphUsage::ShaderRead, 0, "Froxel headers"},
         FroxelBinding{sizeof(StaticAbi::FroxelIndicesData), sizeof(StaticAbi::FroxelLightIndex),
-                      GraphUsage::ShaderRead, 1},
+                      GraphUsage::ShaderRead, 1, "Froxel indices"},
         FroxelBinding{sizeof(StaticAbi::FroxelGlobalLightsData), sizeof(StaticAbi::FroxelLightIndex),
-                      GraphUsage::ShaderRead, 2},
+                      GraphUsage::ShaderRead, 2, "Froxel global lights"},
     };
+    static constexpr auto UploadBytes = Bindings[0].bytes + Bindings[1].bytes + Bindings[2].bytes + Bindings[3].bytes;
+
+    std::pair<std::size_t, std::size_t> FroxelUpload::UploadRequirements() noexcept
+    {
+        return {UploadBytes, Bindings.size()};
+    }
 
     FroxelUpload::FroxelUpload(std::shared_ptr<Allocation> allocation) noexcept : m_Allocation(std::move(allocation))
     {
@@ -59,8 +66,7 @@ namespace Physara::Renderer::Detail
         }
 
         // 固定块容量在分配前已知. 先登记整组上传额度, 之后才取得驻留并生成拥有型载荷.
-        constexpr auto bytes = Bindings[0].bytes + Bindings[1].bytes + Bindings[2].bytes + Bindings[3].bytes;
-        batch.ReserveWrites(bytes, Bindings.size());
+        batch.ReserveWrites(UploadBytes, Bindings.size());
         try
         {
             // 源 span 只借用本轮 ViewWork. 复制结束后, 同一工作区可以为下一路或下一帧重新分箱.
@@ -68,16 +74,17 @@ namespace Physara::Renderer::Detail
             const std::array sources{std::as_bytes(std::span(&lists.grid, 1)), std::as_bytes(std::span(lists.headers)),
                                      std::as_bytes(std::span(lists.indices)),
                                      std::as_bytes(std::span(lists.globalLights))};
-            device.Reserve(bytes);
-            auto allocation = std::make_shared<Allocation>(device.capacity, bytes);
+            device.Reserve(UploadBytes);
+            auto allocation = std::make_shared<Allocation>(device.capacity, UploadBytes);
             std::array<BufferUpload, Bindings.size()> pending;
             for (std::size_t index = 0; index < Bindings.size(); ++index)
             {
                 const auto &binding = Bindings[index];
                 auto &write = pending[index];
                 write.revision = allocation;
-                write.buffer = AllocateBuffer(device.device, binding.usage, binding.bytes, binding.stride);
+                write.buffer = AllocateBuffer(device.device, binding.usage, binding.bytes, binding.stride, binding.name);
                 write.source = GraphUploadSource::ForwardView;
+                write.view = device.preparingView;
                 // 反射范围包括整个固定数组. 零有效行也需要定义绑定块的全部字节.
                 assert(sources[index].size() <= binding.bytes);
                 write.payload.resize(binding.bytes);
@@ -97,8 +104,7 @@ namespace Physara::Renderer::Detail
         catch (...)
         {
             // 末尾四次移入已有容量且不会抛异常. 进入此处时临时资源已析构, 只需撤回本组预留的额度.
-            batch.bytes -= bytes;
-            batch.writes -= Bindings.size();
+            batch.ReleaseWrites(UploadBytes, Bindings.size());
             throw;
         }
     }

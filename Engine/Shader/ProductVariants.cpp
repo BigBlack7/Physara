@@ -10,7 +10,7 @@
 
 namespace Physara::Shader
 {
-    // 角色值也是包数组下标. 三种受光配方各有带数组和不带数组的片元入口, 共享颜色实现.
+    // 角色值也是包数组下标. Direct, DFG 和 IBL 按候选来源及是否读取阴影数组选择片元入口.
     // 三种诊断共用数组查询, 以入口决定配色. Hard/PCF 和级联数量均随本帧数据传入.
     static constexpr std::array<ProductProgram, ProductShaderCount> Programs{{
         {{ProductShader::StaticForward}, "StaticForward", "StaticForward",
@@ -45,6 +45,21 @@ namespace Physara::Shader
          "Passes/Forward/StaticForwardPhysicalShadows.json", "Passes/Forward/Static.vert", "Passes/Forward/ShadowColor.frag"},
         {{ProductShader::StaticForwardIblShadows, 2}, "StaticForwardIblShadows", "StaticForward",
          "Passes/Forward/StaticForwardIblShadows.json", "Passes/Forward/Static.vert", "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardPlus}, "StaticForwardPlus", "StaticForward",
+         "Passes/Forward/StaticForwardPlus.json", "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusPhysical, 1}, "StaticForwardPlusPhysical", "StaticForward",
+         "Passes/Forward/StaticForwardPlusPhysical.json", "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusIbl, 2}, "StaticForwardPlusIbl", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIbl.json", "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusShadows}, "StaticForwardPlusShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusPhysicalShadows, 1}, "StaticForwardPlusPhysicalShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusPhysicalShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusIblShadows, 2}, "StaticForwardPlusIblShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIblShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

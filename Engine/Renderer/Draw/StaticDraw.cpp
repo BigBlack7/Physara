@@ -521,7 +521,7 @@ namespace Physara::Renderer::Detail
             frame.view->accepted = false;
             frame.viewValues = value;
             frame.uploads.Add(frame.view, frame.view->buffer, std::as_bytes(std::span(&value, 1)),
-                              GraphUploadSource::ForwardView);
+                              GraphUploadSource::ForwardView, device.preparingView);
         }
     }
 
@@ -766,7 +766,7 @@ namespace Physara::Renderer::Detail
         if (!storage->accepted || !std::ranges::equal(values, storage->contents))
         {
             storage->accepted = false;
-            frame.uploads.Add(storage, storage->buffer, values, source);
+            frame.uploads.Add(storage, storage->buffer, values, source, device.preparingView);
             storage->contents.assign(values.begin(), values.end());
         }
     }
@@ -892,7 +892,7 @@ namespace Physara::Renderer::Detail
         {
             work.view->accepted = false;
             work.uploads.Add(work.view, work.view->buffer, std::as_bytes(std::span(&value, 1)),
-                             GraphUploadSource::ForwardView);
+                            GraphUploadSource::ForwardView, device.preparingView);
             work.viewValues = value;
         }
     }
@@ -935,7 +935,7 @@ namespace Physara::Renderer::Detail
         {
             shadow.constants->accepted = false;
             frame.uploads.Add(shadow.constants, shadow.constants->buffer, std::as_bytes(std::span(&value, 1)),
-                              GraphUploadSource::ForwardView);
+                              GraphUploadSource::ForwardView, device.preparingView);
             shadow.values = value;
         }
     }
@@ -1171,8 +1171,7 @@ namespace Physara::Renderer::Detail
         }
         const bool litDraws = std::ranges::any_of(frame.materialRows,
             [](const auto &row) { return row->values.unlit == 0; });
-        const bool usesLighting = !shadowLight && litDraws &&
-            (mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting);
+        const bool usesLighting = !shadowLight && litDraws && IsLitPreview(mode);
         if (shadowLight)
         {
             if (const auto *local = std::get_if<LocalShadowSelection>(&view.shadowDiagnostic))
@@ -1205,6 +1204,17 @@ namespace Physara::Renderer::Detail
         else
         {
             frame.shadow.reset();
+        }
+        if (usesLighting && view.opaquePath == OpaquePath::ForwardPlus)
+        {
+            // 实际可绘材质决定是否需要列表. 到这里阴影和环境角色均已选好, 只替换局部灯候选的来源.
+            if (!view.froxels)
+            {
+                Core::BoundedText issue("Cannot prepare Forward+ Froxel grid: ");
+                issue.Append(FroxelStatusName(view.froxelStatus));
+                throw ForwardFailure{ViewSettingReason::ScenePreparationFailed, issue};
+            }
+            frame.environment.program = WithFroxels(frame.environment.program);
         }
         if (!frame.draws.empty())
         {
@@ -1311,6 +1321,12 @@ namespace Physara::Renderer::Detail
                 }
             }
         }
-        frame.lightLayout = device.lightLayouts[std::size_t(frame.environment.program)];
+        const auto program = frame.environment.program;
+        frame.lightLayout = device.lightLayouts[std::size_t(FullListProgram(program))];
+        if (UsesFroxels(program))
+        {
+            assert(device.froxelViewLayout);
+            frame.froxelViewLayout = device.froxelViewLayout;
+        }
     }
 }

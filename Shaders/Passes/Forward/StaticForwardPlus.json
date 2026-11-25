@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "StaticForwardPlus",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Static.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/FroxelColor.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

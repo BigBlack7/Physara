@@ -22,13 +22,24 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
     int distanceExponent = 0;
     if (!directional)
     {
-        LightingPosition lightPosition = LightingPosition(light.positionHigh, light.positionLow);
-        vec3 delta = LightingDelta(lightPosition, surface, 1.0);
+        // 高位携带灯位符号和指数. 剩余 29 位按 24 位低位和 5 位余量还原, 与高位不重叠.
+        const int headDigits = 24;
+        const int sourceDigits = 53;
+        const int residualDigits = sourceDigits - 2 * headDigits;
+        const uint residualMask = (1u << residualDigits) - 1u;
+        ivec3 exponent;
+        frexp(light.positionHigh, exponent);
+        vec3 positionSign = sign(light.positionHigh);
+        vec3 low = ldexp(positionSign * vec3(light.positionTail >> residualDigits), exponent - 2 * headDigits);
+        vec3 residual = ldexp(positionSign * vec3(light.positionTail & residualMask), exponent - sourceDigits);
+        // 三项分别进入与表面的相对作差. 若在世界坐标中先把尾数加回高位, FP32 舍入会丢失这部分位移.
+        LightingPosition lightPosition = LightingPosition(light.positionHigh, low);
+        vec3 delta = CompensatedLightingDelta(lightPosition, residual, surface, 1.0);
         int scaleShift = 0;
         if (any(isinf(delta)) || any(isnan(delta)))
         {
-            // 三项各缩小到四分之一后重新相减, 再判断有限范围. 指数补回 2 以恢复米制距离.
-            delta = LightingDelta(lightPosition, surface, 0.25);
+            // 各位置项缩小到四分之一后重新相减, 再判断有限范围. 指数补回 2 以恢复米制距离.
+            delta = CompensatedLightingDelta(lightPosition, residual, surface, 0.25);
             scaleShift = 2;
         }
         float scale = max(max(abs(delta.x), abs(delta.y)), abs(delta.z));

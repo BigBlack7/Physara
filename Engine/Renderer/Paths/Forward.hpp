@@ -40,6 +40,7 @@ namespace Physara::Renderer
         std::filesystem::path colorShadows;
         std::filesystem::path physicalShadows;
         std::filesystem::path iblShadows;
+        std::array<std::filesystem::path, 6> froxelColors; ///< Direct, DFG, IBL, 再按同序保存带阴影角色.
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
@@ -90,6 +91,7 @@ namespace Physara::Renderer
         ViewImageLayout layout;
         std::uint32_t directionalCascades{};
         std::optional<LocalShadowSelection> localShadow;
+        OpaquePath opaquePath = OpaquePath::Forward;
     };
 
     /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
@@ -197,6 +199,7 @@ namespace Physara::Renderer
 
         /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
         /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
+        /// 封存前按槽撤回未选路的私有缓冲和显示预留. 选中路从本图的上传结果取得 Froxel 读版本.
         /// @note 调用方用 UI 采样或显式导出建立颜色消费者. 本路新生产的 shadowDepth 若要跨帧复用,
         /// 调用方为其声明完整层范围的 ShaderRead 出口, 在本路颜色获接受后确认. 只读导入沿用原回执.
         /// 调用方也可按实际范围为 shadowDepth 独立声明读回.
@@ -253,17 +256,18 @@ namespace Physara::Renderer
         /// @brief 在同一已选代中连续规划并完成一路 View. 空可见集允许背景输出.
         /// 产品多 View 帧分别调用 PlanView 和 FinishView, 在两者之间推进一次原生预算.
         /// @pre frame 已由安全槽 Reset, index 是本轮尚未准备的工作集位置. 各路在同一候选内连续准备.
-        /// @note 局部失败清理该路的 Draw, 已完整登记的生产仍由共同批次保有, 图将核对活性.
+        /// @note 局部失败清理该路的 Draw 和已标记的私有写入. 批次仍有其它候选时保留共享资源的生产记录.
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
-            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
+            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0, const GraphBufferSupport &buffers = {});
         /// @brief 准备一路的常量, 批次及驻留资源, 汇入原生键供本帧统一选代.
         /// @pre frame 已由安全槽 Reset, index 是本帧尚未规划的位置. 局部失败仍允许规划其它路.
         [[nodiscard]] std::optional<ForwardFailure> PlanView(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
-        /// @brief 绑定选定代的句柄, 并在匹配深度组因程序换代失效时补办该路的 caster 准备.
+        /// @brief 绑定选定代, 补办失效的 caster 准备, 仅为实际 Froxel 颜色角色向帧批次登记拥有型载荷.
         /// @pre view 和 index 与成功的 PlanView 相同, 第一条成功绑定后本帧无 Shader 切换.
+        /// @param buffers 同一设备的场景图缓冲区能力. 默认值只允许普通 Forward 与无 Froxel 消费的预览.
         [[nodiscard]] std::optional<ForwardFailure> FinishView(ForwardFrame &frame, const PreparedView &view,
-                                                               std::size_t index = 0);
+            std::size_t index = 0, const GraphBufferSupport &buffers = {});
         /// @brief 在设备 owner 线程读取目录条目数, 物理存储占用和材质复用计数. 首次准备前各项为零.
         [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
         /// @brief 初始化会话的原生设备身份和额度, 在首帧准备前调用.
@@ -273,6 +277,10 @@ namespace Physara::Renderer
         /// @note 首次设备初始化前持有最新回执. 初始化失败后由后续 View 规划或新回执重新触发装配.
         void AdvanceShaderPreparation(std::uint64_t request = 0,
             std::optional<Shader::ReloadResult> result = {}) noexcept;
+        /// @brief 用本轮剩余额度补备当前代, 供归还上传额度后重试的 View 使用.
+        /// @pre 本帧已调用 AdvanceShaderPreparation 并登记重试所需的键. 已开始的原生创建继续计入同一额度.
+        /// 源码候选的准入和发布仍在帧边界处理.
+        void ContinueShaderPreparation() noexcept;
         /// @brief 开始汇总本帧需求和显示资源结果. 槽忙时继续沿用最近一次规划的事实.
         void BeginShaderRequests() noexcept;
         /// @brief 本帧须已登记原生键, 候选覆盖全部键, 各路显示输入已通过规划, 且有空间记录旧表.

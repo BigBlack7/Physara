@@ -187,6 +187,20 @@ namespace Physara::Renderer
         }
     }
 
+    bool View::RequestOpaquePath(OpaquePath path) noexcept
+    {
+        if (path != OpaquePath::Forward && path != OpaquePath::ForwardPlus)
+        {
+            return false;
+        }
+        if (m_OpaquePath != path)
+        {
+            m_OpaquePath = path;
+            m_Reason = ViewSettingReason::SubmissionPending;
+        }
+        return true;
+    }
+
     std::optional<Core::BoundedText> View::RequestShadows(ViewId view, ShadowSettings settings) noexcept
     {
         if (view != m_Id)
@@ -549,14 +563,14 @@ namespace Physara::Renderer
                 shadow->retained ? 0u : shadow->count, shadow->retained ? shadow->count : 0u,
                 shadow->drawBatches, shadow->LogicalBytes(), diagnostic};
         }
-        // 将曝光, 显示设置及程序表编号一起留在颜色候选. Publish 收到匹配图的回执后才更新场景历史.
+        // 将本轮策略, 曝光, 显示设置和程序代一起留在颜色候选. Publish 核对当前请求与提交回执后才更新历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
                           std::move(degradation), prepared.documentRevision, std::move(environment),
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
                           prepared.layouts.display.outputExtent, shaderGeneration, cascades,
                           prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
-                          0, shadowWork}};
+                          0, shadowWork, prepared.opaquePath}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -643,6 +657,7 @@ namespace Physara::Renderer
         if (outputs.m_Retained || !color || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
             (outputs.m_Output->scene && (outputs.m_Output->scene->mode != m_Preview ||
+                                         outputs.m_Output->scene->opaquePath != m_OpaquePath ||
                                          outputs.m_Output->scene->shadowRequestRevision != m_ShadowRequestRevision ||
                                          outputs.m_Output->scene->documentRevision != m_DocumentRevision)))
         {

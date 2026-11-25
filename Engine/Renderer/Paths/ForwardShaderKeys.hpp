@@ -7,6 +7,7 @@
 #include <bitset>
 #include <filesystem>
 #include <span>
+#include <variant>
 
 #include <Shader/Reload.hpp>
 #include <Shader/RhiProgram.hpp>
@@ -17,7 +18,9 @@ namespace Physara::Renderer::Detail
     // 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
     inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
-    inline constexpr std::size_t ForwardColorPrograms = 9;
+    // 前九项各有 set 3 配方. 后六项使用 Froxel set 0, 同一受光组合复用前面的 set 3.
+    inline constexpr std::size_t ForwardPerPassLayouts = 9;
+    inline constexpr std::size_t ForwardColorPrograms = ForwardPerPassLayouts + 6;
     inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineSlots * ForwardColorPrograms + 1 + 8;
 
     /// @brief role 选择程序, variant 选择该程序的固定状态. 天空用槽零, 显示用线性或 sRGB 附件槽.
@@ -33,13 +36,26 @@ namespace Physara::Renderer::Detail
     public:
         void Add(ShaderPipelineRequest key) noexcept;
         [[nodiscard]] bool Contains(ShaderPipelineRequest key) const noexcept;
+        /// @brief 该角色还有任一固定状态键被请求时, 准备器可继续保留这份包的拒绝原因.
+        [[nodiscard]] bool ContainsRole(Shader::ProductShader role) const noexcept;
         [[nodiscard]] std::size_t Count() const noexcept;
     private:
         std::array<std::bitset<GeometryPipelineSlots>, Shader::ProductShaderCount> m_Keys;
     };
 
+    /// @brief 保有读包, 接口校验或设备创建的首因. 失败处同时决定它对其它准备工作的影响.
+    struct ProductProgramFailure
+    {
+        Shader::Failure cause;
+        bool rejectsRole; ///< 为真时活动代跳过同包的所有固定状态键, 继续准备其它角色. 为假时结束本次推进.
+    };
+    using ProductProgramResult = std::variant<Shader::RhiProgram, ProductProgramFailure>;
+
     /// @brief 按已知产品角色消费打包或后台已验证的包, 两条路径使用同一 ABI 和阶段检查.
-    [[nodiscard]] Shader::Result<Shader::RhiProgram> LoadProductProgram(RHI::Device &device,
+    [[nodiscard]] ProductProgramResult LoadProductProgram(RHI::Device &device,
         Shader::ProductShader role, const std::filesystem::path &path, const Shader::ProductPackages &packages,
         std::string_view abi, std::span<const Shader::ExpectedActiveResources> expected = {});
+
+    /// @brief 保留产品角色与加载首因. 包级准入拒绝可由活动代跳过整个角色, 设备错误结束本次推进.
+    [[noreturn]] void RejectProductProgram(std::string_view roleName, const ProductProgramFailure &failure);
 }

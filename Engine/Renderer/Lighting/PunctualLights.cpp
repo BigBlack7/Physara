@@ -5,6 +5,7 @@
 /// 非空表在安全帧槽内更新, 空表由设备共享. 上传字节交给图, 接受状态由提交方确认.
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <charconv>
 #include <cmath>
@@ -56,6 +57,46 @@ namespace Physara::Renderer::Detail
         return low;
     }
 
+    /// @brief 逐轴保留双精度灯位的 53 位有效数. FP32 高位携带符号和指数, 同轴的 uint 保存尾部 29 位.
+    /// @return 高位及拆出的两项尾数均可作为正规 FP32 或零交付时为 true. 失败时调用方放弃整行.
+    static bool EncodeLightPosition(StaticAbi::ForwardLight &row, std::span<const double, 3> position) noexcept
+    {
+        static_assert(std::numeric_limits<double>::is_iec559 && std::numeric_limits<double>::digits == 53);
+        constexpr int HeadDigits = std::numeric_limits<float>::digits;
+        constexpr int SourceDigits = std::numeric_limits<double>::digits;
+        constexpr int TailDigits = SourceDigits - HeadDigits;
+        constexpr int ResidualDigits = TailDigits - HeadDigits;
+        constexpr auto tailMask = (std::uint64_t{1} << TailDigits) - 1;
+        constexpr auto residualMask = (std::uint32_t{1} << ResidualDigits) - 1;
+        constexpr double max = std::numeric_limits<float>::max();
+        for (std::size_t axis = 0; axis < position.size(); ++axis)
+        {
+            const double value = position[axis];
+            if (!(value >= -max && value <= max) || (value != 0 && std::abs(value) < MinimumNormal))
+            {
+                return false;
+            }
+            // 截断有效数后再转换, 高位的符号和指数也用于还原同符号的低位.
+            const auto bits = std::bit_cast<std::uint64_t>(value);
+            const auto high = static_cast<float>(std::bit_cast<double>(bits & ~tailMask));
+            const auto tail = static_cast<std::uint32_t>(bits & tailMask);
+            int exponent = 0;
+            std::frexp(high, &exponent);
+            const auto supported = [exponent](std::uint32_t digits, int offset) noexcept {
+                return digits == 0 || std::ldexp(static_cast<double>(digits), exponent - offset) >= MinimumNormal;
+            };
+            // Shader 可清零非正规数. 写入前按 GPU 拆分检查两个非零余量的实际量级.
+            if (!supported(tail >> ResidualDigits, 2 * HeadDigits) ||
+                !supported(tail & residualMask, SourceDigits))
+            {
+                return false;
+            }
+            row.positionHigh[axis] = high;
+            row.positionTail[axis] = tail;
+        }
+        return true;
+    }
+
     /// @brief 以弦长平方表示余弦过渡, 并检查 FP32 方向求值有足够的过渡分辨率.
     static bool EncodeSpotCone(StaticAbi::ForwardLight &row, const Scene::Light &light) noexcept
     {
@@ -84,13 +125,9 @@ namespace Physara::Renderer::Detail
         {
             return "intensity";
         }
-        if (light.type != LightKind::Directional)
+        if (light.type != LightKind::Directional && !EncodeLightPosition(row, record.position))
         {
-            if (!StoreGpuVector(row.positionHigh, record.position))
-            {
-                return "position";
-            }
-            row.positionLow = GpuPositionLow(record.position, row.positionHigh);
+            return "position encoding";
         }
         if (light.type != LightKind::Point && !StoreGpuVector(row.direction, record.direction))
         {
@@ -275,7 +312,8 @@ namespace Physara::Renderer::Detail
         if (!table->accepted)
         {
             // 表的 CPU 字节随槽保留. 上次写入若被裁剪或只有失败前缀, 此次仍需提供完整生产者.
-            frame.uploads.Add(table, table->buffer, std::as_bytes(std::span(table->packed)));
+            frame.uploads.Add(table, table->buffer, std::as_bytes(std::span(table->packed)),
+                              GraphUploadSource::ForwardStatic, device.preparingView);
         }
         frame.activeLights = table;
         device.Use(*frame.activeLights);

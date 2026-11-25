@@ -156,6 +156,27 @@ namespace Physara::Renderer::Detail
         grid.tileExtent = {request.tileExtent.width, request.tileExtent.height};
         grid.sliceCount = request.sliceCount;
         grid.orthographic = camera.orthographic ? 1u : 0u;
+        // 只为片元查询保存相机相对变换. 透视和正交共用稳定投影的两个轴向系数.
+        // 投影尺度或相机高位超出这里的编码范围时, 保持零尺度以触发完整灯退路.
+        // cameraLow 保存眼点减去高位后的 FP32 近似. CPU 分箱仍使用快照中的双精度眼点.
+        constexpr auto FloatLimit = std::numeric_limits<float>::max();
+        constexpr auto FloatMin = std::numeric_limits<float>::min();
+        const std::array origin{camera.worldFromView[12], camera.worldFromView[13], camera.worldFromView[14]};
+        const auto scaleX = camera.stableClipFromView[0];
+        const auto scaleY = camera.stableClipFromView[5];
+        if (scaleX >= FloatMin && scaleX <= FloatLimit && scaleY >= FloatMin && scaleY <= FloatLimit &&
+            StoreGpuVector(grid.cameraHigh, origin))
+        {
+            grid.cameraLow = GpuPositionLow(origin, grid.cameraHigh);
+            for (std::size_t column = 0; column < grid.viewBasis.size(); ++column)
+            {
+                const auto base = column * 4;
+                grid.viewBasis[column].value = {static_cast<float>(camera.viewFromWorld[base]),
+                    static_cast<float>(camera.viewFromWorld[base + 1]),
+                    static_cast<float>(camera.viewFromWorld[base + 2])};
+            }
+            grid.projectionScale = {static_cast<float>(scaleX), static_cast<float>(scaleY)};
+        }
 
         // Shader 先把像素限制在矩形内再转回整数 tile. 画布端点需能在 FP32 中精确表示.
         constexpr auto ExactPixels = 1u << std::numeric_limits<float>::digits;
@@ -305,7 +326,7 @@ namespace Physara::Renderer::Detail
     static LocalVolume MakeVolume(const LightRecord &record, std::uint32_t lightRow,
                                    const std::array<glm::dvec3, 3> &axes, const glm::dvec3 &origin,
                                    const std::array<TileAxis, 2> &tiles, std::span<const double> depths,
-                                   bool orthographic) noexcept
+                                   double cameraSlack, bool orthographic) noexcept
     {
         LocalVolume light{.radius = *record.light.range * (1 + FloatSlack), .lightRow = lightRow};
         const auto position = glm::make_vec3(record.position.data());
@@ -318,16 +339,9 @@ namespace Physara::Renderer::Detail
             transformSlack += Rounding * std::abs(terms.x) + Rounding * std::abs(terms.y) +
                 Rounding * std::abs(terms.z);
         }
-        light.centerSlack = transformSlack + FloatSlack * std::hypot(light.center.x, light.center.y, light.center.z);
-        std::array<float, 3> positionHigh;
-        if (StoreGpuVector(positionHigh, record.position))
-        {
-            const auto positionLow = GpuPositionLow(record.position, positionHigh);
-            for (std::size_t i = 0; i < positionHigh.size(); ++i)
-            {
-                light.centerSlack += std::abs((record.position[i] - positionHigh[i]) - positionLow[i]);
-            }
-        }
+        light.centerSlack = cameraSlack + transformSlack +
+                            FloatSlack * std::hypot(light.center.x, light.center.y, light.center.z);
+        // 可着色的局部灯表保存完整源位置, 因此灯位与 CPU 影响体使用同一中心.
         if (!std::isfinite(light.centerSlack))
         {
             // 极端相对变换无法证明任何分离. 保持候选范围, 避免非有限值进入区间查找.
@@ -421,6 +435,18 @@ namespace Physara::Renderer::Detail
         const auto basis = glm::make_mat4(camera.worldFromView.data());
         const std::array axes{glm::dvec3(basis[0]), -glm::dvec3(basis[1]), -glm::dvec3(basis[2])};
         const glm::dvec3 origin(basis[3]);
+        double cameraSlack = 0;
+        if (grid.projectionScale[0] != 0)
+        {
+            // 这里计入眼点上传时丢失的米数. 片元随后还要用这个眼点与插值后的表面作差.
+            // 各世界分量的绝对余差之和界定旋转后的距离, 同时放宽球跨度和聚光半空间判定.
+            for (glm::length_t axis = 0; axis < 3; ++axis)
+            {
+                const auto index = static_cast<std::size_t>(axis);
+                cameraSlack += std::abs((origin[axis] - grid.cameraHigh[index]) - grid.cameraLow[index]);
+            }
+            cameraSlack *= 1 + FloatSlack;
+        }
         // 遍历可见灯时每盏先取正式行号, 再按 range 分流. 全局灯也占有一行.
         LightRowCursor cursor{.local = grid.directionalCount};
         std::vector<LocalVolume> finiteLights;
@@ -436,7 +462,7 @@ namespace Physara::Renderer::Detail
             if (record.light.range)
             {
                 const auto &light = finiteLights.emplace_back(MakeVolume(record, row, axes, origin, tiles, depths,
-                                                                         camera.orthographic));
+                                                                          cameraSlack, camera.orthographic));
                 VisitCells(light, tiles, depths, [&](std::size_t cell)
                 {
                     ++result.headers[cell].count;

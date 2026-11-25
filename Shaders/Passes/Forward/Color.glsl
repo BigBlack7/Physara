@@ -2,7 +2,11 @@
 // 各模式共享基色与 MASK 覆盖. 存活片元写 alpha=1, 供后继天空混合识别几何覆盖.
 #include <Interface/Fragment.glsl>
 #include <Source/Material/StaticPreview.glsl>
+#ifdef PHYSARA_FORWARD_FROXELS
+#include <Source/Lighting/FroxelLighting.glsl>
+#else
 #include <Source/Lighting/Punctual.glsl>
+#endif
 #ifdef PHYSARA_PHYSICAL_LIGHTING
 #include <Source/Lighting/Environment.glsl>
 #endif
@@ -42,7 +46,13 @@ void main()
         CoreDfgTerms terms = PrepareCoreDfg(pixel, geometry.shadingNormal, viewDirection);
         compensation = terms.specularCompensation;
 #endif
+#ifdef PHYSARA_FORWARD_FROXELS
+        // 候选依据实际参与逐灯求值的表面位置. 主光栅的覆盖和深度继续沿用共享几何入口.
+        vec3 result = EvaluateFroxelLighting(pixel, geometry, viewDirection, surface, emission, compensation,
+                                             QuerySurfaceFroxelCell(surface));
+#else
         vec3 result = EvaluateLighting(pixel, geometry, viewDirection, surface, emission, compensation);
+#endif
 #if PHYSARA_PHYSICAL_LIGHTING == 2
         result += EvaluateIbl(pixel, geometry.shadingNormal, viewDirection, inputs.occlusion, terms);
 #endif

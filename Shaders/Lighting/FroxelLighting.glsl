@@ -4,13 +4,66 @@
 #include <Source/Lighting/Froxel.glsl>
 #include <Source/Lighting/Punctual.glsl>
 
-// renderPixel 是渲染画布左上像素坐标, viewDepth 是米制正向视深. 四个 Froxel 块和灯表属于同一 View.
+// XY 已取右、下两个视空间轴, 投到相对矩形的稳定像素. w 在正交时为 1, 透视时为正视深.
+vec2 FroxelStablePixel(vec2 xy, vec2 w)
+{
+    vec2 halfExtent = 0.5 * vec2(froxelView.renderRect.zw);
+    return fma((xy / w) * froxelView.projectionScale, halfExtent, halfExtent);
+}
+
+// 与逐灯求值共用表面的世界基点和插值余量. 先相对眼点求差, 再在稳定投影下定位格子.
+// 光栅的 gl_Position 可以因 FP32 世界变换落入另一格, 查询不能用它替换参与照明的位置.
+uint QuerySurfaceFroxelCell(LightingSurface surface)
+{
+    LightingPosition camera = LightingPosition(froxelView.cameraHigh, froxelView.cameraLow);
+    vec3 roundoff;
+    vec3 position = froxelView.viewBasis * -LightingDelta(camera, surface, 1.0, roundoff);
+    float depth = -position.z;
+    bool orthographic = froxelView.orthographic != 0u;
+    float w = orthographic ? 1.0 : depth;
+    if (!(w > 0.0) || !all(greaterThan(froxelView.projectionScale, vec2(0.0))) ||
+        any(isinf(position)) || any(isnan(position)))
+    {
+        return FroxelInvalidCell;
+    }
+    vec2 xy = vec2(position.x, -position.y);
+    float lost = dot(roundoff, vec3(1.0));
+    if (lost == 0.0)
+    {
+        return QueryStableFroxelCell(FroxelStablePixel(xy, vec2(w)), depth);
+    }
+    if (!(lost > 0.0) || isinf(lost))
+    {
+        return FroxelInvalidCell;
+    }
+
+    // 世界轴绝对余差之和界定旋转后各轴的误差. 留出求和、旋转和区间端点的 FP32 舍入量.
+    const float slack = 32.0 * 1.1920928955078125e-7;
+    vec3 magnitude = abs(position);
+    float bound = lost * (1.0 + slack) + slack * max(magnitude.x, max(magnitude.y, magnitude.z));
+    float nearDepth = depth - bound;
+    float farDepth = depth + bound;
+    if (!orthographic && !(nearDepth > 0.0))
+    {
+        return FroxelInvalidCell;
+    }
+    vec2 lower = xy - vec2(bound);
+    vec2 upper = xy + vec2(bound);
+    // 深度分母为正, 按坐标符号选取能产生各投影极值的近端或远端.
+    vec2 lowerW = orthographic ? vec2(1.0) : mix(vec2(nearDepth), vec2(farDepth), greaterThan(lower, vec2(0.0)));
+    vec2 upperW = orthographic ? vec2(1.0) : mix(vec2(farDepth), vec2(nearDepth), greaterThan(upper, vec2(0.0)));
+    uint nearCell = QueryStableFroxelCell(FroxelStablePixel(lower, lowerW), nearDepth);
+    uint farCell = QueryStableFroxelCell(FroxelStablePixel(upper, upperW), farDepth);
+    // 两次查询分别取像素和视深的各轴下界与上界. 两端同属一个有效格时, 整个区间都可用该格的候选.
+    return nearCell == farCell ? nearCell : FroxelInvalidCell;
+}
+
+// 四个 Froxel 块和灯表属于同一 View. cell 来自同一表面坐标的查询, 可携带无效格哨兵.
 // 两张局部索引表互斥, 行号同时选择灯记录和阴影引用. 正常空格仍消费全局局部灯.
 // 无有效格和溢出格沿完整灯入口求值, 不读取紧凑索引及全局局部灯数组.
 vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                            vec3 emission, vec3 specularCompensation, vec2 renderPixel, float viewDepth)
+                            vec3 emission, vec3 specularCompensation, uint cell)
 {
-    uint cell = QueryFroxelCell(renderPixel, viewDepth);
     if (cell != FroxelInvalidCell)
     {
         FroxelCellHeader header = froxelHeaders.records[cell];
@@ -48,6 +101,14 @@ vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 vi
         }
     }
     return EvaluateLighting(pixel, geometry, viewDirection, surface, emission, specularCompensation);
+}
+
+// 已有可靠像素和视深的调用方沿原画布查询入口选择候选.
+vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
+                            vec3 emission, vec3 specularCompensation, vec2 renderPixel, float viewDepth)
+{
+    return EvaluateFroxelLighting(pixel, geometry, viewDirection, surface, emission, specularCompensation,
+                                  QueryFroxelCell(renderPixel, viewDepth));
 }
 
 #endif

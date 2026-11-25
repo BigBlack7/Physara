@@ -28,6 +28,12 @@ namespace Physara::Shader
         StaticForwardShadows,
         StaticForwardPhysicalShadows,
         StaticForwardIblShadows,
+        StaticForwardPlus,
+        StaticForwardPlusPhysical,
+        StaticForwardPlusIbl,
+        StaticForwardPlusShadows,
+        StaticForwardPlusPhysicalShadows,
+        StaticForwardPlusIblShadows,
         Count
     };
 

@@ -210,6 +210,15 @@ namespace Physara::Renderer
         PhysicalLighting
     };
 
+    /// @brief 不透明光照的会话策略. 两路共用表面及后继输出合同.
+    enum class OpaquePath : std::uint8_t { Forward, ForwardPlus };
+
+    /// @brief 普通模式中会执行逐灯求值的两种预览.
+    [[nodiscard]] constexpr bool IsLitPreview(PreviewMode mode) noexcept
+    {
+        return mode == PreviewMode::DirectLighting || mode == PreviewMode::PhysicalLighting;
+    }
+
     /// @brief 场景输出实际采用的显示变换.
     enum class DisplayProfile : std::uint8_t
     {
@@ -289,6 +298,7 @@ namespace Physara::Renderer
         std::optional<LocalShadowSelection> localShadow; ///< 局部诊断实际查询的灯与灯型.
         std::uint64_t submission{}; ///< 接受该颜色的正常提交票据.
         std::optional<RenderedShadows> shadows;
+        OpaquePath opaquePath = OpaquePath::Forward; ///< 本颜色代采用的策略, 与请求及准备状态分别保存.
     };
 
     /// @brief 最近一次成功诊断的身份. 普通画面替换颜色后仍可显示这次诊断的记录.
@@ -431,6 +441,11 @@ namespace Physara::Renderer
         /// @pre mode 为已声明的枚举值. 修改只进入待确认状态, 上一接受画面的模式随其颜色代保留.
         void RequestPreview(PreviewMode mode) noexcept;
 
+        /// @brief 为后继帧选择不透明策略. owner 线程调用, 已接受输出及文档请求继续由原所有者持有.
+        /// @return 未声明的策略会被拒绝, 当前请求保持原值.
+        [[nodiscard]] bool RequestOpaquePath(OpaquePath path) noexcept;
+        [[nodiscard]] OpaquePath RequestedOpaquePath() const noexcept { return m_OpaquePath; }
+
         /// @brief 按值读取本 View 的会话请求. 实际准入的质量与层数见当轮 PreparedView::shadowStatistics.
         [[nodiscard]] ShadowSettings RequestedShadows() const noexcept { return m_ShadowSettings; }
         /// @brief 在帧边界接收会话阴影请求. 距离为有限正米数, 边长为支持档位, 级数为 1 到 4.
@@ -533,6 +548,7 @@ namespace Physara::Renderer
         float m_EffectiveScale = MaxRenderScale;
         ViewSettingReason m_Reason = ViewSettingReason::LayoutPending;
         PreviewMode m_Preview = PreviewMode::BaseColor;
+        OpaquePath m_OpaquePath = OpaquePath::Forward;
         ShadowSettings m_ShadowSettings;
         std::uint64_t m_ShadowRequestRevision{};
         ShadowDiagnostic m_ShadowDiagnostic;

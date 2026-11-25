@@ -29,7 +29,7 @@
         { "name": "range", "type": "float32" },
         { "name": "direction", "type": "float3" },
         { "name": "innerChordSquared", "type": "float32" },
-        { "name": "positionLow", "type": "float3" },
+        { "name": "positionTail", "type": "uint3" },
         { "name": "outerChordSquared", "type": "float32" }
       ]
     },
@@ -98,7 +98,11 @@
         { "name": "directionalCount", "type": "uint32" },
         { "name": "indexCount", "type": "uint32" },
         { "name": "globalCount", "type": "uint32" },
-        { "name": "depthEdges", "type": "float32", "array": 33 }
+        { "name": "depthEdges", "type": "float32", "array": 33 },
+        { "name": "cameraHigh", "type": "float3" },
+        { "name": "cameraLow", "type": "float3" },
+        { "name": "viewBasis", "type": "float3x3" },
+        { "name": "projectionScale", "type": "float2" }
       ]
     },
     {

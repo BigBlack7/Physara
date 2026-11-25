@@ -7,6 +7,7 @@
 
 #include "BuildSupport.hpp"
 #include "Package.hpp"
+#include "ShaderSchema.hpp"
 
 namespace Physara::Shader
 {
@@ -38,8 +39,23 @@ namespace Physara::Shader
             }
             if (count != group.names.size())
             {
+                // 额外活动项已在上方返回. 此时从调用方的配方定位首个缺项, 让同名资源的诊断带上所属阶段.
                 Core::BoundedText issue(module->sourcePath);
-                issue.Append(": package is missing active resources required by the role");
+                issue.Append(" [");
+                issue.Append(StageName(group.stage));
+                issue.Append("]: package is missing active resources required by the role");
+                const auto missing = std::ranges::find_if(group.names, [&](const auto name)
+                {
+                    return std::ranges::none_of(module->resources, [&](const auto &resource)
+                    {
+                        return resource.set == group.set && resource.name == name;
+                    });
+                });
+                if (missing != group.names.end())
+                {
+                    issue.Append(": ");
+                    issue.Append(*missing);
+                }
                 return MakeFailure(ErrorCode::InterfaceMismatch, issue.View());
             }
         }

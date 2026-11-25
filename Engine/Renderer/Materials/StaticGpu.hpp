@@ -14,6 +14,7 @@
 
 #include "../Paths/Forward.hpp"
 #include "../Lighting/EnvironmentCache.hpp"
+#include "../Lighting/FroxelGpu.hpp"
 #include "../PostProcess/Display.hpp"
 
 namespace Physara::Renderer::Detail
@@ -253,6 +254,7 @@ namespace Physara::Renderer::Detail
         GraphUploadSource source = GraphUploadSource::ForwardStatic;
         std::uint64_t offset = 0;
         BufferPage *page = nullptr; ///< 非空时由 revision 的区间强引用保活.
+        std::optional<std::size_t> view; ///< 仅 View 独占的目标登记所属工作集位置. 共享存储留空.
     };
 
     /// @brief levels 按 mip 0 起的完整紧密 RGBA8 层级排列, 同一次接受确认整条链.
@@ -287,11 +289,20 @@ namespace Physara::Renderer::Detail
 
         /// @brief 在复制载荷前累计逻辑字节和命令数, 超限抛 ForwardFailure; 不预留设备上传池.
         void ReserveWrites(std::size_t byteCount, std::size_t count);
+        /// @brief 归还尚未封存的预留, 从未录制过这些写入.
+        void ReleaseWrites(std::size_t byteCount, std::size_t count) noexcept;
+        /// @brief 撤回本次 View 使用, 只保留还有准备代引用的写入并据此重算批次额度.
+        /// @pre 批次未封存. retained 的每项是该路仍有效的准备代, 零表示无候选.
+        /// 返回时 bytes/writes 只含保留下来的载荷与冷表页预留. 调用方再补计各路尚未物化的 Froxel 写组,
+        /// 存活的显示常量及共用的一份 LUT.
+        void DiscardView(std::size_t index, std::uint64_t stamp,
+                         const std::array<std::uint64_t, ForwardViewCount> &retained) noexcept;
         /// @brief 材质纹理已接受, 或本批持有定义全部可采样层的载荷.
         [[nodiscard]] bool HasMaterialTexture(const ResidentTexture &texture) const noexcept;
         /// @brief 保有目标及所属代, 复制 source 全部字节. 调用返回后不再借用源区段.
         void Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                 std::span<const std::byte> payload, GraphUploadSource source = GraphUploadSource::ForwardStatic);
+                 std::span<const std::byte> payload, GraphUploadSource source = GraphUploadSource::ForwardStatic,
+                 std::optional<std::size_t> view = std::nullopt);
         /// @brief 复制恰好覆盖 slice 的字节, 保留页内偏移和所属代供构图合并及逐代确认.
         void Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
                  std::span<const std::byte> source);
@@ -304,12 +315,40 @@ namespace Physara::Renderer::Detail
     /// @brief 按实际资源形状选择颜色变体, 与每轮连续创作参数独立.
     enum class LightingProgram : std::uint8_t
     {
-        Legacy, Physical, Ibl, CascadePreview, SpotPreview, PointPreview, LegacyShadows, PhysicalShadows, IblShadows
+        Legacy, Physical, Ibl, CascadePreview, SpotPreview, PointPreview, LegacyShadows, PhysicalShadows, IblShadows,
+        Froxel, FroxelPhysical, FroxelIbl, FroxelShadows, FroxelPhysicalShadows, FroxelIblShadows
     };
 
     [[nodiscard]] constexpr bool IsShadowPreview(LightingProgram program) noexcept
     {
         return program >= LightingProgram::CascadePreview && program <= LightingProgram::PointPreview;
+    }
+
+    [[nodiscard]] constexpr bool UsesFroxels(LightingProgram program) noexcept
+    {
+        return program >= LightingProgram::Froxel;
+    }
+
+    /// @brief 两个候选策略共用 PerPass 的灯、环境与阴影配方, 仅 PerView 布局不同.
+    [[nodiscard]] constexpr LightingProgram FullListProgram(LightingProgram program) noexcept
+    {
+        if (program >= LightingProgram::FroxelShadows)
+        {
+            return static_cast<LightingProgram>(std::size_t(LightingProgram::LegacyShadows) +
+                std::size_t(program) - std::size_t(LightingProgram::FroxelShadows));
+        }
+        return UsesFroxels(program)
+            ? static_cast<LightingProgram>(std::size_t(program) - std::size_t(LightingProgram::Froxel)) : program;
+    }
+
+    /// @brief 根据已解析的普通受光角色取得同资源组合的 Froxel 颜色角色.
+    /// @pre program 属于全灯 Direct, Physical 或 IBL 及其带阴影版本. 诊断角色单独规划.
+    [[nodiscard]] constexpr LightingProgram WithFroxels(LightingProgram program) noexcept
+    {
+        return program >= LightingProgram::LegacyShadows
+            ? static_cast<LightingProgram>(std::size_t(LightingProgram::FroxelShadows) + std::size_t(program) -
+                                           std::size_t(LightingProgram::LegacyShadows))
+            : static_cast<LightingProgram>(std::size_t(LightingProgram::Froxel) + std::size_t(program));
     }
 
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
@@ -321,9 +360,12 @@ namespace Physara::Renderer::Detail
     inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
 
-    /// @brief 阴影诊断及受光变体的片元活动集合, 供热重载候选发布前检查.
-    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> ShadowProgramResources(
+    /// @brief 颜色角色及深度角色的实际 PerPass 或基色覆盖活动合同, 供冷包及热重载共用.
+    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(
         Shader::ProductShader role) noexcept;
+
+    /// @brief 只有六个 Froxel 颜色角色允许访问额外的 PerView 绑定.
+    [[nodiscard]] bool IsFroxelProgram(Shader::ProductShader role) noexcept;
 
     /// @brief 明确区分同为 ShaderRead 的对象和材质页, 两者记录步长由生成接口决定.
     enum class TableLayout : std::uint8_t { Objects, Materials };
@@ -420,18 +462,23 @@ namespace Physara::Renderer::Detail
 
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
+        std::uint64_t preparationStamp{}; ///< 与 Allocation::lastUse 配对, 零表示本槽无准备或已撤回.
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
         RHI::BindingLayoutHandle lightLayout;
+        RHI::BindingLayoutHandle froxelViewLayout; ///< 选定颜色角色的完整 PerView 布局, 深度仍使用普通布局.
+        std::optional<FroxelUpload> froxelUpload; ///< 本路拥有的上传组, 已发工作按安全槽完成保留预算凭据.
+        bool froxelReserved = false; ///< 只占本轮逻辑额度, 收尾就绪时转换成实际写入.
         EnvironmentFrame environment;
         std::optional<ShadowFrame> shadow;
         PostProcess::DisplayFrame display;
+        bool displayReserved = false; ///< PlanDisplay 已为这份输入登记额度, 本轮失败时可撤回.
     };
 
     struct ForwardShaderGeneration;
 
     /// @brief 同槽的两份 Draw 各自保活, 通过 uploads 引用向一个图候选登记所需的写入.
-    /// lutReserved 记录共享 atlas 的 CPU 预算. GPU 是否已获得它的内容由图执行后的确认决定.
+    /// 各路登记各自的显示输入, 其中同一 atlas 只计一次. 驻留内容由图执行后的确认决定.
     struct ForwardFrameStorage
     {
         UploadBatch uploads;
@@ -441,7 +488,6 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<const ForwardShaderGeneration> shaders; ///< 保留本槽已冻结的原生代直至真实完成.
         std::bitset<ForwardViewCount> planned; ///< 本路资源和工作集已准备, 等候 FinishView 绑定选定代.
         bool begun = false;
-        bool lutReserved = false;
         bool hasPreparedView = false;
     };
 
@@ -497,7 +543,7 @@ namespace Physara::Renderer::Detail
     {
         Shader::ProductShader role;
         Core::BoundedText text;
-        std::optional<std::size_t> variant; ///< 原生失败的固定状态槽, 源诊断可不涉及原生键.
+        std::optional<std::size_t> variant; ///< 原生失败的固定状态槽. 包级拒绝覆盖角色, 源诊断可不涉及槽.
     };
 
     /// @brief 缓存映射只拥有可复用代或本次准备候选. 单线程推进 stamp, 前一帧槽保有退役代.
@@ -513,7 +559,8 @@ namespace Physara::Renderer::Detail
         /// @brief 登记本 View 的整条显示链. 返回 true 时, 该链可从 Active 取得全部阶段.
         [[nodiscard]] bool RequestDisplay(const ViewLayouts &layouts, DisplaySettings settings);
         /// @brief 仅在帧前 owner 阶段尝试接纳当前包并推进一次有界的原生工作.
-        void AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result) noexcept;
+        void AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result,
+                            bool continueActive = false) noexcept;
         /// @brief 候选表及本帧显示资源就绪, 且切换后仍有空间记录旧表.
         [[nodiscard]] bool ShaderCandidateReady() const noexcept;
         /// @brief 构图前核对最新源修订, 只在已准备的候选仍具备资格时切换.
@@ -559,10 +606,11 @@ namespace Physara::Renderer::Detail
         bool shaderCacheDirty{};
         bool retryOnReselection{}; ///< 已观察到候选的原生失败键退出计划, 同一键再出现时重试.
         std::optional<ShaderPreparationFailure> sourceFailure, displayFailure;
-        std::vector<ShaderPreparationFailure> activeFailures; ///< 按失败顺序保留仍在需求中的键及首因.
+        std::vector<ShaderPreparationFailure> activeFailures; ///< 保留活动代仍在需求中的失败角色或单键及首因.
         std::optional<ShaderPreparationPhase> lastShaderFailure; ///< 记录本次推进失败的诊断归属.
         PostProcess::DisplayDevice display;
-        std::array<RHI::BindingLayoutHandle, ForwardColorPrograms> lightLayouts; ///< 每种颜色角色的固定配方贯穿设备会话.
+        std::array<RHI::BindingLayoutHandle, ForwardPerPassLayouts> lightLayouts; ///< 两个候选策略共用的固定配方.
+        RHI::BindingLayoutHandle froxelViewLayout; ///< 首次需要 Froxel Pipeline 时准备, 同设备各代共用.
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
         std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.
@@ -610,7 +658,7 @@ namespace Physara::Renderer::Detail
                                                         SurfacePhase phase, LightingProgram kind) noexcept;
     /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
     [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
-                                                   std::uint32_t stride = 0);
+        std::uint32_t stride = 0, const char *name = "Forward buffer");
     /// @brief 创建并记账常量. set 有值时建立固定 View 集合, 否则由图声明实际绑定.
     [[nodiscard]] std::shared_ptr<ConstantRow> CreateConstantRow(ForwardDevice &device, std::size_t bytes,
                                                                   std::optional<std::size_t> set);

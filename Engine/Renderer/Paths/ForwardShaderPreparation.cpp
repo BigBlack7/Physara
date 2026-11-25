@@ -33,6 +33,12 @@ namespace Physara::Renderer::Detail
         return m_Keys[std::size_t(key.role)][key.variant];
     }
 
+    bool ShaderDemand::ContainsRole(ProductShader role) const noexcept
+    {
+        assert(role < ProductShader::Count);
+        return m_Keys[std::size_t(role)].any();
+    }
+
     std::size_t ShaderDemand::Count() const noexcept
     {
         std::size_t count = 0;
@@ -43,7 +49,77 @@ namespace Physara::Renderer::Detail
         return count;
     }
 
-    Shader::Result<Shader::RhiProgram> LoadProductProgram(RHI::Device &device, ProductShader role,
+    /// @brief 在包的 ABI 和反射已验证后筛选各阶段可绑定的资源, 再逐组核对配方列出的必需项.
+    /// 冷包在创建设备程序前调用, 热重载在构造候选程序表前遍历所有角色.
+    static std::optional<Shader::Failure> CheckStaticForwardResources(const Shader::ShaderPackage &package,
+                                                                    ProductShader role) noexcept
+    {
+        const auto groups = GeometryProgramResources(role);
+        const bool perPass = std::ranges::any_of(groups, [](const auto &group) { return group.set == 3; });
+        const bool froxels = IsFroxelProgram(role);
+        for (const auto &module : package.modules)
+        {
+            const bool fragment = module.stage == Shader::Stage::Fragment;
+            const auto unexpected = std::ranges::find_if(module.resources, [&](const auto &resource)
+            {
+                // 生成 ABI 已核对各槽的类型和允许阶段. 此处确认此角色确有对应布局及图绑定.
+                switch (resource.set)
+                {
+                case 0:
+                    return !(froxels && fragment) && (resource.kind != Shader::ResourceKind::ConstantBuffer ||
+                                                       resource.slot != 0 || resource.name != "perView");
+                case 1: return fragment;
+                case 2: return false;
+                case 3: return !fragment || !perPass;
+                default: return true;
+                }
+            });
+            if (unexpected != module.resources.end())
+            {
+                Core::BoundedText issue(module.sourcePath);
+                issue.Append(": active resource has no binding for this Forward role: ");
+                issue.Append(unexpected->name);
+                return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = issue}};
+            }
+        }
+        // 几何位置依赖 View 变换及对象和实例行, 即使冷包从未在当前帧创建原生 Pipeline.
+        static constexpr std::array<std::string_view, 1> View{"perView"};
+        static constexpr std::array<std::string_view, 2> Renderable{"objectRows", "drawInstances"};
+        static constexpr std::array vertex{
+            Shader::ExpectedActiveResources{Shader::Stage::Vertex, 0, View},
+            Shader::ExpectedActiveResources{Shader::Stage::Vertex, 1, Renderable}};
+        if (const auto failure = Shader::CheckActiveResources(package, vertex))
+        {
+            return failure;
+        }
+        // 深度和阴影诊断的现有配方列出了 set 2 覆盖组, 这些角色允许片元省略 b0.
+        // 普通受光的片元依赖 b0, Froxel 角色还需同一 View 的四个网格块.
+        const bool coverageOnly = std::ranges::any_of(groups, [](const auto &group) { return group.set == 2; });
+        if (!coverageOnly)
+        {
+            // 法线 UV 基底由颜色顶点入口从材质行取得, 此处独立于片元的完整材质配方核对.
+            static constexpr std::array<std::string_view, 1> VertexMaterial{"materialRows"};
+            static constexpr std::array<std::string_view, 5> FroxelView{
+                "perView", "froxelView", "froxelHeaders", "froxelIndices", "froxelGlobalLights"};
+            // 完整颜色共用材质诊断及受光入口. 基色的纹理 alpha 与数值因子共同决定 MASK 覆盖.
+            static constexpr std::array<std::string_view, 11> ColorMaterial{
+                "materialRows", "baseColorImage", "baseColorSampler", "metallicRoughnessImage",
+                "metallicRoughnessSampler", "normalImage", "normalSampler", "occlusionImage",
+                "occlusionSampler", "emissiveImage", "emissiveSampler"};
+            const std::array color{
+                Shader::ExpectedActiveResources{Shader::Stage::Vertex, 2, VertexMaterial},
+                Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
+                    froxels ? std::span<const std::string_view>(FroxelView) : std::span<const std::string_view>(View)},
+                Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, ColorMaterial}};
+            if (const auto failure = Shader::CheckActiveResources(package, color))
+            {
+                return failure;
+            }
+        }
+        return Shader::CheckActiveResources(package, groups);
+    }
+
+    ProductProgramResult LoadProductProgram(RHI::Device &device, ProductShader role,
         const std::filesystem::path &path, const Shader::ProductPackages &packages, std::string_view abi,
         std::span<const Shader::ExpectedActiveResources> expected)
     {
@@ -51,16 +127,56 @@ namespace Physara::Renderer::Detail
         assert(program);
         const auto vertex = "Source/" + std::string(program->vertex);
         const auto fragment = "Source/" + std::string(program->fragment);
+        using Shader::ErrorCode;
+        const auto create = [&](const Shader::ShaderPackage &package) -> ProductProgramResult
+        {
+            if (abi == StaticAbi::AbiHash && package.abiHash == abi)
+            {
+                if (const auto failure = CheckStaticForwardResources(package, role))
+                {
+                    return ProductProgramFailure{*failure, true};
+                }
+            }
+            auto created = Shader::CreateRhiProgram(device, package, abi, expected, fragment, vertex);
+            if (const auto *failure = std::get_if<Shader::Failure>(&created))
+            {
+                // 阶段、源入口和接口的核对先于原生创建. 设备或资源失败仍交推进边界处理.
+                const bool rejectsRole = failure->code == ErrorCode::InterfaceMismatch ||
+                                         failure->code == ErrorCode::UnsupportedProfile;
+                return ProductProgramFailure{*failure, rejectsRole};
+            }
+            return std::get<Shader::RhiProgram>(std::move(created));
+        };
         if (const auto &package = packages[std::size_t(role)]; package)
         {
-            return Shader::CreateRhiProgram(device, *package, abi, expected, fragment, vertex);
+            return create(*package);
         }
         const auto loaded = Shader::ReadPackage(path, abi);
         if (const auto *failure = std::get_if<Shader::Failure>(&loaded))
         {
-            return *failure;
+            // 打开、长度和包内容检查针对该角色共用的磁盘输入. 内存不足和系统失败仍结束本次推进.
+            const bool rejectsRole = failure->code != ErrorCode::OutOfMemory && failure->code != ErrorCode::SystemFailure;
+            return ProductProgramFailure{*failure, rejectsRole};
         }
-        return Shader::CreateRhiProgram(device, std::get<Shader::ShaderPackage>(loaded), abi, expected, fragment, vertex);
+        return create(std::get<Shader::ShaderPackage>(loaded));
+    }
+
+    /// @brief CPU 包级准入已拒绝该角色的程序. 更换固定状态槽无法修复同一个包.
+    struct ShaderPackageRejection
+    {
+        Core::BoundedText description;
+    };
+
+    void RejectProductProgram(std::string_view roleName, const ProductProgramFailure &failure)
+    {
+        Core::BoundedText description(roleName);
+        description.Append(": ");
+        description.Append(failure.cause.context.description.View());
+        if (failure.rejectsRole)
+        {
+            throw ShaderPackageRejection{description};
+        }
+        throw ForwardFailure{ViewSettingReason::ScenePipelineUnavailable, description};
     }
 
     // 只查询指定代已有的句柄. 显示槽按目标格式选择, 几何槽按阶段和固定状态选择.
@@ -74,12 +190,12 @@ namespace Physara::Renderer::Detail
         return generation.programs.FindPipeline(key);
     }
 
-    // 失败记录已经按本帧需求裁剪, 以角色和固定状态槽取得这项工作的首因.
+    // 失败记录已经按本帧需求裁剪. 包级拒绝覆盖同角色的所有槽, 其它失败匹配对应原生键.
     static const ShaderPreparationFailure *FindFailure(std::span<const ShaderPreparationFailure> failures,
                                                        ShaderPipelineRequest key) noexcept
     {
         const auto found = std::ranges::find_if(failures, [key](const auto &failure) {
-            return failure.role == key.role && failure.variant == key.variant;
+            return failure.role == key.role && (!failure.variant || failure.variant == key.variant);
         });
         return found == failures.end() ? nullptr : &*found;
     }
@@ -140,7 +256,7 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    // 按目录顺序寻找一项已登记的缺口. Active 可跳过已有失败记录的键, 候选从自己的表重新核对.
+    // 按目录顺序寻找需求中的下一个缺口. 活动代跳过已拒的角色或单键, 候选代按自己的包和表重新核对.
     static std::optional<ShaderPipelineRequest> NextMissing(const ShaderDemand &demand,
         const ForwardShaderGeneration &generation, std::span<const ShaderPreparationFailure> rejected = {}) noexcept
     {
@@ -251,42 +367,12 @@ namespace Physara::Renderer::Detail
         return false;
     }
 
-    /// @brief 核对各阶段在 PerView 中实际使用的资源是否能由现有 Forward 布局提供.
-    /// @pre 包已核对 StaticForward ABI. 当前所有几何角色共用同一份 PerView 常量绑定.
-    /// @return 活动绑定均可提供时返回空. 首项不匹配时返回阶段源路径和资源名, 供准入方报告该角色.
-    static std::optional<Core::BoundedText> CheckCandidatePerViewBindings(const Shader::ShaderPackage &package,
-                                                                          const RHI::BindingLayoutDesc &layout) noexcept
-    {
-        for (const auto &module : package.modules)
-        {
-            const auto unsupported = std::ranges::find_if(module.resources, [&](const auto &resource) {
-                if (resource.set != layout.registerSpace)
-                {
-                    return false;
-                }
-                return resource.kind != Shader::ResourceKind::ConstantBuffer ||
-                       std::ranges::none_of(layout.bindings, [&](const auto &binding) {
-                           return binding.type == RHI::ResourceType::ConstantBuffer && binding.slot == resource.slot;
-                       });
-            });
-            if (unsupported != module.resources.end())
-            {
-                Core::BoundedText issue(module.sourcePath);
-                issue.Append(": active resource has no Forward PerView binding: ");
-                issue.Append(unsupported->name);
-                return issue;
-            }
-        }
-        return std::nullopt;
-    }
-
     // 包级准入遍历全部角色, 包括当前 View 未选中的角色. 固定布局冲突应在替换活动代之前报告.
     // 角色通过 CPU 检查后才复用原生槽. 缺少的 Pipeline 随各 View 的实际需求分批创建.
     static void AdmitCandidate(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
         const auto &result = *device.candidateInput;
         const auto &active = *device.activeShaders;
-        const auto &perView = *active.programs.layouts.front()->GetDesc();
         for (const auto &program : Shader::ProductPrograms())
         {
             const auto role = program.key.role;
@@ -300,16 +386,7 @@ namespace Physara::Renderer::Detail
             }
             if (abi == StaticAbi::AbiHash)
             {
-                if (const auto failure = CheckCandidatePerViewBindings(*package, perView))
-                {
-                    checking = ShaderPipelineRequest{role, 0};
-                    Reject(ViewSettingReason::ScenePipelineUnavailable, failure->View());
-                }
-            }
-            if (const auto expected = ShadowProgramResources(role); !expected.empty())
-            {
-                // 当前 View 未请求阴影时也核对变体绑定, 保证已发布代可在后续帧正确准备.
-                if (const auto failure = Shader::CheckActiveResources(*package, expected))
+                if (const auto failure = CheckStaticForwardResources(*package, role))
                 {
                     checking = ShaderPipelineRequest{role, 0};
                     Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());
@@ -445,31 +522,36 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    void ForwardDevice::AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result) noexcept
+    void ForwardDevice::AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result,
+                                       bool continueActive) noexcept
     {
         lastShaderFailure.reset();
         auto &statistics = shaderStatistics;
-        statistics.started = 0;
+        statistics.started = continueActive ? statistics.started : 0;
         statistics.demand = shaderDemand.Count();
         if (request < statistics.request)
         {
             return;
         }
-        ObserveShaderRequest(*this, request, std::move(result));
-        // 只移除退出计划的错误, 其余键各自保留原因和失败顺序.
-        std::erase_if(activeFailures, [&](const auto &failure) {
-            return !shaderDemand.Contains({failure.role, *failure.variant});
-        });
-        if (candidateInput && sourceFailure && sourceFailure->variant)
+        if (!continueActive)
         {
-            // 先观察到失败键离开计划, 再观察到同一键重新出现, 才用保留的包重建原生表.
-            const bool requested = shaderDemand.Contains({sourceFailure->role, *sourceFailure->variant});
-            if (requested && retryOnReselection)
+            ObserveShaderRequest(*this, request, std::move(result));
+            // 只在新的帧前轮次重算退出计划的错误. 同帧的补备不撤销首轮失败的键或额度.
+            std::erase_if(activeFailures, [&](const auto &failure) {
+                return failure.variant ? !shaderDemand.Contains({failure.role, *failure.variant}) :
+                                         !shaderDemand.ContainsRole(failure.role);
+            });
+            if (candidateInput && sourceFailure && sourceFailure->variant)
             {
-                sourceFailure.reset();
-                sourcePending = true;
+                // 先观察到失败键离开计划, 再观察到同一键重新出现, 才用保留的包重建原生表.
+                const bool requested = shaderDemand.Contains({sourceFailure->role, *sourceFailure->variant});
+                if (requested && retryOnReselection)
+                {
+                    sourceFailure.reset();
+                    sourcePending = true;
+                }
+                retryOnReselection = !requested;
             }
-            retryOnReselection = !requested;
         }
         if (std::erase_if(retiredShaders, [](const auto &entry) { return entry.expired(); }) || shaderCacheDirty)
         {
@@ -504,22 +586,24 @@ namespace Physara::Renderer::Detail
         };
         try
         {
-            if (candidateInput && !candidateShaders && !sourceFailure && retiredShaders.size() <= shaderLimits.frames)
+            if (!continueActive && candidateInput && !candidateShaders && !sourceFailure &&
+                retiredShaders.size() <= shaderLimits.frames)
             {
                 AdmitCandidate(*this, key);
             }
             // 共享键优先接续仍有效的对象, 设备额度只约束需要新增的 Pipeline.
             const auto advance = [&](ForwardShaderGeneration &generation, const Shader::ProductPackages &packages,
-                                     const ForwardShaderGeneration *other,
-                                     std::span<const ShaderPreparationFailure> rejected) {
-                while ((key = NextMissing(shaderDemand, generation, rejected)))
+                                     const ForwardShaderGeneration *other) {
+                const bool active = phase == ShaderPreparationPhase::Active;
+                using Failures = std::span<const ShaderPreparationFailure>;
+                while ((key = NextMissing(shaderDemand, generation, active ? Failures{activeFailures} : Failures{})))
                 {
                     if (ReuseLivePipeline(*this, generation, packages, other, *key))
                     {
                         ++statistics.nativeHits;
                         continue;
                     }
-                    if (statistics.started == statistics.budget || statistics.inCache >= statistics.cacheLimit)
+                    if (statistics.started >= statistics.budget || statistics.inCache >= statistics.cacheLimit)
                     {
                         return;
                     }
@@ -536,6 +620,18 @@ namespace Physara::Renderer::Detail
                             generation.programs.PreparePipeline(*this, *key, packages);
                         }
                     }
+                    catch (const ShaderPackageRejection &error)
+                    {
+                        statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - start).count();
+                        if (!active)
+                        {
+                            throw;
+                        }
+                        // 包准入失败发生在原生创建前. 记录角色首因后, 剩余额度继续服务其它角色.
+                        assert(activeFailures.size() < activeFailures.capacity());
+                        activeFailures.push_back({key->role, error.description, std::nullopt});
+                        continue;
+                    }
                     catch (...)
                     {
                         statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - start).count();
@@ -549,12 +645,16 @@ namespace Physara::Renderer::Detail
 
             // 优先让当前有效代应对新的 View 需求, 余下额度用于源候选.
             phase = ShaderPreparationPhase::Active;
-            advance(*activeShaders, activePackages, candidateShaders.get(), activeFailures);
+            advance(*activeShaders, activePackages, candidateShaders.get());
             phase = ShaderPreparationPhase::Candidate;
-            if (candidateShaders)
+            if (!continueActive && candidateShaders)
             {
-                advance(*candidateShaders, candidateInput->packages, activeShaders.get(), {});
+                advance(*candidateShaders, candidateInput->packages, activeShaders.get());
             }
+        }
+        catch (const ShaderPackageRejection &error)
+        {
+            fail(error.description);
         }
         catch (const ForwardFailure &error)
         {

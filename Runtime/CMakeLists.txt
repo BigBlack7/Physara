@@ -13,7 +13,8 @@ set(forwardResourcePaths "")
 foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
-        StaticForwardIblShadows)
+        StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
+        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

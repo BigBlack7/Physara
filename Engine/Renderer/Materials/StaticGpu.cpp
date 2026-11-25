@@ -182,11 +182,94 @@ namespace Physara::Renderer::Detail
         writes += count;
     }
 
+    void UploadBatch::ReleaseWrites(std::size_t byteCount, std::size_t count) noexcept
+    {
+        assert(!sealed && byteCount <= bytes && count <= writes);
+        bytes -= byteCount;
+        writes -= count;
+    }
+
+    void UploadBatch::DiscardView(std::size_t index, std::uint64_t stamp,
+                                  const std::array<std::uint64_t, ForwardViewCount> &retained) noexcept
+    {
+        assert(!sealed && stamp != 0 && retained[index] == 0);
+        const auto used = [&](Allocation &revision)
+        {
+            if (revision.lastUse[index] == stamp)
+            {
+                // 撤回未封存的使用证明. 后续 View 可以重新准备失去生产者的未接受存储.
+                revision.lastUse[index] = 0;
+            }
+            for (std::size_t view = 0; view < retained.size(); ++view)
+            {
+                if (retained[view] != 0 && revision.lastUse[view] == retained[view])
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // 以已登记的载荷重算额度, 同时归还中途失败时尚未附着到任何写入的预留.
+        bytes = writes = 0;
+        std::erase_if(buffers, [&](const auto &upload)
+        {
+            const bool sharedConsumer = used(*upload.revision);
+            if (upload.view ? retained[*upload.view] == 0 : !sharedConsumer)
+            {
+                return true;
+            }
+            bytes += upload.payload.size();
+            ++writes;
+            return false;
+        });
+        std::erase_if(textures, [&](const auto &upload)
+        {
+            if (!used(*upload.revision))
+            {
+                return true;
+            }
+            bytes += upload.revision->bytes;
+            writes += upload.levels.size();
+            return false;
+        });
+        std::erase_if(environmentTextures, [&](const auto &upload)
+        {
+            if (!used(*upload.revision))
+            {
+                return true;
+            }
+            const auto &desc = upload.revision->texture->GetDesc();
+            bytes += upload.revision->bytes;
+            writes += std::size_t(desc.mipLevels) * desc.arraySize;
+            return false;
+        });
+        std::erase_if(coldTables, [&](const auto &page)
+        {
+            if (std::ranges::find(buffers, page.get(), &BufferUpload::page) == buffers.end())
+            {
+                return true;
+            }
+            bytes += page->buffer->GetDesc().byteSize;
+            ++writes;
+            return false;
+        });
+    }
+
     void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const RHI::BufferHandle &buffer,
-                          std::span<const std::byte> payload, GraphUploadSource source)
+                          std::span<const std::byte> payload, GraphUploadSource source,
+                          std::optional<std::size_t> view)
     {
         ReserveWrites(payload.size(), 1);
-        buffers.push_back({revision, buffer, {payload.begin(), payload.end()}, source});
+        try
+        {
+            buffers.push_back({revision, buffer, {payload.begin(), payload.end()}, source, 0, nullptr, view});
+        }
+        catch (...)
+        {
+            ReleaseWrites(payload.size(), 1);
+            throw;
+        }
     }
 
     void UploadBatch::Add(const std::shared_ptr<Allocation> &revision, const PageSlice &slice,
@@ -218,16 +301,12 @@ namespace Physara::Renderer::Detail
 
     /// @brief 包读取失败保留包角色及首个编译/反射诊断, 不交付半套 Shader.
     static Shader::RhiProgram LoadProgram(RHI::Device &device, Shader::ProductShader role,
-        const std::filesystem::path &file, const Shader::ProductPackages &packages, std::string_view abi,
-        std::span<const Shader::ExpectedActiveResources> expectedActive = {})
+        const std::filesystem::path &file, const Shader::ProductPackages &packages, std::string_view abi)
     {
-        auto program = LoadProductProgram(device, role, file, packages, abi, expectedActive);
-        if (const auto *error = std::get_if<Shader::Failure>(&program))
+        auto program = LoadProductProgram(device, role, file, packages, abi);
+        if (const auto *error = std::get_if<ProductProgramFailure>(&program))
         {
-            Core::BoundedText text(Shader::FindProductProgram(role)->name);
-            text.Append(": ");
-            text.Append(error->context.description.View());
-            throw ForwardFailure{ViewSettingReason::ScenePipelineUnavailable, text};
+            RejectProductProgram(Shader::FindProductProgram(role)->name, *error);
         }
         return std::get<Shader::RhiProgram>(std::move(program));
     }
@@ -240,7 +319,8 @@ namespace Physara::Renderer::Detail
 
     static constexpr std::array<std::string_view, 3> ShadowQueryNames{"shadowView", "shadowImage", "shadowLayers"};
 
-    std::span<const Shader::ExpectedActiveResources> ShadowProgramResources(ProductShader role) noexcept
+    // 诊断片元只读基色覆盖和阴影查询. 带阴影的普通着色还需完整灯表和按灯行寻址的引用.
+    static std::span<const Shader::ExpectedActiveResources> ShadowProgramResources(ProductShader role) noexcept
     {
         static constexpr std::array preview{CoverageResources,
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, ShadowQueryNames}};
@@ -270,7 +350,12 @@ namespace Physara::Renderer::Detail
     static constexpr std::array<ProductShader, ForwardColorPrograms> LightingRoles{
         ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl,
         ProductShader::StaticCascadePreview, ProductShader::StaticSpotShadowPreview, ProductShader::StaticPointShadowPreview,
-        ProductShader::StaticForwardShadows, ProductShader::StaticForwardPhysicalShadows, ProductShader::StaticForwardIblShadows};
+        ProductShader::StaticForwardShadows, ProductShader::StaticForwardPhysicalShadows, ProductShader::StaticForwardIblShadows,
+        ProductShader::StaticForwardPlus, ProductShader::StaticForwardPlusPhysical, ProductShader::StaticForwardPlusIbl,
+        ProductShader::StaticForwardPlusShadows, ProductShader::StaticForwardPlusPhysicalShadows,
+        ProductShader::StaticForwardPlusIblShadows};
+    static_assert(std::size_t(LightingProgram::Froxel) == ForwardPerPassLayouts);
+    static_assert(std::size_t(LightingProgram::FroxelIblShadows) + 1 == LightingRoles.size());
 
     /// @brief 共用 StaticForward ABI 的颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
     static std::span<const Shader::ExpectedActiveResources> LightingResources(LightingProgram kind) noexcept
@@ -335,11 +420,25 @@ namespace Physara::Renderer::Detail
         return static_cast<std::size_t>(found - LightingRoles.begin());
     }
 
+    bool IsFroxelProgram(ProductShader role) noexcept
+    {
+        const auto froxelRoles = std::span(LightingRoles).subspan(ForwardPerPassLayouts);
+        return std::ranges::find(froxelRoles, role) != froxelRoles.end();
+    }
+
+    std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(ProductShader role) noexcept
+    {
+        if (IsDepthRole(role))
+        {
+            return std::span(&CoverageResources, 1);
+        }
+        return LightingResources(FullListProgram(static_cast<LightingProgram>(LightingIndex(role))));
+    }
+
     ForwardPrograms::ForwardPrograms(RHI::Device &device)
     {
         auto sceneLayout = StaticAbi::MakeBindingLayouts();
-        // StaticForward 声明包含 Froxel 资源. 当前 Forward 的 set 0 只绑定 perView (b0),
-        // 颜色与深度 Pipeline 共享这一布局. 布局筛选在创建 RHI 对象之前完成.
+        // 全灯颜色及所有深度角色共用只含 perView (b0) 的布局. Froxel 颜色布局按需求另行准备.
         std::erase_if(sceneLayout.front().bindings, [](const auto &item)
         {
             return item.type != RHI::ResourceType::ConstantBuffer || item.slot != 0;
@@ -363,18 +462,20 @@ namespace Physara::Renderer::Detail
             return;
         }
         const auto &paths = owner.packagePaths;
-        const std::array<const std::filesystem::path *, ForwardColorPrograms> inputs{
+        const std::array<const std::filesystem::path *, ForwardPerPassLayouts> inputs{
             &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview, &paths.spotShadowPreview,
             &paths.pointShadowPreview, &paths.colorShadows, &paths.physicalShadows, &paths.iblShadows};
-        auto program = LoadProgram(owner.device, LightingRoles[index], *inputs[index], packages,
-            StaticAbi::AbiHash, LightingResources(kind));
-        auto &layout = owner.lightLayouts[index];
+        const auto &path = UsesFroxels(kind) ? paths.froxelColors[index - ForwardPerPassLayouts] : *inputs[index];
+        auto program = LoadProgram(owner.device, LightingRoles[index], path, packages, StaticAbi::AbiHash);
+        // Shader 按候选策略区分, set 3 的灯和环境布局按两种策略共用的受光配方缓存.
+        const auto fullList = FullListProgram(kind);
+        auto &layout = owner.lightLayouts[std::size_t(fullList)];
         if (!layout)
         {
             // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
             auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
             auto &desc = layoutsForProgram.back();
-            std::erase_if(desc.bindings, [kind](const auto &item) { return !UsesLightingBinding(kind, item); });
+            std::erase_if(desc.bindings, [fullList](const auto &item) { return !UsesLightingBinding(fullList, item); });
             layout = owner.device.CreateBindingLayout(desc);
             if (!layout)
             {
@@ -567,7 +668,7 @@ namespace Physara::Renderer::Detail
             {
                 // 深度图只为覆盖配方授权基色槽. 同 ABI 的包也须匹配片元实际使用的材质资源.
                 depthShaders = LoadProgram(device, key.role, shadow ? paths.shadowDepth : paths.depth, packages,
-                    StaticAbi::AbiHash, std::span(&CoverageResources, 1));
+                    StaticAbi::AbiHash);
             }
         }
         else
@@ -598,13 +699,30 @@ namespace Physara::Renderer::Detail
         RHI::GraphicsPipelineDesc desc;
         desc.SetVertexShader(shaders.vertex.Get()).SetFragmentShader(shaders.fragment.Get())
             .SetInputLayout(inputLayouts[layout].Get());
-        for (const auto &binding : layouts)
+        const auto lighting = static_cast<LightingProgram>(mode);
+        if (UsesFroxels(lighting))
+        {
+            if (!owner.froxelViewLayout)
+            {
+                owner.froxelViewLayout = device.CreateBindingLayout(StaticAbi::MakeBindingLayouts().front());
+                if (!owner.froxelViewLayout)
+                {
+                    Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot prepare Froxel PerView layout");
+                }
+            }
+            desc.AddBindingLayout(owner.froxelViewLayout.Get());
+        }
+        else
+        {
+            desc.AddBindingLayout(layouts.front().Get());
+        }
+        for (const auto &binding : std::span(layouts).subspan(1))
         {
             desc.AddBindingLayout(binding.Get());
         }
         if (!depthOnly)
         {
-            desc.AddBindingLayout(owner.lightLayouts[mode].Get());
+            desc.AddBindingLayout(owner.lightLayouts[std::size_t(FullListProgram(lighting))].Get());
         }
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
@@ -872,9 +990,10 @@ namespace Physara::Renderer::Detail
         slice.page = std::move(page);
     }
 
-    RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size, std::uint32_t stride)
+    RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size, std::uint32_t stride,
+                                     const char *name)
     {
-        const RHI::BufferDesc desc{.byteSize = size, .structStride = stride, .debugName = "Forward buffer",
+        const RHI::BufferDesc desc{.byteSize = size, .structStride = stride, .debugName = name,
             .isVertexBuffer = usage == GraphUsage::VertexBuffer, .isIndexBuffer = usage == GraphUsage::IndexBuffer,
             .isConstantBuffer = usage == GraphUsage::ConstantBuffer,
             .isDrawIndirectArgs = usage == GraphUsage::IndirectArgument,
