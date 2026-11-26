@@ -1,7 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief 正式 Forward 准备和图声明入口. 设备缓存与完成驱动的帧槽准备分开保有资源.
+/// @brief 规划静态不透明路径, 将同一 View 的表面, 受光结果和显示色交给图消费者.
+/// 设备缓存持有可复用的程序, 安全帧槽持有本次绘制和绑定引用.
 
 #include <array>
 #include <cstdint>
@@ -43,26 +44,23 @@ namespace Physara::Renderer
         std::array<std::filesystem::path, 6> froxelColors; ///< Direct, DFG, IBL, 再按同序保存带阴影角色.
         std::filesystem::path coreGBuffer;
         std::filesystem::path surfaceAux;
+        std::array<std::filesystem::path, 6> deferredColors; ///< 与前向 Froxel 受光角色的次序一致.
     };
-
-    struct CoreGBufferOutput;
-    struct ForwardWorkingSource;
-
-    /// @brief 在本 View 的最终表面完成后声明核心工作色, 返回所写的颜色版本.
-    /// 回调在构图时同步调用. 成功时返回传入工作色的已写版本, 并为后续 Load 定义整张附件的颜色和覆盖 alpha.
-    /// 执行期所需的资源版本和矩形应复制到 Pass 数据中. 声明失败时返回 GraphError, 由本次构图向上传递.
-    using DeferredCorePass = GraphResult<TextureId> (*)(RenderGraph &, const CoreGBufferOutput &,
-                                                       const ForwardWorkingSource &, TextureId);
 
     /// @brief 按实际消费者准备表面. 普通主视口由 ShadeOpaque 同时写颜色和深度.
     struct ViewResourceNeeds
     {
-        bool earlyDepth = false;
+        bool earlyDepth = false; ///< 普通颜色的独立深度预通道.
         bool coreGBuffer = false; ///< 为独立消费者额外交付最终不透明表面.
-        /// 核心工作色回调与辅助几何共用最终 D32. 同时选中阴影诊断时, PlanView 在准备上传前返回 InvalidViewRequest.
-        DeferredCorePass shadeDeferredCore = nullptr;
+        /// Direct 或 Physical Lighting 可请求内部 Deferred 子图. PlanView 拒绝与有效阴影诊断或 alternate 并用.
+        /// 受光批次需要本 View 的 Froxel 列表. 核心颜色采样最终 D32, 辅助颜色在同一 D32 上做只读等深测试.
+        bool deferredLighting = false;
+        /// @brief 仅交付最终 GBuffer 与 D32, 调用方按需读取或导出这些图版本.
+        /// 此请求跳过普通颜色与显示准备. PlanView 拒绝同时请求 DeferredLighting 或备选颜色路径.
+        bool surfaceOnly = false;
 
-        [[nodiscard]] bool NeedsCoreSurface() const noexcept { return coreGBuffer || shadeDeferredCore; }
+        [[nodiscard]] bool NeedsCoreSurface() const noexcept { return coreGBuffer || deferredLighting || surfaceOnly; }
+        [[nodiscard]] bool NeedsEarlyDepth() const noexcept { return earlyDepth && !deferredLighting && !surfaceOnly; }
     };
 
     /// @brief 未交付候选时的 View 状态及具体说明. Pending 可重试, 硬限制须改变输入后再准备.
@@ -124,6 +122,7 @@ namespace Physara::Renderer
 
     /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
     /// 显示色已执行视口映射. 受光或诊断可另带实际消费的常规深度数组, 所有 TextureId 仅在本图有效.
+    /// 仅表面请求交付 coreGBuffer 及其同一 depth. workingColor 和 displayColor ID 为空.
     struct ForwardOutput
     {
         std::optional<CoreGBufferOutput> coreGBuffer;
@@ -258,7 +257,8 @@ namespace Physara::Renderer
         /// @brief 借出该路实际消费的深度集合, 无消费时返回空指针. retained 有值表示本次使用已接受的数组.
         /// @pre 本路 FinishView 已成功. 返回值只借用到槽 Reset 或再次准备.
         [[nodiscard]] const ShadowDepthSet *PreparedShadowDepth(std::size_t index = 0) const noexcept;
-        /// @brief 从已绑定的实际阶段和固定附件生成 HDR/深度生产身份, 随 View 的接受结果保存.
+        /// @brief 从已绑定的实际阶段和固定附件生成不透明生产身份, 随 View 的颜色接受结果保存.
+        /// 仅表面请求记录其深度格式和参与写入的表面阶段.
         /// @pre 本槽的 index 已成功完成绑定. 返回值拥有程序摘要, 可随输出保存到槽复用之后.
         [[nodiscard]] OpaqueProduction Production(std::size_t index = 0) const noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
@@ -296,7 +296,7 @@ namespace Physara::Renderer
         /// @brief 在创建资源前核对渲染和显示画布的单边上限及本 View 的固定附件预算.
         /// @param display 本路预览模式和 AA 请求解析出的实际显示配置.
         /// @param resample 显示阶段需要从渲染栅格重采样时为 true, 对应一个额外的线性中间目标.
-        /// @param needs 按实际准备需求核算 GBuffer 及是否另有 Forward 深度.
+        /// @param needs 按实际准备需求核算 GBuffer、Forward 深度与显示附件. 仅表面时只检查 render.
         /// @return 空值表示附件可容纳. 失败携带具体的 View 原因, 显式离屏请求可在共享场景提取前返回该原因.
         [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
             DisplaySettings display, bool resample, ViewResourceNeeds needs = {}) const noexcept;

@@ -51,16 +51,12 @@ void FetchStaticVertex()
     vMaterialRow = instance.materialRow;
     vLightingAnchor = object.lightingAnchor;
     FetchLightingOffset(object, vLightingOffsetHigh, vLightingOffsetLow);
-#ifdef PHYSARA_STATIC_SHADOW_DEPTH
-    // LightingDelta 给出从表面到投影原点的向量, 取反后得到光空间变换所需的表面相对坐标.
-    // 写入矩阵包含按该子视图的投影及世界 texel 换算的齐次 z 偏移.
-    LightingPosition origin = LightingPosition(perView.shadowOriginHigh, perView.shadowOriginLow);
-    LightingSurface surface = LightingSurface(vLightingAnchor, LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
-    gl_Position = perView.shadowClipFromOrigin * vec4(-LightingDelta(origin, surface, 1.0), 1.0);
-#else
-    vec4 worldPosition = object.worldFromLocal * vec4(aPosition, 1.0);
-    gl_Position = perView.clipFromWorld * worldPosition;
-#endif
+    // 主表面以眼点为原点, 阴影子视图以光空间投影原点为基准. 两者均使用对象行的高低位偏移.
+    // LightingDelta 合回原点的编码余量和作差余差. 取反得到用于投影的米制相对位置.
+    LightingPosition origin = LightingPosition(perView.originHigh, perView.originLow, perView.originResidual);
+    LightingSurface surface = LightingSurface(vLightingAnchor,
+        LightingPosition(vLightingOffsetHigh, vLightingOffsetLow, vec3(0.0)));
+    gl_Position = perView.clipFromOrigin * vec4(-LightingDelta(origin, surface, 1.0), 1.0);
     vColor = aColor;
     vUv0 = aUv0;
     vUv1 = aUv1;

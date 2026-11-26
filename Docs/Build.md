@@ -52,6 +52,8 @@ PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值
 
 默认产品构建还生成 `StaticCoreGBuffer` 与 `StaticSurfaceAux`, 两包共用当前 `StaticForward` 生成接口. Renderer 按显式表面需求准备原生角色. 工作色合成沿用现有前向颜色包的只读深度状态. 部署时将与程序同配置生成的 Shader 包一同交付. [D11-T02](Developments/D08-D11-RenderPaths.md#d11-t02)
 
+`DeferredLighting` 产品包族沿用 `StaticForward` 生成接口. Renderer 在内部 Deferred 子图需要核心受光时准备对应的 Direct、DFG 或 IBL 角色, 各自按实际阴影需求选择版本. 屏幕角色采样最终 GBuffer 和 D32, 使用同 View 的光照资源. 启动与热重载沿用同配置包及原有的帧前准备预算. [D11-T03](Developments/D08-D11-RenderPaths.md#d11-t03)
+
 Compute 包使用 `LoadRhiComputeProgram` 校验 profile 与 ABI. RHI 的 `CreateComputePipeline` 在准备阶段链接单 CS, 之后由已打开的 Graphics 即时列表设置 Compute 状态并直接 `Dispatch`. 支持的存储格式、绑定和同步见 [OpenGL 能力范围](../RHI/README.md#opengl-原生消费边界).
 
 模块提供 `physara_add_shader_interface(name schema)` 和 `physara_add_shader_program(name interfaceName program sourceRoot)`. 调用方显式提供真实输入路径, 在同一 CMake 作用域先声明接口再声明程序. Compute 使用 `physara_add_shader_interface(name schema COMPUTE)`, 让 Compute.glsl 进入必要输出及包依赖. 后者返回 `<name>Package` 数据路径与 `<name>PackageTarget` 唯一生成 target. 每个消费者通过 `add_dependencies(consumer ${MainPackageTarget})` (以 name=Main 为例) 或 target DEPENDS 共享此前置, 再读取包路径; 不能只把包文件分别挂到多个独立生成消费者. 生成头消费者依赖 `PhysaraShaderInterface<name>`、包含生成头根, 使用绑定头时链接 PhysaraRHI. 编译核心不 include 自己的生成物.

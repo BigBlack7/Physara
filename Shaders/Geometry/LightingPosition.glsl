@@ -3,23 +3,23 @@
 
 #include <Source/Common/SumRemainder.glsl>
 
-// 顶点写阴影和片元查询在同一世界基点下作差. LightingDelta 的结果指向 target.
-// 一个米制向量的高位与余量. 灯和眼点使用世界位置, 表面用同一表示保存相对基点的偏移.
+// 光栅投影和片元查询从同一表面基点作差. LightingDelta 的结果指向 target.
+// 米制向量分成高位、低位和编码余量. 灯、眼点与投影原点均可携带三段.
 struct LightingPosition
 {
     vec3 high;
     vec3 low;
+    vec3 residual;
 };
 
-// anchor 是同一 Draw 共用的 FP32 世界基点. offset 是相对该原点分开插值的高位和余量.
+// 几何入口以实例基点定位, offset 的高低位分别插值. 屏幕入口保存相对眼点的位移、眼点低位与编码余量.
 struct LightingSurface
 {
     vec3 anchor;
     LightingPosition offset;
 };
 
-// 这里记录已编码输入在本次求和中丢失的有符号余差, 与位移同尺度.
-// 相机查格使用余差的绝对值, 逐灯测距按符号补回并合入灯位的上传余量.
+// 记录主差值、两侧第三段的差, 以及各次加法的有符号余差. 各项与位移同尺度.
 struct LightingDeltaTerms
 {
     vec3 delta;
@@ -27,6 +27,8 @@ struct LightingDeltaTerms
     vec3 lowResidual;
     vec3 tailResidual;
     vec3 totalResidual;
+    vec3 residualDelta;
+    vec3 residualRoundoff;
 };
 
 // 先计算 (target.high - anchor) - offset.high, 再合入两次减法余量和 target.low - offset.low.
@@ -41,7 +43,7 @@ LightingDeltaTerms ComputeLightingDeltaTerms(LightingPosition target, LightingSu
     precise vec3 highDelta = base + negativeOffset;
     if (any(isinf(highDelta)))
     {
-        return LightingDeltaTerms(highDelta, vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+        return LightingDeltaTerms(highDelta, vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
     }
     precise vec3 baseError = SumRemainder(targetHigh, negativeAnchor, base);
     precise vec3 highError = SumRemainder(base, negativeOffset, highDelta);
@@ -51,30 +53,30 @@ LightingDeltaTerms ComputeLightingDeltaTerms(LightingPosition target, LightingSu
     precise vec3 low = targetLow + negativeLow;
     precise vec3 tail = error + low;
     precise vec3 delta = highDelta + tail;
+    precise vec3 targetResidual = target.residual * scale;
+    precise vec3 negativeResidual = -surface.offset.residual * scale;
+    precise vec3 residualDelta = targetResidual + negativeResidual;
     return LightingDeltaTerms(delta, SumRemainder(baseError, highError, error),
                               SumRemainder(targetLow, negativeLow, low), SumRemainder(error, low, tail),
-                              SumRemainder(highDelta, tail, delta));
+                              SumRemainder(highDelta, tail, delta), residualDelta,
+                              SumRemainder(targetResidual, negativeResidual, residualDelta));
 }
 
 vec3 LightingDelta(LightingPosition target, LightingSurface surface, float scale, out vec3 roundoff)
 {
     LightingDeltaTerms terms = ComputeLightingDeltaTerms(target, surface, scale);
     // Froxel 的同格判定使用各轴上未进入位移的余差绝对值之和.
-    roundoff = abs(terms.highResidual) + abs(terms.lowResidual) + abs(terms.tailResidual) + abs(terms.totalResidual);
+    roundoff = abs(terms.highResidual) + abs(terms.lowResidual) + abs(terms.tailResidual) + abs(terms.totalResidual) +
+               abs(terms.residualDelta) + abs(terms.residualRoundoff);
     return terms.delta;
 }
 
+// 光栅、测距和阴影查询将两侧的编码余量与算术余差合回相对位移, 再投影或求长度.
 vec3 LightingDelta(LightingPosition target, LightingSurface surface, float scale)
-{
-    return ComputeLightingDeltaTerms(target, surface, scale).delta;
-}
-
-// 高低两组消去后, 将灯位第三项和本次作差的有符号余差合回小尺度位移. 三项采用同一指数尺度.
-vec3 CompensatedLightingDelta(LightingPosition target, vec3 targetResidual, LightingSurface surface, float scale)
 {
     LightingDeltaTerms terms = ComputeLightingDeltaTerms(target, surface, scale);
     precise vec3 correction = (terms.highResidual + terms.lowResidual) + (terms.tailResidual + terms.totalResidual);
-    precise vec3 remainder = correction + targetResidual * scale;
+    precise vec3 remainder = (correction + terms.residualDelta) + terms.residualRoundoff;
     precise vec3 compensated = terms.delta + remainder;
     return compensated;
 }

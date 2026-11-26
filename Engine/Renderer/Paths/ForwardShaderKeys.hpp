@@ -15,7 +15,7 @@
 namespace Physara::Renderer::Detail
 {
     // 每张表按 8 种顶点布局, 4 种绕序/剔面组合及 4 个表面阶段编址. 两个深度角色共用首张表.
-    // 核心及辅助表面各用一个深度合写的阶段, 在常规表尾分别保有 32 个槽.
+    // 核心及辅助表面在常规表后各占 32 槽. 随后的屏幕照明区以角色为下标, 无顶点布局和绕序变体.
     // 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
     inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
@@ -24,8 +24,21 @@ namespace Physara::Renderer::Detail
     inline constexpr std::size_t ForwardColorPrograms = ForwardPerPassLayouts + 6;
     inline constexpr std::size_t CorePipelineBase = GeometryPipelineSlots * ForwardColorPrograms;
     inline constexpr std::size_t SurfaceAuxPipelineBase = CorePipelineBase + GeometryPhaseSlots;
-    inline constexpr std::size_t GeometryPipelineCount = SurfaceAuxPipelineBase + GeometryPhaseSlots;
-    inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineCount + 1 + 8;
+    inline constexpr std::size_t DeferredPipelineBase = SurfaceAuxPipelineBase + GeometryPhaseSlots;
+    inline constexpr std::size_t DeferredLightingCount = 6;
+    inline constexpr std::size_t ScenePipelineCount = DeferredPipelineBase + DeferredLightingCount;
+    inline constexpr std::size_t ForwardPipelineLimit = ScenePipelineCount + 1 + 8;
+
+    [[nodiscard]] constexpr bool IsDeferredLighting(Shader::ProductShader role) noexcept
+    {
+        return role >= Shader::ProductShader::DeferredLighting && role <= Shader::ProductShader::DeferredLightingIblShadows;
+    }
+
+    [[nodiscard]] constexpr std::size_t DeferredLightingIndex(Shader::ProductShader role) noexcept
+    {
+        return std::size_t(role) - std::size_t(Shader::ProductShader::DeferredLighting);
+    }
+    static_assert(DeferredLightingIndex(Shader::ProductShader::DeferredLightingIblShadows) + 1 == DeferredLightingCount);
 
     /// @brief 各表面角色按物理颜色位置列出逻辑 GBuffer 下标. 图写入及目标配方沿用同一顺序.
     inline constexpr std::array<std::size_t, 4> CoreSurfaceAttachments{0, 3, 2, 1};

@@ -64,6 +64,21 @@ namespace Physara::Shader
          "Passes/GBuffer/StaticCoreGBuffer.json", "Passes/Forward/Static.vert", "Passes/GBuffer/Core.frag"},
         {{ProductShader::StaticSurfaceAux}, "StaticSurfaceAux", "StaticForward",
          "Passes/GBuffer/StaticSurfaceAux.json", "Passes/Forward/Static.vert", "Passes/GBuffer/SurfaceAux.frag"},
+        {{ProductShader::DeferredLighting}, "DeferredLighting", "StaticForward",
+         "Passes/Deferred/DeferredLighting.json", "Passes/Forward/Display.vert", "Passes/Deferred/Lighting.frag"},
+        {{ProductShader::DeferredLightingPhysical, 1}, "DeferredLightingPhysical", "StaticForward",
+         "Passes/Deferred/DeferredLightingPhysical.json", "Passes/Forward/Display.vert", "Passes/Deferred/Lighting.frag"},
+        {{ProductShader::DeferredLightingIbl, 2}, "DeferredLightingIbl", "StaticForward",
+         "Passes/Deferred/DeferredLightingIbl.json", "Passes/Forward/Display.vert", "Passes/Deferred/Lighting.frag"},
+        {{ProductShader::DeferredLightingShadows}, "DeferredLightingShadows", "StaticForward",
+         "Passes/Deferred/DeferredLightingShadows.json", "Passes/Forward/Display.vert",
+         "Passes/Deferred/LightingShadows.frag"},
+        {{ProductShader::DeferredLightingPhysicalShadows, 1}, "DeferredLightingPhysicalShadows", "StaticForward",
+         "Passes/Deferred/DeferredLightingPhysicalShadows.json", "Passes/Forward/Display.vert",
+         "Passes/Deferred/LightingShadows.frag"},
+        {{ProductShader::DeferredLightingIblShadows, 2}, "DeferredLightingIblShadows", "StaticForward",
+         "Passes/Deferred/DeferredLightingIblShadows.json", "Passes/Forward/Display.vert",
+         "Passes/Deferred/LightingShadows.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

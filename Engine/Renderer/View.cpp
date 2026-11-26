@@ -696,9 +696,9 @@ namespace Physara::Renderer
                 prepared.layouts, camera.entity, camera.cutRevision, camera.renderClipFromView[0],
                 camera.renderClipFromView[5],
                 camera.nearPlane, camera.renderFar, camera.orthographic, shadows, environment, production});
-            // 未标识的核心回调也能发布当前颜色, 但即使已知程序完全相同, 也不能据此复用上一帧.
-            // 这里只标记候选的前驱票据. Publish 接受候选后才替换已有的生产记录.
-            if (production.historyEligible && m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key == *outputs.m_OpaquePlan)
+            // 兼容性比较包含本路实际写入表面, HDR 和阴影的程序摘要. 未被选用的角色换代不影响比较.
+            // 此处只借用上一笔接受票据. Publish 接受本轮显示色后才替换生产记录.
+            if (m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key == *outputs.m_OpaquePlan)
             {
                 compatiblePredecessor = m_AcceptedOpaquePlan->submission;
             }

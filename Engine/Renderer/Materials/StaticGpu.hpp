@@ -356,6 +356,24 @@ namespace Physara::Renderer::Detail
             : static_cast<LightingProgram>(std::size_t(LightingProgram::Froxel) + std::size_t(program));
     }
 
+    /// @brief 屏幕角色与前向 Froxel 角色共享 Direct, DFG, IBL 和对应的阴影配方.
+    [[nodiscard]] constexpr LightingProgram DeferredLightingKind(Shader::ProductShader role) noexcept
+    {
+        return static_cast<LightingProgram>(ForwardPerPassLayouts + DeferredLightingIndex(role));
+    }
+
+    /// @brief 将已选好的六种 Froxel 受光组合之一映射到屏幕程序, 每种组合只使用固定状态槽零.
+    [[nodiscard]] constexpr ShaderPipelineRequest DeferredLightingRequest(LightingProgram program) noexcept
+    {
+        const auto role = std::size_t(Shader::ProductShader::DeferredLighting) +
+                          std::size_t(program) - ForwardPerPassLayouts;
+        return {static_cast<Shader::ProductShader>(role), 0};
+    }
+
+    inline constexpr std::uint32_t DeferredViewSlot = 0; ///< 屏幕专用 set 1 b0.
+    inline constexpr std::uint32_t GBufferFirstSlot = 2; ///< 逻辑 G0 至 G3 连续映射到 set 1 t2 至 t5.
+    inline constexpr std::uint32_t GBufferDepthSlot = 6;
+
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
     inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
     inline constexpr std::uint32_t ShadowConstantsSlot = 1; ///< StaticForward 的 PerPass b1.
@@ -368,7 +386,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 返回该角色额外核对的活动资源组, 供冷包和热候选共用.
     /// Aux 明列片元的三个纹理槽及材质行. Core 的空组由调用方补上完整的静态材质合同.
-    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(
+    [[nodiscard]] std::span<const Shader::ExpectedActiveResources> OpaqueProgramResources(
         Shader::ProductShader role) noexcept;
 
     /// @brief 两种只写深度的几何角色使用独立的阶段槽, 片元没有颜色输出.
@@ -484,12 +502,16 @@ namespace Physara::Renderer::Detail
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
         std::optional<OpaquePath> alternatePath; ///< 只额外登记颜色准备键, 一路只选择一份图工作.
-        bool usesLighting = false; ///< 实际前向颜色有受光表面, 供其全灯或 Froxel 策略共用.
+        bool usesLighting = false; ///< 当前颜色存在受光表面, 包括核心屏幕光照及辅助前向光照.
         std::uint64_t preparationStamp{}; ///< 与 Allocation::lastUse 配对, 零表示本槽无准备或已撤回.
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
         RHI::BindingLayoutHandle lightLayout;
         RHI::BindingLayoutHandle froxelViewLayout; ///< 选定颜色角色的完整 PerView 布局, 深度仍使用普通布局.
+        std::optional<ShaderPipelineRequest> deferredColor; ///< 实际有核心受光时才登记的颜色角色.
+        std::shared_ptr<DrawBuffer> deferredView; ///< 安全帧槽可复用的屏幕几何常量.
+        RHI::GraphicsPipelineHandle deferredPipeline;
+        RHI::BindingLayoutHandle deferredSurfaceLayout;
         std::optional<FroxelUpload> froxelUpload; ///< 本路拥有的上传组, 已发工作按安全槽完成保留预算凭据.
         bool froxelReserved = false; ///< 只占本轮逻辑额度, 收尾就绪时转换成实际写入.
         EnvironmentFrame environment;
@@ -514,7 +536,7 @@ namespace Physara::Renderer::Detail
         bool hasPreparedView = false;
     };
 
-    /// @brief 一代 Forward 几何和天空程序的原生表. 同一固定状态槽持有该代已准备的 Pipeline.
+    /// @brief 一代不透明几何、屏幕照明和天空程序的原生表. 每槽持有匹配的已准备 Pipeline.
     struct ForwardPrograms
     {
         /// @brief 取得 ABI 约定的场景布局. 程序和 Pipeline 只在帧前按需求准备.
@@ -533,6 +555,7 @@ namespace Physara::Renderer::Detail
         void ReplaceProgram(Shader::ProductShader role) noexcept;
 
         std::array<Shader::RhiProgram, ForwardColorPrograms> colors;
+        std::array<Shader::RhiProgram, DeferredLightingCount> deferredColors;
         Shader::RhiProgram depth;
         Shader::RhiProgram shadowDepth;
         Shader::RhiProgram coreGBuffer;
@@ -542,11 +565,14 @@ namespace Physara::Renderer::Detail
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineCount> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, ScenePipelineCount> pipelines;
 
     private:
         /// @brief 按颜色角色核对活动绑定并取得设备的固定布局. 三种阴影诊断共用基色覆盖和数组查询配方.
         void PrepareLighting(ForwardDevice &owner, LightingProgram kind, const Shader::ProductPackages &packages);
+        /// @brief 在当前固定角色槽准备全屏颜色程序及其三个集合, 交由冻结帧持有.
+        void PrepareDeferredLighting(ForwardDevice &owner, ShaderPipelineRequest key,
+                                     const Shader::ProductPackages &packages);
         /// @brief 准备只写工作色 RGB 的天空 Pipeline, 成功后保存其包摘要供下次换代比较.
         void PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths, const Shader::ProductPackages &packages);
     };
@@ -638,6 +664,7 @@ namespace Physara::Renderer::Detail
         PostProcess::DisplayDevice display;
         std::array<RHI::BindingLayoutHandle, ForwardPerPassLayouts> lightLayouts; ///< 两个候选策略共用的固定配方.
         RHI::BindingLayoutHandle froxelViewLayout; ///< 首次需要 Froxel Pipeline 时准备, 同设备各代共用.
+        RHI::BindingLayoutHandle deferredSurfaceLayout; ///< 屏幕常量和最终表面采样, 同设备各代共用.
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
         std::uint64_t stamp = 0;
         std::uint64_t frameBegin = 0; ///< 本候选最早使用代, 各 View 再单独推进 stamp.

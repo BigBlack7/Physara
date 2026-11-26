@@ -13,7 +13,7 @@ void main()
     }
 
     LightingSurface surface = LightingSurface(vLightingAnchor,
-        LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
+        LightingPosition(vLightingOffsetHigh, vLightingOffsetLow, vec3(0.0)));
     ShadowResult shadow = QueryShadow(1u, surface, GeometricNormal());
     if (shadow.subview < 0)
     {

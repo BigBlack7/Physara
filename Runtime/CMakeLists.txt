@@ -14,7 +14,9 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
-        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows)
+        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows
+        DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
+        DeferredLightingPhysicalShadows DeferredLightingIblShadows)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

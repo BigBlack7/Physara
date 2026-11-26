@@ -59,6 +59,12 @@ physara_add_shader_program(StaticForwardPlusIbl StaticForward ../Shaders/Passes/
 physara_add_shader_program(StaticForwardPlusShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPlusPhysicalShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusPhysicalShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPlusIblShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusIblShadows.json ../Shaders PRODUCT)
+# 核心屏幕光照使用相同的灯光 ABI. 每个 role 只建立一个 RGBA16F 全屏 Pipeline.
+set(deferredPrograms DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
+    DeferredLightingPhysicalShadows DeferredLightingIblShadows)
+foreach(program IN LISTS deferredPrograms)
+    physara_add_shader_program(${program} StaticForward ../Shaders/Passes/Deferred/${program}.json ../Shaders PRODUCT)
+endforeach()
 physara_add_shader_program(ForwardSky ForwardSky ../Shaders/Passes/Forward/ForwardSky.json ../Shaders PRODUCT)
 physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forward/ForwardDisplay.json ../Shaders PRODUCT)
 foreach(program DisplayColorGrading DisplayFxaa DisplayScale)
@@ -107,7 +113,7 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
-        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows)
+        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms})
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

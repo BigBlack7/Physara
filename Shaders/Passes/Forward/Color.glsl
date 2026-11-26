@@ -2,14 +2,7 @@
 // 各模式共享基色与 MASK 覆盖. 存活片元写 alpha=1, 供后继天空混合识别几何覆盖.
 #include <Interface/Fragment.glsl>
 #include <Source/Material/StaticPreview.glsl>
-#ifdef PHYSARA_FORWARD_FROXELS
-#include <Source/Lighting/FroxelLighting.glsl>
-#else
-#include <Source/Lighting/Punctual.glsl>
-#endif
-#ifdef PHYSARA_PHYSICAL_LIGHTING
-#include <Source/Lighting/Environment.glsl>
-#endif
+#include <Source/Lighting/OpaqueLighting.glsl>
 
 // 颜色与深度使用同一实例的材质行判断覆盖. 预览和受光路径共用覆盖前取得的梯度.
 void main()
@@ -29,34 +22,25 @@ void main()
         vec3 tangentNormal = mapped ? SampleTangentNormal(gradients) : vec3(0.0, 0.0, 1.0);
         SurfaceGeometry geometry = PrepareSurfaceGeometry(tangentNormal, mapped);
         MaterialInputs inputs = SampleMaterialInputs(baseColor, gradients);
-        vec3 emission = SampleEmissive(gradients);
+        vec3 emission = PreExposeEmission(SampleEmissive(gradients), perView.preExposure);
         ApplyCoverage(baseColor.a);
 
         // 保留的片元只构造一份表面参数. 正交相机共用反视线方向, 透视相机从当前片元指向眼点.
         PixelParams pixel = BuildPixelParams(inputs, kernel);
         // 基点按实例平坦传递, 相对偏移的高低位分别插值. 同一表面位置供观察向量和每盏局部灯使用.
-        LightingSurface surface = LightingSurface(vLightingAnchor, LightingPosition(vLightingOffsetHigh,
-                                                                                     vLightingOffsetLow));
-        LightingPosition eye = LightingPosition(perView.viewer, perView.viewerLow);
+        LightingSurface surface = LightingSurface(vLightingAnchor,
+            LightingPosition(vLightingOffsetHigh, vLightingOffsetLow, vec3(0.0)));
+        LightingPosition eye = LightingPosition(perView.originHigh, perView.originLow, perView.originResidual);
         // 透视分支只取眼点与表面之差的方向. 三项同时缩小到四分之一, 归一化后比例抵消.
-        vec3 viewDirection = perView.orthographic != 0u ? perView.viewer :
+        vec3 viewDirection = perView.orthographic != 0u ? perView.orthographicDirection :
             UnitOr(LightingDelta(eye, surface, 0.25), geometry.shadingNormal);
-        vec3 compensation = vec3(1.0);
-#ifdef PHYSARA_PHYSICAL_LIGHTING
-        CoreDfgTerms terms = PrepareCoreDfg(pixel, geometry.shadingNormal, viewDirection);
-        compensation = terms.specularCompensation;
-#endif
+        vec3 result = EvaluateOpaqueLighting(pixel, geometry, viewDirection, surface, emission, inputs.occlusion,
+                                             NoScreenLighting
 #ifdef PHYSARA_FORWARD_FROXELS
-        // 候选依据实际参与逐灯求值的表面位置. 主光栅的覆盖和深度继续沿用共享几何入口.
-        vec3 result = EvaluateFroxelLighting(pixel, geometry, viewDirection, surface, emission, compensation,
-                                             QuerySurfaceFroxelCell(surface));
-#else
-        vec3 result = EvaluateLighting(pixel, geometry, viewDirection, surface, emission, compensation);
+                                             , QuerySurfaceFroxelCell(surface)
 #endif
-#if PHYSARA_PHYSICAL_LIGHTING == 2
-        result += EvaluateIbl(pixel, geometry.shadingNormal, viewDirection, inputs.occlusion, terms);
-#endif
-        outColor = vec4(min(result, vec3(MaxWorkingLight)), 1.0);
+                                             );
+        outColor = vec4(result, 1.0);
         return;
     }
     ApplyCoverage(baseColor.a);

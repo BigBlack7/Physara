@@ -18,7 +18,7 @@ void main()
     const vec3 palette[4] = vec3[4](vec3(0.94, 0.25, 0.21), vec3(0.90, 0.69, 0.12),
                                    vec3(0.21, 0.78, 0.38), vec3(0.22, 0.51, 0.94));
     LightingSurface surface = LightingSurface(vLightingAnchor,
-        LightingPosition(vLightingOffsetHigh, vLightingOffsetLow));
+        LightingPosition(vLightingOffsetHigh, vLightingOffsetLow, vec3(0.0)));
     ShadowResult shadow = QueryShadow(1u, surface, GeometricNormal());
     if (shadow.subview < 0)
     {

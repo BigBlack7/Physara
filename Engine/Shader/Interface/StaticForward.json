@@ -11,17 +11,25 @@
       "name": "ForwardView",
       "layout": "std140",
       "fields": [
-        { "name": "clipFromWorld", "type": "float4x4" },
+        { "name": "clipFromOrigin", "type": "float4x4" },
         { "name": "mode", "type": "uint32" },
         { "name": "preExposure", "type": "float32" },
-        { "name": "viewer", "type": "float3" },
         { "name": "orthographic", "type": "uint32" },
         { "name": "directionalCount", "type": "uint32" },
         { "name": "localCount", "type": "uint32" },
-        { "name": "viewerLow", "type": "float3" },
-        { "name": "shadowClipFromOrigin", "type": "float4x4" },
-        { "name": "shadowOriginHigh", "type": "float3" },
-        { "name": "shadowOriginLow", "type": "float3" }
+        { "name": "originHigh", "type": "float3" },
+        { "name": "originLow", "type": "float3" },
+        { "name": "originResidual", "type": "float3" },
+        { "name": "orthographicDirection", "type": "float3" }
+      ]
+    },
+    {
+      "name": "DeferredView",
+      "layout": "std140",
+      "fields": [
+        { "name": "viewFromRenderClip", "type": "float4x4" },
+        { "name": "worldBasis", "type": "float3x3" },
+        { "name": "renderRect", "type": "uint4" }
       ]
     },
     {
@@ -54,11 +62,9 @@
       "name": "ForwardShadowView",
       "layout": "std140",
       "fields": [
-        { "name": "cameraOriginHigh", "type": "float3" },
-        { "name": "edge", "type": "uint32" },
-        { "name": "cameraOriginLow", "type": "float3" },
-        { "name": "layerCount", "type": "uint32" },
         { "name": "cameraForward", "type": "float3" },
+        { "name": "edge", "type": "uint32" },
+        { "name": "layerCount", "type": "uint32" },
         { "name": "pcf", "type": "uint32" },
         { "name": "innerScale", "type": "float32" }
       ]
@@ -78,7 +84,8 @@
         { "name": "nearDepth", "type": "float32" },
         { "name": "farPlane", "type": "float32" },
         { "name": "receiverOffsetRatio", "type": "float32" },
-        { "name": "kind", "type": "uint32" }
+        { "name": "kind", "type": "uint32" },
+        { "name": "originResidual", "type": "float3" }
       ]
     },
     {
@@ -106,6 +113,7 @@
         { "name": "depthEdges", "type": "float32", "array": 33 },
         { "name": "cameraHigh", "type": "float3" },
         { "name": "cameraLow", "type": "float3" },
+        { "name": "cameraResidual", "type": "float3" },
         { "name": "viewBasis", "type": "float3x3" },
         { "name": "projectionScale", "type": "float2" }
       ]
@@ -171,6 +179,12 @@
     { "name": "froxelGlobalLights", "kind": "structured-buffer", "set": 0, "slot": 2, "stages": ["fragment"], "block": "FroxelLightIndex", "capacity": 16384 },
     { "name": "objectRows", "kind": "structured-buffer", "set": 1, "slot": 0, "stages": ["vertex"], "block": "ForwardObject", "capacity": 512 },
     { "name": "drawInstances", "kind": "structured-buffer", "set": 1, "slot": 1, "stages": ["vertex"], "block": "DrawInstanceData", "capacity": 512 },
+    { "name": "deferredView", "kind": "constant-buffer", "set": 1, "slot": 0, "stages": ["fragment"], "block": "DeferredView" },
+    { "name": "gBufferG0", "kind": "texture2d", "set": 1, "slot": 2, "stages": ["fragment"] },
+    { "name": "gBufferG1", "kind": "texture2d", "set": 1, "slot": 3, "stages": ["fragment"] },
+    { "name": "gBufferG2", "kind": "texture2d", "set": 1, "slot": 4, "stages": ["fragment"] },
+    { "name": "gBufferG3", "kind": "texture2d-uint", "set": 1, "slot": 5, "stages": ["fragment"] },
+    { "name": "gBufferDepth", "kind": "texture2d", "set": 1, "slot": 6, "stages": ["fragment"] },
     { "name": "materialRows", "kind": "structured-buffer", "set": 2, "slot": 5, "stages": ["vertex", "fragment"], "block": "ForwardMaterial", "capacity": 512 },
     { "name": "baseColorImage", "kind": "texture2d", "set": 2, "slot": 0, "stages": ["fragment"] },
     { "name": "baseColorSampler", "kind": "sampler", "set": 2, "slot": 0, "stages": ["fragment"] },

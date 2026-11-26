@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "DeferredLightingShadows",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Deferred/LightingShadows.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

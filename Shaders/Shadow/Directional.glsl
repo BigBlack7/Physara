@@ -2,7 +2,7 @@
 float CascadeVisibility(uint layer, ForwardShadowLayer entry, LightingSurface surface,
                         vec3 geometricNormal, vec3 toLight)
 {
-    LightingPosition origin = LightingPosition(entry.originHigh, entry.originLow);
+    LightingPosition origin = LightingPosition(entry.originHigh, entry.originLow, entry.originResidual);
     vec3 position = -LightingDelta(origin, surface, 1.0);
     vec3 offset = ShadowReceiverOffset(geometricNormal, toLight, 0.5 * entry.worldTexel);
     vec3 clip = (entry.clipFromOrigin * vec4(position, 1.0)).xyz +
@@ -15,7 +15,7 @@ float CascadeVisibility(uint layer, ForwardShadowLayer entry, LightingSurface su
 ShadowResult QueryDirectionalShadow(uint base, ForwardShadowLayer group, LightingSurface surface,
                                     vec3 geometricNormal)
 {
-    LightingPosition camera = LightingPosition(shadowView.cameraOriginHigh, shadowView.cameraOriginLow);
+    LightingPosition camera = LightingPosition(perView.originHigh, perView.originLow, perView.originResidual);
     float depth = -dot(shadowView.cameraForward, LightingDelta(camera, surface, 1.0));
     if (!(depth >= group.nearDepth && depth <= shadowLayers.records[base + group.count - 1u].farDepth))
     {

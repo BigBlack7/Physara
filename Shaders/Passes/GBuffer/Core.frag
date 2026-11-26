@@ -22,10 +22,8 @@ void main()
     outColor = vec4(baseColor.rgb, material.occlusion);
     outNormalMaterial = vec4(EncodeCoreNormal(geometry.shadingNormal),
                              FilterCoreRoughness(material.perceptualRoughness, kernel), material.metallic);
-    int exponent;
     // 共用工作域缩放后按 G2 的 6/6/5 位尾数分别限幅, 单通道饱和不改变另外两路.
-    float exposure = frexp(perView.preExposure, exponent);
-    outEmission = min(ScaleWorkingLight(SampleEmissive(gradients) * exposure, exponent),
+    outEmission = min(PreExposeEmission(SampleEmissive(gradients), perView.preExposure),
                       vec3(65024.0, 65024.0, 64512.0));
     outFlags = CoreDeferredEligible;
 }

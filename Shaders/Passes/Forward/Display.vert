@@ -1,8 +1,6 @@
 #version 450 core
-#extension GL_GOOGLE_include_directive : require
-#include <Interface/Vertex.glsl>
 
-// 全屏三角形覆盖整个画布, 包括工作颜色中已初始化的相机留边.
+// 全屏三角形使用 Pass 的 viewport. 顶点阶段只交付位置, 片元从当前像素读取图资源.
 void main()
 {
     vec2 corner = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));

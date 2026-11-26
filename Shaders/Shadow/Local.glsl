@@ -15,7 +15,7 @@ uint PointShadowFace(vec3 delta, vec3 magnitude)
 // 原接收点决定有限半径、外锥和选面. 偏移后的齐次投影同时给出取样位置和常规深度.
 ShadowResult QueryLocalShadow(uint base, ForwardShadowLayer group, LightingSurface surface, vec3 geometricNormal)
 {
-    LightingPosition origin = LightingPosition(group.originHigh, group.originLow);
+    LightingPosition origin = LightingPosition(group.originHigh, group.originLow, group.originResidual);
     vec3 delta = -LightingDelta(origin, surface, 1.0);
     vec3 magnitude = abs(delta);
     float largest = max(magnitude.x, max(magnitude.y, magnitude.z));

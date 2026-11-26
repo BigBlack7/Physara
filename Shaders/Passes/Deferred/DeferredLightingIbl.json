@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "name": "DeferredLightingIbl",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Deferred/Lighting.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": [
+    {
+      "name": "PHYSARA_PHYSICAL_LIGHTING",
+      "allowed": [
+        1,
+        2
+      ],
+      "value": 2
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "DeferredLighting",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Display.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Deferred/Lighting.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": []
+}

@@ -305,11 +305,11 @@
 
 **职责位置：** Renderer/Paths、Shaders/Lighting/Passes、RenderGraph。**前置：** [D11-T01](#d11-t01)、[D11-T02](#d11-t02)。**架构依据：** [8.7](../Architecture.md#opaque-shading)、[8.6](../Architecture.md#lighting)、[6.1](../Architecture.md#paths)。
 
-**状态** D11-T01、D11-T02 已验收，前置已满足。
+**状态** 已验收并归档。B 已签收，CR-001 至 CR-003 全部关闭。 [最终验证](../../openspec/changes/archive/2026-11-27-add-deferred-lighting-subgraph/tasks.md#final-verification) · [归档与规格](../../openspec/changes/archive/2026-11-27-add-deferred-lighting-subgraph/tasks.md#archive-closeout)
 
-- [ ] 由 GBuffer/depth 重建共享 PixelParams/几何状态，使用既有灯、Froxel、阴影和 IBL EvaluateLighting。
-- [ ] 按 PrepareSurface→表面效果输入→ShadeOpaque 的合同组装，输出统一 OpaqueOutput；当屏幕效果未启用使用明确默认输入。
-- [ ] 验证 attachment→sampling、联合只读深度用途、无效背景和 sky 拼接的图访问与原生结果。
+- [x] 由 GBuffer/depth 重建共享 PixelParams/几何状态，使用既有灯、Froxel、阴影和 IBL EvaluateLighting。
+- [x] 按 PrepareSurface→表面效果输入→ShadeOpaque 的合同组装，输出统一 OpaqueOutput；当屏幕效果未启用使用明确默认输入。
+- [x] 验证 attachment→sampling、联合只读深度用途、无效背景和 sky 拼接的图访问与原生结果。
 
 **完成条件：** Deferred 只改变表面存取和不透明子图，光照公式与后处理没有第三份实现。
 
@@ -317,6 +317,8 @@
 ### D11-T04 · 完成三路径配置兼容与事务切换
 
 **职责位置：** View、Renderer/Paths、Engine/Shader、Editor/Panels。**前置：** [D11-T03](#d11-t03)。**架构依据：** [5.7](../Architecture.md#plan-readiness)、[6.1](../Architecture.md#paths)、[7.7](../Architecture.md#capabilities)。
+
+**状态** D11-T03 已验收归档，前置已满足。
 
 - [ ] 把三策略注册到固定组装入口，核对每路径输出、布局、资源准备和当前 AA/效果支持矩阵。
 - [ ] 在已有 None/FXAA 下完成三路径切换；TAA 待 D15 验收再启用，Deferred+MSAA 能力保持 false。

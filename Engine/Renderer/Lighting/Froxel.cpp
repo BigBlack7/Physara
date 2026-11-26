@@ -158,16 +158,15 @@ namespace Physara::Renderer::Detail
         grid.orthographic = camera.orthographic ? 1u : 0u;
         // 只为片元查询保存相机相对变换. 透视和正交共用稳定投影的两个轴向系数.
         // 投影尺度或相机高位超出这里的编码范围时, 保持零尺度以触发完整灯退路.
-        // cameraLow 保存眼点减去高位后的 FP32 近似. CPU 分箱仍使用快照中的双精度眼点.
+        // 眼点使用与主光栅相同的三段编码. CPU 分箱使用快照中的双精度眼点.
         constexpr auto FloatLimit = std::numeric_limits<float>::max();
         constexpr auto FloatMin = std::numeric_limits<float>::min();
         const std::array origin{camera.worldFromView[12], camera.worldFromView[13], camera.worldFromView[14]};
         const auto scaleX = camera.stableClipFromView[0];
         const auto scaleY = camera.stableClipFromView[5];
         if (scaleX >= FloatMin && scaleX <= FloatLimit && scaleY >= FloatMin && scaleY <= FloatLimit &&
-            StoreGpuVector(grid.cameraHigh, origin))
+            StoreGpuPosition(grid.cameraHigh, grid.cameraLow, grid.cameraResidual, origin))
         {
-            grid.cameraLow = GpuPositionLow(origin, grid.cameraHigh);
             for (std::size_t column = 0; column < grid.viewBasis.size(); ++column)
             {
                 const auto base = column * 4;
@@ -443,7 +442,8 @@ namespace Physara::Renderer::Detail
             for (glm::length_t axis = 0; axis < 3; ++axis)
             {
                 const auto index = static_cast<std::size_t>(axis);
-                cameraSlack += std::abs((origin[axis] - grid.cameraHigh[index]) - grid.cameraLow[index]);
+                const double tail = (origin[axis] - grid.cameraHigh[index]) - grid.cameraLow[index];
+                cameraSlack += std::abs(tail - grid.cameraResidual[index]);
             }
             cameraSlack *= 1 + FloatSlack;
         }

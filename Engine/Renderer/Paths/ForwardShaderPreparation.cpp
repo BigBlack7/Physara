@@ -58,12 +58,53 @@ namespace Physara::Renderer::Detail
         return count;
     }
 
+    static constexpr std::array<std::string_view, 5> FroxelViewResources{
+        "perView", "froxelView", "froxelHeaders", "froxelIndices", "froxelGlobalLights"};
+
+    /// @brief 全屏角色不借用几何 IO, 屏幕表面与 Froxel 及 PerPass 照明各有精确的活动集.
+    static std::optional<Shader::Failure> CheckDeferredResources(const Shader::ShaderPackage &package,
+                                                                 ProductShader role) noexcept
+    {
+        using Stage = Shader::Stage;
+        static constexpr std::array<std::string_view, 6> Surface{
+            "deferredView", "gBufferG0", "gBufferG1", "gBufferG2", "gBufferG3", "gBufferDepth"};
+        const auto lighting = OpaqueProgramResources(role);
+        const std::array expected{
+            Shader::ExpectedActiveResources{Stage::Vertex, 0, {}},
+            Shader::ExpectedActiveResources{Stage::Vertex, 1, {}},
+            Shader::ExpectedActiveResources{Stage::Vertex, 2, {}},
+            Shader::ExpectedActiveResources{Stage::Vertex, 3, {}},
+            Shader::ExpectedActiveResources{Stage::Fragment, 0, FroxelViewResources},
+            Shader::ExpectedActiveResources{Stage::Fragment, 1, Surface},
+            Shader::ExpectedActiveResources{Stage::Fragment, 2, {}},
+            lighting.front()};
+        if (const auto failure = Shader::CheckActiveResources(package, expected))
+        {
+            return failure;
+        }
+        for (const auto &module : package.modules)
+        {
+            const bool fragment = module.stage == Stage::Fragment;
+            if (!module.inputs.empty() ||
+                (fragment ? (module.outputs.size() != 1 || module.outputs.front().location != 0) : !module.outputs.empty()))
+            {
+                return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = Core::BoundedText(
+                    "DeferredLighting requires fullscreen IO and one working color output at location 0")}};
+            }
+        }
+        return std::nullopt;
+    }
+
     /// @brief 用各角色的附件位置与绑定配方核对包中已验证的活动反射.
     /// 冷包在创建设备程序前检查. 热重载在建立候选表前检查全部角色, 包括本帧没有绘制的角色.
     static std::optional<Shader::Failure> CheckStaticForwardResources(const Shader::ShaderPackage &package,
                                                                     ProductShader role) noexcept
     {
-        const auto groups = GeometryProgramResources(role);
+        if (IsDeferredLighting(role))
+        {
+            return CheckDeferredResources(package, role);
+        }
+        const auto groups = OpaqueProgramResources(role);
         const bool perPass = std::ranges::any_of(groups, [](const auto &group) { return group.set == 3; });
         const bool froxels = IsFroxelProgram(role);
         const bool aux = role == ProductShader::StaticSurfaceAux;
@@ -140,8 +181,6 @@ namespace Physara::Renderer::Detail
         }
         if (!limitedMaterial)
         {
-            static constexpr std::array<std::string_view, 5> FroxelView{
-                "perView", "froxelView", "froxelHeaders", "froxelIndices", "froxelGlobalLights"};
             // 完整颜色共用材质诊断及受光入口. 基色的纹理 alpha 与数值因子共同决定 MASK 覆盖.
             static constexpr std::array<std::string_view, 11> ColorMaterial{
                 "materialRows", "baseColorImage", "baseColorSampler", "metallicRoughnessImage",
@@ -149,7 +188,8 @@ namespace Physara::Renderer::Detail
                 "occlusionSampler", "emissiveImage", "emissiveSampler"};
             const std::array color{
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
-                    froxels ? std::span<const std::string_view>(FroxelView) : std::span<const std::string_view>(View)},
+                    froxels ? std::span<const std::string_view>(FroxelViewResources) :
+                              std::span<const std::string_view>(View)},
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, ColorMaterial}};
             if (const auto failure = Shader::CheckActiveResources(package, color))
             {

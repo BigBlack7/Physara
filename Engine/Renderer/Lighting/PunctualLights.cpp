@@ -45,16 +45,21 @@ namespace Physara::Renderer::Detail
         return true;
     }
 
-    std::array<float, 3> GpuPositionLow(std::span<const double, 3> position,
-                                       std::span<const float, 3> high) noexcept
+    bool StoreGpuPosition(std::array<float, 3> &high, std::array<float, 3> &low,
+                          std::array<float, 3> &residual, std::span<const double, 3> position) noexcept
     {
-        std::array<float, 3> low{};
-        for (std::size_t axis = 0; axis < low.size(); ++axis)
+        if (!StoreGpuVector(high, position))
         {
-            // 差值在 double 中取得, 其绝对值至多为位置窄化的舍入误差.
-            low[axis] = static_cast<float>(position[axis] - static_cast<double>(high[axis]));
+            return false;
         }
-        return low;
+        for (std::size_t axis = 0; axis < position.size(); ++axis)
+        {
+            // 先在 FP64 中消去高位和已舍入的低位, 保留低位较大时仍可见的局部差值.
+            const double tail = position[axis] - high[axis];
+            low[axis] = static_cast<float>(tail);
+            residual[axis] = static_cast<float>(tail - low[axis]);
+        }
+        return true;
     }
 
     /// @brief 逐轴保留双精度灯位的 53 位有效数. FP32 高位携带符号和指数, 同轴的 uint 保存尾部 29 位.

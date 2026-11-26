@@ -15,6 +15,14 @@ vec3 ScaleWorkingLight(vec3 value, int exponent)
     return ScaleWorkingLight(value, ivec3(exponent));
 }
 
+// 原始材质自发光进入工作域时缩放一次. GBuffer 解码返回的自发光已在该域.
+vec3 PreExposeEmission(vec3 emission, float preExposure)
+{
+    int exponent;
+    float exposure = frexp(preExposure, exponent);
+    return ScaleWorkingLight(emission * exposure, exponent);
+}
+
 // 将源 RGB, 波瓣权重和场景倍率的尾数分别合入, 避免亮源和小倍率在缩放前越出 FP32.
 vec3 ScaleEnvironmentLight(vec3 radiance, vec3 response, float mantissa, ivec3 exponent)
 {

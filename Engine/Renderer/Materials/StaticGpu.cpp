@@ -319,10 +319,15 @@ namespace Physara::Renderer::Detail
 
     static constexpr std::array<std::string_view, 3> ShadowQueryNames{"shadowView", "shadowImage", "shadowLayers"};
 
-    // 诊断片元只读基色覆盖和阴影查询. 带阴影的普通着色还需完整灯表和按灯行寻址的引用.
+    // 三个诊断角色共用按组类型分派的查询. 级联分支在三个片元模块中均活动, 从 set 0 取主相机眼点.
+    // 诊断片元从 set 2 读覆盖材质, 从 set 3 读阴影查询数据.
+    // 带阴影的普通着色还需完整灯表和按灯行寻址的引用.
     static std::span<const Shader::ExpectedActiveResources> ShadowProgramResources(ProductShader role) noexcept
     {
-        static constexpr std::array preview{CoverageResources,
+        static constexpr std::array<std::string_view, 1> PreviewView{"perView"};
+        static constexpr std::array preview{
+            Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0, PreviewView},
+            CoverageResources,
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, ShadowQueryNames}};
         static constexpr std::array<std::string_view, 5> Direct{
             "lightRows", "shadowView", "shadowImage", "shadowLayers", "shadowReferences"};
@@ -425,8 +430,12 @@ namespace Physara::Renderer::Detail
         return std::ranges::find(froxelRoles, role) != froxelRoles.end();
     }
 
-    std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(ProductShader role) noexcept
+    std::span<const Shader::ExpectedActiveResources> OpaqueProgramResources(ProductShader role) noexcept
     {
+        if (IsDeferredLighting(role))
+        {
+            return LightingResources(FullListProgram(DeferredLightingKind(role)));
+        }
         if (role == ProductShader::StaticSurfaceAux)
         {
             static constexpr std::array<std::string_view, 7> names{
@@ -454,6 +463,12 @@ namespace Physara::Renderer::Detail
         {
             return item.type != RHI::ResourceType::ConstantBuffer || item.slot != 0;
         });
+        // 几何的 set 1 仍只有对象和实例行, 屏幕重建所用的片元资源另取布局.
+        std::erase_if(sceneLayout[1].bindings, [](const auto &item)
+        {
+            return item.type != RHI::ResourceType::StructuredBuffer_SRV;
+        });
+        sceneLayout[1].visibility = RHI::ShaderType::Vertex;
         for (std::size_t i = 0; i < layouts.size(); ++i)
         {
             layouts[i] = device.CreateBindingLayout(sceneLayout[i]);
@@ -462,6 +477,40 @@ namespace Physara::Renderer::Detail
                 Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward scene binding layout");
             }
         }
+    }
+
+    /// @brief 按实际 PerPass 灯、环境与阴影组合取得同设备可共享的布局.
+    static RHI::BindingLayout *PrepareLightLayout(ForwardDevice &owner, LightingProgram kind)
+    {
+        const auto fullList = FullListProgram(kind);
+        auto &layout = owner.lightLayouts[std::size_t(fullList)];
+        if (!layout)
+        {
+            // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
+            auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
+            auto &desc = layoutsForProgram.back();
+            std::erase_if(desc.bindings, [fullList](const auto &item) { return !UsesLightingBinding(fullList, item); });
+            layout = owner.device.CreateBindingLayout(desc);
+            if (!layout)
+            {
+                Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward lighting layout");
+            }
+        }
+        return layout.Get();
+    }
+
+    /// @brief 几何和屏幕光照使用相同的 PerView 灯数、曝光和四块网格数据.
+    static RHI::BindingLayout *PrepareFroxelViewLayout(ForwardDevice &owner)
+    {
+        if (!owner.froxelViewLayout)
+        {
+            owner.froxelViewLayout = owner.device.CreateBindingLayout(StaticAbi::MakeBindingLayouts().front());
+            if (!owner.froxelViewLayout)
+            {
+                Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot prepare Froxel PerView layout");
+            }
+        }
+        return owner.froxelViewLayout.Get();
     }
 
     void ForwardPrograms::PrepareLighting(ForwardDevice &owner, LightingProgram kind,
@@ -478,21 +527,7 @@ namespace Physara::Renderer::Detail
             &paths.pointShadowPreview, &paths.colorShadows, &paths.physicalShadows, &paths.iblShadows};
         const auto &path = UsesFroxels(kind) ? paths.froxelColors[index - ForwardPerPassLayouts] : *inputs[index];
         auto program = LoadProgram(owner.device, LightingRoles[index], path, packages, StaticAbi::AbiHash);
-        // Shader 按候选策略区分, set 3 的灯和环境布局按两种策略共用的受光配方缓存.
-        const auto fullList = FullListProgram(kind);
-        auto &layout = owner.lightLayouts[std::size_t(fullList)];
-        if (!layout)
-        {
-            // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
-            auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
-            auto &desc = layoutsForProgram.back();
-            std::erase_if(desc.bindings, [fullList](const auto &item) { return !UsesLightingBinding(fullList, item); });
-            layout = owner.device.CreateBindingLayout(desc);
-            if (!layout)
-            {
-                Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot create Forward lighting layout");
-            }
-        }
+        PrepareLightLayout(owner, kind);
         colors[index] = std::move(program);
     }
 
@@ -561,9 +596,14 @@ namespace Physara::Renderer::Detail
         return {role, std::size_t(phase) * GeometryPhaseSlots + raster + layout};
     }
 
-    // 深度角色共用首张表, 颜色角色按表号和阶段寻址. 两种表面写入在表尾各有自己的 32 槽.
-    static std::size_t GeometrySlot(ShaderPipelineRequest key) noexcept
+    // 深度共用首张表, 颜色按角色和阶段寻址. 屏幕光照每角色一个固定状态.
+    static std::size_t PipelineSlot(ShaderPipelineRequest key) noexcept
     {
+        if (IsDeferredLighting(key.role))
+        {
+            assert(key.variant == 0);
+            return DeferredPipelineBase + DeferredLightingIndex(key.role);
+        }
         if (key.role == ProductShader::StaticCoreGBuffer)
         {
             return CorePipelineBase + key.variant;
@@ -575,13 +615,59 @@ namespace Physara::Renderer::Detail
         return (IsDepthRole(key.role) ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
     }
 
+    void ForwardPrograms::PrepareDeferredLighting(ForwardDevice &owner, ShaderPipelineRequest key,
+                                                   const Shader::ProductPackages &packages)
+    {
+        auto &pipeline = pipelines[PipelineSlot(key)];
+        if (pipeline)
+        {
+            return;
+        }
+        const auto index = DeferredLightingIndex(key.role);
+        auto shaders = LoadProgram(owner.device, key.role, owner.packagePaths.deferredColors[index], packages,
+                                   StaticAbi::AbiHash);
+        if (!owner.deferredSurfaceLayout)
+        {
+            auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
+            auto &layout = layoutsForProgram[1];
+            std::erase_if(layout.bindings, [](const auto &item)
+            {
+                return item.type == RHI::ResourceType::StructuredBuffer_SRV;
+            });
+            layout.visibility = RHI::ShaderType::Pixel;
+            owner.deferredSurfaceLayout = owner.device.CreateBindingLayout(layout);
+            if (!owner.deferredSurfaceLayout)
+            {
+                Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot prepare DeferredLighting surface layout");
+            }
+        }
+        RHI::GraphicsPipelineDesc desc;
+        desc.SetVertexShader(shaders.vertex.Get()).SetFragmentShader(shaders.fragment.Get())
+            .AddBindingLayout(PrepareFroxelViewLayout(owner))
+            .AddBindingLayout(owner.deferredSurfaceLayout.Get())
+            .AddBindingLayout(PrepareLightLayout(owner, DeferredLightingKind(key.role)));
+        desc.renderState.depthStencilState.DisableDepthTest().DisableDepthWrite().DisableStencil();
+        desc.renderState.rasterState.SetCullMode(RHI::RasterCullMode::None).EnableScissor();
+        auto ready = owner.device.CreateGraphicsPipeline(desc, RHI::FramebufferInfo().AddColorFormat(WorkingFormat));
+        if (!ready)
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot link DeferredLighting pipeline");
+        }
+        deferredColors[index] = std::move(shaders);
+        pipeline = std::move(ready);
+    }
+
     RHI::GraphicsPipelineHandle ForwardPrograms::FindPipeline(ShaderPipelineRequest key) const noexcept
     {
-        return key.role == ProductShader::ForwardSky ? skyPipeline : pipelines[GeometrySlot(key)];
+        return key.role == ProductShader::ForwardSky ? skyPipeline : pipelines[PipelineSlot(key)];
     }
 
     std::string_view ForwardPrograms::ProgramContent(ProductShader role) const noexcept
     {
+        if (IsDeferredLighting(role))
+        {
+            return deferredColors[DeferredLightingIndex(role)].contentHash;
+        }
         switch (role)
         {
         case ProductShader::StaticCoreGBuffer: return coreGBuffer.contentHash;
@@ -608,7 +694,13 @@ namespace Physara::Renderer::Detail
             skyPipeline = std::move(existing);
             return true;
         }
-        if (!SurfaceAttachments(key.role).empty())
+        if (IsDeferredLighting(key.role))
+        {
+            const auto mode = DeferredLightingIndex(key.role);
+            auto shaders = source.deferredColors[mode];
+            deferredColors[mode] = std::move(shaders);
+        }
+        else if (!SurfaceAttachments(key.role).empty())
         {
             const bool core = key.role == ProductShader::StaticCoreGBuffer;
             auto &program = core ? coreGBuffer : surfaceAux;
@@ -638,7 +730,7 @@ namespace Physara::Renderer::Detail
                 colors[mode] = std::move(shaders);
             }
         }
-        pipelines[GeometrySlot(key)] = std::move(existing);
+        pipelines[PipelineSlot(key)] = std::move(existing);
         return true;
     }
 
@@ -649,11 +741,16 @@ namespace Physara::Renderer::Detail
             skyPipeline = nullptr;
             skyContent.clear();
         }
+        else if (IsDeferredLighting(role))
+        {
+            deferredColors[DeferredLightingIndex(role)] = {};
+            pipelines[PipelineSlot({role, 0})] = nullptr;
+        }
         else if (!SurfaceAttachments(role).empty())
         {
             auto &program = role == ProductShader::StaticCoreGBuffer ? coreGBuffer : surfaceAux;
             program = {};
-            std::fill_n(pipelines.begin() + GeometrySlot({role, 0}), GeometryPhaseSlots, RHI::GraphicsPipelineHandle{});
+            std::fill_n(pipelines.begin() + PipelineSlot({role, 0}), GeometryPhaseSlots, RHI::GraphicsPipelineHandle{});
         }
         else if (IsDepthRole(role))
         {
@@ -686,7 +783,12 @@ namespace Physara::Renderer::Detail
             PrepareSky(device, paths, packages);
             return;
         }
-        auto &pipeline = pipelines[GeometrySlot(key)];
+        if (IsDeferredLighting(key.role))
+        {
+            PrepareDeferredLighting(owner, key, packages);
+            return;
+        }
+        auto &pipeline = pipelines[PipelineSlot(key)];
         if (pipeline)
         {
             return;
@@ -750,15 +852,7 @@ namespace Physara::Renderer::Detail
         const auto lighting = static_cast<LightingProgram>(mode);
         if (UsesFroxels(lighting))
         {
-            if (!owner.froxelViewLayout)
-            {
-                owner.froxelViewLayout = device.CreateBindingLayout(StaticAbi::MakeBindingLayouts().front());
-                if (!owner.froxelViewLayout)
-                {
-                    Reject(ViewSettingReason::ScenePipelineUnavailable, "Cannot prepare Froxel PerView layout");
-                }
-            }
-            desc.AddBindingLayout(owner.froxelViewLayout.Get());
+            desc.AddBindingLayout(PrepareFroxelViewLayout(owner));
         }
         else
         {

@@ -1,14 +1,7 @@
 // 静态片元的世界空间框架与几何镜面过滤入口, 消费 StaticVertexFetch 的插值结果.
 // 材质层负责 normal 取样及解码; 本文件只准备方向和光栅像素尺度的方差项.
 #include <Source/Common/UnitDirection.glsl>
-
-// 两个法线都是世界空间单位方向. geometricNormal 是未施加 normal map 和背面翻转的插值法线,
-// 用于估计几何变化; shadingNormal 包含贴图与有效面向, 用于 BRDF 和法线预览.
-struct SurfaceGeometry
-{
-    vec3 geometricNormal;
-    vec3 shadingNormal;
-};
+#include <Source/Geometry/SurfaceGeometry.glsl>
 
 // 未使用材质贴图或面向条件的几何法线, 也供一致控制流中的粗糙度求导使用.
 vec3 GeometricNormal()

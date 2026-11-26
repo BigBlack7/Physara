@@ -27,12 +27,12 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 按生成接口的列布局写入矩阵. 任一 double 分量超出有限 float 范围时返回 false.
-    template <typename Columns>
-    static bool StoreMatrix(Columns &output, const glm::dmat4 &matrix) noexcept
+    template <typename Columns, glm::length_t Size>
+    static bool StoreMatrix(Columns &output, const glm::mat<Size, Size, double> &matrix) noexcept
     {
-        for (std::uint32_t column = 0; column < 4; ++column)
+        for (glm::length_t column = 0; column < Size; ++column)
         {
-            for (std::uint32_t row = 0; row < 4; ++row)
+            for (glm::length_t row = 0; row < Size; ++row)
             {
                 const auto value = matrix[column][row];
                 if (!(std::abs(value) <= (std::numeric_limits<float>::max)()))
@@ -43,6 +43,14 @@ namespace Physara::Renderer::Detail
             }
         }
         return true;
+    }
+
+    /// @brief 比较光栅所用的投影与三段原点. 仅尾数变化也会使安全帧槽中的旧常量失效.
+    static bool SameRasterTransform(const StaticAbi::ForwardView &a, const StaticAbi::ForwardView &b) noexcept
+    {
+        return a.originHigh == b.originHigh && a.originLow == b.originLow && a.originResidual == b.originResidual &&
+            std::ranges::equal(a.clipFromOrigin, b.clipFromOrigin,
+                               [](const auto &left, const auto &right) { return left.value == right.value; });
     }
 
     /// @brief 编码对象与法线矩阵, 以及在图元世界基点附近求光照所需的仿射系数.
@@ -58,7 +66,7 @@ namespace Physara::Renderer::Detail
         {
             return invalidFrame;
         }
-        // 选取靠近几何的世界基点并窄化一次. 它只作为光照坐标的原点, 裁剪矩阵沿用现有路径.
+        // 选取靠近几何的世界基点并窄化一次. 光栅、眼点和局部灯从同一基点消去世界平移.
         const auto worldAnchor = worldFromLocal * glm::dvec4(anchor[0], anchor[1], anchor[2], 1.0);
         const std::array position{worldAnchor.x, worldAnchor.y, worldAnchor.z};
         if (!StoreGpuVector(row.lightingAnchor, position))
@@ -462,36 +470,39 @@ namespace Physara::Renderer::Detail
         text.Append(reason);
     }
 
-    /// @brief 编码当前相机, 请求模式及活动灯表的两段计数. 只在槽安全且字段已改变或上传未接受时排入写入.
+    /// @brief 以当前眼点为主光栅原点, 编码投影、模式及活动灯表的两段计数.
+    /// 只在槽安全且字段已改变或上传未接受时排入写入.
     static void PrepareViewRow(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
-                               PreviewMode mode, bool usesLighting)
+                               PreviewMode mode)
     {
         StaticAbi::ForwardView value{};
-        if (!StoreMatrix(value.clipFromWorld, glm::make_mat4(view.camera->renderClipFromView.data()) *
-                                              glm::make_mat4(view.camera->viewFromWorld.data())))
+        const auto &camera = *view.camera;
+        const std::span basis(camera.worldFromView);
+        const auto eye = basis.subspan<12, 3>();
+        if (!StoreGpuPosition(value.originHigh, value.originLow, value.originResidual, eye))
+        {
+            Reject(ViewSettingReason::InvalidProjection, "Forward raster origin exceeds the GPU float range");
+        }
+        // 光栅与屏幕恢复共用这三段眼点. 矩阵只旋转相对位移并应用本次渲染投影, 保留实际抖动.
+        const auto viewFromOrigin = glm::dmat4(glm::dmat3(glm::make_mat4(camera.viewFromWorld.data())));
+        if (!StoreMatrix(value.clipFromOrigin, glm::make_mat4(camera.renderClipFromView.data()) * viewFromOrigin))
         {
             Reject(ViewSettingReason::InvalidProjection, "Forward clip transform exceeds the GPU float range");
         }
         value.mode = static_cast<std::uint32_t>(mode);
-        value.preExposure = view.camera->exposure.preExposure;
+        value.preExposure = camera.exposure.preExposure;
         if (frame.activeLights)
         {
             value.directionalCount = frame.activeLights->directionalCount;
             value.localCount = frame.activeLights->localCount;
         }
-        if (usesLighting)
+        value.orthographic = camera.orthographic ? 1u : 0u;
+        if (camera.orthographic)
         {
-            const std::span basis(view.camera->worldFromView);
-            value.orthographic = view.camera->orthographic ? 1u : 0u;
-            // 透视使用眼点, 正交使用相机世界 +Z, 即朝向观察者的固定单位向量.
-            const auto viewer = view.camera->orthographic ? basis.subspan<8, 3>() : basis.subspan<12, 3>();
-            if (!StoreGpuVector(value.viewer, viewer))
+            // 正交 BRDF 使用相机世界 +Z. 光栅原点仍为眼点.
+            if (!StoreGpuVector(value.orthographicDirection, basis.subspan<8, 3>()))
             {
-                Reject(ViewSettingReason::InvalidProjection, "Forward viewer exceeds the GPU float range");
-            }
-            if (!view.camera->orthographic)
-            {
-                value.viewerLow = GpuPositionLow(viewer, value.viewer);
+                Reject(ViewSettingReason::InvalidProjection, "Forward view direction exceeds the GPU float range");
             }
         }
         if (!frame.view)
@@ -499,28 +510,12 @@ namespace Physara::Renderer::Detail
             frame.view = CreateConstantRow(device, sizeof(value), 0);
         }
         device.Use(*frame.view);
-        const auto same = [&]
-        {
-            // 曝光, 灯计数或观察向量均可独立改变. 比较只读取实际字段.
-            if (!frame.viewValues || frame.viewValues->mode != value.mode ||
-                frame.viewValues->preExposure != value.preExposure || frame.viewValues->viewer != value.viewer ||
-                frame.viewValues->viewerLow != value.viewerLow ||
-                frame.viewValues->orthographic != value.orthographic ||
-                frame.viewValues->directionalCount != value.directionalCount ||
-                frame.viewValues->localCount != value.localCount)
-            {
-                return false;
-            }
-            for (std::size_t i = 0; i < value.clipFromWorld.size(); ++i)
-            {
-                if (value.clipFromWorld[i].value != frame.viewValues->clipFromWorld[i].value)
-                {
-                    return false;
-                }
-            }
-            return true;
-        };
-        if (!frame.view->accepted || !same())
+        const auto &previous = frame.viewValues;
+        if (!frame.view->accepted || !previous || previous->mode != value.mode ||
+            previous->preExposure != value.preExposure || previous->orthographic != value.orthographic ||
+            previous->orthographicDirection != value.orthographicDirection ||
+            previous->directionalCount != value.directionalCount || previous->localCount != value.localCount ||
+            !SameRasterTransform(value, *previous))
         {
             // 先撤销已上传资格. 图未接受或上传准备失败时保留 false, 本槽安全复用后仍会重试该行.
             frame.view->accepted = false;
@@ -779,6 +774,23 @@ namespace Physara::Renderer::Detail
         }
     }
 
+    /// @brief 打包最终 D32 所在栅格的逆投影和相机旋转. 世界眼点高低位由同一 View 的 Froxel 数据提供.
+    /// renderRect 以渲染画布像素计, 包含留边偏移. 逆矩阵对应实际写深度时带抖动的渲染投影.
+    static void PrepareDeferredView(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
+    {
+        StaticAbi::DeferredView value{};
+        const auto &camera = *view.camera;
+        if (!StoreMatrix(value.viewFromRenderClip, glm::make_mat4(camera.viewFromRenderClip.data())) ||
+            !StoreMatrix(value.worldBasis, glm::dmat3(glm::make_mat4(camera.worldFromView.data()))))
+        {
+            Reject(ViewSettingReason::InvalidProjection, "DeferredLighting inverse projection exceeds the GPU float range");
+        }
+        const auto &rect = frame.source.layout.rect;
+        value.renderRect = {rect.x, rect.y, rect.extent.width, rect.extent.height};
+        PrepareDrawBuffer(device, frame, frame.deferredView, GraphUsage::ConstantBuffer,
+                          std::as_bytes(std::span(&value, 1)), 0, GraphUploadSource::ForwardView);
+    }
+
     /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
     /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
     static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitRoutes = false)
@@ -873,13 +885,13 @@ namespace Physara::Renderer::Detail
     /// @brief 前置深度和最终 Deferred 表面均先于几何颜色消费.
     static SurfacePhase ColorPhase(const ViewResourceNeeds &needs) noexcept
     {
-        return needs.earlyDepth || needs.shadeDeferredCore ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        return needs.NeedsEarlyDepth() || needs.deferredLighting ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
     }
 
-    /// @brief 核心光照由屏幕阶段交付时, 只有辅助几何需要前向颜色 Pipeline.
+    /// @brief 普通颜色使用所有批次. Deferred 的前向颜色只消费辅助几何. 独立表面没有颜色批次.
     static bool UsesForwardColor(const ViewResourceNeeds &needs, OpaqueSurfaceRoute route) noexcept
     {
-        return !needs.shadeDeferredCore || route != OpaqueSurfaceRoute::CoreDeferred;
+        return !needs.surfaceOnly && (!needs.deferredLighting || route != OpaqueSurfaceRoute::CoreDeferred);
     }
 
     /// @brief 同次 CPU 投影编码为相对原点的列主序 clip 矩阵. caster 常量偏移单独追加.
@@ -897,13 +909,6 @@ namespace Physara::Renderer::Detail
         return clip;
     }
 
-    /// @brief 比较生成矩阵的有效列, 忽略对齐填充.
-    template <typename Columns>
-    static bool SameMatrix(const Columns &left, const Columns &right) noexcept
-    {
-        return std::ranges::equal(left, right, [](const auto &a, const auto &b) { return a.value == b.value; });
-    }
-
     /// @brief 在安全槽内复用阴影 View 常量, 修改仅登记本轮的图上传.
     static void PrepareCasterConstants(ForwardDevice &device, StaticDrawWork &work, const auto &value)
     {
@@ -914,9 +919,7 @@ namespace Physara::Renderer::Detail
         }
         device.Use(*work.view);
         const auto &previous = work.viewValues;
-        if (!work.view->accepted || !previous || value.shadowOriginHigh != previous->shadowOriginHigh ||
-            value.shadowOriginLow != previous->shadowOriginLow ||
-            !SameMatrix(value.shadowClipFromOrigin, previous->shadowClipFromOrigin))
+        if (!work.view->accepted || !previous || !SameRasterTransform(value, *previous))
         {
             work.view->accepted = false;
             work.uploads.Add(work.view, work.view->buffer, std::as_bytes(std::span(&value, 1)),
@@ -932,15 +935,10 @@ namespace Physara::Renderer::Detail
     {
         auto &shadow = *frame.shadow;
         StaticAbi::ForwardShadowView value{};
-        // 方向光若获准总是首组. 只有级联选级需要稳定相机的原点及前向.
+        // 方向光若获准总是首组. 级联选级使用这里的前向和主 View 行的眼点.
         if (shadow.queryRows.front().kind == 0)
         {
             const std::span camera(view.camera->worldFromView);
-            if (!StoreGpuVector(value.cameraOriginHigh, camera.subspan<12, 3>()))
-            {
-                Reject(ViewSettingReason::InvalidProjection, "Cascade query camera origin exceeds the GPU float range");
-            }
-            value.cameraOriginLow = GpuPositionLow(camera.subspan<12, 3>(), value.cameraOriginHigh);
             for (std::size_t axis = 0; axis < 3; ++axis)
             {
                 value.cameraForward[axis] = static_cast<float>(-camera[8 + axis]);
@@ -957,8 +955,7 @@ namespace Physara::Renderer::Detail
         }
         device.Use(*shadow.constants);
         const auto &previous = shadow.values;
-        if (!shadow.constants->accepted || !previous || previous->cameraOriginHigh != value.cameraOriginHigh ||
-            previous->cameraOriginLow != value.cameraOriginLow || previous->cameraForward != value.cameraForward ||
+        if (!shadow.constants->accepted || !previous || previous->cameraForward != value.cameraForward ||
             previous->edge != value.edge || previous->layerCount != value.layerCount || previous->pcf != value.pcf)
         {
             shadow.constants->accepted = false;
@@ -984,12 +981,11 @@ namespace Physara::Renderer::Detail
                 auto &row = rows[first + i];
                 const auto &cascade = plan->cascades[i];
                 const auto &projection = cascade.projection;
-                if (!StoreGpuVector(row.originHigh, projection.origin) ||
+                if (!StoreGpuPosition(row.originHigh, row.originLow, row.originResidual, projection.origin) ||
                     !StoreMatrix(row.clipFromOrigin, CascadeClip(projection)))
                 {
                     Reject(ViewSettingReason::InvalidProjection, "Directional shadow projection exceeds float range");
                 }
-                row.originLow = GpuPositionLow(projection.origin, row.originHigh);
                 row.worldTexel = static_cast<float>(projection.halfExtent * (2.0 / shadow.depth.edge));
                 row.farDepth = cascade.farDepth;
                 row.transition = cascade.transition;
@@ -1005,9 +1001,10 @@ namespace Physara::Renderer::Detail
             const auto &local = std::get<LocalShadowPlan>(light.views);
             const auto &volume = local.volume;
             group.kind = std::uint32_t(volume.outerCone > 0 ? Asset::ModelLightKind::Spot : Asset::ModelLightKind::Point);
-            std::ranges::transform(volume.position, group.originHigh.begin(),
-                                   [](double value) { return static_cast<float>(value); });
-            group.originLow = GpuPositionLow(volume.position, group.originHigh);
+            if (!StoreGpuPosition(group.originHigh, group.originLow, group.originResidual, volume.position))
+            {
+                Reject(ViewSettingReason::InvalidProjection, "Local shadow projection exceeds float range");
+            }
             group.nearDepth = static_cast<float>(volume.nearPlane);
             group.farPlane = static_cast<float>(volume.farPlane);
             group.receiverOffsetRatio = local.receiverOffsetRatio;
@@ -1031,22 +1028,23 @@ namespace Physara::Renderer::Detail
         StaticAbi::ForwardView raster{};
         const auto *directional = std::get_if<DirectionalShadowPlan>(&light.views);
         const auto &origin = directional ? row : shadow.queryRows[first];
-        raster.shadowOriginHigh = origin.originHigh;
-        raster.shadowOriginLow = origin.originLow;
+        raster.originHigh = origin.originHigh;
+        raster.originLow = origin.originLow;
+        raster.originResidual = origin.originResidual;
         for (std::size_t column = 0; column < row.clipFromOrigin.size(); ++column)
         {
-            raster.shadowClipFromOrigin[column].value = row.clipFromOrigin[column].value;
+            raster.clipFromOrigin[column].value = row.clipFromOrigin[column].value;
         }
         if (directional)
         {
             const auto &projection = directional->cascades[i].projection;
             const double texel = projection.halfExtent * (2.0 / shadow.depth.edge);
-            raster.shadowClipFromOrigin[3].value[2] =
+            raster.clipFromOrigin[3].value[2] =
                 static_cast<float>(texel * ShadowDepthConvention::CasterBiasTexels / projection.depthRange);
         }
         else
         {
-            raster.shadowClipFromOrigin[3].value[2] = std::get<LocalShadowPlan>(light.views).projections[i].casterClipZ;
+            raster.clipFromOrigin[3].value[2] = std::get<LocalShadowPlan>(light.views).projections[i].casterClipZ;
         }
         return raster;
     }
@@ -1190,6 +1188,7 @@ namespace Physara::Renderer::Detail
         std::map<MaterialRow *, std::size_t> rows;
         const auto phase = ColorPhase(frame.needs);
         const bool needsSurface = frame.needs.NeedsCoreSurface();
+        const bool needsColor = !frame.needs.surfaceOnly;
         for (const auto index : view.primitives)
         {
             PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !needsSurface);
@@ -1198,12 +1197,13 @@ namespace Physara::Renderer::Detail
         {
             throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
         }
-        // 核心屏幕颜色由回调提供. 仅仍进入前向颜色的受光表面需要本路的灯和 Froxel 输入.
-        const bool litDraws = std::ranges::any_of(frame.materialRows, [&](const auto &row)
+        const bool coreLighting = frame.needs.deferredLighting && std::ranges::any_of(frame.materialRows, [](const auto &row)
         {
-            return row->values.unlit == 0 && UsesForwardColor(frame.needs, row->route);
+            return row->route == OpaqueSurfaceRoute::CoreDeferred;
         });
-        const bool usesLighting = !shadowLight && litDraws && IsLitPreview(mode);
+        // 核心与辅助受光共享本 View 的灯表、Froxel、阴影及环境准备.
+        const bool usesLighting = needsColor && !shadowLight && IsLitPreview(mode) &&
+            std::ranges::any_of(frame.materialRows, [](const auto &row) { return row->values.unlit == 0; });
         frame.usesLighting = usesLighting;
         if (shadowLight)
         {
@@ -1219,11 +1219,11 @@ namespace Physara::Renderer::Detail
                 frame.environment.program = LightingProgram::CascadePreview;
             }
         }
-        else
+        else if (needsColor)
         {
-            PrepareEnvironment(device, frame, view, mode, litDraws);
+            PrepareEnvironment(device, frame, view, mode, usesLighting);
         }
-        const auto groups = view.ShadowGroups(usesLighting);
+        const auto groups = needsColor ? view.ShadowGroups(usesLighting) : std::span<const ShadowLightPlan>{};
         if (!groups.empty() && !frame.draws.empty())
         {
             if (usesLighting)
@@ -1238,15 +1238,21 @@ namespace Physara::Renderer::Detail
         {
             frame.shadow.reset();
         }
-        if (usesLighting && view.opaquePath == OpaquePath::ForwardPlus)
+        if (usesLighting && (frame.needs.deferredLighting || view.opaquePath == OpaquePath::ForwardPlus))
         {
             // 实际可绘材质决定是否需要列表. 到这里阴影和环境角色均已选好, 只替换局部灯候选的来源.
             frame.environment.program = WithFroxels(frame.environment.program);
         }
+        if (coreLighting)
+        {
+            frame.deferredColor = DeferredLightingRequest(frame.environment.program);
+            device.shaderDemand.Add(*frame.deferredColor);
+            PrepareDeferredView(device, frame, view);
+        }
         if (!frame.draws.empty())
         {
-            // 普通前向或辅助重画才绑定灯表, 即使该颜色角色需要的是共享零表.
-            if (!shadowLight && (!frame.needs.shadeDeferredCore || frame.HasAuxiliarySurface()))
+            // 只为实际核心或前向颜色准备灯表, 无光照的前向配方沿用共享零表.
+            if (needsColor && !shadowLight)
             {
                 PrepareLightTable(device, frame, view, usesLighting);
                 if (frame.shadow)
@@ -1254,10 +1260,10 @@ namespace Physara::Renderer::Detail
                     PrepareShadowReferences(device, frame, view);
                 }
             }
-            PrepareViewRow(device, frame, view, mode, !shadowLight && usesLighting);
+            PrepareViewRow(device, frame, view, mode);
             // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
             SortDraws(frame);
-            // 仅表面消费者需拆分混合路由, 两个辅助 Pass 沿相同的有序批次绘制.
+            // GBuffer 按路由拆分批次, 两个辅助 Pass 沿相同的有序批次绘制.
             PackBatches(device, frame, needsSurface);
         }
         if (frame.environment.sky)
@@ -1272,18 +1278,19 @@ namespace Physara::Renderer::Detail
             {
                 device.shaderDemand.Add(SurfaceShader(route, draw));
             }
-            if (UsesForwardColor(frame.needs, route))
+            const bool forwardColor = UsesForwardColor(frame.needs, route);
+            if (forwardColor)
             {
                 device.shaderDemand.Add(DrawShader(frame, draw, phase));
             }
-            if (usesLighting && frame.alternatePath && UsesForwardColor(frame.needs, route))
+            if (usesLighting && frame.alternatePath && forwardColor)
             {
                 const auto program = FullListProgram(frame.environment.program);
                 const auto alternate = *frame.alternatePath == OpaquePath::ForwardPlus ? WithFroxels(program) : program;
                 device.shaderDemand.Add(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase,
                                                         alternate), false);
             }
-            if (frame.needs.earlyDepth && !frame.needs.shadeDeferredCore)
+            if (frame.needs.NeedsEarlyDepth())
             {
                 device.shaderDemand.Add(DrawShader(frame, draw, SurfacePhase::Depth));
             }
@@ -1357,6 +1364,12 @@ namespace Physara::Renderer::Detail
             frame.environment.skyLayout = device.activeShaders->programs.skyLayout;
             shaderReady = bool(frame.environment.skyPipeline);
         }
+        if (frame.deferredColor)
+        {
+            frame.deferredPipeline = device.RequestShader(*frame.deferredColor);
+            frame.deferredSurfaceLayout = device.deferredSurfaceLayout;
+            shaderReady &= bool(frame.deferredPipeline);
+        }
         const auto phase = ColorPhase(frame.needs);
         // 本帧只从已选代取得各批次使用的句柄. 实例及间接参数已按固定状态分组.
         for (const auto &batch : frame.batches)
@@ -1373,7 +1386,7 @@ namespace Physara::Renderer::Detail
                 draw.surfacePipeline = device.RequestShader(SurfaceShader(route, draw));
                 shaderReady &= bool(draw.surfacePipeline);
             }
-            if (frame.needs.earlyDepth && !frame.needs.shadeDeferredCore)
+            if (frame.needs.NeedsEarlyDepth())
             {
                 draw.depthPipeline = device.RequestShader(DrawShader(frame, draw, SurfacePhase::Depth));
                 shaderReady &= bool(draw.depthPipeline);
@@ -1400,16 +1413,15 @@ namespace Physara::Renderer::Detail
                 }
             }
         }
-        if (frame.needs.shadeDeferredCore && !frame.HasAuxiliarySurface())
+        if (!frame.needs.surfaceOnly)
         {
-            return;
-        }
-        const auto program = frame.environment.program;
-        frame.lightLayout = device.lightLayouts[std::size_t(FullListProgram(program))];
-        if (UsesFroxels(program))
-        {
-            assert(device.froxelViewLayout);
-            frame.froxelViewLayout = device.froxelViewLayout;
+            const auto program = frame.environment.program;
+            frame.lightLayout = device.lightLayouts[std::size_t(FullListProgram(program))];
+            if (UsesFroxels(program))
+            {
+                assert(device.froxelViewLayout);
+                frame.froxelViewLayout = device.froxelViewLayout;
+            }
         }
     }
 }

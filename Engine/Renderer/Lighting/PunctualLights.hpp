@@ -51,10 +51,10 @@ namespace Physara::Renderer::Detail
     /// @return 任一分量越出有限范围时返回 false, 先前分量可能已写入, 调用方须放弃本候选.
     [[nodiscard]] bool StoreGpuVector(std::array<float, 3> &output, std::span<const double, 3> input) noexcept;
 
-    /// @brief 在 double 中计算世界位置减去高位的米制残差, 再逐分量舍入为 FP32.
-    /// @pre high 是同一 position 各分量的有限 FP32 编码. 两部分共用场景世界坐标原点.
-    [[nodiscard]] std::array<float, 3> GpuPositionLow(std::span<const double, 3> position,
-                                                       std::span<const float, 3> high) noexcept;
+    /// @brief 将世界米制位置编码为高位、低位及低位窄化的有符号余量.
+    /// @return 高位超出 FP32 有限范围时返回 false, 调用方放弃该编码.
+    [[nodiscard]] bool StoreGpuPosition(std::array<float, 3> &high, std::array<float, 3> &low,
+        std::array<float, 3> &residual, std::span<const double, 3> position) noexcept;
 
     /// @brief 通过 GPU 编码边界检查整份灯集合, 保留原光度单位和可选范围.
     /// @pre indices 来自同一次成功的 View 准备, 借用的 SceneFrame 在调用期间有效.

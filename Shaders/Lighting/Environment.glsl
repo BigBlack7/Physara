@@ -27,7 +27,8 @@ vec3 DiffuseVisibility(float a, vec3 albedo)
 }
 
 // 漫反射与镜面共享环境逆旋转, 只将 AO 应用于间接分量.
-vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, CoreDfgTerms terms)
+vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, CoreDfgTerms terms,
+                 float reflectionConfidence, vec3 preExposedReflection)
 {
     float noV = CoreNormalViewCosine(normal, viewDirection);
     vec3 diffuse = EvaluateEnvironmentSh(environment.environmentFromWorld * normal);
@@ -44,8 +45,10 @@ vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, C
     vec3 specularFactor = terms.directionalAlbedo * terms.specularCompensation * specularAo;
 
     ivec3 exponent = ivec3(environment.radianceExponent);
+    // 屏幕反射已乘置信度与预曝光. 两路镜面使用同一核心波瓣权重, 环境标定只影响环境输入.
+    vec3 reflectedLight = ScaleEnvironmentLight(specular, specularFactor, environment.radianceMantissa, exponent) *
+                          (1.0 - reflectionConfidence) + preExposedReflection * specularFactor;
     return ScaleEnvironmentLight(diffuse, diffuseFactor, environment.radianceMantissa,
-                                 exponent + environment.shExponent) +
-           ScaleEnvironmentLight(specular, specularFactor, environment.radianceMantissa, exponent);
+                                 exponent + environment.shExponent) + reflectedLight;
 }
 #endif

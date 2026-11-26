@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 产品几何, 表面 MRT, 阴影和显示程序目录. 构建驱动及热重载按同一角色取得变体和源入口.
+/// @brief 产品程序目录涵盖几何, 表面 MRT, 屏幕照明, 阴影和显示. 构建驱动及热重载按同一角色取得变体和源入口.
 
 #include <span>
 
@@ -36,6 +36,12 @@ namespace Physara::Shader
         StaticForwardPlusIblShadows,
         StaticCoreGBuffer,
         StaticSurfaceAux,
+        DeferredLighting,
+        DeferredLightingPhysical,
+        DeferredLightingIbl,
+        DeferredLightingShadows,
+        DeferredLightingPhysicalShadows,
+        DeferredLightingIblShadows,
         Count
     };
 
