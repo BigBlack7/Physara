@@ -239,8 +239,10 @@ namespace Physara::RHI::OpenGL
         const auto &info = GetFormatInfo(format);
         const auto &storage = device.GetFormatCaps(desc.format, desc.dimension);
         const auto &view = device.GetFormatCaps(format, dimension);
-        // 按视图的真实目标核对 ShaderSample. cube 基线只接受颜色, 二维 packed 仍按深度分量解释.
-        RequirePreparation((view.support & FormatSupport::ShaderSample) != 0 &&
+        // 片元按 texel 读取无符号二维视图. 浮点采样仍按实际视图目标核对.
+        const bool unsignedPlane = dimension == TextureDimension::Texture2D && info.kind == FormatKind::Integer && !info.isSigned;
+        const auto required = unsignedPlane ? FormatSupport::ShaderLoad : FormatSupport::ShaderSample;
+        RequirePreparation((view.support & required) != 0 &&
                                (info.kind != FormatKind::DepthStencil || format == desc.format) &&
                                (format == desc.format ||
                                 (desc.isTypeless && storage.viewClass != 0 && storage.viewClass == view.viewClass)),
@@ -348,6 +350,7 @@ namespace Physara::RHI::OpenGL
                     else
                     {
                         views[index] = InspectTexture(*this, item, *nativeLayout->GetDesc());
+                        record.imageFormat = item.format == Format::UNKNOWN ? views[index].texture->GetDesc().format : item.format;
                     }
                     // 保存 storage 空间中的实际范围, view 的 mip/layer 重编号不能用于用途或 feedback 判断.
                     record.dimension = views[index].dimension;

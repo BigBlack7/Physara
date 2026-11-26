@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -59,7 +60,8 @@ namespace Physara::Shader
         StructuredUav,
         Image2D,
         Image2DArray,
-        Texture2DArray ///< 图形阶段的单个浮点采样图像, 层索引属于图像坐标.
+        Texture2DArray, ///< 图形阶段的单个浮点采样图像, 层索引属于图像坐标.
+        Texture2DUInt ///< 片元阶段按 texel 读取的无符号二维图像.
     };
 
     /// @brief 存储绑定的访问权限, 由声明生成并与最终 IR 比较.
@@ -144,6 +146,7 @@ namespace Physara::Shader
         std::vector<ResourceDeclaration> bindings;
         std::vector<StageIoDeclaration> io;
         std::array<std::uint32_t, 3> localSize{}; ///< 仅 Compute 接口声明三个固定轴.
+        std::map<std::string, std::uint32_t> uintConstants; ///< 编解码共用的命名常量, 值进入接口身份.
     };
 
     /// @brief 受控逻辑路径与原文件字节摘要, 不含机器绝对路径, 用于可重建内容身份.

@@ -101,21 +101,23 @@ namespace Physara::Runtime
     }
 
     EditorGraphProfile::EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews,
-                                           bool diagnostic, std::uint64_t shadowBytes)
+                                           bool diagnostic, std::uint64_t shadowBytes, bool coreGBuffer)
     {
         const bool scene = sceneViews != 0;
         const auto info = host.GetInfo();
         constexpr std::array formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA8_UNORM,
-                                     RHI::Format::RGBA16_FLOAT, RHI::Format::D32};
-        auto count = scene ? formats.size() : 2;
+                                     RHI::Format::RGBA16_FLOAT, RHI::Format::D32,
+                                     RHI::Format::R11G11B10_FLOAT, RHI::Format::R16_UINT};
+        std::size_t count = coreGBuffer ? formats.size() : (scene ? 4 : 2);
         for (std::size_t index = 0; index < count; ++index)
         {
             m_Textures[index] = {.format = formats[index], .dimension = RHI::TextureDimension::Texture2D,
                 .sampleCount = 1, .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
                 .maxDepth = 1, .maxLayers = 1,
                 .formatSupport = host.GetDevice()->QueryFormatSupport(formats[index]),
-                .copySource = true, .copyDestination = true, .clear = true, .maxSampledLayers = 1,
+                .copySource = true, .copyDestination = true, .clear = true,
                 .presentation = formats[index] == RHI::Format::SRGBA8_UNORM};
+            m_Textures[index].maxSampledLayers = m_Textures[index].SupportsShaderRead() ? 1u : 0u;
             if (host.HasFatalGraphicsError())
             {
                 return;
@@ -159,12 +161,13 @@ namespace Physara::Runtime
                 if ((support & RHI::FormatSupport::ShaderUavStore) != RHI::FormatSupport::None)
                 {
                     // 逐 target 记录同一设备观察到的能力. 允许创建 storage 的目标才进入场景编译表.
-                    m_Textures[count++] = {.format = format, .dimension = dimension, .sampleCount = 1,
+                    auto &row = m_Textures[count++];
+                    row = {.format = format, .dimension = dimension, .sampleCount = 1,
                         .maxWidth = info.maxTextureSizePixels, .maxHeight = info.maxTextureSizePixels,
                         .maxDepth = 1, .maxLayers = maxLayers, .formatSupport = support,
                         .copySource = true, .copyDestination = true,
-                        .clear = bool(support & RHI::FormatSupport::RenderTarget),
-                        .maxSampledLayers = (support & RHI::FormatSupport::ShaderSample) != RHI::FormatSupport::None ? 1u : 0u};
+                        .clear = bool(support & RHI::FormatSupport::RenderTarget)};
+                    row.maxSampledLayers = row.SupportsShaderRead() ? 1u : 0u;
                 }
             };
             // RGBA8 和 RGBA16F 的 2D 行已有实际格式位, 补充其它二维格式及数组目标.
@@ -179,7 +182,7 @@ namespace Physara::Runtime
         m_Options = {.textures = std::span(m_Textures).first(count),
             .buffers = FrameBufferSupport(info, scene, structuredUav),
             .textureBoundaryStates = std::span(m_States).first(shadowBytes != 0 ? 3u : 2u),
-            .bufferBoundaryStates = std::span(m_States).first<2>(), .maxColorAttachments = 1,
+            .bufferBoundaryStates = std::span(m_States).first<2>(), .maxColorAttachments = coreGBuffer ? 4u : 1u,
             .transientByteBudget = sceneViews * ForwardAttachmentBudget + 32 * 1024 * 1024 + 4 +
                 shadowBytes + ((!scene || diagnostic) ? DiagnosticUploadBudget : 0),
             .transientObjectBudget = GraphResourcePool::DefaultLimit.objects};
@@ -755,6 +758,7 @@ namespace Physara::Runtime
             const auto sceneCount = declared.scene ? std::ranges::count_if(declared.scene->views,
                 [](const auto &source) { return source.has_value(); }) : 0;
             std::uint64_t shadowBytes = 0;
+            bool coreGBuffer = false;
             if (declared.scene)
             {
                 for (const auto &source : declared.scene->views)
@@ -762,11 +766,12 @@ namespace Physara::Runtime
                     if (source)
                     {
                         shadowBytes += source->shadowBytes;
+                        coreGBuffer |= source->coreGBuffer.has_value();
                     }
                 }
             }
             EditorGraphProfile profile(host, static_cast<std::size_t>(sceneCount), declared.diagnosticUpload.IsValid(),
-                                       shadowBytes);
+                                       shadowBytes, coreGBuffer);
             if (!errors.IsClear())
             {
                 return Failed(host, preparationFailure, "Frame.Profile",

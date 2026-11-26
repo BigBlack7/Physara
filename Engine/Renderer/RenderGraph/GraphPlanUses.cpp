@@ -288,7 +288,7 @@ namespace Physara::Renderer::Detail
     // 采样和着色器导出检查同一能力行和分量规则. Packed 深度只允许选择 Depth, 实际 SRV 由 RHI 创建.
     static bool SupportsSampledView(const TextureRange &range, const GraphTextureSupport &support) noexcept
     {
-        return HasSameFormatSampledAspect(range.aspect) && (support.formatSupport & FormatSupport::ShaderSample) != 0 &&
+        return HasSameFormatSampledAspect(range.aspect) && support.SupportsShaderRead() &&
                range.layerCount <= support.maxSampledLayers;
     }
 

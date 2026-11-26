@@ -406,8 +406,7 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 两种只写深度的程序使用首张几何表的各自阶段槽.
-    static bool IsDepthRole(ProductShader role) noexcept
+    bool IsDepthRole(ProductShader role) noexcept
     {
         return role == ProductShader::StaticDepth || role == ProductShader::StaticShadowDepth;
     }
@@ -428,6 +427,10 @@ namespace Physara::Renderer::Detail
 
     std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(ProductShader role) noexcept
     {
+        if (role == ProductShader::StaticCoreGBuffer)
+        {
+            return {}; // 与基本颜色共用完整 PerMaterial, 核心写入没有 PerPass 灯表.
+        }
         if (IsDepthRole(role))
         {
             return std::span(&CoverageResources, 1);
@@ -553,6 +556,10 @@ namespace Physara::Renderer::Detail
     // 两个深度角色各占首张表的 32 个槽. 颜色角色用自己的表号和表面阶段定位槽.
     static std::size_t GeometrySlot(ShaderPipelineRequest key) noexcept
     {
+        if (key.role == ProductShader::StaticCoreGBuffer)
+        {
+            return CorePipelineBase + key.variant;
+        }
         return (IsDepthRole(key.role) ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
     }
 
@@ -565,6 +572,7 @@ namespace Physara::Renderer::Detail
     {
         switch (role)
         {
+        case ProductShader::StaticCoreGBuffer: return coreGBuffer.contentHash;
         case ProductShader::ForwardSky: return skyContent;
         case ProductShader::StaticDepth: return depth.contentHash;
         case ProductShader::StaticShadowDepth: return shadowDepth.contentHash;
@@ -587,7 +595,15 @@ namespace Physara::Renderer::Detail
             skyPipeline = std::move(existing);
             return true;
         }
-        if (IsDepthRole(key.role))
+        if (key.role == ProductShader::StaticCoreGBuffer)
+        {
+            if (!coreGBuffer.vertex)
+            {
+                auto shaders = source.coreGBuffer;
+                coreGBuffer = std::move(shaders);
+            }
+        }
+        else if (IsDepthRole(key.role))
         {
             const bool shadow = key.role == ProductShader::StaticShadowDepth;
             auto &program = shadow ? shadowDepth : depth;
@@ -617,6 +633,11 @@ namespace Physara::Renderer::Detail
         {
             skyPipeline = nullptr;
             skyContent.clear();
+        }
+        else if (role == ProductShader::StaticCoreGBuffer)
+        {
+            coreGBuffer = {};
+            std::fill(pipelines.begin() + CorePipelineBase, pipelines.end(), RHI::GraphicsPipelineHandle{});
         }
         else if (IsDepthRole(role))
         {
@@ -660,9 +681,17 @@ namespace Physara::Renderer::Detail
         const bool doubleSided = (key.variant & 16) != 0;
         const bool depthOnly = IsDepthRole(key.role);
         const bool shadow = phase == SurfacePhase::ShadowDepth;
-        const auto mode = depthOnly ? 0 : LightingIndex(key.role);
+        const bool core = key.role == ProductShader::StaticCoreGBuffer;
+        const auto mode = depthOnly || core ? 0 : LightingIndex(key.role);
         auto &depthShaders = shadow ? shadowDepth : depth;
-        if (depthOnly)
+        if (core)
+        {
+            if (!coreGBuffer.vertex)
+            {
+                coreGBuffer = LoadProgram(device, key.role, paths.coreGBuffer, packages, StaticAbi::AbiHash);
+            }
+        }
+        else if (depthOnly)
         {
             if (!depthShaders.vertex)
             {
@@ -675,7 +704,7 @@ namespace Physara::Renderer::Detail
         {
             PrepareLighting(owner, static_cast<LightingProgram>(mode), packages);
         }
-        const auto &shaders = depthOnly ? depthShaders : colors[mode];
+        const auto &shaders = core ? coreGBuffer : (depthOnly ? depthShaders : colors[mode]);
         // 顶点存储仅依属性位决定, 同一格式可跨深度和颜色角色复用. 实际 Shader 输入由 Pipeline 核对.
         if (!inputLayouts[layout])
         {
@@ -720,7 +749,7 @@ namespace Physara::Renderer::Detail
         {
             desc.AddBindingLayout(binding.Get());
         }
-        if (!depthOnly)
+        if (!depthOnly && !core)
         {
             desc.AddBindingLayout(owner.lightLayouts[std::size_t(FullListProgram(lighting))].Get());
         }
@@ -739,7 +768,14 @@ namespace Physara::Renderer::Detail
         }
         RHI::FramebufferInfo target;
         target.SetDepthFormat(shadow ? ShadowDepthFormat : DepthFormat);
-        if (!depthOnly)
+        if (core)
+        {
+            for (auto format : CoreGBufferOutput::Formats)
+            {
+                target.AddColorFormat(format);
+            }
+        }
+        else if (!depthOnly)
         {
             target.AddColorFormat(WorkingFormat);
         }

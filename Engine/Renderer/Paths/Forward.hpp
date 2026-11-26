@@ -41,12 +41,14 @@ namespace Physara::Renderer
         std::filesystem::path physicalShadows;
         std::filesystem::path iblShadows;
         std::array<std::filesystem::path, 6> froxelColors; ///< Direct, DFG, IBL, 再按同序保存带阴影角色.
+        std::filesystem::path coreGBuffer;
     };
 
     /// @brief 当前路径按实际下游需求准备附加表面. 正常主视口由 ShadeOpaque 同时写颜色和深度.
     struct ViewResourceNeeds
     {
         bool earlyDepth = false;
+        bool coreGBuffer = false; ///< 显式消费者请求独立的最近核心表面.
     };
 
     /// @brief 未交付候选时的 View 状态及具体说明. Pending 可重试, 硬限制须改变输入后再准备.
@@ -94,10 +96,23 @@ namespace Physara::Renderer
         OpaquePath opaquePath = OpaquePath::Forward;
     };
 
+    /// @brief 同一 View 栅格上的四个颜色版本和独立 Reverse-Z 深度. 图外不得保留这些身份.
+    /// colors 按 G0-G3 排列. 后继 Pass 在本图声明所读的版本, 按 rect 内同一像素关联字段与深度.
+    struct CoreGBufferOutput
+    {
+        static constexpr std::array Formats{RHI::Format::SRGBA8_UNORM, RHI::Format::RGBA16_FLOAT,
+            RHI::Format::R11G11B10_FLOAT, RHI::Format::R16_UINT};
+        std::array<TextureId, Formats.size()> colors;
+        TextureId depth;
+        ViewImageRect rect;
+        PassId producer;
+    };
+
     /// @brief 本图的工作颜色, 深度及显示颜色. 读回和显示处理消费同一工作色生产者.
     /// 显示色已执行视口映射. 受光或诊断可另带实际消费的常规深度数组, 所有 TextureId 仅在本图有效.
     struct ForwardOutput
     {
+        std::optional<CoreGBufferOutput> coreGBuffer;
         TextureId workingColor; ///< 显示映射的输入. 启用天空时指向合成后的颜色版本.
         TextureId depth; ///< 与工作色共用渲染矩形的主 Reverse-Z 深度, 天空合成保留此版本.
         TextureId displayColor;
@@ -267,9 +282,10 @@ namespace Physara::Renderer
         /// @brief 在创建资源前核对渲染和显示画布的单边上限及本 View 的固定附件预算.
         /// @param display 本路预览模式和 AA 请求解析出的实际显示配置.
         /// @param resample 显示阶段需要从渲染栅格重采样时为 true, 对应一个额外的线性中间目标.
+        /// @param coreGBuffer 显式请求核心输出时, 按渲染栅格另计四个颜色附件和独立深度.
         /// @return 空值表示附件可容纳. 失败携带具体的 View 原因, 显式离屏请求可在共享场景提取前返回该原因.
         [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
-            DisplaySettings display, bool resample) const noexcept;
+            DisplaySettings display, bool resample, bool coreGBuffer = false) const noexcept;
 
         /// @brief 在同一已选代中连续规划并完成一路 View. 空可见集允许背景输出.
         /// 产品多 View 帧分别调用 PlanView 和 FinishView, 在两者之间推进一次原生预算.

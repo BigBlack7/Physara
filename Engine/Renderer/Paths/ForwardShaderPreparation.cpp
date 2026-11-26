@@ -58,8 +58,8 @@ namespace Physara::Renderer::Detail
         return count;
     }
 
-    /// @brief 在包的 ABI 和反射已验证后筛选各阶段可绑定的资源, 再逐组核对配方列出的必需项.
-    /// 冷包在创建设备程序前调用, 热重载在构造候选程序表前遍历所有角色.
+    /// @brief 用各角色的附件位置与绑定配方核对包中已验证的活动反射.
+    /// 冷包在创建设备程序前检查. 热重载在建立候选表前检查全部角色, 包括本帧没有绘制的角色.
     static std::optional<Shader::Failure> CheckStaticForwardResources(const Shader::ShaderPackage &package,
                                                                     ProductShader role) noexcept
     {
@@ -69,6 +69,25 @@ namespace Physara::Renderer::Detail
         for (const auto &module : package.modules)
         {
             const bool fragment = module.stage == Shader::Stage::Fragment;
+            if (fragment)
+            {
+                // 活动输出按 location 排序且类型已由共享 ABI 核对. 角色决定从 0 开始实际绑定几个附件.
+                const std::size_t count = role == ProductShader::StaticCoreGBuffer ? CoreGBufferOutput::Formats.size() :
+                                          IsDepthRole(role) ? 0u : 1u;
+                if (module.outputs.size() != count)
+                {
+                    return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = Core::BoundedText(
+                        "Active fragment output count conflicts with this role's color attachments")}};
+                }
+                for (std::size_t location = 0; location < count; ++location)
+                {
+                    if (module.outputs[location].location != location)
+                    {
+                        return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = Core::BoundedText(
+                            "Active fragment output location conflicts with this role's color attachments")}};
+                    }
+                }
+            }
             const auto unexpected = std::ranges::find_if(module.resources, [&](const auto &resource)
             {
                 // 生成 ABI 已核对各槽的类型和允许阶段. 此处确认此角色确有对应布局及图绑定.

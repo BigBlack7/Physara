@@ -26,6 +26,8 @@ namespace Physara::RHI::OpenGL
         {Format::RGBA8_UNORM, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},
         {Format::RGBA8_UINT, GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},
         {Format::SRGBA8_UNORM, GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        {Format::R16_UINT, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},
+        {Format::R11G11B10_FLOAT, GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV},
         {Format::R16_FLOAT, GL_R16F, GL_RED, GL_HALF_FLOAT},
         {Format::RG16_FLOAT, GL_RG16F, GL_RG, GL_HALF_FLOAT},
         {Format::RGBA16_FLOAT, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
@@ -85,8 +87,10 @@ namespace Physara::RHI::OpenGL
                            TextureDimension dimension, FormatCaps &result)
     {
         const auto &format = GetFormatInfo(mapping.format);
-        // GL 4.6 8.5 排除 3D 深度/模板存储; 不能由驱动的乐观 query 放行非法 target.
-        if ((dimension == TextureDimension::Texture3D && format.hasDepth) ||
+        // 核心 GBuffer 的两种新格式只接入 2D. GL 4.6 8.5 排除 3D 深度/模板存储.
+        if ((dimension != TextureDimension::Texture2D &&
+             (mapping.format == Format::R16_UINT || mapping.format == Format::R11G11B10_FLOAT)) ||
+            (dimension == TextureDimension::Texture3D && format.hasDepth) ||
             (format.blockSize > 1 && dimension != TextureDimension::Texture2D))
         {
             return true;

@@ -279,11 +279,11 @@
 
 **职责位置：** Renderer/Passes、Shaders/Material/Passes。**前置：** 本阶段入口满足。**架构依据：** [8.2](../Architecture.md#geometry)、[8.5](../Architecture.md#materials)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档，CR-001 至 CR-005 均已签收。 [最终验证](../../openspec/changes/archive/2026-11-26-implement-core-gbuffer-codec/tasks.md#final-verification)
 
-- [ ] 实现 G0 RGBA8_SRGB、G1 RGBA16F、G2 R11G11B10F、G3 R16_UINT 的 18 B/pixel 核心布局，depth 单独管理。
-- [ ] 共享材质采样和法线/roughness/metallic/AO/预曝光 emissive 编解码，清理 DeferredEligible 等 flags 的默认值。
-- [ ] 验证 sRGB、量化/极值误差、alphaMask、双面、静态实例和材质覆盖；不扩成承载所有扩展的大型 GBuffer。
+- [x] 实现 G0 RGBA8_SRGB、G1 RGBA16F、G2 R11G11B10F、G3 R16_UINT 的 18 B/pixel 核心布局，depth 单独管理。
+- [x] 共享材质采样和法线/roughness/metallic/AO/预曝光 emissive 编解码，清理 DeferredEligible 等 flags 的默认值。
+- [x] 验证 sRGB、量化/极值误差、alphaMask、双面、静态实例和材质覆盖；不扩成承载所有扩展的大型 GBuffer。
 
 **完成条件：** GBuffer 每字段和误差可追溯到共享核心模型，正确性不依赖偶然 clear 值。
 
@@ -291,6 +291,8 @@
 ### D11-T02 · 实现 SurfaceAux 与 ForwardExtension 路由
 
 **职责位置：** Renderer/Draw、Paths、Passes、Shaders/Passes。**前置：** [D11-T01](#d11-t01)。**架构依据：** [8.2](../Architecture.md#geometry)、[5.6](../Architecture.md#draws)、[6.1](../Architecture.md#paths)。
+
+**状态** 前置 D11-T01 已归档，本包待启动。
 
 - [ ] 在核心 GBuffer 后为 Unlit/非核心不透明 profile 写真实 depth、normal/roughness，并清除 DeferredEligible。
 - [ ] DeferredLighting 只照明 eligible 像素，ForwardUnlit/ForwardExtension 在同一表面深度下输出各自颜色。

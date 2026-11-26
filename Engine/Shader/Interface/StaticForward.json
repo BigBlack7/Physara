@@ -1,6 +1,7 @@
 {
   "version": 1,
   "name": "StaticForward",
+  "uintConstants": { "CoreDeferredEligible": 1 },
   "blocks": [
     {
       "name": "ForwardView",
@@ -212,6 +213,9 @@
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vMaterialRow", "location": 8, "type": "uint32", "interpolation": "flat" },
-    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" },
+    { "stage": "fragment", "direction": "out", "name": "outNormalMaterial", "location": 1, "type": "float4" },
+    { "stage": "fragment", "direction": "out", "name": "outEmission", "location": 2, "type": "float3" },
+    { "stage": "fragment", "direction": "out", "name": "outFlags", "location": 3, "type": "uint32" }
   ]
 }

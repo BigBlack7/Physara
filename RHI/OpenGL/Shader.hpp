@@ -36,6 +36,7 @@ namespace Physara::RHI::OpenGL
         std::uint32_t recordStride = 0;
         std::vector<std::uint32_t> layout;
         StorageAccess access = StorageAccess::None;
+        GLenum sampledScalar = 0; ///< 活动纹理视图所需的基本数值类型.
         Format imageFormat = Format::UNKNOWN;
     };
 

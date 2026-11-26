@@ -364,6 +364,9 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(
         Shader::ProductShader role) noexcept;
 
+    /// @brief 两种只写深度的几何角色使用独立的阶段槽, 片元没有颜色输出.
+    [[nodiscard]] bool IsDepthRole(Shader::ProductShader role) noexcept;
+
     /// @brief 只有六个 Froxel 颜色角色允许访问额外的 PerView 绑定.
     [[nodiscard]] bool IsFroxelProgram(Shader::ProductShader role) noexcept;
 
@@ -388,6 +391,8 @@ namespace Physara::Renderer::Detail
         std::size_t material;
         RHI::GraphicsPipelineHandle pipeline;
         RHI::GraphicsPipelineHandle depthPipeline;
+        // 仅请求核心输出且该批参与写入时, 由批首保有独立 MRT Pipeline.
+        RHI::GraphicsPipelineHandle corePipeline;
         std::uint32_t pipelineKey;
         double viewDepth;
         std::uint32_t source; ///< 本 SceneFrame 的 Primitive 下标, 用作最终稳定排序键.
@@ -506,7 +511,7 @@ namespace Physara::Renderer::Detail
         /// @brief 借用该角色已载入包的内容摘要, 尚未载入时为空. 替换程序后重新取值.
         [[nodiscard]] std::string_view ProgramContent(Shader::ProductShader role) const noexcept;
         /// @brief 接续同设备同角色, 包内容及固定状态相同的 Pipeline. 天空槽随带布局, 颜色角色共用设备布局.
-        /// @note 成功后目标表持有句柄, 源表仍按自身帧的完成时点退休.
+        /// @note 几何程序的摘要复制失败时保留目标槽原状. 成功后两代各自保活其句柄.
         [[nodiscard]] bool ReusePipeline(const ForwardPrograms &source, ShaderPipelineRequest key,
                                          std::string_view content);
         /// @brief 清除由该角色派生的程序和 Pipeline 槽, 兼容的顶点布局和其他角色的句柄可沿用.
@@ -515,12 +520,13 @@ namespace Physara::Renderer::Detail
         std::array<Shader::RhiProgram, ForwardColorPrograms> colors;
         Shader::RhiProgram depth;
         Shader::RhiProgram shadowDepth;
+        Shader::RhiProgram coreGBuffer;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
         std::string skyContent;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineSlots * ForwardColorPrograms> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, CorePipelineBase + GeometryPhaseSlots> pipelines;
 
     private:
         /// @brief 按颜色角色核对活动绑定并取得设备的固定布局. 三种阴影诊断共用基色覆盖和数组查询配方.

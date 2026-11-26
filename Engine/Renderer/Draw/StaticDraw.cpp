@@ -690,7 +690,7 @@ namespace Physara::Renderer::Detail
             Reject(ViewSettingReason::ScenePreparationFailed, "Forward sort depth is not finite");
         }
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
-            slot->second, {}, {}, static_cast<std::uint32_t>(
+            slot->second, {}, {}, {}, static_cast<std::uint32_t>(
                 GeometryRequest(attributes, mirror, doubleSided, phase, LightingProgram::Legacy).variant),
             -z, index, attributes, mirror, doubleSided});
     }
@@ -718,9 +718,11 @@ namespace Physara::Renderer::Detail
 
     /// @brief 比较同一 View 和实例块内仍可能变化的状态. 光照角色和前置深度由本路统一选择,
     /// 固定状态槽同时确定颜色和深度的布局及光栅组合. 材质集合含表页和采样组合.
-    static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b) noexcept
+    /// splitCore 使每批首项能代表整批的照明资格. 在相邻段上分批, 保留相等深度处原有的覆盖顺序.
+    static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b, bool splitCore) noexcept
     {
         return a.pipelineKey == b.pipelineKey &&
+               (!splitCore || frame.materialRows[a.material]->values.unlit == frame.materialRows[b.material]->values.unlit) &&
                a.geometry->vertices.page == b.geometry->vertices.page &&
                a.geometry->indices.page == b.geometry->indices.page &&
                a.object->storage.page == b.object->storage.page &&
@@ -773,7 +775,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
     /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
-    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame)
+    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitCore = false)
     {
         constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
         using Argument = RHI::DrawIndexedIndirectArguments;
@@ -826,7 +828,7 @@ namespace Physara::Renderer::Detail
                     const auto &geometry = draws[current].geometry;
                     auto end = current + 1;
                     while (end < draws.size() && draws[end].geometry == geometry &&
-                           SameBatch(frame, head, draws[end]))
+                           SameBatch(frame, head, draws[end], splitCore))
                     {
                         ++end;
                     }
@@ -837,7 +839,7 @@ namespace Physara::Renderer::Detail
                     arguments.push_back(EncodeCommand(*geometry, static_cast<std::uint32_t>(current),
                                                      static_cast<std::uint32_t>(end - current)));
                     current = end;
-                } while (current < draws.size() && SameBatch(frame, head, draws[current]));
+                } while (current < draws.size() && SameBatch(frame, head, draws[current], splitCore));
                 frame.batches.push_back({first + begin, block, firstCommand,
                     static_cast<std::uint32_t>(arguments.size()) - firstCommand, renderables});
                 begin = current;
@@ -1163,7 +1165,7 @@ namespace Physara::Renderer::Detail
         const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
         for (const auto index : view.primitives)
         {
-            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr);
+            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !frame.needs.coreGBuffer);
         }
         if (frame.draws.empty() && frame.degradation)
         {
@@ -1224,7 +1226,8 @@ namespace Physara::Renderer::Detail
             PrepareViewRow(device, frame, view, mode, !shadowLight && usesLighting);
             // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
             SortDraws(frame);
-            PackBatches(device, frame);
+            // 最近核心表面需要跳过 Unlit. 只拆分共用绑定的异类批次, 保留原有的光栅顺序.
+            PackBatches(device, frame, frame.needs.coreGBuffer);
         }
         if (frame.environment.sky)
         {
@@ -1234,6 +1237,10 @@ namespace Physara::Renderer::Detail
         {
             const auto &draw = frame.draws[batch.firstDraw];
             device.shaderDemand.Add(DrawShader(frame, draw, phase));
+            if (frame.needs.coreGBuffer && frame.materialRows[draw.material]->values.unlit == 0)
+            {
+                device.shaderDemand.Add({Shader::ProductShader::StaticCoreGBuffer, draw.pipelineKey % GeometryPhaseSlots});
+            }
             if (usesLighting && frame.alternatePath)
             {
                 const auto program = FullListProgram(frame.environment.program);
@@ -1318,6 +1325,11 @@ namespace Physara::Renderer::Detail
             auto &draw = frame.draws[batch.firstDraw];
             draw.pipeline = device.RequestShader(DrawShader(frame, draw, phase));
             shaderReady &= bool(draw.pipeline);
+            if (frame.needs.coreGBuffer && frame.materialRows[draw.material]->values.unlit == 0)
+            {
+                draw.corePipeline = device.RequestShader({Shader::ProductShader::StaticCoreGBuffer, draw.pipelineKey % GeometryPhaseSlots});
+                shaderReady &= bool(draw.corePipeline);
+            }
             if (frame.needs.earlyDepth)
             {
                 draw.depthPipeline = device.RequestShader(DrawShader(frame, draw, SurfacePhase::Depth));

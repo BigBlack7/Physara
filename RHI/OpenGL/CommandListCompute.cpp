@@ -52,6 +52,11 @@ namespace Physara::RHI::OpenGL
                 m_Device->Report("SetComputeState", "InterfaceMismatch: compute active range, stride or dimension");
                 return false;
             }
+            if (binding.type == ResourceType::Texture_SRV && GetFormatInfo(binding.imageFormat).kind == FormatKind::Integer)
+            {
+                m_Device->Report("SetComputeState", "InterfaceMismatch: compute sampled texture requires float view");
+                return false;
+            }
             if (binding.type == ResourceType::Texture_UAV)
             {
                 if (binding.imageFormat != entry.resource.imageFormat)

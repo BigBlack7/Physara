@@ -29,16 +29,17 @@ namespace Physara::Runtime
     public:
         /// @pre 在就绪宿主的 owner 线程构造. sceneViews 为本次候选的场景视图数, 有场景时才追加结构化 UAV 和数组 image 能力.
         /// @param shadowBytes 当前声明的阴影数组字节, 用于准入与设备能力选择.
+        /// @param coreGBuffer 任一 View 声明了核心输出时, 追加两种二维格式并为四路颜色写入设置图编译上限.
         EditorGraphProfile(const Platform::DeviceHost &host, std::size_t sceneViews, bool diagnostic,
-                           std::uint64_t shadowBytes = 0);
+                           std::uint64_t shadowBytes = 0, bool coreGBuffer = false);
         EditorGraphProfile(const EditorGraphProfile &) = delete;
         EditorGraphProfile &operator=(const EditorGraphProfile &) = delete;
 
         [[nodiscard]] const Renderer::GraphCompileOptions &Options() const noexcept { return m_Options; }
 
     private:
-        // 基础 2D 四项、cube 及深度数组各一项、额外 2D 两项和 storage 2DArray 四项.
-        std::array<Renderer::GraphTextureSupport, 12> m_Textures{};
+        // 基础 2D 四项及可选核心附件两项, cube 和深度数组各一项, 另有六项 storage 目标.
+        std::array<Renderer::GraphTextureSupport, 14> m_Textures{};
         std::array<RHI::ResourceStates, 3> m_States{RHI::ResourceStates::Common, RHI::ResourceStates::ShaderResource};
         Renderer::GraphCompileOptions m_Options;
     };

@@ -71,6 +71,10 @@ namespace Physara::Shader
                << schema.abiHash
                << "\";\n"
                   "    static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);\n";
+        for (const auto &[name, value] : schema.uintConstants)
+        {
+            output << "    inline constexpr std::uint32_t " << name << " = " << value << "u;\n";
+        }
         for (const auto &block : schema.blocks)
         {
             output << "\n    // " << block.layout << ": 实际字段 extent 与分配尾 padding 分别表达.\n"
@@ -131,6 +135,7 @@ namespace Physara::Shader
         case ResourceKind::Image2D:
         case ResourceKind::Image2DArray:
             return "Texture_UAV";
+        case ResourceKind::Texture2DUInt:
         case ResourceKind::Texture2D:
         case ResourceKind::TextureCube:
         case ResourceKind::Texture2DArray:
@@ -227,6 +232,10 @@ namespace Physara::Shader
     {
         std::ostringstream output;
         output << "// 自动生成的 canonical Vulkan GLSL 接口, 算法由薄入口与共享函数实现.\n";
+        for (const auto &[name, value] : schema.uintConstants)
+        {
+            output << "const uint " << name << " = " << value << "u;\n";
+        }
         if (stage == Stage::Compute)
         {
             output << "layout(local_size_x = " << schema.localSize[0] << ", local_size_y = " << schema.localSize[1]
@@ -250,12 +259,14 @@ namespace Physara::Shader
             const auto &resource = binding.resource;
             output << "layout(set = " << resource.set << ", binding = " << resource.binding;
             if (resource.kind == ResourceKind::Texture2D || resource.kind == ResourceKind::TextureCube ||
-                resource.kind == ResourceKind::Texture2DArray || resource.kind == ResourceKind::Sampler)
+                resource.kind == ResourceKind::Texture2DArray || resource.kind == ResourceKind::Texture2DUInt ||
+                resource.kind == ResourceKind::Sampler)
             {
                 const char *type = "texture2D";
                 switch (resource.kind)
                 {
                 case ResourceKind::Sampler: type = "sampler"; break;
+                case ResourceKind::Texture2DUInt: type = "utexture2D"; break;
                 case ResourceKind::TextureCube: type = "textureCube"; break;
                 case ResourceKind::Texture2DArray: type = "texture2DArray"; break;
                 default: break;

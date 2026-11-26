@@ -228,10 +228,13 @@ namespace Physara::RHI::OpenGL
             const auto &image = compiler.get_type(item.type_id);
             const bool cube = image.image.dim == spv::DimCube && !image.image.arrayed;
             const bool plane = image.image.dim == spv::Dim2D && (!image.image.arrayed || stage != ShaderType::Compute);
+            result.sampledScalar = Scalar(compiler.get_type(image.image.type));
+            const bool unsignedPlane = result.sampledScalar == GL_UNSIGNED_INT && stage == ShaderType::Pixel &&
+                plane && !image.image.arrayed;
             RequirePreparation((cube || plane) && !image.image.ms &&
                                    !image.image.depth && image.image.sampled == 1 &&
-                                   Scalar(compiler.get_type(image.image.type)) == GL_FLOAT,
-                               "Unsupported: separate float texture2D, texture2DArray or textureCube shape");
+                                   (result.sampledScalar == GL_FLOAT || unsignedPlane),
+                               "Unsupported: sampled texture shape or numeric type");
             result.dimension = TextureDimension::Texture2D;
             if (image.image.arrayed)
             {
@@ -355,6 +358,10 @@ namespace Physara::RHI::OpenGL
         };
         for (const auto &pair : compiler.get_combined_image_samplers())
         {
+            // 原始 SPIR-V 可直接进入 RHI. uint 读取只允许 lowering 为内部 nearest sampler 的 texelFetch.
+            const auto &image = compiler.get_type_from_variable(pair.image_id);
+            RequirePreparation(pair.sampler_id == dummy || compiler.get_type(image.image.type).basetype !=
+                                   spirv_cross::SPIRType::UInt, "Unsupported: unsigned textures require samplerless texelFetch");
             m_Pairs.push_back({key(pair.image_id), pair.sampler_id == dummy ? ShaderBindingKey{} : key(pair.sampler_id),
                                pair.sampler_id == dummy});
         }

@@ -92,6 +92,10 @@ namespace Physara::Shader
         {
             return ResourceKind::Texture2D;
         }
+        if (name == "texture2d-uint")
+        {
+            return ResourceKind::Texture2DUInt;
+        }
         if (name == "texturecube")
         {
             return ResourceKind::TextureCube;
@@ -129,6 +133,8 @@ namespace Physara::Shader
             return "structured-buffer";
         case ResourceKind::Texture2D:
             return "texture2d";
+        case ResourceKind::Texture2DUInt:
+            return "texture2d-uint";
         case ResourceKind::TextureCube:
             return "texturecube";
         case ResourceKind::Texture2DArray:
@@ -355,6 +361,10 @@ namespace Physara::Shader
             binding.stageMask |= mask;
         }
         constexpr auto ComputeMask = 1u << static_cast<unsigned>(Stage::Compute);
+        if (resource.kind == ResourceKind::Texture2DUInt && binding.stageMask != (1u << unsigned(Stage::Fragment)))
+        {
+            throw BuildError(ErrorCode::InvalidInput, "Unsigned sampled texture requires fragment visibility.");
+        }
         if (resource.kind == ResourceKind::Texture2DArray && (binding.stageMask & ComputeMask) != 0)
         {
             throw BuildError(ErrorCode::InvalidInput,
@@ -459,7 +469,7 @@ namespace Physara::Shader
 
     InterfaceSchema ParseInterfaceSchema(const Json &document)
     {
-        CheckFields(document, {"version", "name", "blocks", "resources", "io", "localSize"}, "/");
+        CheckFields(document, {"version", "name", "blocks", "resources", "io", "localSize", "uintConstants"}, "/");
         if (UInt(document.at("version"), 1, "/version") != 1)
         {
             throw BuildError(ErrorCode::InvalidInput, "Unsupported interface version.");
@@ -487,6 +497,23 @@ namespace Physara::Shader
         }
         std::set<std::string> blockNames;
         std::set<std::string> generatedNames{"AbiHash", "MakeBindingLayouts"};
+        // 常量同时进入 C++ 和各阶段 GLSL 的外层作用域. 先登记其名字, 后续检查块名与派生名称冲突.
+        if (const auto constants = document.find("uintConstants"); constants != document.end())
+        {
+            if (!constants->is_object())
+            {
+                throw BuildError(ErrorCode::InvalidInput, "/uintConstants requires a name to uint32 object.");
+            }
+            for (const auto &[key, value] : constants->items())
+            {
+                const auto name = Identifier(key, "/uintConstants");
+                if (name.front() < 'A' || name.front() > 'Z' || !generatedNames.insert(name).second)
+                {
+                    throw BuildError(ErrorCode::InvalidInput, "Invalid or conflicting interface constant: " + name);
+                }
+                schema.uintConstants.emplace(name, UInt(value, UINT32_MAX, "/uintConstants"));
+            }
+        }
         for (const auto &block : document.at("blocks"))
         {
             auto value = ParseBlockLayout(block);
@@ -509,6 +536,10 @@ namespace Physara::Shader
             schema.bindings.push_back(std::move(binding));
         }
         std::set<std::string> glslTypes;
+        for (const auto &[name, value] : schema.uintConstants)
+        {
+            glslTypes.insert(name);
+        }
         for (const auto &block : schema.blocks)
         {
             if (block.layout == "std430")
@@ -538,7 +569,8 @@ namespace Physara::Shader
         {
             auto io = ParseIo(item);
             if (!locations.emplace(io.stage, io.input, io.value.location).second ||
-                !ioNames.emplace(io.stage, io.value.name).second || resourceNames.contains(io.value.name))
+                !ioNames.emplace(io.stage, io.value.name).second || resourceNames.contains(io.value.name) ||
+                schema.uintConstants.contains(io.value.name))
             {
                 throw BuildError(ErrorCode::InvalidInput, "Duplicate IO location/name: " + io.value.name);
             }
@@ -564,7 +596,7 @@ namespace Physara::Shader
     }
     InterfaceDeclaration SnapshotInterface(const InterfaceSchema &schema)
     {
-        return {schema.name, schema.blocks, schema.bindings, schema.io, schema.localSize};
+        return {schema.name, schema.blocks, schema.bindings, schema.io, schema.localSize, schema.uintConstants};
     }
 
     Json DeclarationSchema(const InterfaceDeclaration &declaration)
@@ -653,6 +685,10 @@ namespace Physara::Shader
         {
             schema["localSize"] = declaration.localSize;
         }
+        if (!declaration.uintConstants.empty())
+        {
+            schema["uintConstants"] = declaration.uintConstants;
+        }
         return schema;
     }
 
@@ -680,6 +716,10 @@ namespace Physara::Shader
         if (declaration.localSize[0] != 0)
         {
             identity["localSize"] = declaration.localSize;
+        }
+        if (!declaration.uintConstants.empty())
+        {
+            identity["uintConstants"] = declaration.uintConstants;
         }
         return HashText(identity.dump());
     }

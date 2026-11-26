@@ -16,20 +16,27 @@ struct PixelParams
     float alpha;
 };
 
-// inputs 遵守 MaterialInputs 的有效范围; kernel 为 ComputeGeometricRoughnessKernel 的结果.
+// roughness 是有效材质的原感知粗糙度, kernel 为 ComputeGeometricRoughnessKernel 的结果.
 // 在 pRaw^4 域加入 kernel, 取两次平方根恢复 p, 限制到 [0.045, 1] 后再求 alpha=p^2.
-// 基色及金属度派生 diffuseColor/F0; alpha 覆盖与 AO 不参与波瓣参数, 由各自消费者处理.
-PixelParams BuildPixelParams(MaterialInputs inputs, float kernel)
+float FilterCoreRoughness(float roughness, float kernel)
 {
-    float roughness = inputs.perceptualRoughness;
     float rawAlpha = roughness * roughness;
     float filteredAlphaSquared = clamp(rawAlpha * rawAlpha + kernel, 0.0, 1.0);
     // 0.045 是固定 Filament 的桌面感知粗糙度下限.
-    float filteredRoughness = clamp(sqrt(sqrt(filteredAlphaSquared)), 0.045, 1.0);
-    vec3 baseColor = inputs.baseColor.rgb;
-    return PixelParams(baseColor * (1.0 - inputs.metallic),
-                       mix(vec3(0.04), baseColor, inputs.metallic),
+    return clamp(sqrt(sqrt(filteredAlphaSquared)), 0.045, 1.0);
+}
+
+// 从已过滤的表面恢复核心波瓣, 屏幕解码与几何颜色入口共享此步.
+PixelParams CorePixelParams(vec3 baseColor, float metallic, float filteredRoughness)
+{
+    return PixelParams(baseColor * (1.0 - metallic),
+                       mix(vec3(0.04), baseColor, metallic),
                        1.0, filteredRoughness, filteredRoughness * filteredRoughness);
+}
+
+PixelParams BuildPixelParams(MaterialInputs inputs, float kernel)
+{
+    return CorePixelParams(inputs.baseColor.rgb, inputs.metallic, FilterCoreRoughness(inputs.perceptualRoughness, kernel));
 }
 
 #endif

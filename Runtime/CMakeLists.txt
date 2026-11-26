@@ -10,7 +10,7 @@ get_target_property(editorUiPackageTarget PhysaraEditor PHYSARA_UI_PACKAGE_TARGE
 add_dependencies(Physara ${editorUiPackageTarget})
 # 将 Renderer 登记的全部包纳入产品构建. 帧前按实际受光或诊断角色加载对应包.
 set(forwardResourcePaths "")
-foreach(program StaticForward StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
+foreach(program StaticForward StaticCoreGBuffer StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl

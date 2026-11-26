@@ -30,6 +30,7 @@ namespace Physara::Shader
         std::string name;
         std::string abiHash;
         Json canonical;
+        std::map<std::string, std::uint32_t> uintConstants;
         std::vector<BufferLayout> blocks;
         std::vector<BindingSchema> bindings;
         std::vector<IoSchema> io;

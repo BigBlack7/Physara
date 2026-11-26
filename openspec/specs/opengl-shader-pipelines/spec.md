@@ -230,3 +230,12 @@ Pipeline 准备 SHALL 从 canonical IR 生成 desktop GLSL 460, 依计划配置�
 
 - **WHEN** 缓存额度已被 Active、候选或尚未完成的工作占用，额外请求无法准入
 - **THEN** 准备保持有界并报告压力，已有效的对象继续可用。真实完成和相关持有解除后，后继请求可重新取得容量
+
+### Requirement: Validate the numeric kind of active graphics texture fetches
+
+图形片元的原生 Shader 与 Pipeline SHALL 接受普通非多样本二维无符号整数纹理的 texel fetch，保留活动位置的维度和数值类别。绑定消费时 SHALL 将活动位置与实际 SRV 视图解释匹配，浮点与无符号整数类别互换时 SHALL 在发出绘制前报告失败。直接提交的无符号采样图像若与逻辑 Sampler 配对，原生 Shader 创建 SHALL 报告不支持。合法的整数 fetch SHALL 返回未经归一化、混合或过滤的原始整数。
+
+#### Scenario: Fetch a flag pattern and reject a mistyped view
+
+- **WHEN** 对 R16_UINT 纹理中的 0x8105 执行无符号 fetch，并分别尝试将浮点视图接到该位置及将无符号视图接到浮点位置
+- **THEN** 合法绘制精确得到 0x8105，两个错误绑定均在成功绘制前给出数值类别失配，Debug 和 Release 语义一致。

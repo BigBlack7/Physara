@@ -205,6 +205,10 @@ namespace Physara::Renderer
         std::size_t bytes = 4096 * m_Data->views.size() + m_Data->uploads.writes * 256;
         for (const auto &view : m_Data->views)
         {
+            if (view.needs.coreGBuffer)
+            {
+                bytes += 1024; // 额外几何 Pass 在本槽的图 arena 中保有 SceneRaster.
+            }
             if (view.shadow && !view.shadow->depth.retained)
             {
                 bytes += view.shadow->depth.count * 1024;
@@ -430,7 +434,7 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
-        DisplaySettings display, bool resample) const noexcept
+        DisplaySettings display, bool resample, bool coreGBuffer) const noexcept
     {
         if (render.width == 0 || render.height == 0 || output.width == 0 || output.height == 0)
         {
@@ -444,7 +448,7 @@ namespace Physara::Renderer
         }
         const bool fxaa = display.antiAliasing == AntiAliasing::Fxaa;
         // RGBA16F 工作色和 D32 每个渲染像素合计 12 字节. FXAA 和重采样各需一个 8 字节的线性中间目标.
-        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(resample));
+        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(resample)) + (coreGBuffer ? 22 : 0);
         if (render.height > ForwardAttachmentBudget / renderBytesPerPixel / render.width)
         {
             return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
@@ -579,7 +583,7 @@ namespace Physara::Renderer
         const auto display = ResolveDisplaySettings(view.previewShadow ? PreviewMode::BaseColor : mode,
                                                     view.requestedAa);
         if (const auto failure = CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
-                                                  display, view.layouts.render != view.layouts.display))
+                                                  display, view.layouts.render != view.layouts.display, needs.coreGBuffer))
         {
             throw *failure;
         }
@@ -1121,11 +1125,12 @@ namespace Physara::Renderer
     }
 
     /// @brief 将预解析的 Draw 绑定关联到本 Pass 的读范围. 主深度, 阴影深度和阴影诊断只取材质基色槽.
-    /// color 指向主着色工作时才选用 set 3. 阴影附件使用自己的方形 viewport.
+    /// 核心 Pass 跳过 Unlit, 为其余批次声明完整材质纹理. 只有主着色由 color 选用 set 3.
+    /// 阴影附件使用自己的方形 viewport.
     static SceneRaster RasterInputs(RenderGraph &graph, SceneGraphResources &versions,
         const Detail::StaticDrawWork &work, const ViewImageRect &rect, RasterReads &reads,
         const Detail::ForwardFrameData *color = nullptr, TextureId shadowDepth = {},
-        const Detail::FroxelGraphInputs *froxels = nullptr)
+        const Detail::FroxelGraphInputs *froxels = nullptr, bool core = false)
     {
         SceneRaster raster;
         raster.viewport = RasterViewport(rect);
@@ -1216,6 +1221,10 @@ namespace Physara::Renderer
         // 同一批的实例可以选取不同对象行和材质行. 逐表面登记这些行及几何区间, 重复的读由 readBuffer 合并.
         for (const auto &draw : work.draws)
         {
+            if (core && work.materialRows[draw.material]->values.unlit != 0)
+            {
+                continue;
+            }
             static_cast<void>(slice(draw.geometry->vertices));
             static_cast<void>(slice(draw.geometry->indices));
             table(draw.object->storage);
@@ -1227,8 +1236,12 @@ namespace Physara::Renderer
         {
             const auto &draw = work.draws[batch.firstDraw];
             const auto &material = *work.materialRows[draw.material];
+            if (core && material.values.unlit != 0)
+            {
+                continue;
+            }
             static_cast<void>(buffer(work.instanceBlocks[batch.instanceBlock]->buffer, GraphUsage::ShaderRead));
-            const auto slots = !color || preview ? Detail::CoverageTextureCount : material.textures.size();
+            const auto slots = (!color && !core) || preview ? Detail::CoverageTextureCount : material.textures.size();
             for (std::size_t i = 0; i < slots; ++i)
             {
                 const auto &product = *material.textures[i];
@@ -1241,7 +1254,7 @@ namespace Physara::Renderer
                 {batch.firstCommand * commandBytes, batch.commandCount * commandBytes}, nullptr);
             raster.batches.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices), arguments,
                 batch.renderables.Get(), material.binding->Get(),
-                (color ? draw.pipeline : draw.depthPipeline).Get(), batch.commandCount});
+                (core ? draw.corePipeline : (color ? draw.pipeline : draw.depthPipeline)).Get(), batch.commandCount});
         }
         return raster;
     }
@@ -1522,6 +1535,55 @@ namespace Physara::Renderer
             })));
     }
 
+    /// @brief 以核心材质批次绘制同一份四附件快照, 深度与资格位显式初始化以支持池内存复用.
+    static CoreGBufferOutput DeclareCoreSurface(RenderGraph &graph, SceneGraphResources &versions,
+                                                const Detail::ForwardFrameData &frame)
+    {
+        CoreGBufferOutput surface{};
+        surface.rect = frame.source.layout.rect;
+        const auto extent = frame.source.layout.outputExtent;
+        const auto texture = [&](RHI::Format format, const char *name)
+        {
+            return TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
+                .format = format, .debugName = name, .isRenderTarget = true}));
+        };
+        constexpr std::array names{"G0 base color and AO", "G1 normal and material", "G2 pre-exposed emission", "G3 flags"};
+        for (std::size_t i = 0; i < surface.colors.size(); ++i)
+        {
+            surface.colors[i] = texture(surface.Formats[i], names[i]);
+        }
+        surface.depth = texture(DepthFormat, "Core surface reverse depth");
+        RasterReads reads;
+        auto raster = RasterInputs(graph, versions, frame, surface.rect, reads, nullptr, {}, nullptr, true);
+        surface.producer = TakeGraph(graph.AddPass<SceneRaster>("Core GBuffer",
+            [&](PassBuilder &builder, SceneRaster &data)
+            {
+                data = std::move(raster);
+                if (!DeclareRasterReads(builder, reads))
+                {
+                    return false;
+                }
+                for (std::size_t i = 0; i < surface.colors.size(); ++i)
+                {
+                    TextureWriteOps ops{.load = LoadOp::Clear, .clearValue = RHI::Color(0.f)};
+                    if (surface.Formats[i] == RHI::Format::R16_UINT)
+                    {
+                        ops.clearValue = std::uint32_t{0};
+                    }
+                    auto &color = surface.colors[i];
+                    color = builder.Write(color, GraphUsage::ColorAttachment, ops);
+                    if (!color.IsValid())
+                    {
+                        return false;
+                    }
+                }
+                surface.depth = builder.Write(surface.depth, GraphUsage::DepthStencilAttachment,
+                    {.load = LoadOp::Clear, .clearValue = DepthStencilClear{0.f, 0}}, TextureRange{.aspect = TextureAspect::Depth});
+                return surface.depth.IsValid();
+            }, DrawScene));
+        return surface;
+    }
+
     /// @brief 声明一个 View 的表面与显示目标, 私有输出不进入共享驻留映射.
     static ForwardOutput DeclareView(RenderGraph &graph, SceneGraphResources &versions,
                                      std::vector<GraphUpload> &uploads, const Detail::ForwardFrameData &frame,
@@ -1531,6 +1593,10 @@ namespace Physara::Renderer
         const auto firstPass = graph.Passes().size();
         ForwardOutput output;
         output.source = frame.source;
+        if (frame.needs.coreGBuffer)
+        {
+            output.coreGBuffer = DeclareCoreSurface(graph, versions, frame);
+        }
         output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
         output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,

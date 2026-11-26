@@ -34,6 +34,7 @@ namespace Physara::Shader
         StaticForwardPlusShadows,
         StaticForwardPlusPhysicalShadows,
         StaticForwardPlusIblShadows,
+        StaticCoreGBuffer,
         Count
     };
 

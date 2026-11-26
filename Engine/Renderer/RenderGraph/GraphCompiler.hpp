@@ -47,6 +47,18 @@ namespace Physara::Renderer
         std::uint32_t maxSampledLayers = 0;
         bool presentation = false;
         bool layeredReadExport = false;
+
+        /// @brief 普通二维无符号图像按 texel 读取, 浮点和深度视图按设备的采样能力准入.
+        [[nodiscard]] bool SupportsShaderRead() const noexcept
+        {
+            const auto &info = RHI::GetFormatInfo(format);
+            if (info.kind == RHI::FormatKind::Integer && !info.isSigned)
+            {
+                return dimension == RHI::TextureDimension::Texture2D && sampleCount == 1 &&
+                       (formatSupport & RHI::FormatSupport::ShaderLoad) != 0;
+            }
+            return (formatSupport & RHI::FormatSupport::ShaderSample) != 0;
+        }
     };
 
     /// @brief 图编译所用的 Buffer 容量和绑定限制. 常量和结构化视图的容量及偏移对齐均以字节计.

@@ -205,6 +205,13 @@ namespace Physara::RHI::OpenGL
                         Utils::TextureDimensionToString(binding.dimension));
                     return fail(reason);
                 }
+                // 可重解释的 storage 由 SRV 选定数值类型. 用该视图格式与活动 Shader 操作数比较.
+                const auto &format = GetFormatInfo(binding.imageFormat);
+                const auto scalar = format.kind == FormatKind::Integer ? (format.isSigned ? GL_INT : GL_UNSIGNED_INT) : GL_FLOAT;
+                if (entry.resource.sampledScalar != GLenum(scalar))
+                {
+                    return fail("InterfaceMismatch: active sampled texture numeric type");
+                }
                 const auto conflicts = [&](const FramebufferAttachment &attachment)
                 {
                     return !attachment.isReadOnly && SamplesAttachment(binding, attachment);

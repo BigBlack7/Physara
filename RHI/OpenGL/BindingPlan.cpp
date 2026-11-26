@@ -85,9 +85,10 @@ namespace Physara::RHI::OpenGL
                     result.resources, [&](const auto &entry) { return entry.resource.key == resource.key; });
                 if (existing != result.resources.end())
                 {
-                    // 跨阶段共用同一物理位置, 因此块的大小和字段布局, 或采样视图的维度都须一致.
+                    // 同一 set/binding 跨阶段只分配一个原生位置. 缓冲布局或纹理维度与采样标量须一致.
                     RequirePreparation(existing->resource.type == resource.type &&
                                            existing->resource.dimension == resource.dimension &&
+                                           existing->resource.sampledScalar == resource.sampledScalar &&
                                            existing->resource.extent == resource.extent &&
                                            existing->resource.layout == resource.layout,
                                        "InterfaceMismatch: cross-stage resource" + KeyText(resource.key));

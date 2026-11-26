@@ -248,12 +248,15 @@ namespace Physara::Shader
             const auto &type = compiler.get_type(image.type_id);
             const bool cube = type.image.dim == spv::DimCube && !type.image.arrayed;
             const bool plane = type.image.dim == spv::Dim2D && (!type.image.arrayed || stage != Stage::Compute);
+            const auto &scalar = compiler.get_type(type.image.type);
+            const bool unsignedPlane = scalar.basetype == spirv_cross::SPIRType::UInt && scalar.width == 32 &&
+                stage == Stage::Fragment && plane && !type.image.arrayed;
             if (!(cube || plane) ||
                 type.image.ms || type.image.depth ||
-                type.image.sampled != 1 || compiler.get_type(type.image.type).basetype != spirv_cross::SPIRType::Float)
+                type.image.sampled != 1 || (scalar.basetype != spirv_cross::SPIRType::Float && !unsignedPlane))
             {
                 throw BuildError(ErrorCode::UnsupportedProfile,
-                                 "Unsupported separate float texture2D, texture2DArray or textureCube shape.");
+                                 "Unsupported sampled image shape or numeric type.");
             }
         }
         for (const auto &image : all.storage_images)
@@ -461,7 +464,11 @@ namespace Physara::Shader
         {
             const auto &shape = compiler.get_type(image.type_id).image;
             auto kind = ResourceKind::Texture2D;
-            if (shape.arrayed)
+            if (compiler.get_type(shape.type).basetype == spirv_cross::SPIRType::UInt)
+            {
+                kind = ResourceKind::Texture2DUInt;
+            }
+            else if (shape.arrayed)
             {
                 kind = ResourceKind::Texture2DArray;
             }
@@ -486,6 +493,20 @@ namespace Physara::Shader
         // 完整核对成功后才替换请求结果, 失败不能留下部分反射作为成功包消费.
         auto inputs = ReflectIo(compiler, active.stage_inputs, schema, module.stage, true);
         auto outputs = ReflectIo(compiler, active.stage_outputs, schema, module.stage, false);
+        // 合并分析会生成临时变量, 因此在采集原始 IO 和资源后执行. uint SRV 只接受无逻辑采样器的 fetch.
+        if (std::ranges::any_of(resources, [](const auto &resource) { return resource.kind == ResourceKind::Texture2DUInt; }))
+        {
+            const auto dummy = compiler.build_dummy_sampler_for_combined_images();
+            compiler.build_combined_image_samplers();
+            for (const auto &pair : compiler.get_combined_image_samplers())
+            {
+                const auto &image = compiler.get_type_from_variable(pair.image_id);
+                if (pair.sampler_id != dummy && compiler.get_type(image.image.type).basetype == spirv_cross::SPIRType::UInt)
+                {
+                    throw BuildError(ErrorCode::UnsupportedProfile, "Unsigned textures require samplerless texelFetch.");
+                }
+            }
+        }
         module.resources = std::move(resources);
         module.inputs = std::move(inputs);
         module.outputs = std::move(outputs);

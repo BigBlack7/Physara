@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "StaticCoreGBuffer",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "Passes/Forward/Static.vert", "entry": "main" },
+    { "stage": "fragment", "source": "Passes/GBuffer/Core.frag", "entry": "main" }
+  ],
+  "defines": []
+}

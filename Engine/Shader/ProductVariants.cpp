@@ -60,6 +60,8 @@ namespace Physara::Shader
         {{ProductShader::StaticForwardPlusIblShadows, 2}, "StaticForwardPlusIblShadows", "StaticForward",
          "Passes/Forward/StaticForwardPlusIblShadows.json", "Passes/Forward/Static.vert",
          "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticCoreGBuffer}, "StaticCoreGBuffer", "StaticForward",
+         "Passes/GBuffer/StaticCoreGBuffer.json", "Passes/Forward/Static.vert", "Passes/GBuffer/Core.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

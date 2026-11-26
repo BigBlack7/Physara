@@ -46,7 +46,7 @@ namespace Physara::RHI::OpenGL
         BufferRange range;
         std::uint32_t recordStride = 0;
         Resource *resource = nullptr;       ///< 借用集合强持有的实际 storage/sampler, 不以 view 名称推断资源身份.
-        Format imageFormat = Format::UNKNOWN; ///< 存储图像的公开格式, 用于与活动 IR 比较.
+        Format imageFormat = Format::UNKNOWN; ///< 采样视图或存储图像的公开格式, 用于与活动 IR 比较.
         GLenum imageInternalFormat = 0;
         TextureDimension dimension = TextureDimension::Unknown; ///< 采样或存储视图的目标, 可以和原存储不同.
         TextureSubresourceSet subresources; ///< 原存储坐标中的 mip/layer, 用于权限, 重叠和同步检查.
