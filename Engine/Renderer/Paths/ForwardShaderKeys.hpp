@@ -15,7 +15,7 @@
 namespace Physara::Renderer::Detail
 {
     // 每张表按 8 种顶点布局, 4 种绕序/剔面组合及 4 个表面阶段编址. 两个深度角色共用首张表.
-    // 核心 MRT 的深度与四颜色附件总是合写, 在常规表尾只占一个阶段的 32 槽.
+    // 核心及辅助表面各用一个深度合写的阶段, 在常规表尾分别保有 32 个槽.
     // 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
     inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
@@ -23,7 +23,24 @@ namespace Physara::Renderer::Detail
     inline constexpr std::size_t ForwardPerPassLayouts = 9;
     inline constexpr std::size_t ForwardColorPrograms = ForwardPerPassLayouts + 6;
     inline constexpr std::size_t CorePipelineBase = GeometryPipelineSlots * ForwardColorPrograms;
-    inline constexpr std::size_t ForwardPipelineLimit = CorePipelineBase + GeometryPhaseSlots + 1 + 8;
+    inline constexpr std::size_t SurfaceAuxPipelineBase = CorePipelineBase + GeometryPhaseSlots;
+    inline constexpr std::size_t GeometryPipelineCount = SurfaceAuxPipelineBase + GeometryPhaseSlots;
+    inline constexpr std::size_t ForwardPipelineLimit = GeometryPipelineCount + 1 + 8;
+
+    /// @brief 各表面角色按物理颜色位置列出逻辑 GBuffer 下标. 图写入及目标配方沿用同一顺序.
+    inline constexpr std::array<std::size_t, 4> CoreSurfaceAttachments{0, 3, 2, 1};
+    inline constexpr std::array<std::size_t, 2> AuxSurfaceAttachments{1, 3};
+
+    /// @brief 返回按原生输出位置排列的逻辑附件下标. 空范围表示该角色使用自身的普通颜色或深度配方.
+    [[nodiscard]] constexpr std::span<const std::size_t> SurfaceAttachments(Shader::ProductShader role) noexcept
+    {
+        switch (role)
+        {
+        case Shader::ProductShader::StaticCoreGBuffer: return CoreSurfaceAttachments;
+        case Shader::ProductShader::StaticSurfaceAux: return AuxSurfaceAttachments;
+        default: return {};
+        }
+    }
 
     /// @brief role 选择程序, variant 选择该程序的固定状态. 天空用槽零, 显示用线性或 sRGB 附件槽.
     struct ShaderPipelineRequest

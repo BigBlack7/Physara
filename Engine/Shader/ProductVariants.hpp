@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 产品 Forward, 阴影和显示程序目录. 构建驱动及热重载通过统一角色取得合法变体和源入口.
+/// @brief 产品几何, 表面 MRT, 阴影和显示程序目录. 构建驱动及热重载按同一角色取得变体和源入口.
 
 #include <span>
 
@@ -35,6 +35,7 @@ namespace Physara::Shader
         StaticForwardPlusPhysicalShadows,
         StaticForwardPlusIblShadows,
         StaticCoreGBuffer,
+        StaticSurfaceAux,
         Count
     };
 

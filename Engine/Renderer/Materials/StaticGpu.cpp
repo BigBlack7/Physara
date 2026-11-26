@@ -427,6 +427,14 @@ namespace Physara::Renderer::Detail
 
     std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(ProductShader role) noexcept
     {
+        if (role == ProductShader::StaticSurfaceAux)
+        {
+            static constexpr std::array<std::string_view, 7> names{
+                "materialRows", "baseColorImage", "baseColorSampler", "metallicRoughnessImage",
+                "metallicRoughnessSampler", "normalImage", "normalSampler"};
+            static constexpr Shader::ExpectedActiveResources resources{Shader::Stage::Fragment, 2, names};
+            return std::span(&resources, 1);
+        }
         if (role == ProductShader::StaticCoreGBuffer)
         {
             return {}; // 与基本颜色共用完整 PerMaterial, 核心写入没有 PerPass 灯表.
@@ -553,12 +561,16 @@ namespace Physara::Renderer::Detail
         return {role, std::size_t(phase) * GeometryPhaseSlots + raster + layout};
     }
 
-    // 两个深度角色各占首张表的 32 个槽. 颜色角色用自己的表号和表面阶段定位槽.
+    // 深度角色共用首张表, 颜色角色按表号和阶段寻址. 两种表面写入在表尾各有自己的 32 槽.
     static std::size_t GeometrySlot(ShaderPipelineRequest key) noexcept
     {
         if (key.role == ProductShader::StaticCoreGBuffer)
         {
             return CorePipelineBase + key.variant;
+        }
+        if (key.role == ProductShader::StaticSurfaceAux)
+        {
+            return SurfaceAuxPipelineBase + key.variant;
         }
         return (IsDepthRole(key.role) ? 0 : LightingIndex(key.role)) * GeometryPipelineSlots + key.variant;
     }
@@ -573,6 +585,7 @@ namespace Physara::Renderer::Detail
         switch (role)
         {
         case ProductShader::StaticCoreGBuffer: return coreGBuffer.contentHash;
+        case ProductShader::StaticSurfaceAux: return surfaceAux.contentHash;
         case ProductShader::ForwardSky: return skyContent;
         case ProductShader::StaticDepth: return depth.contentHash;
         case ProductShader::StaticShadowDepth: return shadowDepth.contentHash;
@@ -595,12 +608,14 @@ namespace Physara::Renderer::Detail
             skyPipeline = std::move(existing);
             return true;
         }
-        if (key.role == ProductShader::StaticCoreGBuffer)
+        if (!SurfaceAttachments(key.role).empty())
         {
-            if (!coreGBuffer.vertex)
+            const bool core = key.role == ProductShader::StaticCoreGBuffer;
+            auto &program = core ? coreGBuffer : surfaceAux;
+            if (!program.vertex)
             {
-                auto shaders = source.coreGBuffer;
-                coreGBuffer = std::move(shaders);
+                auto shaders = core ? source.coreGBuffer : source.surfaceAux;
+                program = std::move(shaders);
             }
         }
         else if (IsDepthRole(key.role))
@@ -634,10 +649,11 @@ namespace Physara::Renderer::Detail
             skyPipeline = nullptr;
             skyContent.clear();
         }
-        else if (role == ProductShader::StaticCoreGBuffer)
+        else if (!SurfaceAttachments(role).empty())
         {
-            coreGBuffer = {};
-            std::fill(pipelines.begin() + CorePipelineBase, pipelines.end(), RHI::GraphicsPipelineHandle{});
+            auto &program = role == ProductShader::StaticCoreGBuffer ? coreGBuffer : surfaceAux;
+            program = {};
+            std::fill_n(pipelines.begin() + GeometrySlot({role, 0}), GeometryPhaseSlots, RHI::GraphicsPipelineHandle{});
         }
         else if (IsDepthRole(role))
         {
@@ -681,22 +697,26 @@ namespace Physara::Renderer::Detail
         const bool doubleSided = (key.variant & 16) != 0;
         const bool depthOnly = IsDepthRole(key.role);
         const bool shadow = phase == SurfacePhase::ShadowDepth;
+        const auto attachments = SurfaceAttachments(key.role);
+        const bool surface = !attachments.empty();
         const bool core = key.role == ProductShader::StaticCoreGBuffer;
-        const auto mode = depthOnly || core ? 0 : LightingIndex(key.role);
-        auto &depthShaders = shadow ? shadowDepth : depth;
-        if (core)
+        const auto mode = depthOnly || surface ? 0 : LightingIndex(key.role);
+        auto &shaders = surface ? (core ? coreGBuffer : surfaceAux) : (depthOnly ? (shadow ? shadowDepth : depth)
+                                                                                : colors[mode]);
+        if (surface)
         {
-            if (!coreGBuffer.vertex)
+            if (!shaders.vertex)
             {
-                coreGBuffer = LoadProgram(device, key.role, paths.coreGBuffer, packages, StaticAbi::AbiHash);
+                shaders = LoadProgram(device, key.role, core ? paths.coreGBuffer : paths.surfaceAux,
+                                      packages, StaticAbi::AbiHash);
             }
         }
         else if (depthOnly)
         {
-            if (!depthShaders.vertex)
+            if (!shaders.vertex)
             {
                 // 深度图只为覆盖配方授权基色槽. 同 ABI 的包也须匹配片元实际使用的材质资源.
-                depthShaders = LoadProgram(device, key.role, shadow ? paths.shadowDepth : paths.depth, packages,
+                shaders = LoadProgram(device, key.role, shadow ? paths.shadowDepth : paths.depth, packages,
                     StaticAbi::AbiHash);
             }
         }
@@ -704,7 +724,6 @@ namespace Physara::Renderer::Detail
         {
             PrepareLighting(owner, static_cast<LightingProgram>(mode), packages);
         }
-        const auto &shaders = core ? coreGBuffer : (depthOnly ? depthShaders : colors[mode]);
         // 顶点存储仅依属性位决定, 同一格式可跨深度和颜色角色复用. 实际 Shader 输入由 Pipeline 核对.
         if (!inputLayouts[layout])
         {
@@ -749,13 +768,14 @@ namespace Physara::Renderer::Detail
         {
             desc.AddBindingLayout(binding.Get());
         }
-        if (!depthOnly && !core)
+        if (!depthOnly && !surface)
         {
             desc.AddBindingLayout(owner.lightLayouts[std::size_t(FullListProgram(lighting))].Get());
         }
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
             .SetCullMode(doubleSided ? RHI::RasterCullMode::None : RHI::RasterCullMode::Back);
+        // 核心和辅助表面写入均为 GreaterOrEqual. 重画辅助颜色时用独立的 ReadOnlyDepth 槽读取最终 D32.
         const bool equal = phase == SurfacePhase::ReadOnlyDepth;
         const auto compare = shadow ? ShadowDepthConvention::Compare :
             (equal ? RHI::ComparisonFunc::Equal : RHI::ComparisonFunc::GreaterOrEqual);
@@ -768,11 +788,11 @@ namespace Physara::Renderer::Detail
         }
         RHI::FramebufferInfo target;
         target.SetDepthFormat(shadow ? ShadowDepthFormat : DepthFormat);
-        if (core)
+        if (surface)
         {
-            for (auto format : CoreGBufferOutput::Formats)
+            for (auto index : attachments)
             {
-                target.AddColorFormat(format);
+                target.AddColorFormat(CoreGBufferOutput::Formats[index]);
             }
         }
         else if (!depthOnly)

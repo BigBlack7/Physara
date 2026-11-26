@@ -62,6 +62,8 @@ namespace Physara::Shader
          "Passes/Forward/FroxelShadowColor.frag"},
         {{ProductShader::StaticCoreGBuffer}, "StaticCoreGBuffer", "StaticForward",
          "Passes/GBuffer/StaticCoreGBuffer.json", "Passes/Forward/Static.vert", "Passes/GBuffer/Core.frag"},
+        {{ProductShader::StaticSurfaceAux}, "StaticSurfaceAux", "StaticForward",
+         "Passes/GBuffer/StaticSurfaceAux.json", "Passes/Forward/Static.vert", "Passes/GBuffer/SurfaceAux.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

@@ -266,10 +266,11 @@ namespace Physara::Renderer
     /// @brief HDR 和深度实际生产接口. 摘要包含已用程序的 ABI 及内容, 空元素表示该阶段未被用到.
     struct OpaqueProduction
     {
-        std::array<std::array<char, 64>, 4> programContents{}; ///< 颜色, 天空, 前置深度和阴影深度.
+        std::array<char, 64> forwardColor{}, sky{}, earlyDepth{}, shadowDepth{}, coreSurface{}, surfaceAux{};
         RHI::Format color = RHI::Format::UNKNOWN;
         RHI::Format depth = RHI::Format::UNKNOWN;
         std::uint32_t samples = 1;
+        bool historyEligible = true; ///< 有未标识的生产者时, 颜色仍可发布, 历史从本帧重新开始.
         bool operator==(const OpaqueProduction &) const = default;
     };
 

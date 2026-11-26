@@ -11,7 +11,7 @@
 /// @file
 /// @brief 在同一图中登记共享上传及各 View 的几何, 阴影深度, 天空和显示转换.
 /// 受光分支按准入组紧排深度层, 诊断只取选中组. 深度逐层写入或整体只读导入, 颜色 Pass 绑定连续数组视图.
-/// Forward+ 的颜色 Pass 从本图上传版本取得所属 View 的 Froxel 数据, 后继天空和显示沿用同一工作色.
+/// Forward+ 使用本 View 的 Froxel 上传版本. 显式表面请求先写核心 MRT, 再按覆盖接续 G1, G3 和 D32.
 
 namespace Physara::Renderer
 {
@@ -40,9 +40,16 @@ namespace Physara::Renderer
     {
         auto counts = WorkCounts(index);
         const auto &view = m_Data->views[index];
-        ForwardPassWork work{view.batches.size(), 0};
+        ForwardPassWork work{};
         for (const auto &batch : view.batches)
         {
+            const auto &draw = view.draws[batch.firstDraw];
+            if (view.needs.shadeDeferredCore && view.materialRows[draw.material]->route ==
+                Detail::OpaqueSurfaceRoute::CoreDeferred)
+            {
+                continue;
+            }
+            ++work.batches;
             work.records += batch.commandCount;
         }
         if (IsLivePass(plan, output.depthPass))
@@ -143,32 +150,45 @@ namespace Physara::Renderer
     {
         const auto &view = m_Data->views[index];
         const auto &programs = m_Data->shaders->programs;
-        OpaqueProduction production{.color = WorkingFormat, .depth = DepthFormat};
-        const auto store = [&](std::size_t slot, Shader::ProductShader role)
+        const bool composed = view.needs.shadeDeferredCore != nullptr;
+        const bool auxiliary = composed && view.HasAuxiliarySurface();
+        // 核心颜色回调当前没有稳定的程序身份. 仍记录该组合实际写入深度和颜色的已知程序.
+        OpaqueProduction production{.color = WorkingFormat, .depth = DepthFormat, .historyEligible = !composed};
+        const auto store = [&](std::array<char, 64> &digest, Shader::ProductShader role)
         {
             const auto content = programs.ProgramContent(role);
-            auto &digest = production.programContents[slot];
             assert(content.size() == digest.size());
             std::ranges::copy(content, digest.begin());
         };
+        if (composed && std::ranges::any_of(view.materialRows, [](const auto &row)
+        {
+            return row->route == Detail::OpaqueSurfaceRoute::CoreDeferred;
+        }))
+        {
+            store(production.coreSurface, Shader::ProductShader::StaticCoreGBuffer);
+        }
+        if (auxiliary)
+        {
+            store(production.surfaceAux, Shader::ProductShader::StaticSurfaceAux);
+        }
         // 顶点布局和绕序选择同一角色的不同 Pipeline 槽. 历史比较使用角色的包摘要.
-        if (!view.batches.empty())
+        if (composed ? auxiliary : !view.batches.empty())
         {
             const auto key = Detail::GeometryRequest(0, false, false, Detail::SurfacePhase::Combined,
                                                      view.environment.program);
-            store(0, key.role);
-            if (view.needs.earlyDepth)
+            store(production.forwardColor, key.role);
+            if (!composed && view.needs.earlyDepth)
             {
-                store(2, Shader::ProductShader::StaticDepth);
+                store(production.earlyDepth, Shader::ProductShader::StaticDepth);
             }
         }
         if (view.environment.sky)
         {
-            store(1, Shader::ProductShader::ForwardSky);
+            store(production.sky, Shader::ProductShader::ForwardSky);
         }
         if (view.shadow && view.shadow->depth.variants.any())
         {
-            store(3, Shader::ProductShader::StaticShadowDepth);
+            store(production.shadowDepth, Shader::ProductShader::StaticShadowDepth);
         }
         return production;
     }
@@ -205,9 +225,9 @@ namespace Physara::Renderer
         std::size_t bytes = 4096 * m_Data->views.size() + m_Data->uploads.writes * 256;
         for (const auto &view : m_Data->views)
         {
-            if (view.needs.coreGBuffer)
+            if (view.needs.NeedsCoreSurface())
             {
-                bytes += 1024; // 额外几何 Pass 在本槽的图 arena 中保有 SceneRaster.
+                bytes += view.HasAuxiliarySurface() ? 2048 : 1024; // 核心及可选辅助写入的 SceneRaster.
             }
             if (view.shadow && !view.shadow->depth.retained)
             {
@@ -434,7 +454,7 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
-        DisplaySettings display, bool resample, bool coreGBuffer) const noexcept
+        DisplaySettings display, bool resample, ViewResourceNeeds needs) const noexcept
     {
         if (render.width == 0 || render.height == 0 || output.width == 0 || output.height == 0)
         {
@@ -448,7 +468,8 @@ namespace Physara::Renderer
         }
         const bool fxaa = display.antiAliasing == AntiAliasing::Fxaa;
         // RGBA16F 工作色和 D32 每个渲染像素合计 12 字节. FXAA 和重采样各需一个 8 字节的线性中间目标.
-        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(resample)) + (coreGBuffer ? 22 : 0);
+        const std::size_t surfaceBytes = needs.shadeDeferredCore ? 18 : (needs.coreGBuffer ? 22 : 0);
+        const std::size_t renderBytesPerPixel = 12 + 8 * (std::size_t(fxaa) + std::size_t(resample)) + surfaceBytes;
         if (render.height > ForwardAttachmentBudget / renderBytesPerPixel / render.width)
         {
             return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
@@ -580,10 +601,15 @@ namespace Physara::Renderer
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
+        if (needs.shadeDeferredCore && view.previewShadow)
+        {
+            return ForwardFailure{ViewSettingReason::InvalidViewRequest,
+                Core::BoundedText("Deferred opaque composition cannot be combined with a shadow diagnostic")};
+        }
         const auto display = ResolveDisplaySettings(view.previewShadow ? PreviewMode::BaseColor : mode,
                                                     view.requestedAa);
         if (const auto failure = CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
-                                                  display, view.layouts.render != view.layouts.display, needs.coreGBuffer))
+                                                  display, view.layouts.render != view.layouts.display, needs))
         {
             throw *failure;
         }
@@ -783,7 +809,9 @@ namespace Physara::Renderer
         m_Resources->ResumeView(index);
         Detail::ApplyDrawShaders(*m_Resources, data, view);
         m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
-        if (data.froxelViewLayout && !data.froxelUpload)
+        const bool usesFroxels = Detail::UsesFroxels(data.environment.program);
+        assert(usesFroxels == bool(data.froxelViewLayout));
+        if (usesFroxels && !data.froxelUpload)
         {
             if (!view.froxels)
             {
@@ -1124,17 +1152,26 @@ namespace Physara::Renderer
         return state;
     }
 
-    /// @brief 将预解析的 Draw 绑定关联到本 Pass 的读范围. 主深度, 阴影深度和阴影诊断只取材质基色槽.
-    /// 核心 Pass 跳过 Unlit, 为其余批次声明完整材质纹理. 只有主着色由 color 选用 set 3.
+    /// @brief 几何 Pass 对已排序表面的选择. 两个辅助 Pass 共用 Auxiliary 选择.
+    enum class RasterSurfaces : std::uint8_t { All, Core, Auxiliary };
+
+    /// @brief 将预解析的 Draw 绑定关联到本 Pass 的实际读范围.
+    /// 深度和阴影诊断只取基色. 辅助表面写入另取粗糙度与法线. 几何着色由 color 选用 set 3.
     /// 阴影附件使用自己的方形 viewport.
     static SceneRaster RasterInputs(RenderGraph &graph, SceneGraphResources &versions,
         const Detail::StaticDrawWork &work, const ViewImageRect &rect, RasterReads &reads,
         const Detail::ForwardFrameData *color = nullptr, TextureId shadowDepth = {},
-        const Detail::FroxelGraphInputs *froxels = nullptr, bool core = false)
+        const Detail::FroxelGraphInputs *froxels = nullptr, RasterSurfaces surfaces = RasterSurfaces::All)
     {
         SceneRaster raster;
         raster.viewport = RasterViewport(rect);
-        if (work.draws.empty())
+        const auto selected = [surfaces](const Detail::MaterialRow &material)
+        {
+            return surfaces == RasterSurfaces::All || (surfaces == RasterSurfaces::Core) ==
+                (material.route == Detail::OpaqueSurfaceRoute::CoreDeferred);
+        };
+        if (work.draws.empty() || (surfaces != RasterSurfaces::All &&
+            std::ranges::none_of(work.materialRows, [&](const auto &row) { return selected(*row); })))
         {
             return raster;
         }
@@ -1221,27 +1258,37 @@ namespace Physara::Renderer
         // 同一批的实例可以选取不同对象行和材质行. 逐表面登记这些行及几何区间, 重复的读由 readBuffer 合并.
         for (const auto &draw : work.draws)
         {
-            if (core && work.materialRows[draw.material]->values.unlit != 0)
+            const auto &material = *work.materialRows[draw.material];
+            if (!selected(material))
             {
                 continue;
             }
             static_cast<void>(slice(draw.geometry->vertices));
             static_cast<void>(slice(draw.geometry->indices));
             table(draw.object->storage);
-            table(work.materialRows[draw.material]->storage);
+            table(material.storage);
         }
+        const bool surfaceWrite = !color && surfaces != RasterSurfaces::All;
         constexpr auto commandBytes = sizeof(RHI::DrawIndexedIndirectArguments);
         raster.batches.reserve(work.batches.size());
         for (const auto &batch : work.batches)
         {
             const auto &draw = work.draws[batch.firstDraw];
             const auto &material = *work.materialRows[draw.material];
-            if (core && material.values.unlit != 0)
+            if (!selected(material))
             {
                 continue;
             }
             static_cast<void>(buffer(work.instanceBlocks[batch.instanceBlock]->buffer, GraphUsage::ShaderRead));
-            const auto slots = (!color && !core) || preview ? Detail::CoverageTextureCount : material.textures.size();
+            auto slots = material.textures.size();
+            if (surfaceWrite && surfaces == RasterSurfaces::Auxiliary)
+            {
+                slots = Detail::AuxSurfaceTextureCount;
+            }
+            else if ((!color && !surfaceWrite) || preview)
+            {
+                slots = Detail::CoverageTextureCount;
+            }
             for (std::size_t i = 0; i < slots; ++i)
             {
                 const auto &product = *material.textures[i];
@@ -1254,7 +1301,8 @@ namespace Physara::Renderer
                 {batch.firstCommand * commandBytes, batch.commandCount * commandBytes}, nullptr);
             raster.batches.push_back({slice(draw.geometry->vertices), slice(draw.geometry->indices), arguments,
                 batch.renderables.Get(), material.binding->Get(),
-                (core ? draw.corePipeline : (color ? draw.pipeline : draw.depthPipeline)).Get(), batch.commandCount});
+                (surfaceWrite ? draw.surfacePipeline : (color ? draw.pipeline : draw.depthPipeline)).Get(),
+                batch.commandCount});
         }
         return raster;
     }
@@ -1552,9 +1600,10 @@ namespace Physara::Renderer
         {
             surface.colors[i] = texture(surface.Formats[i], names[i]);
         }
-        surface.depth = texture(DepthFormat, "Core surface reverse depth");
+        surface.depth = texture(DepthFormat, "Opaque surface reverse depth");
         RasterReads reads;
-        auto raster = RasterInputs(graph, versions, frame, surface.rect, reads, nullptr, {}, nullptr, true);
+        auto raster = RasterInputs(graph, versions, frame, surface.rect, reads, nullptr, {}, nullptr,
+                                   RasterSurfaces::Core);
         surface.producer = TakeGraph(graph.AddPass<SceneRaster>("Core GBuffer",
             [&](PassBuilder &builder, SceneRaster &data)
             {
@@ -1563,7 +1612,7 @@ namespace Physara::Renderer
                 {
                     return false;
                 }
-                for (std::size_t i = 0; i < surface.colors.size(); ++i)
+                for (auto i : Detail::CoreSurfaceAttachments)
                 {
                     TextureWriteOps ops{.load = LoadOp::Clear, .clearValue = RHI::Color(0.f)};
                     if (surface.Formats[i] == RHI::Format::R16_UINT)
@@ -1584,6 +1633,69 @@ namespace Physara::Renderer
         return surface;
     }
 
+    /// @brief 核心阶段初始化整个表面, 辅助批次随后以同一栅格的最近覆盖接续 G1、G3 和 D32.
+    static CoreGBufferOutput PrepareDeferredSurface(RenderGraph &graph, SceneGraphResources &versions,
+                                                    const Detail::ForwardFrameData &frame)
+    {
+        auto surface = DeclareCoreSurface(graph, versions, frame);
+        if (!frame.HasAuxiliarySurface())
+        {
+            return surface;
+        }
+        RasterReads reads;
+        auto raster = RasterInputs(graph, versions, frame, surface.rect, reads, nullptr, {}, nullptr,
+                                   RasterSurfaces::Auxiliary);
+        surface.producer = TakeGraph(graph.AddPass<SceneRaster>("SurfaceAux",
+            [&](PassBuilder &builder, SceneRaster &data)
+            {
+                data = std::move(raster);
+                if (!DeclareRasterReads(builder, reads))
+                {
+                    return false;
+                }
+                // G0 和 G2 保留核心阶段的版本. 两个 Load 加上下方深度 Load 保留孔内和遮挡后的表面.
+                for (auto index : Detail::AuxSurfaceAttachments)
+                {
+                    auto &attachment = surface.colors[index];
+                    attachment = builder.Write(attachment, GraphUsage::ColorAttachment, {.load = LoadOp::Load});
+                    if (!attachment.IsValid())
+                    {
+                        return false;
+                    }
+                }
+                surface.depth = builder.Write(surface.depth, GraphUsage::DepthStencilAttachment,
+                    {.load = LoadOp::Load}, TextureRange{.aspect = TextureAspect::Depth});
+                return surface.depth.IsValid();
+            }, DrawScene));
+        return surface;
+    }
+
+    /// @brief 沿 SurfaceAux 的批次次序重画已覆盖的颜色. 读取最终 D32, 保留其它像素的核心色或底色.
+    static PassId AddOpaqueForwardExtensions(RenderGraph &graph, SceneGraphResources &versions,
+        const Detail::ForwardFrameData &frame, const CoreGBufferOutput &surface, TextureId &color,
+        TextureId shadowDepth, const Detail::FroxelGraphInputs *froxels)
+    {
+        if (!frame.HasAuxiliarySurface())
+        {
+            return {};
+        }
+        RasterReads reads;
+        auto raster = RasterInputs(graph, versions, frame, surface.rect, reads, &frame, shadowDepth, froxels,
+                                   RasterSurfaces::Auxiliary);
+        return TakeGraph(graph.AddPass<SceneRaster>("Forward opaque extensions",
+            [&](PassBuilder &builder, SceneRaster &data)
+            {
+                data = std::move(raster);
+                if (!DeclareRasterReads(builder, reads) || (data.froxels && !data.froxels->DeclareReads(builder)) ||
+                    !builder.Read(surface.depth, GraphUsage::DepthStencilRead, TextureRange{.aspect = TextureAspect::Depth}))
+                {
+                    return false;
+                }
+                color = builder.Write(color, GraphUsage::ColorAttachment, {.load = LoadOp::Load});
+                return color.IsValid();
+            }, DrawScene, PrepareRasterBindings));
+    }
+
     /// @brief 声明一个 View 的表面与显示目标, 私有输出不进入共享驻留映射.
     static ForwardOutput DeclareView(RenderGraph &graph, SceneGraphResources &versions,
                                      std::vector<GraphUpload> &uploads, const Detail::ForwardFrameData &frame,
@@ -1593,22 +1705,36 @@ namespace Physara::Renderer
         const auto firstPass = graph.Passes().size();
         ForwardOutput output;
         output.source = frame.source;
-        if (frame.needs.coreGBuffer)
+        if (frame.needs.NeedsCoreSurface())
         {
-            output.coreGBuffer = DeclareCoreSurface(graph, versions, frame);
+            output.coreGBuffer = PrepareDeferredSurface(graph, versions, frame);
         }
-        output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
-            .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
         output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
-            .format = WorkingFormat, .debugName = "Forward linear working color", .isRenderTarget = true}));
+            .format = WorkingFormat, .debugName = "Opaque linear working color", .isRenderTarget = true}));
         if (frame.shadow)
         {
             output.shadowDepth = DeclareShadowDepth(graph, versions, *frame.shadow);
             output.shadowBytes = frame.shadow->depth.LogicalBytes();
         }
-        output.depthPass = PrepareSurface(graph, versions, frame, output.depth);
-        output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor,
-                                       output.shadowDepth, froxels);
+        if (const auto shadeCore = frame.needs.shadeDeferredCore)
+        {
+            const auto &surface = *output.coreGBuffer;
+            output.depth = surface.depth;
+            // 核心消费者读取最终资格, 先定义工作色. 随后的 Equal 重画只改写同深度且通过 MASK 的辅助片元.
+            const auto target = output.workingColor;
+            output.workingColor = TakeGraph(shadeCore(graph, surface, output.source, target));
+            assert(output.workingColor.Identity() == target.Identity());
+            output.colorPass = AddOpaqueForwardExtensions(graph, versions, frame, surface, output.workingColor,
+                                                          output.shadowDepth, froxels);
+        }
+        else
+        {
+            output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
+                .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
+            output.depthPass = PrepareSurface(graph, versions, frame, output.depth);
+            output.colorPass = ShadeOpaque(graph, versions, frame, output.depth, output.workingColor,
+                                           output.shadowDepth, froxels);
+        }
         AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();

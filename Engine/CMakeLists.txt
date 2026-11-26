@@ -38,6 +38,8 @@ physara_add_shader_interface(DisplayPost Shader/Interface/DisplayPost.json)
 physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders PRODUCT)
 # 核心表面共用现有顶点和材质 ABI, 片元入口写四个固定类型附件.
 physara_add_shader_program(StaticCoreGBuffer StaticForward ../Shaders/Passes/GBuffer/StaticCoreGBuffer.json ../Shaders PRODUCT)
+# 辅助表面共用静态顶点接口, 仅向 G1 和 G3 写颜色附件.
+physara_add_shader_program(StaticSurfaceAux StaticForward ../Shaders/Passes/GBuffer/StaticSurfaceAux.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticDepth StaticForward ../Shaders/Passes/Forward/StaticDepth.json ../Shaders PRODUCT)
 # 阴影深度使用专用投影顶点和共享 MASK 片元. 各诊断包复用数组查询, 以各自的入口呈现级联或灯面.
 physara_add_shader_program(StaticShadowDepth StaticForward ../Shaders/Passes/Shadow/StaticShadowDepth.json ../Shaders PRODUCT)
@@ -101,7 +103,7 @@ set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
-foreach(program StaticForward StaticCoreGBuffer StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
+foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl

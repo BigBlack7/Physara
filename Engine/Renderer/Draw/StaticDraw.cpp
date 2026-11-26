@@ -288,6 +288,9 @@ namespace Physara::Renderer::Detail
     {
         auto &uploads = frame.uploads;
         const auto values = cachedRow ? cachedRow->values : EncodeMaterial(material);
+        // 当前受支持的 lit 材质均可编码到核心布局. 路由随有效材质驻留, 与覆盖模式独立.
+        const auto route = cachedRow ? cachedRow->route : (material.values.unlit ? OpaqueSurfaceRoute::Unlit
+                                                                                : OpaqueSurfaceRoute::CoreDeferred);
         if (!cachedRow)
         {
             ++frame.encodings.materials;
@@ -308,7 +311,8 @@ namespace Physara::Renderer::Detail
         {
             auto &entry = found->second;
             auto &row = *entry.resident;
-            if (SameMaterial(row.values, values) && row.textures == textures && row.samplers == samplers)
+            if (row.route == route && SameMaterial(row.values, values) &&
+                row.textures == textures && row.samplers == samplers)
             {
                 // 这些字段只参与后续准备. 在途 Draw 已保存自己的路由和 Pipeline.
                 entry.revision = revision;
@@ -322,6 +326,7 @@ namespace Physara::Renderer::Detail
         device.Reserve(rowBytes, true);
         auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
+        row->route = route;
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
         device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
@@ -718,11 +723,12 @@ namespace Physara::Renderer::Detail
 
     /// @brief 比较同一 View 和实例块内仍可能变化的状态. 光照角色和前置深度由本路统一选择,
     /// 固定状态槽同时确定颜色和深度的布局及光栅组合. 材质集合含表页和采样组合.
-    /// splitCore 使每批首项能代表整批的照明资格. 在相邻段上分批, 保留相等深度处原有的覆盖顺序.
-    static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b, bool splitCore) noexcept
+    /// splitRoutes 使每批首项能代表整批的表面路由. 在相邻段上分批, 保留相等深度处的覆盖顺序.
+    static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b,
+                          bool splitRoutes) noexcept
     {
         return a.pipelineKey == b.pipelineKey &&
-               (!splitCore || frame.materialRows[a.material]->values.unlit == frame.materialRows[b.material]->values.unlit) &&
+               (!splitRoutes || frame.materialRows[a.material]->route == frame.materialRows[b.material]->route) &&
                a.geometry->vertices.page == b.geometry->vertices.page &&
                a.geometry->indices.page == b.geometry->indices.page &&
                a.object->storage.page == b.object->storage.page &&
@@ -775,7 +781,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
     /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
-    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitCore = false)
+    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitRoutes = false)
     {
         constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
         using Argument = RHI::DrawIndexedIndirectArguments;
@@ -828,7 +834,7 @@ namespace Physara::Renderer::Detail
                     const auto &geometry = draws[current].geometry;
                     auto end = current + 1;
                     while (end < draws.size() && draws[end].geometry == geometry &&
-                           SameBatch(frame, head, draws[end], splitCore))
+                           SameBatch(frame, head, draws[end], splitRoutes))
                     {
                         ++end;
                     }
@@ -839,7 +845,7 @@ namespace Physara::Renderer::Detail
                     arguments.push_back(EncodeCommand(*geometry, static_cast<std::uint32_t>(current),
                                                      static_cast<std::uint32_t>(end - current)));
                     current = end;
-                } while (current < draws.size() && SameBatch(frame, head, draws[current], splitCore));
+                } while (current < draws.size() && SameBatch(frame, head, draws[current], splitRoutes));
                 frame.batches.push_back({first + begin, block, firstCommand,
                     static_cast<std::uint32_t>(arguments.size()) - firstCommand, renderables});
                 begin = current;
@@ -854,6 +860,26 @@ namespace Physara::Renderer::Detail
                                             SurfacePhase phase) noexcept
     {
         return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program);
+    }
+
+    /// @brief 按批首材质选择表面写入角色. 取余保留布局, 绕序及剔面, 去掉颜色阶段的等深只读状态.
+    static ShaderPipelineRequest SurfaceShader(OpaqueSurfaceRoute route, const DrawRecord &draw) noexcept
+    {
+        const auto role = route == OpaqueSurfaceRoute::CoreDeferred ? Shader::ProductShader::StaticCoreGBuffer
+                                                                  : Shader::ProductShader::StaticSurfaceAux;
+        return {role, draw.pipelineKey % GeometryPhaseSlots};
+    }
+
+    /// @brief 前置深度和最终 Deferred 表面均先于几何颜色消费.
+    static SurfacePhase ColorPhase(const ViewResourceNeeds &needs) noexcept
+    {
+        return needs.earlyDepth || needs.shadeDeferredCore ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+    }
+
+    /// @brief 核心光照由屏幕阶段交付时, 只有辅助几何需要前向颜色 Pipeline.
+    static bool UsesForwardColor(const ViewResourceNeeds &needs, OpaqueSurfaceRoute route) noexcept
+    {
+        return !needs.shadeDeferredCore || route != OpaqueSurfaceRoute::CoreDeferred;
     }
 
     /// @brief 同次 CPU 投影编码为相对原点的列主序 clip 矩阵. caster 常量偏移单独追加.
@@ -1162,17 +1188,21 @@ namespace Physara::Renderer::Detail
     {
         // 先收集几何和材质写入, 据实际可绘项选择后续灯表和 View 常量. 各路准备结束后统一封存.
         std::map<MaterialRow *, std::size_t> rows;
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        const auto phase = ColorPhase(frame.needs);
+        const bool needsSurface = frame.needs.NeedsCoreSurface();
         for (const auto index : view.primitives)
         {
-            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !frame.needs.coreGBuffer);
+            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !needsSurface);
         }
         if (frame.draws.empty() && frame.degradation)
         {
             throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
         }
-        const bool litDraws = std::ranges::any_of(frame.materialRows,
-            [](const auto &row) { return row->values.unlit == 0; });
+        // 核心屏幕颜色由回调提供. 仅仍进入前向颜色的受光表面需要本路的灯和 Froxel 输入.
+        const bool litDraws = std::ranges::any_of(frame.materialRows, [&](const auto &row)
+        {
+            return row->values.unlit == 0 && UsesForwardColor(frame.needs, row->route);
+        });
         const bool usesLighting = !shadowLight && litDraws && IsLitPreview(mode);
         frame.usesLighting = usesLighting;
         if (shadowLight)
@@ -1215,7 +1245,8 @@ namespace Physara::Renderer::Detail
         }
         if (!frame.draws.empty())
         {
-            if (!shadowLight)
+            // 普通前向或辅助重画才绑定灯表, 即使该颜色角色需要的是共享零表.
+            if (!shadowLight && (!frame.needs.shadeDeferredCore || frame.HasAuxiliarySurface()))
             {
                 PrepareLightTable(device, frame, view, usesLighting);
                 if (frame.shadow)
@@ -1226,8 +1257,8 @@ namespace Physara::Renderer::Detail
             PrepareViewRow(device, frame, view, mode, !shadowLight && usesLighting);
             // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
             SortDraws(frame);
-            // 最近核心表面需要跳过 Unlit. 只拆分共用绑定的异类批次, 保留原有的光栅顺序.
-            PackBatches(device, frame, frame.needs.coreGBuffer);
+            // 仅表面消费者需拆分混合路由, 两个辅助 Pass 沿相同的有序批次绘制.
+            PackBatches(device, frame, needsSurface);
         }
         if (frame.environment.sky)
         {
@@ -1236,19 +1267,23 @@ namespace Physara::Renderer::Detail
         for (const auto &batch : frame.batches)
         {
             const auto &draw = frame.draws[batch.firstDraw];
-            device.shaderDemand.Add(DrawShader(frame, draw, phase));
-            if (frame.needs.coreGBuffer && frame.materialRows[draw.material]->values.unlit == 0)
+            const auto route = frame.materialRows[draw.material]->route;
+            if (needsSurface)
             {
-                device.shaderDemand.Add({Shader::ProductShader::StaticCoreGBuffer, draw.pipelineKey % GeometryPhaseSlots});
+                device.shaderDemand.Add(SurfaceShader(route, draw));
             }
-            if (usesLighting && frame.alternatePath)
+            if (UsesForwardColor(frame.needs, route))
+            {
+                device.shaderDemand.Add(DrawShader(frame, draw, phase));
+            }
+            if (usesLighting && frame.alternatePath && UsesForwardColor(frame.needs, route))
             {
                 const auto program = FullListProgram(frame.environment.program);
                 const auto alternate = *frame.alternatePath == OpaquePath::ForwardPlus ? WithFroxels(program) : program;
                 device.shaderDemand.Add(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase,
                                                         alternate), false);
             }
-            if (frame.needs.earlyDepth)
+            if (frame.needs.earlyDepth && !frame.needs.shadeDeferredCore)
             {
                 device.shaderDemand.Add(DrawShader(frame, draw, SurfacePhase::Depth));
             }
@@ -1259,11 +1294,15 @@ namespace Physara::Renderer::Detail
     std::optional<ForwardFailure> CheckAlternateColors(const ForwardDevice &device,
         const ForwardFrameData &frame, LightingProgram program) noexcept
     {
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        const auto phase = ColorPhase(frame.needs);
         std::optional<ForwardFailure> pending;
         for (const auto &batch : frame.batches)
         {
             const auto &draw = frame.draws[batch.firstDraw];
+            if (!UsesForwardColor(frame.needs, frame.materialRows[draw.material]->route))
+            {
+                continue;
+            }
             const auto key = GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, program);
             if (auto issue = device.CheckSwitchShader(key))
             {
@@ -1318,19 +1357,23 @@ namespace Physara::Renderer::Detail
             frame.environment.skyLayout = device.activeShaders->programs.skyLayout;
             shaderReady = bool(frame.environment.skyPipeline);
         }
-        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        const auto phase = ColorPhase(frame.needs);
         // 本帧只从已选代取得各批次使用的句柄. 实例及间接参数已按固定状态分组.
         for (const auto &batch : frame.batches)
         {
             auto &draw = frame.draws[batch.firstDraw];
-            draw.pipeline = device.RequestShader(DrawShader(frame, draw, phase));
-            shaderReady &= bool(draw.pipeline);
-            if (frame.needs.coreGBuffer && frame.materialRows[draw.material]->values.unlit == 0)
+            const auto route = frame.materialRows[draw.material]->route;
+            if (UsesForwardColor(frame.needs, route))
             {
-                draw.corePipeline = device.RequestShader({Shader::ProductShader::StaticCoreGBuffer, draw.pipelineKey % GeometryPhaseSlots});
-                shaderReady &= bool(draw.corePipeline);
+                draw.pipeline = device.RequestShader(DrawShader(frame, draw, phase));
+                shaderReady &= bool(draw.pipeline);
             }
-            if (frame.needs.earlyDepth)
+            if (frame.needs.NeedsCoreSurface())
+            {
+                draw.surfacePipeline = device.RequestShader(SurfaceShader(route, draw));
+                shaderReady &= bool(draw.surfacePipeline);
+            }
+            if (frame.needs.earlyDepth && !frame.needs.shadeDeferredCore)
             {
                 draw.depthPipeline = device.RequestShader(DrawShader(frame, draw, SurfacePhase::Depth));
                 shaderReady &= bool(draw.depthPipeline);
@@ -1356,6 +1399,10 @@ namespace Physara::Renderer::Detail
                     frame.degradation = skipped;
                 }
             }
+        }
+        if (frame.needs.shadeDeferredCore && !frame.HasAuxiliarySurface())
+        {
+            return;
         }
         const auto program = frame.environment.program;
         frame.lightLayout = device.lightLayouts[std::size_t(FullListProgram(program))];

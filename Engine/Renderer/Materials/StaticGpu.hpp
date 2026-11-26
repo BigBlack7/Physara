@@ -3,6 +3,7 @@
 /// @file
 /// @brief Forward 的设备缓存、拥有型写区段与可绘记录. 类型仅在 Renderer 实现内共享.
 
+#include <algorithm>
 #include <array>
 #include <bitset>
 #include <map>
@@ -217,6 +218,9 @@ namespace Physara::Renderer::Detail
     using SamplingKey = std::array<std::uintptr_t, 2 * Scene::MaterialSlotCount>;
     using MaterialBinding = std::shared_ptr<const RHI::BindingSetHandle>;
 
+    /// @brief 可进入不透明绘制的材质 profile. MASK 的覆盖规则独立于路由.
+    enum class OpaqueSurfaceRoute : std::uint8_t { CoreDeferred, Unlit, OpaqueForwardExtension };
+
     /// @brief GPU 材质行与预解析集合. 缺席槽绑定共享白图, Shader 仍由有效 slot 判定是否采样.
     struct MaterialRow final : Allocation
     {
@@ -227,6 +231,7 @@ namespace Physara::Renderer::Detail
         SamplingKey sampling;
         MaterialBinding binding;
         StaticAbi::ForwardMaterial values{};
+        OpaqueSurfaceRoute route = OpaqueSurfaceRoute::CoreDeferred;
     };
 
     /// @brief 路由和版本只属于当前缓存, 已准备的 Draw 独立保有 GPU 行.
@@ -359,8 +364,10 @@ namespace Physara::Renderer::Detail
     inline constexpr std::uint32_t ShadowReferencesSlot = 5; ///< 按灯行索引的组引用表, PerPass t5.
     inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
+    inline constexpr std::size_t AuxSurfaceTextureCount = std::size_t(Asset::MaterialSlot::Normal) + 1;
 
-    /// @brief 颜色角色及深度角色的实际 PerPass 或基色覆盖活动合同, 供冷包及热重载共用.
+    /// @brief 返回该角色额外核对的活动资源组, 供冷包和热候选共用.
+    /// Aux 明列片元的三个纹理槽及材质行. Core 的空组由调用方补上完整的静态材质合同.
     [[nodiscard]] std::span<const Shader::ExpectedActiveResources> GeometryProgramResources(
         Shader::ProductShader role) noexcept;
 
@@ -391,8 +398,7 @@ namespace Physara::Renderer::Detail
         std::size_t material;
         RHI::GraphicsPipelineHandle pipeline;
         RHI::GraphicsPipelineHandle depthPipeline;
-        // 仅请求核心输出且该批参与写入时, 由批首保有独立 MRT Pipeline.
-        RHI::GraphicsPipelineHandle corePipeline;
+        RHI::GraphicsPipelineHandle surfacePipeline; ///< 请求表面时, 批首按同一材质路由持有对应 MRT.
         std::uint32_t pipelineKey;
         double viewDepth;
         std::uint32_t source; ///< 本 SceneFrame 的 Primitive 下标, 用作最终稳定排序键.
@@ -466,10 +472,19 @@ namespace Physara::Renderer::Detail
         ForwardFrameData(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
             StaticDrawWork(batch, counts) {}
 
+        /// @brief 在已准备的可见材质中查找需要辅助深度和前向颜色的表面.
+        [[nodiscard]] bool HasAuxiliarySurface() const noexcept
+        {
+            return std::ranges::any_of(materialRows, [](const auto &row)
+            {
+                return row->route != OpaqueSurfaceRoute::CoreDeferred;
+            });
+        }
+
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
         std::optional<OpaquePath> alternatePath; ///< 只额外登记颜色准备键, 一路只选择一份图工作.
-        bool usesLighting = false; ///< 已通过材质及诊断分支选择, 由两条颜色策略共用.
+        bool usesLighting = false; ///< 实际前向颜色有受光表面, 供其全灯或 Froxel 策略共用.
         std::uint64_t preparationStamp{}; ///< 与 Allocation::lastUse 配对, 零表示本槽无准备或已撤回.
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
@@ -521,12 +536,13 @@ namespace Physara::Renderer::Detail
         Shader::RhiProgram depth;
         Shader::RhiProgram shadowDepth;
         Shader::RhiProgram coreGBuffer;
+        Shader::RhiProgram surfaceAux;
         std::array<RHI::BindingLayoutHandle, 3> layouts;
         std::string skyContent;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
         std::array<RHI::InputLayoutHandle, 8> inputLayouts;
-        std::array<RHI::GraphicsPipelineHandle, CorePipelineBase + GeometryPhaseSlots> pipelines;
+        std::array<RHI::GraphicsPipelineHandle, GeometryPipelineCount> pipelines;
 
     private:
         /// @brief 按颜色角色核对活动绑定并取得设备的固定布局. 三种阴影诊断共用基色覆盖和数组查询配方.

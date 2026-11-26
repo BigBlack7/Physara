@@ -292,11 +292,11 @@
 
 **职责位置：** Renderer/Draw、Paths、Passes、Shaders/Passes。**前置：** [D11-T01](#d11-t01)。**架构依据：** [8.2](../Architecture.md#geometry)、[5.6](../Architecture.md#draws)、[6.1](../Architecture.md#paths)。
 
-**状态** 前置 D11-T01 已归档，本包待启动。
+**状态** 已验收并归档。 [归档与验收证据](../../openspec/changes/archive/2026-11-26-add-deferred-surface-routing/tasks.md#final-verification)
 
-- [ ] 在核心 GBuffer 后为 Unlit/非核心不透明 profile 写真实 depth、normal/roughness，并清除 DeferredEligible。
-- [ ] DeferredLighting 只照明 eligible 像素，ForwardUnlit/ForwardExtension 在同一表面深度下输出各自颜色。
-- [ ] 以 Unlit 和已有 profile 验证遮挡、覆盖、边界；为 D12 扩展提供相同测试入口。
+- [x] 在核心 GBuffer 后为 Unlit 和已准入的不透明扩展写入实际深度、法线与粗糙度，并清除 DeferredEligible。
+- [x] 确立 DeferredLighting 的核心照明资格，交付 ForwardUnlit/ForwardExtension 在最终表面深度下的颜色合成入口。生产 DeferredLighting 由 D11-T03 接入。
+- [x] 用 Unlit 与现有核心材质验证遮挡、覆盖和边界，为 D12 扩展保留同一验证入口。
 
 **完成条件：** AO/SSR 未来读取的是实际最近表面，扩展不会既被 deferred 照明又被 forward 重画。
 
@@ -304,6 +304,8 @@
 ### D11-T03 · 实现共享 DeferredLighting 与子图
 
 **职责位置：** Renderer/Paths、Shaders/Lighting/Passes、RenderGraph。**前置：** [D11-T01](#d11-t01)、[D11-T02](#d11-t02)。**架构依据：** [8.7](../Architecture.md#opaque-shading)、[8.6](../Architecture.md#lighting)、[6.1](../Architecture.md#paths)。
+
+**状态** D11-T01、D11-T02 已验收，前置已满足。
 
 - [ ] 由 GBuffer/depth 重建共享 PixelParams/几何状态，使用既有灯、Froxel、阴影和 IBL EvaluateLighting。
 - [ ] 按 PrepareSurface→表面效果输入→ShadeOpaque 的合同组装，输出统一 OpaqueOutput；当屏幕效果未启用使用明确默认输入。

@@ -66,14 +66,15 @@ namespace Physara::Renderer::Detail
         const auto groups = GeometryProgramResources(role);
         const bool perPass = std::ranges::any_of(groups, [](const auto &group) { return group.set == 3; });
         const bool froxels = IsFroxelProgram(role);
+        const bool aux = role == ProductShader::StaticSurfaceAux;
+        const auto attachments = SurfaceAttachments(role);
         for (const auto &module : package.modules)
         {
             const bool fragment = module.stage == Shader::Stage::Fragment;
             if (fragment)
             {
                 // 活动输出按 location 排序且类型已由共享 ABI 核对. 角色决定从 0 开始实际绑定几个附件.
-                const std::size_t count = role == ProductShader::StaticCoreGBuffer ? CoreGBufferOutput::Formats.size() :
-                                          IsDepthRole(role) ? 0u : 1u;
+                const std::size_t count = attachments.empty() ? (IsDepthRole(role) ? 0u : 1u) : attachments.size();
                 if (module.outputs.size() != count)
                 {
                     return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = Core::BoundedText(
@@ -94,6 +95,10 @@ namespace Physara::Renderer::Detail
                 switch (resource.set)
                 {
                 case 0:
+                    if (aux && fragment)
+                    {
+                        return true;
+                    }
                     return !(froxels && fragment) && (resource.kind != Shader::ResourceKind::ConstantBuffer ||
                                                        resource.slot != 0 || resource.name != "perView");
                 case 1: return fragment;
@@ -120,13 +125,21 @@ namespace Physara::Renderer::Detail
         {
             return failure;
         }
-        // 深度和阴影诊断的现有配方列出了 set 2 覆盖组, 这些角色允许片元省略 b0.
-        // 普通受光的片元依赖 b0, Froxel 角色还需同一 View 的四个网格块.
-        const bool coverageOnly = std::ranges::any_of(groups, [](const auto &group) { return group.set == 2; });
-        if (!coverageOnly)
+        // 各角色的 set 2 分别核对顶点与片元. Aux 顶点用材质行变换法线贴图的切线框架,
+        // 片元只允许覆盖, 粗糙度和法线所用的槽. 完整颜色角色还读取 b0, Froxel 颜色另读四个网格块.
+        const bool limitedMaterial = std::ranges::any_of(groups, [](const auto &group) { return group.set == 2; });
+        if (!limitedMaterial || aux)
         {
             // 法线 UV 基底由颜色顶点入口从材质行取得, 此处独立于片元的完整材质配方核对.
             static constexpr std::array<std::string_view, 1> VertexMaterial{"materialRows"};
+            const Shader::ExpectedActiveResources material{Shader::Stage::Vertex, 2, VertexMaterial};
+            if (const auto failure = Shader::CheckActiveResources(package, std::span(&material, 1)))
+            {
+                return failure;
+            }
+        }
+        if (!limitedMaterial)
+        {
             static constexpr std::array<std::string_view, 5> FroxelView{
                 "perView", "froxelView", "froxelHeaders", "froxelIndices", "froxelGlobalLights"};
             // 完整颜色共用材质诊断及受光入口. 基色的纹理 alpha 与数值因子共同决定 MASK 覆盖.
@@ -135,7 +148,6 @@ namespace Physara::Renderer::Detail
                 "metallicRoughnessSampler", "normalImage", "normalSampler", "occlusionImage",
                 "occlusionSampler", "emissiveImage", "emissiveSampler"};
             const std::array color{
-                Shader::ExpectedActiveResources{Shader::Stage::Vertex, 2, VertexMaterial},
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
                     froxels ? std::span<const std::string_view>(FroxelView) : std::span<const std::string_view>(View)},
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, ColorMaterial}};

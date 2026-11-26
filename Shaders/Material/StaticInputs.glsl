@@ -4,10 +4,8 @@
 #include <Source/Material/MaterialInputs.glsl>
 #include <Source/Material/StaticCoverage.glsl>
 
-// baseColor 须为同片元 SampleBaseColor 的结果, 由调用方与覆盖共享, 此处不再次采样或乘因子.
-// metallicRoughness 的 G/B 与 AO 的 R 均按线性数据解释; 缺席纹理为 1, AO 再按 strength 插值.
-// 返回原始感知粗糙度, 不进行几何过滤或曝光; normal 与 emissive 由所需消费者单独取样.
-MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradients)
+// 以线性纹理 G/B 及材质因子取得未过滤的感知粗糙度和金属度. 缺席纹理的乘数为 1.
+vec2 SampleRoughnessMetallic(MaterialUvGradients gradients)
 {
     vec2 roughnessMetallic = vec2(1.0);
     if (HasMaterialTexture(1))
@@ -16,15 +14,21 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
         roughnessMetallic = textureGrad(sampler2D(metallicRoughnessImage, metallicRoughnessSampler),
                                         sampleUv.uv, sampleUv.dx, sampleUv.dy).gb;
     }
+    return roughnessMetallic * PHYSARA_FORWARD_MATERIAL.surface.yx;
+}
+
+// baseColor 与覆盖共用. AO 用线性纹理 R 及 strength 求值. 调用者按需处理法线、自发光及过滤.
+MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradients)
+{
+    vec2 roughnessMetallic = SampleRoughnessMetallic(gradients);
     float occlusion = 1.0;
     if (HasMaterialTexture(3))
     {
         MaterialUvSample sampleUv = MaterialUv(3, gradients);
         occlusion = textureGrad(sampler2D(occlusionImage, occlusionSampler), sampleUv.uv, sampleUv.dx, sampleUv.dy).r;
     }
-    vec4 factors = PHYSARA_FORWARD_MATERIAL.surface;
-    return MaterialInputs(baseColor, roughnessMetallic.x * factors.y, roughnessMetallic.y * factors.x,
-                          mix(1.0, occlusion, factors.z));
+    return MaterialInputs(baseColor, roughnessMetallic.x, roughnessMetallic.y,
+                          mix(1.0, occlusion, PHYSARA_FORWARD_MATERIAL.surface.z));
 }
 
 // 调用前须确认 HasMaterialTexture(2). 线性 RGB 从 [0, 1] 解码为切线空间方向, 只缩放 XY.

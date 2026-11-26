@@ -696,8 +696,9 @@ namespace Physara::Renderer
                 prepared.layouts, camera.entity, camera.cutRevision, camera.renderClipFromView[0],
                 camera.renderClipFromView[5],
                 camera.nearPlane, camera.renderFar, camera.orthographic, shadows, environment, production});
-            // 只给这份候选标记可接续的提交. 候选被裁剪或执行失败时, 上次接受的生产记录仍由 View 持有.
-            if (m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key == *outputs.m_OpaquePlan)
+            // 未标识的核心回调也能发布当前颜色, 但即使已知程序完全相同, 也不能据此复用上一帧.
+            // 这里只标记候选的前驱票据. Publish 接受候选后才替换已有的生产记录.
+            if (production.historyEligible && m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key == *outputs.m_OpaquePlan)
             {
                 compatiblePredecessor = m_AcceptedOpaquePlan->submission;
             }
