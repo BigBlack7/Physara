@@ -98,12 +98,12 @@ namespace Physara::Renderer
     /// 显示色已执行视口映射. 受光或诊断可另带实际消费的常规深度数组, 所有 TextureId 仅在本图有效.
     struct ForwardOutput
     {
-        TextureId workingColor;
-        TextureId depth;
+        TextureId workingColor; ///< 显示映射的输入. 启用天空时指向合成后的颜色版本.
+        TextureId depth; ///< 与工作色共用渲染矩形的主 Reverse-Z 深度, 天空合成保留此版本.
         TextureId displayColor;
         ForwardWorkingSource source;
-        PassId depthPass;
-        PassId colorPass;
+        PassId depthPass; ///< 独立深度预通道. 未请求时此 ID 无效, 由颜色 Pass 写主深度.
+        PassId colorPass; ///< 本 View 的 ShadeOpaque. 对此 Pass 单独计时只覆盖不透明着色阶段.
         TextureId shadowDepth; ///< 本图用于受光或诊断的分层常规深度.
         std::uint64_t shadowBytes{}; ///< 这路消费的紧凑数组字节, 用于图准入.
         PassId firstPass, lastPass; ///< 本 View 私有子图的声明范围, 不含共享上传和 UI.

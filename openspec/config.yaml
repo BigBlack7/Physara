@@ -23,4 +23,5 @@ rules:
   tasks:
     - For each changed contract identify the concrete risk, the smallest sufficient check and when to stop. Reuse existing evidence for identical inputs; add a case only for a distinct uncovered failure. Check a task only after its acceptance criteria are met.
     - Plan Agent-A implementation/local checks, independent Agent-B review/annotation, correction and B recheck, then final native verify before sync/archive; hand off after implementation checks while review tasks remain pending.
-    - Only the responsible session may mark its review/correction/recheck tasks complete, using the AGENTS.md loop; preserve detailed review and acceptance evidence in the change tasks before resetting Docs/CodeReview.md. The development plan records only completion status and a link to the change.
+    - In A's handoff step, record the recommended B review tier and the concrete review risk in Docs/CodeReview.md after implementation and local checks. Use Docs/Developments/AgentModels.md for the rubric and current model mapping.
+    - Only the responsible session may mark its review/correction/recheck tasks complete, using the AGENTS.md loop. Preserve the tier recommendation, actual B configuration, and review and acceptance evidence in the change tasks before resetting Docs/CodeReview.md.

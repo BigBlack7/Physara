@@ -55,9 +55,10 @@ namespace Physara::Renderer
     {
         Scene::SceneId scene;
         std::uint64_t contentRevision{}, sceneCameraRevision{};
-        /// indexBudget 是本次有限索引额度. 其余三项来自已交付的 CPU 表, GPU 写入字节由图另计.
+        /// indexBudget 是有限灯索引额度, indexCount 是已交付的条目数. GPU 写入字节由图另计.
+        /// cellCount 和 overflowCellCount 按格计数, 实际走退路的受光像素数取决于片元覆盖和着色时的选格.
         std::uint32_t indexBudget{}, cellCount{}, overflowCellCount{}, indexCount{};
-        std::optional<std::size_t> fallbackLocalCount; ///< 可见集合就绪后才可计算, 单位为每次查询的灯行数.
+        std::optional<std::size_t> fallbackLocalCount; ///< 一次完整列表退路遍历的局部灯行数. 可见集合就绪后才有值.
     };
 
     /// @brief 主准备失败时交付身份与原因. 成功时 SceneFrame 和索引借用当前槽与该 View 的工作区.

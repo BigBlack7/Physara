@@ -255,27 +255,31 @@
 
 **阴影参考** [Forward 阴影参考](../Performance/ForwardShadowReference.md)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-26-verify-forward-plus-hdr-and-lighting-cost/tasks.md#final-verification) · [双路径基准](../Performance/ForwardPlusReference.md)
 
-- [ ] 固定同一 SceneFrame、曝光、阴影、IBL、分辨率和画质，对两路径线性/HDR 输出做误差比较。
-- [ ] 包含 range 缺省、overflow、极端相机、聚光边界和不同光源规模，核对灯集合无漏项。
-- [ ] 分别测量 CPU 分箱、上传和 GPU 灯循环，保留 fallback 比例，不只记录总 FPS。
+- [x] 固定同一 SceneFrame、曝光、阴影、IBL、分辨率和画质，对两路径线性/HDR 输出做误差比较。
+- [x] 包含 range 缺省、overflow、极端相机、聚光边界和不同光源规模，核对灯集合无漏项。
+- [x] 分别测量 CPU 分箱、上传和 GPU 灯循环，保留 fallback 比例，不只记录总 FPS。
 
 **完成条件：** Forward+ 的收益与代价可以解释且没有通过丢灯获得，第二路径可作为后续 Deferred 参照。
 
-**D10 阶段出口：** Forward+ 与完整灯循环 Forward 在同输入 HDR 下等价；无穷 range、列表溢出、相机范围和空灯情况均正确。
+**D10 阶段出口：** 已通过。相同输入的 Forward 与 Forward+ HDR 等价，无 range、列表溢出、相机边界与空灯均已验收。 [验收与证据](../../openspec/changes/archive/2026-11-26-verify-forward-plus-hdr-and-lighting-cost/tasks.md#final-verification)
 
 <a id="dev-d11"></a>
 ## D11 · 接入 Deferred 并完成三路径切换骨架
 
-**性质：** 基线。**入口：** [D10](#dev-d10) 的阶段出口通过。
+**性质：** 基线。**入口：** [D10](#dev-d10) 阶段出口已通过。 [入口证据](../../openspec/changes/archive/2026-11-26-verify-forward-plus-hdr-and-lighting-cost/tasks.md#final-verification)
 
 **阶段目标：** 实现紧凑核心 GBuffer、扩展表面辅助合同和共享 deferred lighting，保持完整上下游一致。
+
+**A 开发档位建议 M。** D11-T01 至 T03 的 GBuffer 编解码、最近表面路由和图内照明共同决定实际像素输出。T04 还需协调 View、Shader 和资源就绪状态的三路径事务切换，T05 通过同输入 HDR 与原生开销验证整条链。 [分级依据](AgentModels.md#development-tier)
 
 <a id="d11-t01"></a>
 ### D11-T01 · 实现固定核心 GBuffer 编解码
 
 **职责位置：** Renderer/Passes、Shaders/Material/Passes。**前置：** 本阶段入口满足。**架构依据：** [8.2](../Architecture.md#geometry)、[8.5](../Architecture.md#materials)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 实现 G0 RGBA8_SRGB、G1 RGBA16F、G2 R11G11B10F、G3 R16_UINT 的 18 B/pixel 核心布局，depth 单独管理。
 - [ ] 共享材质采样和法线/roughness/metallic/AO/预曝光 emissive 编解码，清理 DeferredEligible 等 flags 的默认值。
@@ -322,6 +326,8 @@
 **职责位置：** Renderer、Editor/Diagnostics。**前置：** [D11-T01](#d11-t01)、[D11-T02](#d11-t02)、[D11-T03](#d11-t03)、[D11-T04](#d11-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[12.2](../Architecture.md#benchmark)、[10.1](../Architecture.md#editor-output)。
 
 **阴影参考** [Forward 阴影参考](../Performance/ForwardShadowReference.md)。
+
+**双路径基准** [Forward+ 画质与多灯成本参考](../Performance/ForwardPlusReference.md)。
 
 - [ ] 对核心/Unlit、mask、静态实例、阴影、无穷灯及 Froxel overflow 做同输入 HDR 等价回归。
 - [ ] 提供 GBuffer/深度/法线/路由可视化的 typed preview Pass，UI 不直接解释任意纹理位型。

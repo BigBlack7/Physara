@@ -7,7 +7,7 @@ Physara 是面向静态场景、带轻量编辑器的物理渲染器。先定位
 
 - 工作范围、前置和状态从[开发计划的当前阶段](Docs/Developments/Developments.md#current-stage)进入。工作包链接到 [Architecture.md](Docs/Architecture.md) 的具体合同。这是项目唯一的架构指南，仅在设计纠错或正式采纳长期方案时修改。
 - 核实上游事实时按主题查 [Filament](Docs/Reference/Filament_Rendering_Pipeline_Analysis.md) 或 [NVRHI](Docs/Reference/NVRHI_RHI_Vulkan_Analysis.md)。构建和运行入口见[构建说明](Docs/Build.md)。
-- 在对应 OpenSpec change 中细化可观察行为、设计取舍、实施任务与验收证据。开发计划只记录阶段、前置与范围调整、完成状态和 change 引用。归档保留当时的决定。
+- 在对应 OpenSpec change 中细化可观察行为、设计取舍、实施任务与验收证据。开发计划只记录阶段、前置与范围调整、阶段开发档位建议、完成状态和 change 引用。归档保留当时的决定。
 
 <a id="workflow"></a>
 ## 每次交付
@@ -19,6 +19,7 @@ Physara 是面向静态场景、带轻量编辑器的物理渲染器。先定位
 - 开发测试的代码、脚本、样例与临时工程只写入 `build/` 下按工作包归类的目录，不进入正式源码或默认构建；删除 build 后正式工程仍须可重新配置和构建。防御处理与测试规模按实际风险取最小充分范围，细则见对应技能。
 - <a id="annotation"></a>第一方 C++、Shader 和 CMake 用中文注释、英文标点。C++ 声明使用紧凑 Doxygen `///`，实现说明使用 `//`，按[理解难度分层](.agents/skills/physara-cpp/SKILL.md#annotation)。B 补齐本轮涉及的完整第一方文件，修改后同步核对职责、接口合同及流程说明。
 - <a id="review-loop"></a>归档前必须经过独立会话 **A 开发 → B 审查并注释 → A 整改并自检 → B 复核并完善注释**。维护者调度交接，各自勾选自己的项。B 验收最终版本后才执行最终 verify、同步及归档。交接使用[当前问题单](Docs/CodeReview.md)。
+- A 完成 T 工作包对应 change 的实现和本地检查后，在问题单给出 B 的审查档位建议。D 阶段出口归档后，当前 A 在下一阶段入口给出 A 的开发档位建议。实际配置由维护者确定。 [模型分级与调度](Docs/Developments/AgentModels.md)
 - 历史改写、推送、发布及不可逆删除须有维护者明确授权。
 
 ## 按任务加载技能
