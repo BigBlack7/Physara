@@ -513,7 +513,7 @@ namespace Physara::Editor::Detail
         const auto pose = field.Required("cameraPose");
         pose.Object({"translation", "rotation"});
         const auto requested = field.Required("requested");
-        requested.Object({"renderScale", "physicalCamera", "antiAliasing"});
+        requested.Object({"renderScale", "physicalCamera", "antiAliasing", "opaquePath"});
         const auto camera = field.Required("cameraEntityId");
         Renderer::ViewDocumentRequests view{.cameraPose = ReadPose(pose),
                                             .renderScale = requested.Required("renderScale").Number<float>()};
@@ -537,6 +537,19 @@ namespace Physara::Editor::Detail
             else if (value != "none")
             {
                 aa->Error("Expected none or fxaa");
+            }
+        }
+        // 旧 v1 的缺省值来自 ViewDocumentRequests. 显式字段的类型和值在原 JSON 路径上报错.
+        if (const auto path = requested.Optional("opaquePath"))
+        {
+            const auto value = path->Text();
+            if (value == "forward-plus")
+            {
+                view.opaquePath = Renderer::OpaquePath::ForwardPlus;
+            }
+            else if (value != "forward")
+            {
+                path->Error("Expected forward or forward-plus");
             }
         }
         if (auto error = Renderer::View::ValidateDocumentRequests(view))

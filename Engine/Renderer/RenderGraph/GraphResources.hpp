@@ -368,10 +368,12 @@ namespace Physara::Renderer
     };
 
     /// @brief 错误正文独立持有阶段及已知对象信息, 可在图销毁后报告.
+    /// Pass 身份由错误发生处填写, 消费者通过同一张图的声明查找所属工作.
     struct GraphError
     {
         GraphErrorCode code;
         Core::BoundedText description;
+        PassId pass; ///< 仅在失败归属于具体 Pass 时交付. 身份只在对应图内可用.
     };
 
     /// @brief 成功时返回阶段结果, 失败时返回诊断.

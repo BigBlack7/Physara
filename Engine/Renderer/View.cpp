@@ -24,7 +24,12 @@ namespace Physara::Renderer
     // 进程只有一个活动宿主. View 在该宿主 owner 线程分配身份, 后续创建不会复用旧代.
     static std::uint64_t LastViewIdentity = 0;
 
-    /// @brief 校验文档的 AA, 比例, 位姿和引用形状. 具体相机引用仍由组合方对 Scene 检查.
+    [[nodiscard]] static constexpr bool ValidOpaquePath(OpaquePath path) noexcept
+    {
+        return path == OpaquePath::Forward || path == OpaquePath::ForwardPlus;
+    }
+
+    /// @brief 校验文档的路径, AA, 比例, 位姿和引用形状. 组合方核对 Scene 的具体相机引用.
     static std::optional<Core::BoundedText> ValidateDocumentFields(const ViewDocumentRequests &requests) noexcept
     {
         if (!(requests.renderScale >= MinRenderScale && requests.renderScale <= MaxRenderScale))
@@ -34,6 +39,10 @@ namespace Physara::Renderer
         if (requests.antiAliasing > AntiAliasing::Fxaa)
         {
             return Core::BoundedText("Invalid mainView.requested.antiAliasing");
+        }
+        if (!ValidOpaquePath(requests.opaquePath))
+        {
+            return Core::BoundedText("Invalid mainView.requested.opaquePath");
         }
         if (!Scene::IsValidPose(requests.cameraPose))
         {
@@ -189,15 +198,118 @@ namespace Physara::Renderer
 
     bool View::RequestOpaquePath(OpaquePath path) noexcept
     {
-        if (path != OpaquePath::Forward && path != OpaquePath::ForwardPlus)
+        if (!ValidOpaquePath(path))
         {
             return false;
         }
-        if (m_OpaquePath != path)
+        if (m_Document.opaquePath != path)
         {
-            m_OpaquePath = path;
-            m_Reason = ViewSettingReason::SubmissionPending;
+            if (!Core::AdvanceGeneration(m_DocumentRevision))
+            {
+                return false;
+            }
+            m_Document.opaquePath = path;
+            OpaquePathChanged();
         }
+        return true;
+    }
+
+    // 新意图留待正常渲染确认. 原颜色与相机继续对应其实际提交.
+    void View::OpaquePathChanged() noexcept
+    {
+        m_Reason = ViewSettingReason::SubmissionPending;
+        m_OpaqueReason = m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key.path == RequestedOpaquePath()
+            ? ViewSettingReason::None : ViewSettingReason::SubmissionPending;
+        m_OpaqueDetail.reset();
+        m_OpaqueRejection.reset();
+    }
+
+    void View::ObserveScene(Scene::SceneId scene) noexcept
+    {
+        if (m_PlanScene != scene)
+        {
+            m_PlanScene = scene;
+            m_AcceptedOpaquePlan.reset();
+            m_OpaqueReason = ViewSettingReason::LayoutPending;
+            m_OpaqueDetail.reset();
+            m_OpaqueRejection.reset();
+        }
+    }
+
+    OpaquePathSettings View::OpaqueSettings(Scene::SceneId scene) const noexcept
+    {
+        if (scene != m_PlanScene)
+        {
+            return {RequestedOpaquePath(), {}, ViewSettingReason::LayoutPending, nullptr};
+        }
+        return {RequestedOpaquePath(), m_AcceptedOpaquePlan ? std::optional{m_AcceptedOpaquePlan->key.path}
+                                                          : std::nullopt,
+                m_OpaqueReason, m_OpaqueDetail ? &*m_OpaqueDetail : nullptr};
+    }
+
+    void View::ReportOpaquePreparation(Scene::SceneId scene, std::uint64_t revision,
+        ViewSettingReason reason, const Core::BoundedText *detail) noexcept
+    {
+        if (scene == m_PlanScene && revision == m_DocumentRevision)
+        {
+            m_OpaqueReason = reason;
+            m_OpaqueDetail = detail ? std::optional{*detail} : std::nullopt;
+        }
+    }
+
+    void View::RejectOpaqueSubmission(const PreparedViewOutput &candidate, ViewSettingReason reason,
+        const Core::BoundedText *detail) noexcept
+    {
+        if (!candidate.m_OpaquePlan || candidate.IsRetained())
+        {
+            return;
+        }
+        const auto &scene = *candidate.m_Output->scene;
+        if (scene.scene != m_PlanScene || scene.documentRevision != m_DocumentRevision ||
+            candidate.m_CameraRevision != m_CameraRevision || scene.opaquePath != RequestedOpaquePath())
+        {
+            return;
+        }
+        ReportOpaquePreparation(scene.scene, scene.documentRevision, reason, detail);
+        if (!m_AcceptedOpaquePlan || m_AcceptedOpaquePlan->key.path != scene.opaquePath)
+        {
+            m_OpaqueRejection = OpaqueRejection{
+                {scene.scene, scene.contentRevision, scene.documentRevision, candidate.m_CameraRevision,
+                 scene.camera.sceneCameraRevision, {scene.renderLayout, candidate.m_Output->layout}, scene.mode,
+                 scene.shadowRequestRevision, scene.shaderGeneration}, reason, m_OpaqueDetail};
+        }
+    }
+
+    bool View::CanSwitchOpaquePath(const PreparedView &prepared, std::uint64_t shaderGeneration) noexcept
+    {
+        if (!m_OpaqueRejection)
+        {
+            return true;
+        }
+        const OpaqueAttempt current{prepared.scene.scene, prepared.scene.contentRevision, prepared.documentRevision,
+            prepared.cameraRevision, prepared.camera->sceneCameraRevision, prepared.layouts, prepared.preview,
+            prepared.shadowStatistics.requestRevision, shaderGeneration};
+        // 相机或计划输入更新后允许重试. 等待期间旧策略取得的新票据仍属于旧策略, 不会解除拒绝.
+        if (current != m_OpaqueRejection->input)
+        {
+            m_OpaqueRejection.reset();
+            return true;
+        }
+        const auto &rejection = *m_OpaqueRejection;
+        ReportOpaquePreparation(current.scene, current.documentRevision, rejection.reason,
+                                rejection.detail ? &*rejection.detail : nullptr);
+        return false;
+    }
+
+    bool View::RequestCameraCut(ViewId view) noexcept
+    {
+        if (view != m_Id || !Core::AdvanceGeneration(m_CameraRevision))
+        {
+            return false;
+        }
+        // cut 是相机代的一种更新, 因而在相机代能前进时没有独立的回绕风险.
+        ++m_CameraCutRevision;
+        m_Reason = ViewSettingReason::SubmissionPending;
         return true;
     }
 
@@ -411,6 +523,11 @@ namespace Physara::Renderer
             {
                 m_Reason = ViewSettingReason::SubmissionPending;
             }
+            if (m_Document.opaquePath != update.m_Value.opaquePath)
+            {
+                m_Document.opaquePath = update.m_Value.opaquePath;
+                OpaquePathChanged();
+            }
             if (m_Document.cameraEntityId != update.m_Value.cameraEntityId)
             {
                 m_Reason = ViewSettingReason::LayoutPending;
@@ -535,7 +652,7 @@ namespace Physara::Renderer
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
         std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration,
-        const ShadowDepthSet *shadow)
+        const ShadowDepthSet *shadow, OpaqueProduction production)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -563,6 +680,28 @@ namespace Physara::Renderer
                 shadow->retained ? 0u : shadow->count, shadow->retained ? shadow->count : 0u,
                 shadow->drawBatches, shadow->LogicalBytes(), diagnostic};
         }
+        std::uint64_t compatiblePredecessor = 0;
+        if (!diagnostic && IsLitPreview(prepared.preview))
+        {
+            const auto &camera = *prepared.camera;
+            auto shadows = shadow ? std::optional{m_ShadowSettings} : std::nullopt;
+            if (shadows)
+            {
+                shadows->edge = shadow->edge;
+                shadows->filter = shadow->filter;
+            }
+            // 投影对角尺度独立于本帧抖动. 采用渲染远面的语义, 不把随裁剪变化的有限工作范围当作相机 cut.
+            outputs.m_OpaquePlan.emplace(PreparedViewOutput::OpaquePlan{
+                prepared.scene.scene, prepared.scene.contentRevision, prepared.opaquePath, prepared.preview,
+                prepared.layouts, camera.entity, camera.cutRevision, camera.renderClipFromView[0],
+                camera.renderClipFromView[5],
+                camera.nearPlane, camera.renderFar, camera.orthographic, shadows, environment, production});
+            // 只给这份候选标记可接续的提交. 候选被裁剪或执行失败时, 上次接受的生产记录仍由 View 持有.
+            if (m_AcceptedOpaquePlan && m_AcceptedOpaquePlan->key == *outputs.m_OpaquePlan)
+            {
+                compatiblePredecessor = m_AcceptedOpaquePlan->submission;
+            }
+        }
         // 将本轮策略, 曝光, 显示设置和程序代一起留在颜色候选. Publish 核对当前请求与提交回执后才更新历史.
         outputs.m_Output = ViewOutput{m_Id, ViewOutputRole::DisplayColor, m_LastGeneration, prepared.layouts.display, {},
             RenderedScene{prepared.scene.scene, prepared.scene.contentRevision, *prepared.camera, prepared.preview,
@@ -570,7 +709,7 @@ namespace Physara::Renderer
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
                           prepared.layouts.display.outputExtent, shaderGeneration, cascades,
                           prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
-                          0, shadowWork, prepared.opaquePath}};
+                          0, shadowWork, prepared.opaquePath, compatiblePredecessor}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -654,12 +793,18 @@ namespace Physara::Renderer
     {
         // 拒绝安全图旧快照和已被后继编辑取代的候选, 即使尺寸或比例碰巧相同也不重新确认.
         const auto *color = retained ? retained.Texture() : acceptedTexture.Get();
+        const auto *scene = outputs.m_Output && outputs.m_Output->scene ? &*outputs.m_Output->scene : nullptr;
         if (outputs.m_Retained || !color || !outputs.m_Output || outputs.m_Output->view != m_Id ||
             outputs.m_RequestRevision != m_RequestRevision || outputs.m_CameraRevision != m_CameraRevision ||
-            (outputs.m_Output->scene && (outputs.m_Output->scene->mode != m_Preview ||
-                                         outputs.m_Output->scene->opaquePath != m_OpaquePath ||
-                                         outputs.m_Output->scene->shadowRequestRevision != m_ShadowRequestRevision ||
-                                         outputs.m_Output->scene->documentRevision != m_DocumentRevision)))
+            (scene && (scene->mode != m_Preview || scene->shadowRequestRevision != m_ShadowRequestRevision ||
+                scene->documentRevision != m_DocumentRevision || outputs.m_Output->generation != m_LastGeneration ||
+                (m_PlanScene.IsValid() && scene->scene != m_PlanScene))))
+        {
+            return false;
+        }
+        // 等候另一条路径时仍可接受本轮重建的有效计划. 其资格来自同一场景的已接受路径.
+        if (outputs.m_OpaquePlan && (!ticket || (scene->opaquePath != RequestedOpaquePath() &&
+            OpaqueSettings(scene->scene).effective != scene->opaquePath)))
         {
             return false;
         }
@@ -671,6 +816,17 @@ namespace Physara::Renderer
         }
         if (outputs.m_Output->scene)
         {
+            if (outputs.m_OpaquePlan)
+            {
+                ObserveScene(scene->scene);
+                m_AcceptedOpaquePlan = AcceptedOpaquePlan{std::move(*outputs.m_OpaquePlan), ticket};
+                if (scene->opaquePath == RequestedOpaquePath())
+                {
+                    m_OpaqueReason = ViewSettingReason::None;
+                    m_OpaqueDetail.reset();
+                    m_OpaqueRejection.reset();
+                }
+            }
             // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
             outputs.m_Output->scene->submission = ticket;
             m_RenderedScene = outputs.m_Output->scene;

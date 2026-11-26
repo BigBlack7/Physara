@@ -662,6 +662,17 @@ namespace Physara::Editor
                 requests.antiAliasing = *workspace.antiAliasing;
                 state.editError = EditMainView(scene->Id(), *view, std::move(requests));
             }
+            if (view && workspace.opaquePath)
+            {
+                // 同一批次可能刚改过相机或 AA. 身份匹配后只向最新请求合入路径, 由 EditMainView 处理冻结和撤销.
+                const auto &intent = *workspace.opaquePath;
+                if (intent.view == view->Id())
+                {
+                    auto requests = view->DocumentRequests();
+                    requests.opaquePath = intent.path;
+                    state.editError = EditMainView(intent.scene, *view, std::move(requests));
+                }
+            }
             if (view && scene && !frozen && !discard)
             {
                 // 控件可以来自同一批布局. 按顺序把每个字段合入当前 Scene, 文件替换在本批最后处理.

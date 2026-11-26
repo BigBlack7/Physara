@@ -229,6 +229,8 @@ namespace Physara::Editor::Detail
             }
             main.PublishDocumentUpdate(std::get<Renderer::ViewDocumentUpdate>(std::move(result)));
             scene = std::move(candidate.scene);
+            // 新文档即使与旧文档请求相同, 有效路径也要等新 Scene 的首个受光提交确认.
+            main.ObserveScene(scene->Id());
             path = std::move(next);
             saved = Current(main);
             history.Clear();

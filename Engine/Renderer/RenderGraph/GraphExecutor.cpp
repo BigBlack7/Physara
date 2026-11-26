@@ -134,13 +134,16 @@ namespace Physara::Renderer::Detail
         std::vector<std::uint8_t> m_BufferImports;
         std::unique_ptr<GraphExecutionOutputList> m_Outputs;
         std::string_view m_CurrentPass;
+        PassId m_CurrentPassId;
         std::string_view m_Stage = "GraphExec.Preflight";
     };
 
     GraphError GraphExecutor::Error(GraphErrorCode code, std::string_view stage, std::string_view name,
                                     std::string_view reason, std::optional<std::uint32_t> version) const noexcept
     {
-        return MakeGraphError(code, stage, m_CurrentPass, name, reason, version);
+        auto error = MakeGraphError(code, stage, m_CurrentPass, name, reason, version);
+        error.pass = m_CurrentPassId;
+        return error;
     }
 
     RHI::Texture *GraphExecutor::Texture(TextureId id) const noexcept
@@ -490,9 +493,11 @@ namespace Physara::Renderer::Detail
                     const auto &entry = texture.retained.m_Entry;
                     if (entry && entry->mutableContent && entry->mutableContent->HasReader(use->access.range))
                     {
-                        return MakeGraphError(GraphErrorCode::AccessDenied, "GraphExec.Preflight",
+                        auto error = MakeGraphError(GraphErrorCode::AccessDenied, "GraphExec.Preflight",
                             graph.Passes()[pass.id.index].name, texture.desc.debugName,
                             "Texture write overlaps a retained read-only output", id.version);
+                        error.pass = pass.id;
+                        return error;
                     }
                 }
             }
@@ -632,6 +637,7 @@ namespace Physara::Renderer::Detail
     {
         const auto &declaration = m_Graph.Passes()[pass.id.index];
         m_CurrentPass = declaration.name;
+        m_CurrentPassId = pass.id;
         m_Stage = "GraphExec.Materialize";
         for (const auto &use : pass.uses)
         {
@@ -716,7 +722,9 @@ namespace Physara::Renderer::Detail
 
     GraphFailure GraphExecutor::Handoff()
     {
+        // 所有 Pass 已结束. 图尾恢复状态或导出资源时发生的错误应归于整图.
         m_CurrentPass = {};
+        m_CurrentPassId = {};
         m_Stage = "GraphExec.Handoff";
         PrepareWritableOutputs();
         GraphExecutionStates uses;
@@ -787,6 +795,8 @@ namespace Physara::Renderer::Detail
         {
             if (auto failure = ExecutePass(m_Plan.passes[position], position))
             {
+                // 资源查询和回调返回的错误也归属于此轮实际执行的 Pass.
+                failure->pass = m_Plan.passes[position].id;
                 return failure;
             }
         }

@@ -281,10 +281,14 @@ namespace Physara::Editor::Detail
         Json mainView{{"cameraPose", WritePose(view.cameraPose)},
                       {"cameraEntityId", view.cameraEntityId ? Json(*view.cameraEntityId) : Json(nullptr)},
                       {"requested", {{"renderScale", view.renderScale}, {"physicalCamera", std::move(physicalCamera)}}}};
-        // 只保存文档快照的请求. 即使上一帧实际使用 None, 也不能丢掉待确认的 FXAA.
+        // None 和 Forward 由 v1 缺省值表示. 其余请求随保存快照写出, 即使对应的渲染计划仍在等待.
         if (view.antiAliasing == Renderer::AntiAliasing::Fxaa)
         {
             mainView["requested"]["antiAliasing"] = "fxaa";
+        }
+        if (view.opaquePath == Renderer::OpaquePath::ForwardPlus)
+        {
+            mainView["requested"]["opaquePath"] = "forward-plus";
         }
         CountValues(mainView, remaining);
         append("\n],\"mainView\":");

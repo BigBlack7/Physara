@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief 每个 View 持有自己的相机, 比例, AA, 会话预览和阴影请求, 以及最近接受的显示色.
+/// @brief 每个 View 持有相机, 不透明路径, 比例, AA, 会话预览和阴影请求, 以及最近接受的显示色.
 /// 主视口按编辑器布局请求像素, 附加离屏 View 由调用方提供布局. Runtime 按各自的图出口确认颜色.
 /// Prepare 取得当前镜头和曝光, 匹配场景颜色获接受时才同时确认渲染相机与曝光.
 
@@ -68,6 +68,9 @@ namespace Physara::Renderer
         Fxaa
     };
 
+    /// @brief 不透明照明策略. 两路共用表面和后续输出合同.
+    enum class OpaquePath : std::uint8_t { Forward, ForwardPlus };
+
     /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
     struct ViewDocumentRequests
     {
@@ -76,6 +79,7 @@ namespace Physara::Renderer
         float renderScale = MaxRenderScale;
         PhysicalCameraRequest physicalCamera;
         AntiAliasing antiAliasing = AntiAliasing::None;
+        OpaquePath opaquePath = OpaquePath::Forward;
 
         bool operator==(const ViewDocumentRequests &) const = default;
     };
@@ -210,9 +214,6 @@ namespace Physara::Renderer
         PhysicalLighting
     };
 
-    /// @brief 不透明光照的会话策略. 两路共用表面及后继输出合同.
-    enum class OpaquePath : std::uint8_t { Forward, ForwardPlus };
-
     /// @brief 普通模式中会执行逐灯求值的两种预览.
     [[nodiscard]] constexpr bool IsLitPreview(PreviewMode mode) noexcept
     {
@@ -251,6 +252,25 @@ namespace Physara::Renderer
         std::uint64_t requestRevision = 0; ///< 比例请求的布局代, 不是 AA 的版本或 GPU 输出代.
         PreviewMode preview = PreviewMode::BaseColor; ///< 当前请求模式; 已接受像素的模式由 ViewOutput::scene 表达.
         AntiAliasing requestedAa = AntiAliasing::None; ///< 当前文档意图, 与最近场景帧实际采用的 AA 可以不同.
+    };
+
+    /// @brief 当前路径选择和准备结果. 有效值只来自该 Scene 正常接受的受光计划.
+    struct OpaquePathSettings
+    {
+        OpaquePath requested;
+        std::optional<OpaquePath> effective;
+        ViewSettingReason reason;
+        const Core::BoundedText *detail; ///< 借用至下次 View 请求或准备状态更新.
+    };
+
+    /// @brief HDR 和深度实际生产接口. 摘要包含已用程序的 ABI 及内容, 空元素表示该阶段未被用到.
+    struct OpaqueProduction
+    {
+        std::array<std::array<char, 64>, 4> programContents{}; ///< 颜色, 天空, 前置深度和阴影深度.
+        RHI::Format color = RHI::Format::UNKNOWN;
+        RHI::Format depth = RHI::Format::UNKNOWN;
+        std::uint32_t samples = 1;
+        bool operator==(const OpaqueProduction &) const = default;
     };
 
     /// @brief Runtime 对诊断纹理像素记账的总字节上限, 同时约束单张诊断图的尺寸.
@@ -299,6 +319,7 @@ namespace Physara::Renderer
         std::uint64_t submission{}; ///< 接受该颜色的正常提交票据.
         std::optional<RenderedShadows> shadows;
         OpaquePath opaquePath = OpaquePath::Forward; ///< 本颜色代采用的策略, 与请求及准备状态分别保存.
+        std::uint64_t compatiblePredecessor{}; ///< 同一 View 此次可接续的受光提交, 零表示需重新开始.
     };
 
     /// @brief 最近一次成功诊断的身份. 普通画面替换颜色后仍可显示这次诊断的记录.
@@ -384,7 +405,27 @@ namespace Physara::Renderer
 
     private:
         friend class View;
+        /// @brief 受光输出的生产身份. 逐帧位姿、曝光和抖动随颜色另存, 无须使历史失效.
+        struct OpaquePlan
+        {
+            Scene::SceneId scene;
+            std::uint64_t contentRevision;
+            OpaquePath path;
+            PreviewMode mode;
+            ViewLayouts layouts;
+            std::optional<Scene::EntityHandle> camera;
+            std::uint64_t cameraCutRevision;
+            double scaleX, scaleY, nearPlane;
+            std::optional<double> farPlane;
+            bool orthographic;
+            std::optional<ShadowSettings> shadows;
+            std::optional<RenderedEnvironment> environment;
+            OpaqueProduction production;
+            bool operator==(const OpaquePlan &) const = default;
+        };
+
         std::optional<ViewOutput> m_Output;
+        std::optional<OpaquePlan> m_OpaquePlan;
         std::size_t m_UploadBytes = 0;
         std::span<const std::byte> m_Pixels;
         bool m_Retained = false;
@@ -417,8 +458,12 @@ namespace Physara::Renderer
         [[nodiscard]] const ViewDocumentRequests &DocumentRequests() const noexcept { return m_Document; }
         /// @brief 任一持久请求净变化都推进此代, 用于保存及拒绝陈旧场景候选.
         [[nodiscard]] std::uint64_t DocumentRevision() const noexcept { return m_DocumentRevision; }
-        /// @brief 位姿, 相机引用或有效导航 FOV 的变化代. 纯曝光变化不使几何输入映射过期.
+        /// @brief 位姿, 相机引用, 有效导航 FOV 或显式跳转的变化代.
         [[nodiscard]] std::uint64_t CameraRevision() const noexcept { return m_CameraRevision; }
+        /// @brief 标记同一相机输入的显式跳转. 只改变运行期相机代, 由后续正常帧确认历史.
+        /// @return 别的 View 或代号耗尽时返回 false, 已接受记录保持有效.
+        [[nodiscard]] bool RequestCameraCut(ViewId view) noexcept;
+        [[nodiscard]] std::uint64_t CameraCutRevision() const noexcept { return m_CameraCutRevision; }
         /// @brief 读取当前合法请求的曝光, 可早于该请求的首次场景提交.
         [[nodiscard]] CameraExposure Exposure() const noexcept { return m_Physical.exposure; }
         /// @brief 按当前合法镜头构造导航投影, 沿用导航的裁剪和 aspect 合同.
@@ -441,10 +486,23 @@ namespace Physara::Renderer
         /// @pre mode 为已声明的枚举值. 修改只进入待确认状态, 上一接受画面的模式随其颜色代保留.
         void RequestPreview(PreviewMode mode) noexcept;
 
-        /// @brief 为后继帧选择不透明策略. owner 线程调用, 已接受输出及文档请求继续由原所有者持有.
-        /// @return 未声明的策略会被拒绝, 当前请求保持原值.
+        /// @brief 在 owner 线程为后续帧提交不透明策略. 使用与文档事务相同的值域和请求代.
+        /// @return 非法值或版号耗尽时返回 false. 重复选择同值直接成功.
         [[nodiscard]] bool RequestOpaquePath(OpaquePath path) noexcept;
-        [[nodiscard]] OpaquePath RequestedOpaquePath() const noexcept { return m_OpaquePath; }
+        [[nodiscard]] OpaquePath RequestedOpaquePath() const noexcept { return m_Document.opaquePath; }
+
+        /// @brief 为当前文档或离屏调用绑定场景身份. 换场使旧计划失效, 已接受的旧色仍可只读.
+        void ObserveScene(Scene::SceneId scene) noexcept;
+        /// @brief 读取该场景的路径状态. 另一 Scene 的接受记录不能作为当前有效计划.
+        [[nodiscard]] OpaquePathSettings OpaqueSettings(Scene::SceneId scene) const noexcept;
+        /// @brief 记录匹配当前场景及 View 请求代的实际准备结果, 不推进有效路径.
+        void ReportOpaquePreparation(Scene::SceneId scene, std::uint64_t revision, ViewSettingReason reason,
+            const Core::BoundedText *detail = nullptr) noexcept;
+        /// @brief 记录本路受光候选的 Pass 拒绝. 首次确认和切换均保存引起拒绝的输入.
+        void RejectOpaqueSubmission(const PreparedViewOutput &candidate, ViewSettingReason reason,
+            const Core::BoundedText *detail) noexcept;
+        /// @brief 输入仍匹配时恢复本候选的拒绝原因并返回 false. 首次受光和已有路径切换共用此检查.
+        [[nodiscard]] bool CanSwitchOpaquePath(const PreparedView &prepared, std::uint64_t shaderGeneration) noexcept;
 
         /// @brief 按值读取本 View 的会话请求. 实际准入的质量与层数见当轮 PreparedView::shadowStatistics.
         [[nodiscard]] ShadowSettings RequestedShadows() const noexcept { return m_ShadowSettings; }
@@ -491,6 +549,8 @@ namespace Physara::Renderer
         /// 与保留场景历史的 LastRenderedScene 分开, 防止测试图继续显示先前场景的降级摘要.
         /// @note 借用止于下一次成功 Publish 或 View 销毁.
         [[nodiscard]] const RenderedScene *AcceptedScenePreview() const noexcept;
+        /// @brief 最近确认并可供 UI 采样的颜色是否为视口测试图.
+        [[nodiscard]] bool HasAcceptedTestPattern() const noexcept { return m_Accepted && !m_Accepted->scene; }
 
         /// @brief 在帧边界接收此 View 的有限比例. 同值请求直接成功.
         /// @return 身份或比例无效, 或请求代耗尽时返回原因, 保留已有状态.
@@ -514,10 +574,12 @@ namespace Physara::Renderer
         /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
         /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
         /// @param shadow 借用本轮受光或诊断消费的深度集合以记录候选工作量. 重新生产或无消费时解除旧深度引用.
+        /// @param production 正常渲染入口传入本槽该 View 已绑定的 HDR/深度生产描述, 用于核对前次提交的兼容性.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
                            std::optional<RenderedEnvironment> environment = std::nullopt,
-                           std::uint64_t shaderGeneration = 0, const ShadowDepthSet *shadow = nullptr);
+                           std::uint64_t shaderGeneration = 0, const ShadowDepthSet *shadow = nullptr,
+                           OpaqueProduction production = {});
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
@@ -534,6 +596,7 @@ namespace Physara::Renderer
         friend class ViewWork;
         View(ViewId id, std::uint32_t maxTextureSize) noexcept;
         void ApplyRenderScale(float scale) noexcept;
+        void OpaquePathChanged() noexcept;
         [[nodiscard]] std::optional<Core::BoundedText> SetShadowDiagnostic(ViewId view,
             ShadowDiagnostic diagnostic) noexcept;
 
@@ -545,10 +608,36 @@ namespace Physara::Renderer
         PhysicalCameraEvaluation m_Physical;
         std::uint64_t m_DocumentRevision = 0;
         std::uint64_t m_CameraRevision = 0;
+        std::uint64_t m_CameraCutRevision = 0;
         float m_EffectiveScale = MaxRenderScale;
         ViewSettingReason m_Reason = ViewSettingReason::LayoutPending;
+        Scene::SceneId m_PlanScene;
+        ViewSettingReason m_OpaqueReason = ViewSettingReason::LayoutPending;
+        std::optional<Core::BoundedText> m_OpaqueDetail;
+        /// @brief 被拒候选与实际生产输入配对. 不以帧号或新票据作为重试依据.
+        struct OpaqueAttempt
+        {
+            Scene::SceneId scene;
+            std::uint64_t contentRevision, documentRevision, cameraRevision, sceneCameraRevision;
+            ViewLayouts layouts;
+            PreviewMode preview;
+            std::uint64_t shadowRevision, shaderGeneration;
+            bool operator==(const OpaqueAttempt &) const = default;
+        };
+        struct OpaqueRejection
+        {
+            OpaqueAttempt input;
+            ViewSettingReason reason;
+            std::optional<Core::BoundedText> detail;
+        };
+        std::optional<OpaqueRejection> m_OpaqueRejection;
+        struct AcceptedOpaquePlan
+        {
+            PreparedViewOutput::OpaquePlan key;
+            std::uint64_t submission;
+        };
+        std::optional<AcceptedOpaquePlan> m_AcceptedOpaquePlan;
         PreviewMode m_Preview = PreviewMode::BaseColor;
-        OpaquePath m_OpaquePath = OpaquePath::Forward;
         ShadowSettings m_ShadowSettings;
         std::uint64_t m_ShadowRequestRevision{};
         ShadowDiagnostic m_ShadowDiagnostic;

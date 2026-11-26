@@ -240,11 +240,11 @@
 
 **职责位置：** View、Renderer/Paths、Editor/Panels。**前置：** [D10-T03](#d10-t03)。**架构依据：** [5.7](../Architecture.md#plan-readiness)、[11.2](../Architecture.md#history-commit)、[2.3](../Architecture.md#edits)。
 
-**状态** 前置已满足，待立项。
+**状态** 已验收并归档。 [验收与证据](../../openspec/changes/archive/2026-11-26-switch-opaque-paths-atomically/tasks.md#final-verification)
 
-- [ ] 实现 requested/effective 路径、准备中继续有效计划、失败原因及切换完成的原子发布。
-- [ ] 只替换布局/格式相关资源并按兼容性失效历史，禁止 WaitForIdle 或重新加载场景。
-- [ ] 测试快速重复请求、编译失败、相机移动中切换、resize 与多 View 独立切换。
+- [x] 实现 requested/effective 路径、准备中继续有效计划、失败原因及切换完成的原子发布。
+- [x] 只替换布局/格式相关资源并按兼容性失效历史，禁止 WaitForIdle 或重新加载场景。
+- [x] 测试快速重复请求、编译失败、相机移动中切换、resize 与多 View 独立切换。
 
 **完成条件：** UI 显示的有效路径与真实执行一致，未就绪请求不被伪装为成功。
 
@@ -254,6 +254,8 @@
 **职责位置：** Renderer、Runtime、Editor/Diagnostics。**前置：** [D10-T01](#d10-t01)、[D10-T02](#d10-t02)、[D10-T03](#d10-t03)、[D10-T04](#d10-t04)。**架构依据：** [12.1](../Architecture.md#tests)、[12.2](../Architecture.md#benchmark)、[8.6](../Architecture.md#lighting)。
 
 **阴影参考** [Forward 阴影参考](../Performance/ForwardShadowReference.md)。
+
+**状态** 前置已满足，待立项。
 
 - [ ] 固定同一 SceneFrame、曝光、阴影、IBL、分辨率和画质，对两路径线性/HDR 输出做误差比较。
 - [ ] 包含 range 缺省、overflow、极端相机、聚光边界和不同光源规模，核对灯集合无漏项。

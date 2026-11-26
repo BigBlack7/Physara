@@ -48,6 +48,11 @@ namespace Physara::Renderer::Detail
         }
         auto error = MakeGraphError(code, "Compile", pass ? std::string_view(pass->name) : std::string_view{},
                                     resource.name, context.View(), resource.version);
+        // pass 是报告该用途冲突的位置. predecessor 只补充依赖关系, 由正文保留.
+        if (pass)
+        {
+            error.pass = pass->id;
+        }
         if (predecessor && !predecessor->name.empty())
         {
             error.description.Append(", predecessor=");

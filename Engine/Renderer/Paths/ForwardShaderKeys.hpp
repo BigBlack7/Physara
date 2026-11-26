@@ -34,13 +34,17 @@ namespace Physara::Renderer::Detail
     class ShaderDemand final
     {
     public:
-        void Add(ShaderPipelineRequest key) noexcept;
+        /// @brief 仍可执行的计划优先于待选颜色. 同一键也被有效计划要求时保留其优先级.
+        void Add(ShaderPipelineRequest key, bool required = true) noexcept;
         [[nodiscard]] bool Contains(ShaderPipelineRequest key) const noexcept;
+        [[nodiscard]] bool Required(ShaderPipelineRequest key) const noexcept;
         /// @brief 该角色还有任一固定状态键被请求时, 准备器可继续保留这份包的拒绝原因.
         [[nodiscard]] bool ContainsRole(Shader::ProductShader role) const noexcept;
         [[nodiscard]] std::size_t Count() const noexcept;
     private:
+        // m_Keys 用于整代就绪判断, m_Required 是其中享有本轮原生创建优先级的子集.
         std::array<std::bitset<GeometryPipelineSlots>, Shader::ProductShaderCount> m_Keys;
+        std::array<std::bitset<GeometryPipelineSlots>, Shader::ProductShaderCount> m_Required;
     };
 
     /// @brief 保有读包, 接口校验或设备创建的首因. 失败处同时决定它对其它准备工作的影响.

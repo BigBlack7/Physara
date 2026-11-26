@@ -454,7 +454,8 @@ namespace Physara::Renderer::Detail
     };
 
     /// @brief 安全槽中的一个 View 候选. Draw, 灯光和阴影各自在实际消费前准备.
-    /// @note 图回调借用本槽保有的对象. 同槽完成后方可重用常量、实例块和间接缓冲.
+    /// PlanDraws 为两条策略共用一套批次. 选路时一起确定 source 中的路径及颜色程序, 随后的图回调借用本槽.
+    /// @note 同槽完成后方可重用常量、实例块和间接缓冲.
     struct ForwardFrameData : StaticDrawWork
     {
         ForwardFrameData(UploadBatch &batch, ForwardEncodingCounts &counts) noexcept :
@@ -462,6 +463,8 @@ namespace Physara::Renderer::Detail
 
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
+        std::optional<OpaquePath> alternatePath; ///< 只额外登记颜色准备键, 一路只选择一份图工作.
+        bool usesLighting = false; ///< 已通过材质及诊断分支选择, 由两条颜色策略共用.
         std::uint64_t preparationStamp{}; ///< 与 Allocation::lastUse 配对, 零表示本槽无准备或已撤回.
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
@@ -556,6 +559,8 @@ namespace Physara::Renderer::Detail
                       ShaderPreparationLimits shaderLimits);
         /// @brief 登记几何或天空键并查询 Active. 缺项返回空句柄, 已登记的硬失败抛出 ForwardFailure.
         [[nodiscard]] RHI::GraphicsPipelineHandle RequestShader(ShaderPipelineRequest key);
+        /// @brief 查询待切入颜色键, 带回当前角色的源及原生首因, 不改写活动表和使用统计.
+        [[nodiscard]] std::optional<ForwardFailure> CheckSwitchShader(ShaderPipelineRequest key) const noexcept;
         /// @brief 登记本 View 的整条显示链. 返回 true 时, 该链可从 Active 取得全部阶段.
         [[nodiscard]] bool RequestDisplay(const ViewLayouts &layouts, DisplaySettings settings);
         /// @brief 仅在帧前 owner 阶段尝试接纳当前包并推进一次有界的原生工作.
@@ -686,4 +691,7 @@ namespace Physara::Renderer::Detail
                    const ShadowLightPlan *shadowLight);
     /// @brief 从本帧选定代取得每个批次和天空所需的句柄. 缺项报告等待或硬失败, 不创建 Pipeline.
     void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view);
+    /// @brief 用当前已驻留表面的实际批次核对待选颜色, 其它共享键照常在收尾绑定.
+    [[nodiscard]] std::optional<ForwardFailure> CheckAlternateColors(
+        const ForwardDevice &device, const ForwardFrameData &frame, LightingProgram program) noexcept;
 }

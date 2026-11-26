@@ -71,6 +71,14 @@ namespace Physara::Editor::Detail
         Renderer::ShadowDiagnostic selection;
     };
 
+    /// @brief 路径选择携带绘制控件时的 Scene 和 View 身份. 会话应用意图时再取得其余文档字段.
+    struct OpaquePathIntent
+    {
+        Scene::SceneId scene;
+        Renderer::ViewId view;
+        Renderer::OpaquePath path;
+    };
+
     /// @brief 当前 UI 批次的布局及值意图. 会话封存绘制数据后消费.
     /// @note 视口图像借用当轮 ImGui 列表及字体. 编辑和窗口请求由本值持有.
     /// 相机字段意图只在本批当前文档的编辑边界消费, 先于可替换 Scene 的文件操作.
@@ -87,6 +95,7 @@ namespace Physara::Editor::Detail
         std::optional<PhysicalResourceIntent> physicalSource;
         bool cancelPhysicalSource = false;
         std::optional<Renderer::AntiAliasing> antiAliasing; ///< 持久化意图, 走主 View 文档事务.
+        std::optional<OpaquePathIntent> opaquePath;
         std::optional<Renderer::PreviewMode> preview; ///< 会话内显示意图, 不进入持久化文档或撤销历史.
         std::optional<ShadowSettingsIntent> shadowSettings;
         std::optional<ShadowDiagnosticIntent> shadowDiagnostic;

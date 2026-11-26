@@ -609,6 +609,41 @@ namespace Physara::Editor::Detail
         }
     }
 
+    /// @brief 编辑当前文档的路径请求. 有效路径与准备原因来自 View 接受的受光计划及当轮候选.
+    static void DrawOpaquePath(const Renderer::View &view, Scene::SceneId scene, bool allowEdits,
+                               WorkspaceFrame &frame)
+    {
+        constexpr const char *names[]{"Forward", "Forward+"};
+        const auto status = view.OpaqueSettings(scene);
+        int path = static_cast<int>(status.requested);
+        ImGui::BeginDisabled(!allowEdits || !scene.IsValid());
+        const bool changed = ImGui::Combo("Requested opaque path", &path, names, IM_ARRAYSIZE(names));
+        ImGui::EndDisabled();
+        if (changed)
+        {
+            frame.opaquePath = OpaquePathIntent{scene, view.Id(), static_cast<Renderer::OpaquePath>(path)};
+        }
+        ImGui::Text("Effective opaque path - %s", status.effective ?
+            names[static_cast<std::size_t>(*status.effective)] : "Awaiting a lit scene frame");
+        // 测试图与诊断帧按实际接受的显示色提示范围. 有效路径仍来自最近接受的受光计划.
+        const auto *displayed = view.AcceptedScenePreview();
+        if (!Renderer::IsLitPreview(view.Preview()) || view.HasAcceptedTestPattern() ||
+            (displayed && (!Renderer::IsLitPreview(displayed->mode) ||
+                           displayed->directionalCascades || displayed->localShadow)))
+        {
+            ImGui::TextUnformatted("Opaque path applies to the regular lighting previews.");
+        }
+        if (status.reason != Renderer::ViewSettingReason::None)
+        {
+            ImGui::TextUnformatted(ViewStatus(status.reason));
+            if (status.detail)
+            {
+                const auto detail = status.detail->View();
+                ImGui::TextWrapped("%.*s", static_cast<int>(detail.size()), detail.data());
+            }
+        }
+    }
+
     // 用 View 的请求比例初始化控件, 由 ImGui 的交互状态产生下一轮比例意图.
     static void DrawViewSettings(const Renderer::ViewSettings &view, bool allowEdits, WorkspaceFrame &frame)
     {
@@ -1013,6 +1048,8 @@ namespace Physara::Editor::Detail
                         {
                             frame.preview = static_cast<Renderer::PreviewMode>(preview);
                         }
+                        DrawOpaquePath(*state.view, state.scene ? state.scene->Id() : Scene::SceneId{},
+                                       allowEdits, frame);
                         constexpr const char *aaNames[]{"None", "FXAA"};
                         int antiAliasing = static_cast<int>(settings.requestedAa);
                         ImGui::BeginDisabled(!allowEdits);

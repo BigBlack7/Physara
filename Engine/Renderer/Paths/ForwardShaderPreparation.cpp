@@ -21,10 +21,19 @@ namespace Physara::Renderer::Detail
     using Shader::ProductShader;
     using PrepareClock = std::chrono::steady_clock;
 
-    void ShaderDemand::Add(ShaderPipelineRequest key) noexcept
+    void ShaderDemand::Add(ShaderPipelineRequest key, bool required) noexcept
     {
         assert(key.role < ProductShader::Count && key.variant < GeometryPipelineSlots);
         m_Keys[std::size_t(key.role)][key.variant] = true;
+        if (required)
+        {
+            m_Required[std::size_t(key.role)][key.variant] = true;
+        }
+    }
+
+    bool ShaderDemand::Required(ShaderPipelineRequest key) const noexcept
+    {
+        return m_Required[std::size_t(key.role)][key.variant];
     }
 
     bool ShaderDemand::Contains(ShaderPipelineRequest key) const noexcept
@@ -215,6 +224,41 @@ namespace Physara::Renderer::Detail
         return {};
     }
 
+    // 切入颜色键要先核对源码修订上的拒绝和等待, 再核对本帧活动代能否提供实际 Pipeline.
+    std::optional<ForwardFailure> ForwardDevice::CheckSwitchShader(ShaderPipelineRequest key) const noexcept
+    {
+        const std::span<const ShaderPreparationFailure> source = sourceFailure
+            ? std::span(&*sourceFailure, 1) : std::span<const ShaderPreparationFailure>{};
+        const auto describe = [&](ViewSettingReason reason, std::string_view message)
+        {
+            const auto *program = Shader::FindProductProgram(key.role);
+            Core::BoundedText text(program->name);
+            text.Append(": ");
+            text.Append(message);
+            return ForwardFailure{reason, text};
+        };
+        if (const auto *failure = FindFailure(source, key))
+        {
+            return describe(ViewSettingReason::ScenePipelineUnavailable, failure->text.View());
+        }
+        if (sourcePending && (!candidateShaders ||
+            candidateInput->packages[std::size_t(key.role)]->contentHash !=
+                activeShaders->programs.ProgramContent(key.role)))
+        {
+            // 只约束实际要切入的程序. 已接受策略仍可从活动表直接取句柄.
+            return describe(ViewSettingReason::ShaderPending, "Waiting for the current Shader source");
+        }
+        if (const auto *failure = FindFailure(activeFailures, key))
+        {
+            return describe(ViewSettingReason::ScenePipelineUnavailable, failure->text.View());
+        }
+        if (!FindPipeline(*activeShaders, key))
+        {
+            return describe(ViewSettingReason::ShaderPending, "Waiting for the prepared pipeline variant");
+        }
+        return std::nullopt;
+    }
+
     bool ForwardDevice::RequestDisplay(const ViewLayouts &layouts, DisplaySettings settings)
     {
         const auto requests = PostProcess::DisplayDevice::SelectStages(layouts, settings);
@@ -260,6 +304,7 @@ namespace Physara::Renderer::Detail
     static std::optional<ShaderPipelineRequest> NextMissing(const ShaderDemand &demand,
         const ForwardShaderGeneration &generation, std::span<const ShaderPreparationFailure> rejected = {}) noexcept
     {
+        std::optional<ShaderPipelineRequest> optional;
         for (const auto &program : Shader::ProductPrograms())
         {
             for (std::size_t variant = 0; variant < GeometryPipelineSlots; ++variant)
@@ -267,11 +312,18 @@ namespace Physara::Renderer::Detail
                 const ShaderPipelineRequest key{program.key.role, variant};
                 if (demand.Contains(key) && !FindPipeline(generation, key) && !FindFailure(rejected, key))
                 {
-                    return key;
+                    if (demand.Required(key))
+                    {
+                        return key;
+                    }
+                    if (!optional)
+                    {
+                        optional = key;
+                    }
                 }
             }
         }
-        return std::nullopt;
+        return optional;
     }
 
     // 按 RHI Pipeline 句柄指向的对象去重, 将 Active, 候选及仍被帧持有的旧代合计为设备占用.

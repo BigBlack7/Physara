@@ -40,7 +40,7 @@ namespace Physara::Renderer
 
     /// @brief 本帧相机的独立值. 右手系, 列主序, 主视图 NDC 深度为 [0,1] Reverse-Z.
     /// stable 投影不含 jitter 且有有限远面, render 投影保留请求的远面语义与本次偏移.
-    /// 场景身份与 View 请求版本由外层 PreparedView 携带, 本值不代表已提交的相机历史.
+    /// 场景身份与 View 请求版本由外层 PreparedView 携带. cutRevision 记录采样时的跳转代, 随本次接受的颜色成为历史.
     struct CameraSnapshot
     {
         std::optional<Scene::EntityHandle> entity; ///< 空值表示 View 拥有的导航相机.
@@ -59,6 +59,7 @@ namespace Physara::Renderer
         bool orthographic;
         CameraLens lens;
         CameraExposure exposure;
+        std::uint64_t cutRevision{}; ///< View 显式相机跳转代. 连续位姿更新沿用原值.
 
         /// @brief 从有效图像的左上 UV 得到稳定视线, 两轴范围均为 [0,1). 越界或无法表示时返回空.
         /// 透视射线起于眼点, 正交射线起于对应近面位置; 两者都不含本帧 jitter.

@@ -1172,6 +1172,7 @@ namespace Physara::Renderer::Detail
         const bool litDraws = std::ranges::any_of(frame.materialRows,
             [](const auto &row) { return row->values.unlit == 0; });
         const bool usesLighting = !shadowLight && litDraws && IsLitPreview(mode);
+        frame.usesLighting = usesLighting;
         if (shadowLight)
         {
             if (const auto *local = std::get_if<LocalShadowSelection>(&view.shadowDiagnostic))
@@ -1208,12 +1209,6 @@ namespace Physara::Renderer::Detail
         if (usesLighting && view.opaquePath == OpaquePath::ForwardPlus)
         {
             // 实际可绘材质决定是否需要列表. 到这里阴影和环境角色均已选好, 只替换局部灯候选的来源.
-            if (!view.froxels)
-            {
-                Core::BoundedText issue("Cannot prepare Forward+ Froxel grid: ");
-                issue.Append(FroxelStatusName(view.froxelStatus));
-                throw ForwardFailure{ViewSettingReason::ScenePreparationFailed, issue};
-            }
             frame.environment.program = WithFroxels(frame.environment.program);
         }
         if (!frame.draws.empty())
@@ -1239,11 +1234,40 @@ namespace Physara::Renderer::Detail
         {
             const auto &draw = frame.draws[batch.firstDraw];
             device.shaderDemand.Add(DrawShader(frame, draw, phase));
+            if (usesLighting && frame.alternatePath)
+            {
+                const auto program = FullListProgram(frame.environment.program);
+                const auto alternate = *frame.alternatePath == OpaquePath::ForwardPlus ? WithFroxels(program) : program;
+                device.shaderDemand.Add(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase,
+                                                        alternate), false);
+            }
             if (frame.needs.earlyDepth)
             {
                 device.shaderDemand.Add(DrawShader(frame, draw, SurfacePhase::Depth));
             }
         }
+    }
+
+    // 每个批次的首项代表整批的原生键. 暂缺键先记下, 继续检查后续批次才能优先报告已有的硬失败.
+    std::optional<ForwardFailure> CheckAlternateColors(const ForwardDevice &device,
+        const ForwardFrameData &frame, LightingProgram program) noexcept
+    {
+        const auto phase = frame.needs.earlyDepth ? SurfacePhase::ReadOnlyDepth : SurfacePhase::Combined;
+        std::optional<ForwardFailure> pending;
+        for (const auto &batch : frame.batches)
+        {
+            const auto &draw = frame.draws[batch.firstDraw];
+            const auto key = GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, program);
+            if (auto issue = device.CheckSwitchShader(key))
+            {
+                if (issue->reason != ViewSettingReason::ShaderPending)
+                {
+                    return issue;
+                }
+                pending = std::move(issue);
+            }
+        }
+        return pending;
     }
 
     /// @brief 从冻结代确认只读导入. 程序变化时才为原计划补办重绘, 沿用该 View 的准备预算.

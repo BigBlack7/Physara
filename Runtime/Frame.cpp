@@ -197,6 +197,7 @@ namespace Physara::Runtime
         std::optional<Core::BoundedText> additional;
         ViewSettingReason viewportReason = ViewSettingReason::None; ///< 移除视口生产者时传给占位或旧图, 区分等待和硬拒绝.
         bool viewportPublished = false; ///< 仅完整正常图采样并实际发布时确认输入映射.
+        ViewId rejectedView; ///< 图失败有可证实的私有 Pass 归属时才有效.
     };
 
     // 在离开图/准备作用域前复制阶段和原始 RHI 首错, 不让诊断借用图字符串或 arena.
@@ -223,6 +224,17 @@ namespace Physara::Runtime
         PassId diagnosticUpload;
         std::vector<GraphUpload> uploads = std::vector<GraphUpload>(0);
     };
+
+    /// @brief 仅把明确属于一个 View 子图的拒绝交给路径状态. 全图容量等待和共享工作由帧诊断处理.
+    static ViewId RejectedView(const FrameDeclaration &frame, const GraphError &error) noexcept
+    {
+        if (frame.scene && error.code != GraphErrorCode::OutOfStorage &&
+            error.code != GraphErrorCode::TransientBudgetExceeded)
+        {
+            return frame.scene->PassOwner(error.pass);
+        }
+        return {};
+    }
 
     /// @brief 同槽附加请求自己的候选及准备事实. RenderFrame 保有到一次尝试结束.
     struct OffscreenCandidate
@@ -513,12 +525,14 @@ namespace Physara::Runtime
                 timer = {.state = Editor::GpuIntervalState::Failed};
             }
         }
+        ViewId rejectedView;
         if (const auto *error = std::get_if<GraphError>(&executed))
         {
             // 接管拒绝时保留可能造成包失效的原始时间戳错误. 图内其余失败使用自己的首错.
             failure = timerBeginError && error->code == GraphErrorCode::InvalidRecording ?
                 Failed(host, AttemptStatus::Cancelled, "Frame.TimerBegin", *timerBeginError).error :
                 Failed(host, AttemptStatus::Cancelled, "Frame.Execute", error->description).error;
+            rejectedView = RejectedView(declared, *error);
         }
         else
         {
@@ -577,19 +591,26 @@ namespace Physara::Runtime
             assert(confirmed == accepted);
             static_cast<void>(confirmed);
         }
-        const auto publishView = [&](View &owner, PreparedViewOutput &candidate, TextureId color)
+        const auto publishView = [&](View &owner, PreparedViewOutput &candidate, TextureId color,
+                                     const ForwardOutput *produced)
         {
             // 场景出口须能追溯到本槽的程序表. View 还要用导出纹理和票据确认自己的请求版本.
+            // 主视口与离屏可共用提交票据. 各自的图出口与路径一致后才把纹理交给所属 View.
             const auto *output = FindTextureExport(*execution, color);
             const auto *planned = candidate.Color();
-            if (planned && planned->scene && planned->scene->shaderGeneration != slot.forward.ShaderGeneration())
+            if (planned && planned->scene &&
+                (!produced || produced->source.view != owner.Id() || produced->source.scene != planned->scene->scene ||
+                 produced->source.opaquePath != planned->scene->opaquePath ||
+                 planned->scene->shaderGeneration != slot.forward.ShaderGeneration()))
             {
                 return false;
             }
             return output && owner.Publish(std::move(candidate), output->object, output->retained, receipt.ticket);
         };
+        const auto *mainScene = declared.scene && declared.scene->views[MainViewIndex] ?
+            &*declared.scene->views[MainViewIndex] : nullptr;
         const bool published = accepted && usedViewport && mode == Editor::UiFrameMode::Normal &&
-            publishView(view, outputs, declared.viewport);
+            publishView(view, outputs, declared.viewport, mainScene);
         if (accepted && declared.scene)
         {
             // 共享存储按本计划的写入确认. 每路显示色另外用自己的出口查找原生对象, 再核对所属 View 的请求.
@@ -614,8 +635,8 @@ namespace Physara::Runtime
             if (offscreen)
             {
                 auto &request = *offscreen->request;
-                const auto color = declared.scene->views[OffscreenViewIndex]->displayColor;
-                if (publishView(request.view, offscreen->outputs, color))
+                const auto &produced = *declared.scene->views[OffscreenViewIndex];
+                if (publishView(request.view, offscreen->outputs, produced.displayColor, &produced))
                 {
                     confirmDepth(request.view, OffscreenViewIndex);
                     measurements.statistics.PublishAcceptedShadows(OffscreenViewIndex, request.view);
@@ -666,7 +687,7 @@ namespace Physara::Runtime
             {
                 return stopped("Frame.Retry", Core::BoundedText("Persistent import states cannot be re-established"));
             }
-            return {AttemptStatus::Cancelled, failure, {}};
+            return {.status = AttemptStatus::Cancelled, .error = failure, .rejectedView = rejectedView};
         }
         if (result.swapped)
         {
@@ -760,7 +781,9 @@ namespace Physara::Runtime
                 {
                     measurements.statistics.ReportPoolPressure(error->description);
                 }
-                return Failed(host, AttemptStatus::GraphRejected, "Frame.Compile", error->description);
+                auto result = Failed(host, AttemptStatus::GraphRejected, "Frame.Compile", error->description);
+                result.rejectedView = RejectedView(declared, *error);
+                return result;
             }
             const auto &plan = *std::get<std::unique_ptr<const CompiledGraphPlan>>(compiled);
             // 此时可以发布编译规模. 中途取消仍保留这次计划, 原生创建数和提交资格在各自发生时补入.
@@ -882,15 +905,94 @@ namespace Physara::Runtime
         return failure;
     }
 
+    /// @brief 当轮共用工作按仍有效的策略取得资源. 只为另一候选额外登记颜色键.
+    static std::optional<ForwardFailure> PlanOpaqueView(Platform::DeviceHost &host, ForwardRenderer &forward,
+        ForwardFrame &frame, View &owner, PreparedView &prepared, std::size_t index)
+    {
+        const auto scene = prepared.scene.scene;
+        const auto settings = owner.OpaqueSettings(scene);
+        const bool lit = IsLitPreview(prepared.preview) && !prepared.previewShadow;
+        prepared.opaquePath = settings.requested;
+        std::optional<OpaquePath> candidate;
+        if (lit && settings.effective && *settings.effective != settings.requested)
+        {
+            prepared.opaquePath = *settings.effective;
+            candidate = settings.requested;
+        }
+        auto failure = PrepareForwardView(host, [&] {
+            return forward.PlanView(frame, prepared, prepared.preview, {}, index, candidate,
+                                    settings.effective.has_value());
+        });
+        if (lit && failure)
+        {
+            owner.ReportOpaquePreparation(scene, prepared.documentRevision, failure->reason, &failure->description);
+        }
+        return failure;
+    }
+
+    /// @brief 可选资源与选定计划的收尾各有原生错误边界. Fatal 从任何阶段都交给宿主退出.
+    static std::optional<ForwardFailure> FinishOpaqueView(Platform::DeviceHost &host, ForwardRenderer &forward,
+        ForwardFrame &frame, View &owner, PreparedView &prepared, std::size_t index, const GraphBufferSupport &buffers)
+    {
+        const auto scene = prepared.scene.scene;
+        const auto effective = owner.OpaqueSettings(scene).effective;
+        const auto selectionErrors = host.BeginFrameGraphicsDiagnostics();
+        auto failure = forward.SelectOpaquePath(frame, prepared, owner, index, buffers);
+        const bool selectedRequest = prepared.opaquePath == owner.RequestedOpaquePath();
+        const bool fatal = host.HasFatalGraphicsError();
+        if (fatal || !selectionErrors.IsClear())
+        {
+            const auto native = host.FirstGraphicsError();
+            if (fatal || selectedRequest)
+            {
+                if (!failure)
+                {
+                    failure = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                        native.value_or(Core::BoundedText("Opaque path preparation failed"))};
+                }
+            }
+            else
+            {
+                // 可选资源已回滚. 复制本路候选的首因, 再为有效方案单独捕获收尾诊断.
+                const auto status = owner.OpaqueSettings(scene);
+                auto detail = status.detail ? *status.detail : Core::BoundedText("Opaque candidate preparation failed");
+                if (native && detail.View() != native->View())
+                {
+                    detail.Append(" | RHI: ");
+                    detail.Append(native->View());
+                }
+                owner.ReportOpaquePreparation(scene, prepared.documentRevision, status.reason, &detail);
+            }
+        }
+        if (failure)
+        {
+            forward.CancelPlannedView(frame, index);
+        }
+        else
+        {
+            failure = PrepareForwardView(host, [&] { return forward.FinishView(frame, prepared, index, buffers); });
+        }
+        if (selectedRequest && IsLitPreview(prepared.preview) && !prepared.previewShadow)
+        {
+            if (failure)
+            {
+                owner.ReportOpaquePreparation(scene, prepared.documentRevision, failure->reason, &failure->description);
+            }
+            else if (effective != prepared.opaquePath)
+            {
+                owner.ReportOpaquePreparation(scene, prepared.documentRevision, ViewSettingReason::SubmissionPending);
+            }
+        }
+        return failure;
+    }
+
     /// @brief 消费冻结的附加 View 工作集. 重试沿用原相机, 可见集及布局, 成功规划后由 FinishOffscreen 接续.
     static void PlanOffscreenDraws(Platform::DeviceHost &host, ForwardRenderer &forward, FrameSlot &slot,
                                    OffscreenCandidate &candidate)
     {
         auto &request = *candidate.request;
-        const auto &prepared = candidate.prepared;
-        const auto failure = PrepareForwardView(host, [&] {
-            return forward.PlanView(slot.forward, prepared, prepared.preview, {}, OffscreenViewIndex);
-        });
+        const auto failure = PlanOpaqueView(host, forward, slot.forward, request.view, candidate.prepared,
+                                            OffscreenViewIndex);
         candidate.error.reset();
         candidate.planned = !failure;
         if (failure)
@@ -928,6 +1030,7 @@ namespace Physara::Runtime
         }
         // 已确认这一路的 View 身份. 即使其布局过期, Runtime 也可发布归属于它的拒绝摘要.
         candidate.request = &request;
+        view.ObserveScene(scene.Source().Id());
         std::optional<ForwardFailure> ordinaryAttachmentFailure;
         if (request.layout)
         {
@@ -960,6 +1063,11 @@ namespace Physara::Runtime
             {
                 request.reason = layoutReason;
                 candidate.outputs = view.Unavailable(request.reason);
+                if (layoutReason != ViewSettingReason::InvalidViewRequest && IsLitPreview(view.Preview()))
+                {
+                    view.ReportOpaquePreparation(scene.Source().Id(), view.DocumentRevision(), layoutReason,
+                        candidate.error ? &*candidate.error : nullptr);
+                }
                 candidate.prepared.view = view.Id();
                 candidate.prepared.requestRevision = layout.requestRevision;
                 candidate.prepared.documentRevision = view.DocumentRevision();
@@ -978,6 +1086,11 @@ namespace Physara::Runtime
             candidate.outputs = view.Unavailable(request.reason);
             candidate.error = ordinaryAttachmentFailure && request.reason == ordinaryAttachmentFailure->reason ?
                 std::optional{ordinaryAttachmentFailure->description} : candidate.prepared.failure;
+            if (IsLitPreview(candidate.prepared.preview) && !candidate.prepared.previewShadow)
+            {
+                view.ReportOpaquePreparation(scene.Source().Id(), candidate.prepared.documentRevision, request.reason,
+                    candidate.error ? &*candidate.error : nullptr);
+            }
             return candidate;
         }
 
@@ -995,10 +1108,8 @@ namespace Physara::Runtime
         }
         auto &request = *candidate.request;
         auto &view = request.view;
-        const auto &prepared = candidate.prepared;
-        const auto failure = PrepareForwardView(host, [&] {
-            return forward.FinishView(slot.forward, prepared, OffscreenViewIndex, buffers);
-        });
+        auto &prepared = candidate.prepared;
+        const auto failure = FinishOpaqueView(host, forward, slot.forward, view, prepared, OffscreenViewIndex, buffers);
         if (failure)
         {
             request.reason = failure->reason;
@@ -1013,7 +1124,7 @@ namespace Physara::Runtime
         }
         auto output = view.PreparePreview(prepared, slot.forward.Degradation(OffscreenViewIndex),
             slot.forward.Environment(OffscreenViewIndex), slot.forward.ShaderGeneration(),
-            slot.forward.PreparedShadowDepth(OffscreenViewIndex));
+            slot.forward.PreparedShadowDepth(OffscreenViewIndex), slot.forward.Production(OffscreenViewIndex));
         if (const auto *error = std::get_if<Core::BoundedText>(&output))
         {
             request.reason = ViewSettingReason::ScenePreparationFailed;
@@ -1071,6 +1182,7 @@ namespace Physara::Runtime
         forward.BeginShaderRequests();
         const auto *scene = editor.ActiveScene();
         assert(scene);
+        view.ObserveScene(scene->Id());
         const auto sceneCameraRevision = scene->Versions().camera;
         const auto &environment = scene->Environment();
         forward.BeginEnvironmentRequests(environment ? environment->source : nullptr);
@@ -1078,16 +1190,16 @@ namespace Physara::Runtime
         ShadowPlanningLimits shadowLimits;
         static_cast<void>(host.QueryDepthArrayLimits(ShadowDepthFormat, shadowLimits.maxEdge, shadowLimits.maxLayers));
         SceneFramePreparation shared(slot.sceneFrame, *scene);
-        const auto prepared = slot.mainView.Prepare(shared, view, editorFrame.viewport, {}, ViewportUse::EditorViewport,
-                                                    shadowLimits);
+        auto prepared = slot.mainView.Prepare(shared, view, editorFrame.viewport, {}, ViewportUse::EditorViewport,
+                                              shadowLimits);
         editor.SetPreparedViewport(&prepared);
         // 局部 View 失败仍进入诊断占位和基础 UI, 这里记录原因而不撤销其它可用 UI.
         remember(prepared.failure);
         std::variant<PreparedViewOutput, Core::BoundedText> candidate;
         const bool physical = prepared.preview == PreviewMode::PhysicalLighting;
         const bool hasScene = HasSceneOutput(prepared);
-        const auto *accepted = view.AcceptedScenePreview();
-        const bool changingPath = accepted && accepted->opaquePath != prepared.opaquePath;
+        const auto active = view.OpaqueSettings(scene->Id()).effective;
+        const bool changingPath = active && *active != prepared.opaquePath;
         // 路径切换及现有可恢复配置失败时, 可读旧色仍能由安全 UI 显示.
         const bool retainOnFailure = physical || (hasScene &&
             (changingPath || prepared.opaquePath == OpaquePath::ForwardPlus ||
@@ -1114,9 +1226,7 @@ namespace Physara::Runtime
         std::optional<ForwardFailure> mainFailure;
         if (mainRequested)
         {
-            mainFailure = PrepareForwardView(host, [&] {
-                return forward.PlanView(slot.forward, prepared, prepared.preview);
-            });
+            mainFailure = PlanOpaqueView(host, forward, slot.forward, view, prepared, MainViewIndex);
         }
         if (host.HasFatalGraphicsError())
         {
@@ -1151,14 +1261,27 @@ namespace Physara::Runtime
         // 两路从本帧同一程序代取句柄. Froxel 的范围准入取自场景图使用的设备上限.
         // 主视口的旧色可交给安全 UI 采样, 离屏请求另按自己的准备及导出结果确认.
         const auto sceneBuffers = FrameBufferSupport(host.GetInfo(), true);
+        // 主路首次使用或准备切入 Forward+ 时, 先让已有有效 Forward+ 的离屏路结算本帧的写入和驻留.
+        const bool mainAddsFroxels = mainRequested && !mainFailure &&
+            (slot.forward.AddsFroxels(MainViewIndex) || (!active && slot.forward.UsesFroxels(MainViewIndex)));
+        const bool finishOffscreenFirst = mainAddsFroxels && offscreen.planned &&
+            offscreen.request->view.OpaqueSettings(scene->Id()).effective == OpaquePath::ForwardPlus &&
+            slot.forward.UsesFroxels(OffscreenViewIndex);
+        if (finishOffscreenFirst)
+        {
+            FinishOffscreen(host, forward, slot, offscreen, sceneBuffers);
+            if (host.HasFatalGraphicsError())
+            {
+                remember(offscreen.error);
+                return stop();
+            }
+        }
         const auto mainHeldDemand = slot.forward.UploadDemand();
         if (mainRequested)
         {
             if (!mainFailure)
             {
-                mainFailure = PrepareForwardView(host, [&] {
-                    return forward.FinishView(slot.forward, prepared, MainViewIndex, sceneBuffers);
-                });
+                mainFailure = FinishOpaqueView(host, forward, slot.forward, view, prepared, MainViewIndex, sceneBuffers);
             }
             if (const auto &failure = mainFailure)
             {
@@ -1177,7 +1300,8 @@ namespace Physara::Runtime
             else
             {
                 candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment(),
-                                                slot.forward.ShaderGeneration(), slot.forward.PreparedShadowDepth());
+                                                slot.forward.ShaderGeneration(), slot.forward.PreparedShadowDepth(),
+                                                slot.forward.Production());
             }
             if (host.HasFatalGraphicsError())
             {
@@ -1188,10 +1312,22 @@ namespace Physara::Runtime
         {
             // 封存命令不采样时没有本轮颜色回执. 保留上次显示代, 仅更新当前请求的等待原因.
             candidate = view.Unavailable(ViewSettingReason::ViewportSamplingPending);
+            if (IsLitPreview(prepared.preview) && !prepared.previewShadow)
+            {
+                view.ReportOpaquePreparation(scene->Id(), prepared.documentRevision,
+                                             ViewSettingReason::ViewportSamplingPending);
+            }
         }
         else
         {
             candidate = view.PrepareDiagnostic(prepared, remainingDiagnosticBytes);
+            if (IsLitPreview(prepared.preview))
+            {
+                const auto reason = prepared.reason != ViewSettingReason::None ?
+                    prepared.reason : ViewSettingReason::SceneOutputUnavailable;
+                view.ReportOpaquePreparation(scene->Id(), prepared.documentRevision, reason,
+                    prepared.failure ? &*prepared.failure : nullptr);
+            }
         }
         if (const auto *error = std::get_if<Core::BoundedText>(&candidate))
         {
@@ -1199,7 +1335,7 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
-        if (mainFailure && offscreen.request && !offscreen.planned &&
+        if (mainRequested && offscreen.request && !offscreen.planned &&
             offscreen.request->reason == ViewSettingReason::SceneUploadLimit)
         {
             const auto remaining = slot.forward.UploadDemand();
@@ -1232,7 +1368,10 @@ namespace Physara::Runtime
             remember(host.FirstGraphicsError());
             return stop();
         }
-        FinishOffscreen(host, forward, slot, offscreen, sceneBuffers);
+        if (!finishOffscreenFirst)
+        {
+            FinishOffscreen(host, forward, slot, offscreen, sceneBuffers);
+        }
         if (offscreen.error)
         {
             statistics.PublishFroxels(OffscreenViewIndex, &offscreen.prepared, offscreen.error);
@@ -1276,8 +1415,36 @@ namespace Physara::Runtime
             statistics.PublishPool(graphPool.Statistics());
             const bool attemptedOffscreen = selectedOffscreen != nullptr;
             selectedOffscreen = nullptr;
-            if (attemptedOffscreen && offscreen.request->submission == 0 && attempt.status != AttemptStatus::Succeeded)
+            const auto reportUnaccepted = [&](View &owner, const PreparedViewOutput &output)
             {
+                if (!output.IsRetained() && output.Color() && output.Color()->scene)
+                {
+                    const auto &candidateScene = *output.Color()->scene;
+                    if (attempt.status == AttemptStatus::Succeeded)
+                    {
+                        if (candidateScene.opaquePath == owner.RequestedOpaquePath() &&
+                            IsLitPreview(candidateScene.mode) && !candidateScene.directionalCascades &&
+                            !candidateScene.localShadow)
+                        {
+                            owner.ReportOpaquePreparation(candidateScene.scene, candidateScene.documentRevision,
+                                                          ViewSettingReason::ViewportSamplingPending);
+                        }
+                    }
+                    else if (attempt.rejectedView == owner.Id())
+                    {
+                        const auto reason = attempt.viewportReason != ViewSettingReason::None ?
+                            attempt.viewportReason : ViewSettingReason::ScenePreparationFailed;
+                        owner.RejectOpaqueSubmission(output, reason, attempt.error ? &*attempt.error : nullptr);
+                    }
+                }
+            };
+            if (!attempt.viewportPublished && mode == Editor::UiFrameMode::Normal)
+            {
+                reportUnaccepted(view, outputs);
+            }
+            if (attemptedOffscreen && offscreen.request->submission == 0)
+            {
+                reportUnaccepted(offscreen.request->view, offscreen.outputs);
                 const auto reason = attempt.viewportReason != ViewSettingReason::None ? attempt.viewportReason :
                     ViewSettingReason::ScenePreparationFailed;
                 offscreen.request->reason = reason;

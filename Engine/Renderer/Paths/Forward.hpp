@@ -106,6 +106,14 @@ namespace Physara::Renderer
         PassId colorPass;
         TextureId shadowDepth; ///< 本图用于受光或诊断的分层常规深度.
         std::uint64_t shadowBytes{}; ///< 这路消费的紧凑数组字节, 用于图准入.
+        PassId firstPass, lastPass; ///< 本 View 私有子图的声明范围, 不含共享上传和 UI.
+
+        /// @brief 检查 DeclareView 连续声明的 Pass. 含先行独占上传的完整归属由 ForwardGraph::PassOwner 查询.
+        [[nodiscard]] bool OwnsPass(PassId pass) const noexcept
+        {
+            return pass.IsValid() && pass.generation == firstPass.generation &&
+                pass.index >= firstPass.index && pass.index <= lastPass.index;
+        }
     };
 
     namespace Detail
@@ -121,10 +129,14 @@ namespace Physara::Renderer
     {
         std::array<std::optional<ForwardOutput>, ForwardViewCount> views;
 
+        /// @brief 查找本图中私有子图或独占写入的 View. 共享写入与外部 Pass 返回空身份.
+        [[nodiscard]] ViewId PassOwner(PassId pass) const noexcept;
+
     private:
         friend class ForwardFrame;
         std::map<Detail::Allocation *, std::vector<PassId>> m_StorageWrites;
         std::vector<std::pair<Detail::BufferPage *, PassId>> m_TableWrites;
+        std::array<std::vector<PassId>, ForwardViewCount> m_ViewUploadPasses;
         PassId m_LutWrite;
         std::size_t m_LutView{};
     };
@@ -196,6 +208,9 @@ namespace Physara::Renderer
         [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
         /// @brief 封存前拥有的写入需求, 包含之后可能不进入存活计划的写入.
         [[nodiscard]] std::pair<std::size_t, std::size_t> UploadDemand() const noexcept;
+        /// @brief 读取当前规划的 Froxel 消费和待选路径的额外需求, 供实际资源准入排序.
+        [[nodiscard]] bool UsesFroxels(std::size_t index) const noexcept;
+        [[nodiscard]] bool AddsFroxels(std::size_t index) const noexcept;
 
         /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
         /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
@@ -214,6 +229,9 @@ namespace Physara::Renderer
         /// @brief 借出该路实际消费的深度集合, 无消费时返回空指针. retained 有值表示本次使用已接受的数组.
         /// @pre 本路 FinishView 已成功. 返回值只借用到槽 Reset 或再次准备.
         [[nodiscard]] const ShadowDepthSet *PreparedShadowDepth(std::size_t index = 0) const noexcept;
+        /// @brief 从已绑定的实际阶段和固定附件生成 HDR/深度生产身份, 随 View 的接受结果保存.
+        /// @pre 本槽的 index 已成功完成绑定. 返回值拥有程序摘要, 可随输出保存到槽复用之后.
+        [[nodiscard]] OpaqueProduction Production(std::size_t index = 0) const noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
         /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;
@@ -260,14 +278,24 @@ namespace Physara::Renderer
         [[nodiscard]] std::optional<ForwardFailure> Prepare(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0, const GraphBufferSupport &buffers = {});
         /// @brief 准备一路的常量, 批次及驻留资源, 汇入原生键供本帧统一选代.
+        /// @param alternate 同一 View 另行准备的请求路径. view.opaquePath 是本轮先规划的策略.
+        /// @param holdFroxelWrites 为有效 Froxel 方案保留写入额度. 首次受光候选延至收尾才申请.
         /// @pre frame 已由安全槽 Reset, index 是本帧尚未规划的位置. 局部失败仍允许规划其它路.
         [[nodiscard]] std::optional<ForwardFailure> PlanView(ForwardFrame &frame, const PreparedView &view,
-            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0);
+            PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0,
+            std::optional<OpaquePath> alternate = {}, bool holdFroxelWrites = true);
         /// @brief 绑定选定代, 补办失效的 caster 准备, 仅为实际 Froxel 颜色角色向帧批次登记拥有型载荷.
         /// @pre view 和 index 与成功的 PlanView 相同, 第一条成功绑定后本帧无 Shader 切换.
         /// @param buffers 同一设备的场景图缓冲区能力. 默认值只允许普通 Forward 与无 Froxel 消费的预览.
         [[nodiscard]] std::optional<ForwardFailure> FinishView(ForwardFrame &frame, const PreparedView &view,
             std::size_t index = 0, const GraphBufferSupport &buffers = {});
+        /// @brief 独立准备可选路径及其专用资源. 局部拒绝保留当轮仍有效的计划及原因.
+        /// @pre 当前 View 已 PlanView, 两路需求已进入本帧原生准备. 调用方为此阶段独立捕获 RHI 错误.
+        /// @return 无有效策略可接续的错误才交给调用方撤回准备.
+        [[nodiscard]] std::optional<ForwardFailure> SelectOpaquePath(ForwardFrame &frame, PreparedView &view,
+            View &owner, std::size_t index, const GraphBufferSupport &buffers);
+        /// @brief 结算选路边界上无法继续的计划, 其它路的有效需求继续持有.
+        void CancelPlannedView(ForwardFrame &frame, std::size_t index) noexcept;
         /// @brief 在设备 owner 线程读取目录条目数, 物理存储占用和材质复用计数. 首次准备前各项为零.
         [[nodiscard]] ForwardResidencyCounts ResidencyCounts() const noexcept;
         /// @brief 初始化会话的原生设备身份和额度, 在首帧准备前调用.

@@ -271,7 +271,8 @@ namespace Physara::Renderer
             MatrixValue(world), MatrixValue(view), MatrixValue(stable.clipFromView), MatrixValue(stable.viewFromClip),
             MatrixValue(render.clipFromView), MatrixValue(render.viewFromClip), profile.jitterPixels,
             parameters.aspect, parameters.nearPlane, farPlane, parameters.farPlane, parameters.orthographic,
-            owner.ResolveLens(input.entity.scene.IsValid() ? &input.projection : nullptr), owner.Exposure()};
+            owner.ResolveLens(input.entity.scene.IsValid() ? &input.projection : nullptr), owner.Exposure(),
+            owner.CameraCutRevision()};
     }
 
     const std::variant<SceneFrame, Core::BoundedText> &SceneFramePreparation::Extract()
@@ -337,7 +338,10 @@ namespace Physara::Renderer
         const auto path = view.RequestedOpaquePath();
         const auto preview = view.Preview();
         const FroxelRequest defaultFroxels;
-        const bool automaticFroxels = !froxelRequest && path == OpaquePath::ForwardPlus && IsLitPreview(preview);
+        const auto effective = view.OpaqueSettings(shared.Source().Id()).effective;
+        // 选择在 Shader 准备后才确定. 任一路可能用 Forward+ 时, 先为当前相机生成一份可借用的 CPU 列表.
+        const bool needsFroxels = path == OpaquePath::ForwardPlus || effective == OpaquePath::ForwardPlus;
+        const bool automaticFroxels = !froxelRequest && needsFroxels && IsLitPreview(preview);
         const auto *listsRequest = automaticFroxels ? &defaultFroxels : froxelRequest;
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,
                             .cameraRevision = view.CameraRevision(), .documentRevision = view.DocumentRevision(),

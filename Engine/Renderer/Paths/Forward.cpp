@@ -66,6 +66,17 @@ namespace Physara::Renderer
         return m_Data ? std::pair{m_Data->uploads.writes, m_Data->uploads.bytes} : std::pair<std::size_t, std::size_t>{};
     }
 
+    bool ForwardFrame::UsesFroxels(std::size_t index) const noexcept
+    {
+        return Detail::UsesFroxels(m_Data->views[index].environment.program);
+    }
+
+    bool ForwardFrame::AddsFroxels(std::size_t index) const noexcept
+    {
+        const auto &view = m_Data->views[index];
+        return view.usesLighting && view.alternatePath == OpaquePath::ForwardPlus && !UsesFroxels(index);
+    }
+
     /// @brief 解除本轮绘制引用. 槽内保留 View 行、实例块和参数缓冲供下次准备比较.
     static void ResetDrawWork(Detail::StaticDrawWork &work) noexcept
     {
@@ -126,6 +137,40 @@ namespace Physara::Renderer
         assert(m_Data);
         const auto &shadow = m_Data->views[index].shadow;
         return shadow ? &shadow->depth : nullptr;
+    }
+
+    OpaqueProduction ForwardFrame::Production(std::size_t index) const noexcept
+    {
+        const auto &view = m_Data->views[index];
+        const auto &programs = m_Data->shaders->programs;
+        OpaqueProduction production{.color = WorkingFormat, .depth = DepthFormat};
+        const auto store = [&](std::size_t slot, Shader::ProductShader role)
+        {
+            const auto content = programs.ProgramContent(role);
+            auto &digest = production.programContents[slot];
+            assert(content.size() == digest.size());
+            std::ranges::copy(content, digest.begin());
+        };
+        // 顶点布局和绕序选择同一角色的不同 Pipeline 槽. 历史比较使用角色的包摘要.
+        if (!view.batches.empty())
+        {
+            const auto key = Detail::GeometryRequest(0, false, false, Detail::SurfacePhase::Combined,
+                                                     view.environment.program);
+            store(0, key.role);
+            if (view.needs.earlyDepth)
+            {
+                store(2, Shader::ProductShader::StaticDepth);
+            }
+        }
+        if (view.environment.sky)
+        {
+            store(1, Shader::ProductShader::ForwardSky);
+        }
+        if (view.shadow && view.shadow->depth.variants.any())
+        {
+            store(3, Shader::ProductShader::StaticShadowDepth);
+        }
+        return production;
     }
 
     void ForwardFrame::ConfirmShadowDepth(View &owner, std::size_t index, const GraphRetainedResource &retained,
@@ -526,7 +571,8 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::PlanView(ForwardFrame &frame, const PreparedView &view,
-        PreviewMode mode, ViewResourceNeeds needs, std::size_t index)
+        PreviewMode mode, ViewResourceNeeds needs, std::size_t index, std::optional<OpaquePath> alternate,
+        bool holdFroxelWrites)
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
@@ -569,16 +615,28 @@ namespace Physara::Renderer
         data.source = {.view = view.view, .scene = view.scene.scene, .contentRevision = view.scene.contentRevision,
             .mode = mode, .camera = *view.camera, .layout = view.layouts.render, .opaquePath = view.opaquePath};
         data.needs = needs;
+        data.alternatePath = alternate;
         m_Resources->BeginView(index);
         data.preparationStamp = m_Resources->viewBudgets[index].stamp;
         Detail::PlanDraws(*m_Resources, data, view, mode, view.previewShadow);
         PlanDisplay(*m_Resources, *frame.m_Data, data, view.layouts, display);
-        if (Detail::UsesFroxels(data.environment.program))
+        if (holdFroxelWrites && Detail::UsesFroxels(data.environment.program) && view.froxels)
         {
-            // 规划按 View 顺序准入全部可确定的写入, 避免后一路占用首路收尾才需要的额度.
+            // 有效计划保留已知的写入需求. 首次受光和额外候选在实际收尾时准入.
             const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
-            frame.m_Data->uploads.ReserveWrites(bytes, writes);
-            data.froxelReserved = true;
+            try
+            {
+                frame.m_Data->uploads.ReserveWrites(bytes, writes);
+                data.froxelReserved = true;
+            }
+            catch (const ForwardFailure &)
+            {
+                if (!alternate)
+                {
+                    throw;
+                }
+                // 待选全灯可在 Froxel 额度不足时独立就绪. 若仍使用旧路, 收尾尝试取得实际所需额度.
+            }
         }
         frame.m_Data->planned.set(index);
         return std::nullopt;
@@ -599,6 +657,103 @@ namespace Physara::Renderer
         }
         return ForwardFailure{ViewSettingReason::ScenePreparationFailed,
                               Core::BoundedText("Forward plan allocation failed")};
+    }
+
+    /// @brief 列表准备失败仍保留全灯工作集, 由需要 Froxel 的实际策略报告首因.
+    static ForwardFailure MissingFroxelLists(const PreparedView &view) noexcept
+    {
+        Core::BoundedText issue("Cannot prepare Forward+ Froxel grid: ");
+        issue.Append(FroxelStatusName(view.froxelStatus));
+        return {ViewSettingReason::ScenePreparationFailed, issue};
+    }
+
+    std::optional<ForwardFailure> ForwardRenderer::SelectOpaquePath(ForwardFrame &frame, PreparedView &view,
+        View &owner, std::size_t index, const GraphBufferSupport &buffers)
+    {
+        auto &storage = *frame.m_Data;
+        auto &data = storage.views[index];
+        const auto report = [&](ViewSettingReason reason, const Core::BoundedText *detail = nullptr)
+        {
+            owner.ReportOpaquePreparation(view.scene.scene, view.documentRevision, reason, detail);
+        };
+        const bool lit = IsLitPreview(view.preview) && !view.previewShadow;
+        const auto effective = owner.OpaqueSettings(view.scene.scene).effective;
+        if (data.alternatePath && owner.CanSwitchOpaquePath(view, m_Resources->activeShaders->generation))
+        {
+            auto program = Detail::FullListProgram(data.environment.program);
+            const bool froxels = data.usesLighting && *data.alternatePath == OpaquePath::ForwardPlus;
+            if (froxels)
+            {
+                program = Detail::WithFroxels(program);
+            }
+            // 等待或拒绝只影响待选路径. 共用的绘制及上传仍可由已接受策略提交.
+            std::optional<ForwardFailure> candidate;
+            if (data.usesLighting)
+            {
+                candidate = Detail::CheckAlternateColors(*m_Resources, data, program);
+            }
+            if (!candidate && froxels)
+            {
+                if (!view.froxels)
+                {
+                    candidate = MissingFroxelLists(view);
+                }
+                else
+                {
+                    try
+                    {
+                        m_Resources->ResumeView(index);
+                        data.froxelUpload = Detail::FroxelUpload::Prepare(*m_Resources, storage.uploads, view, buffers);
+                    }
+                    catch (const ForwardFailure &failure)
+                    {
+                        candidate = failure;
+                    }
+                    catch (const std::bad_alloc &)
+                    {
+                        candidate = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
+                                                    Core::BoundedText("Forward+ upload allocation failed")};
+                    }
+                }
+            }
+            if (candidate)
+            {
+                report(candidate->reason, &candidate->description);
+            }
+            else
+            {
+                if (data.froxelReserved)
+                {
+                    const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+                    storage.uploads.ReleaseWrites(bytes, writes);
+                    data.froxelReserved = false;
+                }
+                // PreparePreview 和 Declare 分别从这两份记录读取路径, 必须指向同一次选择.
+                view.opaquePath = data.source.opaquePath = *data.alternatePath;
+                data.environment.program = program;
+            }
+        }
+        else if (!data.alternatePath && lit && !effective)
+        {
+            // 没有有效计划时也可保留失败输入. 调用方撤回本路准备, 其它路继续构图.
+            if (!owner.CanSwitchOpaquePath(view, m_Resources->activeShaders->generation))
+            {
+                const auto status = owner.OpaqueSettings(view.scene.scene);
+                return ForwardFailure{status.reason, status.detail ? *status.detail :
+                    Core::BoundedText("Opaque path submission was rejected")};
+            }
+            if (data.usesLighting)
+            {
+                return Detail::CheckAlternateColors(*m_Resources, data, data.environment.program);
+            }
+        }
+        return std::nullopt;
+    }
+
+    void ForwardRenderer::CancelPlannedView(ForwardFrame &frame, std::size_t index) noexcept
+    {
+        assert(frame.m_Data && frame.m_Data->planned[index]);
+        RejectView(*frame.m_Data, index);
     }
 
     std::optional<ForwardFailure> ForwardRenderer::FinishView(ForwardFrame &frame, const PreparedView &view,
@@ -624,13 +779,19 @@ namespace Physara::Renderer
         m_Resources->ResumeView(index);
         Detail::ApplyDrawShaders(*m_Resources, data, view);
         m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
-        if (data.froxelViewLayout)
+        if (data.froxelViewLayout && !data.froxelUpload)
         {
-            // 角色已就绪, 将本 View 的预计额度转换为同样大小的实际写入. 中间没有其它 View 准备.
-            assert(data.froxelReserved);
-            const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
-            frame.m_Data->uploads.ReleaseWrites(bytes, writes);
-            data.froxelReserved = false;
+            if (!view.froxels)
+            {
+                throw MissingFroxelLists(view);
+            }
+            // 角色已就绪, 取用本 View 的逻辑预留, 实际写入由上传组按同样的额度登记.
+            if (data.froxelReserved)
+            {
+                const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+                frame.m_Data->uploads.ReleaseWrites(bytes, writes);
+                data.froxelReserved = false;
+            }
             data.froxelUpload = Detail::FroxelUpload::Prepare(*m_Resources, frame.m_Data->uploads, view, buffers);
             assert(data.froxelUpload);
         }
@@ -828,18 +989,25 @@ namespace Physara::Renderer
                                                const std::array<bool, ForwardViewCount> &selected,
                                                std::vector<GraphUpload> &uploads,
                                                std::map<Detail::Allocation *, std::vector<PassId>> &storageWrites,
-                                               std::vector<std::pair<Detail::BufferPage *, PassId>> &tableWrites)
+                                               std::vector<std::pair<Detail::BufferPage *, PassId>> &tableWrites,
+                                               std::array<std::vector<PassId>, ForwardViewCount> &viewUploadPasses)
     {
         const auto &batch = frame.uploads;
         SceneGraphResources resources;
         // 一代几何可有两块缓冲, 一个 cube 可有多个面和 mip. 确认时须能逐笔找到同一代的写入.
-        const auto record = [&](Detail::Allocation *storage, std::size_t first, GraphUploadSource source)
+        const auto record = [&](Detail::Allocation *storage, std::size_t first, GraphUploadSource source,
+                                std::optional<std::size_t> view = {})
         {
             auto &passes = storageWrites[storage];
             for (auto &write : std::span(uploads).subspan(first))
             {
                 write.source = source;
                 passes.push_back(write.pass);
+                if (view)
+                {
+                    // 灯表可按 ForwardStatic 统计, 但缓冲仍归单个 View. 用写入记录的 view 定位失败.
+                    viewUploadPasses[*view].push_back(write.pass);
+                }
             }
         };
         for (const auto &upload : batch.textures)
@@ -894,7 +1062,7 @@ namespace Physara::Renderer
             const auto first = uploads.size();
             auto &version = resources.BufferVersion(graph, upload.buffer, upload.page, false);
             version = TakeGraph(AddBufferUpload(graph, version, upload.payload, uploads, upload.offset));
-            record(upload.revision.get(), first, upload.source);
+            record(upload.revision.get(), first, upload.source, upload.view);
         }
         DeclarePageUploads(graph, resources, frame, selected, uploads, storageWrites, tableWrites);
         return resources;
@@ -1360,6 +1528,7 @@ namespace Physara::Renderer
                                      TextureId lut, const Detail::FroxelGraphInputs *froxels)
     {
         const auto extent = frame.source.layout.outputExtent;
+        const auto firstPass = graph.Passes().size();
         ForwardOutput output;
         output.source = frame.source;
         output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
@@ -1383,6 +1552,8 @@ namespace Physara::Renderer
         {
             entry.source = GraphUploadSource::ForwardView;
         }
+        output.firstPass = graph.Passes()[firstPass].id;
+        output.lastPass = graph.Passes().back().id;
         return output;
     }
 
@@ -1420,7 +1591,8 @@ namespace Physara::Renderer
             }
         }
         // 生产版本只建立一次. 逐路声明读取时沿用同一映射, 因而存活的任一路都能保住共享上传.
-        auto versions = DeclareUploads(graph, *m_Data, selected, uploads, output.m_StorageWrites, output.m_TableWrites);
+        auto versions = DeclareUploads(graph, *m_Data, selected, uploads, output.m_StorageWrites,
+                                       output.m_TableWrites, output.m_ViewUploadPasses);
         for (std::size_t index = 0; index < selected.size(); ++index)
         {
             if (selected[index])
@@ -1436,6 +1608,23 @@ namespace Physara::Renderer
     catch (const GraphError &failure)
     {
         return failure;
+    }
+
+    ViewId ForwardGraph::PassOwner(PassId pass) const noexcept
+    {
+        if (pass.IsValid())
+        {
+            for (std::size_t index = 0; index < views.size(); ++index)
+            {
+                const auto &output = views[index];
+                const auto &writes = m_ViewUploadPasses[index];
+                if (output && (output->OwnsPass(pass) || std::ranges::find(writes, pass) != writes.end()))
+                {
+                    return output->source.view;
+                }
+            }
+        }
+        return {};
     }
 
     void ForwardFrame::Confirm(const ForwardGraph &output, const CompiledGraphPlan &plan) noexcept

@@ -26,7 +26,9 @@ v1 `mainView.requested.physicalCamera` SHALL 为可省略的物理请求对象�
 
 v1 `mainView.requested.antiAliasing` SHALL 是可省略的字符串，支持 `none` 和 `fxaa`，缺省为新建主 View 的 None。保存 SHALL 捕获有效请求的值，允许省略缺省的 `none`。显式未知值、`null` 或类型不符 SHALL 定位到该字段并拒绝整个 Open 候选。显示 profile、实际 AA 和渲染及输出像素布局 SHALL 从当前准备与成功接受的帧获得。
 
-额外 View、窗口设置、布局、选择、运行期 handle、编辑历史及有效渲染输出 SHALL 保持为各自运行期状态。
+v1 `mainView.requested.opaquePath` SHALL 是可省略的字符串，支持 `forward` 和 `forward-plus`，缺省为新建主 View 的 Forward。保存 SHALL 捕获已接受的路径请求，允许省略缺省的 `forward`。显式未知值、`null` 或类型不符 SHALL 定位到该字段并拒绝整个 Open 候选。打开成功时 SHALL 随完整文档恢复请求，实际有效路径由随后匹配的正常受光输出确认。
+
+额外 View、窗口设置、布局、选择、运行期 handle、编辑历史及有效渲染输出 SHALL 保持为各自运行期状态。待选计划、准备诊断、有效路径和历史资格 SHALL 由运行期帧准备与接受合同管理。
 
 #### Scenario: Round-trip a requested value that is still pending
 - **WHEN** 主 View 已接收不同于当前有效比率的请求，并选择场景中的相机实体后保存并重开
@@ -60,6 +62,16 @@ v1 `mainView.requested.antiAliasing` SHALL 是可省略的字符串，支持 `no
 
 - **WHEN** 待打开文件将主 View 的 `antiAliasing` 指定为 `null` 或未支持的值
 - **THEN** 文件和该字段的原因可见，原 Scene、主 View 请求、活动路径和已接受输出继续有效
+
+#### Scenario: Restore an opaque path request independently of the accepted path
+
+- **WHEN** 用户打开缺少 `opaquePath` 的 v1 文档，请求 Forward+ 后在有效路径仍为 Forward 时保存并重开
+- **THEN** 初次打开的请求为 Forward，重开后恢复保存的 Forward+ 请求并在有效路径尚未确认时显示真实状态。首次有效受光结果使用重开后的当前输入确认
+
+#### Scenario: Reject an invalid v1 opaque path without publishing the document
+
+- **WHEN** v1 文件的 `opaquePath` 是 `null`、非字符串或超出支持值域
+- **THEN** Open 诊断包含对应文件及 `mainView.requested.opaquePath`，原活动场景、文档路径、主 View 请求和接受记录依照失败恢复合同继续有效
 
 ### Requirement: Validate the document format before restoration
 
