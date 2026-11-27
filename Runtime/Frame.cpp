@@ -910,7 +910,7 @@ namespace Physara::Runtime
         return failure;
     }
 
-    /// @brief 当轮共用工作按仍有效的策略取得资源. 只为另一候选额外登记颜色键.
+    /// @brief 当轮共用工作优先按有效策略取得资源, 同时收集当前请求的表面及颜色需求.
     static std::optional<ForwardFailure> PlanOpaqueView(Platform::DeviceHost &host, ForwardRenderer &forward,
         ForwardFrame &frame, View &owner, PreparedView &prepared, std::size_t index)
     {
@@ -1207,7 +1207,7 @@ namespace Physara::Runtime
         const bool changingPath = active && *active != prepared.opaquePath;
         // 路径切换及现有可恢复配置失败时, 可读旧色仍能由安全 UI 显示.
         const bool retainOnFailure = physical || (hasScene &&
-            (changingPath || prepared.opaquePath == OpaquePath::ForwardPlus ||
+            (changingPath || UsesFroxelCandidates(prepared.opaquePath) ||
              !std::holds_alternative<std::monostate>(prepared.shadowDiagnostic) ||
              (prepared.preview == PreviewMode::DirectLighting && prepared.shadowStatistics.enabled) ||
              prepared.layouts.render != prepared.layouts.display));
@@ -1266,12 +1266,13 @@ namespace Physara::Runtime
         // 两路从本帧同一程序代取句柄. Froxel 的范围准入取自场景图使用的设备上限.
         // 主视口的旧色可交给安全 UI 采样, 离屏请求另按自己的准备及导出结果确认.
         const auto sceneBuffers = FrameBufferSupport(host.GetInfo(), true);
-        // 主路首次使用或准备切入 Forward+ 时, 先让已有有效 Forward+ 的离屏路结算本帧的写入和驻留.
-        const bool mainAddsFroxels = mainRequested && !mainFailure &&
-            (slot.forward.AddsFroxels(MainViewIndex) || (!active && slot.forward.UsesFroxels(MainViewIndex)));
-        const bool finishOffscreenFirst = mainAddsFroxels && offscreen.planned &&
-            offscreen.request->view.OpaqueSettings(scene->Id()).effective == OpaquePath::ForwardPlus &&
-            slot.forward.UsesFroxels(OffscreenViewIndex);
+        // 设备容量随各路收尾的实际分配结算. 无论哪路先收尾, 候选为其它有效策略尚需的私有分配留出余量.
+        const bool mainAddsResources = mainRequested && !mainFailure &&
+            slot.forward.AddsOpaqueResources(MainViewIndex, active);
+        const auto offscreenActive = offscreen.planned
+            ? offscreen.request->view.OpaqueSettings(scene->Id()).effective : std::optional<OpaquePath>{};
+        const bool finishOffscreenFirst = mainAddsResources && offscreenActive &&
+            UsesFroxelCandidates(*offscreenActive) && slot.forward.UsesFroxels(OffscreenViewIndex);
         if (finishOffscreenFirst)
         {
             FinishOffscreen(host, forward, slot, offscreen, sceneBuffers);

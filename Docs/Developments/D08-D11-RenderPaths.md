@@ -318,11 +318,11 @@
 
 **职责位置：** View、Renderer/Paths、Engine/Shader、Editor/Panels。**前置：** [D11-T03](#d11-t03)。**架构依据：** [5.7](../Architecture.md#plan-readiness)、[6.1](../Architecture.md#paths)、[7.7](../Architecture.md#capabilities)。
 
-**状态** D11-T03 已验收归档，前置已满足。
+**状态** 已验收并归档，CR-001 至 CR-004 已关闭。 [验收与证据](../../openspec/changes/archive/2026-11-27-enable-deferred-path-switching/tasks.md#final-verification) · [归档与规格](../../openspec/changes/archive/2026-11-27-enable-deferred-path-switching/tasks.md#archive-closeout)
 
-- [ ] 把三策略注册到固定组装入口，核对每路径输出、布局、资源准备和当前 AA/效果支持矩阵。
-- [ ] 在已有 None/FXAA 下完成三路径切换；TAA 待 D15 验收再启用，Deferred+MSAA 能力保持 false。
-- [ ] 测试 Pending、失败、快速循环切换、多 View、相机移动和分辨率变化；只使不兼容历史失效且不全设备等待。
+- [x] 把三策略注册到固定组装入口，核对每路径输出、布局、资源准备和当前 AA/效果支持矩阵。
+- [x] 在已有 None/FXAA 下完成三路径切换；TAA 待 D15 验收再启用，Deferred+MSAA 能力保持 false。
+- [x] 测试 Pending、失败、快速循环切换、多 View、相机移动和分辨率变化；只使不兼容历史失效且不全设备等待。
 
 **完成条件：** 同一场景与驻留资源可跨三路径复用，requested/effective 和不支持原因完整可见。
 

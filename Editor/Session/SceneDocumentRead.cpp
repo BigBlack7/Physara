@@ -547,9 +547,13 @@ namespace Physara::Editor::Detail
             {
                 view.opaquePath = Renderer::OpaquePath::ForwardPlus;
             }
+            else if (value == "deferred")
+            {
+                view.opaquePath = Renderer::OpaquePath::Deferred;
+            }
             else if (value != "forward")
             {
-                path->Error("Expected forward or forward-plus");
+                path->Error("Expected forward, forward-plus or deferred");
             }
         }
         if (auto error = Renderer::View::ValidateDocumentRequests(view))

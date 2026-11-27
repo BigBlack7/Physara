@@ -68,8 +68,14 @@ namespace Physara::Renderer
         Fxaa
     };
 
-    /// @brief 不透明照明策略. 两路共用表面和后续输出合同.
-    enum class OpaquePath : std::uint8_t { Forward, ForwardPlus };
+    /// @brief 不透明照明策略. 三路共用场景工作集和后续输出合同.
+    enum class OpaquePath : std::uint8_t { Forward, ForwardPlus, Deferred };
+
+    /// @brief 实际受光时由本 View 的 Froxel 提供局部候选, 并保有完整灯集合用于退路.
+    [[nodiscard]] constexpr bool UsesFroxelCandidates(OpaquePath path) noexcept
+    {
+        return path == OpaquePath::ForwardPlus || path == OpaquePath::Deferred;
+    }
 
     /// @brief 持久化主 View 请求. 相机引用由会话根据候选 Scene 解释.
     struct ViewDocumentRequests
@@ -569,9 +575,9 @@ namespace Physara::Renderer
         /// @return 无有效范围或上传额度不足时返回无颜色的结果. 身份代耗尽时返回原因.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PrepareDiagnostic(const PreparedView &prepared, std::size_t remainingUploadBytes);
-        /// @brief 通过已准备的场景和相机建立本轮显示色候选, 由 Forward 图生产实际内容.
+        /// @brief 用本轮相机和实际选定的生产阶段建立显示色候选. 受光路径在 Publish 接受该候选后生效.
         /// @pre 场景 Draw 已使用此 View 准备值及其 preview 模式. degradation 只描述局部不支持项.
-        /// @param environment 同一 Forward 候选选中的角色和源, 可与场景声明的用途不同.
+        /// @param environment 同一渲染计划实际采用的环境角色和源, 可与场景声明的用途不同.
         /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
         /// @param shadow 借用本轮受光或诊断消费的深度集合以记录候选工作量. 重新生产或无消费时解除旧深度引用.
         /// @param production 正常渲染入口传入本槽该 View 已绑定的 HDR/深度生产描述, 用于核对前次提交的兼容性.

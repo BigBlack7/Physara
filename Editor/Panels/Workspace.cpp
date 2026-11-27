@@ -613,7 +613,9 @@ namespace Physara::Editor::Detail
     static void DrawOpaquePath(const Renderer::View &view, Scene::SceneId scene, bool allowEdits,
                                WorkspaceFrame &frame)
     {
-        constexpr const char *names[]{"Forward", "Forward+"};
+        // 同一序表用于请求控件和有效路径回显. 后者从最近接受的受光提交取值.
+        constexpr const char *names[]{"Forward", "Forward+", "Deferred"};
+        static_assert(IM_ARRAYSIZE(names) == static_cast<int>(Renderer::OpaquePath::Deferred) + 1);
         const auto status = view.OpaqueSettings(scene);
         int path = static_cast<int>(status.requested);
         ImGui::BeginDisabled(!allowEdits || !scene.IsValid());

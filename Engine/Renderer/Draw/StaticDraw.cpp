@@ -749,24 +749,40 @@ namespace Physara::Renderer::Detail
                 static_cast<std::int32_t>(baseVertex), instance};
     }
 
-    /// @brief 在当前安全 View 槽复用等形缓冲. 已接受且字节相同的版本可直接导入后继图.
+    /// @brief 同一设备 owner 和字节数的私有缓冲可复用物理存储.
+    static bool FitsDrawBuffer(const ForwardDevice &device, const DrawBuffer *storage, std::size_t bytes) noexcept
+    {
+        return storage && storage->capacity == device.capacity && storage->bytes == bytes;
+    }
+
+    /// @brief 在当前安全 View 槽取得等形缓冲, 按本轮使用登记驻留.
+    static void UseDrawBuffer(ForwardDevice &device, std::shared_ptr<DrawBuffer> &storage,
+                              GraphUsage usage, std::size_t bytes, std::uint32_t stride = 0)
+    {
+        if (!FitsDrawBuffer(device, storage.get(), bytes))
+        {
+            storage.reset();
+            device.Reserve(bytes);
+            auto next = std::make_shared<DrawBuffer>(device.capacity, bytes);
+            next->buffer = AllocateBuffer(device.device, usage, bytes, stride);
+            storage = std::move(next);
+        }
+        device.Use(*storage);
+    }
+
+    /// @brief 已接受且字节相同的版本可直接导入后继图.
+    static bool HasDrawBufferContents(const DrawBuffer &storage, std::span<const std::byte> values) noexcept
+    {
+        return storage.accepted && std::ranges::equal(values, storage.contents);
+    }
+
+    /// @brief 准备当前安全 View 槽的普通绘制缓冲, 必要时在本图登记写入.
     static void PrepareDrawBuffer(ForwardDevice &device, StaticDrawWork &frame,
         std::shared_ptr<DrawBuffer> &storage, GraphUsage usage, std::span<const std::byte> values,
         std::uint32_t stride = 0, GraphUploadSource source = GraphUploadSource::ForwardDraw)
     {
-        if (storage && (storage->capacity != device.capacity || storage->bytes != values.size()))
-        {
-            storage.reset();
-        }
-        if (!storage)
-        {
-            device.Reserve(values.size());
-            auto next = std::make_shared<DrawBuffer>(device.capacity, values.size());
-            next->buffer = AllocateBuffer(device.device, usage, values.size(), stride);
-            storage = std::move(next);
-        }
-        device.Use(*storage);
-        if (!storage->accepted || !std::ranges::equal(values, storage->contents))
+        UseDrawBuffer(device, storage, usage, values.size(), stride);
+        if (!HasDrawBufferContents(*storage, values))
         {
             storage->accepted = false;
             frame.uploads.Add(storage, storage->buffer, values, source, device.preparingView);
@@ -774,30 +790,27 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    /// @brief 打包最终 D32 所在栅格的逆投影和相机旋转. 世界眼点高低位由同一 View 的 Froxel 数据提供.
+    /// @brief 打包最终 D32 所在栅格的逆投影和相机旋转. 屏幕着色另从主光栅的 View 常量取得三段眼点.
     /// renderRect 以渲染画布像素计, 包含留边偏移. 逆矩阵对应实际写深度时带抖动的渲染投影.
-    static void PrepareDeferredView(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view)
+    static std::optional<StaticAbi::DeferredView> EncodeDeferredView(const ForwardFrameData &frame,
+                                                                     const PreparedView &view) noexcept
     {
         StaticAbi::DeferredView value{};
         const auto &camera = *view.camera;
         if (!StoreMatrix(value.viewFromRenderClip, glm::make_mat4(camera.viewFromRenderClip.data())) ||
             !StoreMatrix(value.worldBasis, glm::dmat3(glm::make_mat4(camera.worldFromView.data()))))
         {
-            Reject(ViewSettingReason::InvalidProjection, "DeferredLighting inverse projection exceeds the GPU float range");
+            return std::nullopt;
         }
         const auto &rect = frame.source.layout.rect;
         value.renderRect = {rect.x, rect.y, rect.extent.width, rect.extent.height};
-        PrepareDrawBuffer(device, frame, frame.deferredView, GraphUsage::ConstantBuffer,
-                          std::as_bytes(std::span(&value, 1)), 0, GraphUploadSource::ForwardView);
+        return value;
     }
 
-    /// @brief 为有序表面分配实例块并编码紧排的参数. 大工作集按块分段, 避免跨越 Shader 表容量.
-    /// @pre draws 已排序且非空. 生成的首实例相对于绑定块, 参数偏移相对于整份 View 参数缓冲.
-    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitRoutes = false)
+    /// @brief 为有序表面分配实例块. 页内行号及顺序在不同的表面路由之间共用.
+    static void PrepareInstanceBlocks(ForwardDevice &device, StaticDrawWork &frame)
     {
         constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
-        using Argument = RHI::DrawIndexedIndirectArguments;
-        std::vector<Argument> arguments;
         const auto drawCount = frame.draws.size();
         const auto blockCount = (drawCount - 1) / blockCapacity + 1;
         frame.instanceBlocks.resize(blockCount);
@@ -821,7 +834,32 @@ namespace Physara::Renderer::Detail
             auto &storage = frame.instanceBlocks[block];
             PrepareDrawBuffer(device, frame, storage, GraphUsage::ShaderRead, std::as_bytes(std::span(instances)),
                               sizeof(StaticAbi::DrawInstanceData));
+        }
+    }
+
+    /// @brief 由已准备的实例块编码相邻批次. prior 借用同一有序工作集的旧批次, 实例块和对象页身份一致.
+    static void BuildBatches(ForwardDevice &device, const StaticDrawWork &frame, bool splitRoutes,
+        std::vector<DrawBatch> &batches, std::vector<RHI::DrawIndexedIndirectArguments> &arguments,
+        std::span<const DrawBatch> prior = {})
+    {
+        constexpr auto blockCapacity = StaticAbi::DrawInstancesCapacity;
+        auto *layout = device.activeShaders->programs.layouts[1].Get();
+        auto previous = prior.begin();
+        for (std::size_t block = 0; block < frame.instanceBlocks.size(); ++block)
+        {
+            const auto first = block * blockCapacity;
+            const auto draws = std::span(frame.draws).subspan(first, std::min(blockCapacity, frame.draws.size() - first));
+            const auto &storage = frame.instanceBlocks[block];
             std::map<std::uint64_t, RHI::BindingSetHandle> sets;
+            // 重分批沿用同一对象页和实例块的集合. 原生布局身份变化时按当前布局建立集合.
+            for (; previous != prior.end() && previous->instanceBlock == block; ++previous)
+            {
+                if (previous->renderables->GetLayout() == layout)
+                {
+                    const auto &objects = frame.draws[previous->firstDraw].object->storage.page;
+                    sets.try_emplace(objects->ordinal, previous->renderables);
+                }
+            }
             for (std::size_t begin = 0; begin < draws.size();)
             {
                 const auto &head = draws[begin];
@@ -832,7 +870,7 @@ namespace Physara::Renderer::Detail
                     RHI::BindingSetDesc bindings;
                     bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(0, objects.buffer.Get()));
                     bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(1, storage->buffer.Get()));
-                    renderables = device.device.CreateBindingSet(bindings, device.activeShaders->programs.layouts[1].Get());
+                    renderables = device.device.CreateBindingSet(bindings, layout);
                     if (!renderables)
                     {
                         Reject(ViewSettingReason::ScenePreparationFailed, "Cannot prepare Forward instance binding");
@@ -850,7 +888,7 @@ namespace Physara::Renderer::Detail
                     {
                         ++end;
                     }
-                    if (arguments.size() == ForwardBufferLimit / sizeof(Argument))
+                    if (arguments.size() == ForwardBufferLimit / sizeof(RHI::DrawIndexedIndirectArguments))
                     {
                         Reject(ViewSettingReason::SceneUploadLimit, "Forward indirect arguments exceed the buffer limit");
                     }
@@ -858,11 +896,19 @@ namespace Physara::Renderer::Detail
                                                      static_cast<std::uint32_t>(end - current)));
                     current = end;
                 } while (current < draws.size() && SameBatch(frame, head, draws[current], splitRoutes));
-                frame.batches.push_back({first + begin, block, firstCommand,
+                batches.push_back({first + begin, block, firstCommand,
                     static_cast<std::uint32_t>(arguments.size()) - firstCommand, renderables});
                 begin = current;
             }
         }
+    }
+
+    /// @brief 按当前策略准备有序实例和参数. 深度与颜色共享这些实例行.
+    static void PackBatches(ForwardDevice &device, StaticDrawWork &frame, bool splitRoutes = false)
+    {
+        PrepareInstanceBlocks(device, frame);
+        std::vector<RHI::DrawIndexedIndirectArguments> arguments;
+        BuildBatches(device, frame, splitRoutes, frame.batches, arguments);
         PrepareDrawBuffer(device, frame, frame.indirect, GraphUsage::IndirectArgument,
                           std::as_bytes(std::span(arguments)));
     }
@@ -892,6 +938,45 @@ namespace Physara::Renderer::Detail
     static bool UsesForwardColor(const ViewResourceNeeds &needs, OpaqueSurfaceRoute route) noexcept
     {
         return !needs.surfaceOnly && (!needs.deferredLighting || route != OpaqueSurfaceRoute::CoreDeferred);
+    }
+
+    LightingProgram OpaqueColorProgram(const ForwardFrameData &frame, OpaquePath path) noexcept
+    {
+        const auto program = FullListProgram(frame.environment.program);
+        return frame.usesLighting && UsesFroxelCandidates(path) ? WithFroxels(program) : program;
+    }
+
+    /// @brief 只有可绘核心材质实际需要屏幕光照程序. 空表面和 Unlit 仍能完成构图.
+    static std::optional<ShaderPipelineRequest> DeferredColor(const ForwardFrameData &frame,
+        const ViewResourceNeeds &needs, LightingProgram program) noexcept
+    {
+        if (needs.deferredLighting && frame.usesLighting && std::ranges::any_of(frame.materialRows, [](const auto &row)
+            {
+                return row->route == OpaqueSurfaceRoute::CoreDeferred;
+            }))
+        {
+            return DeferredLightingRequest(program);
+        }
+        return std::nullopt;
+    }
+
+    /// @brief 同一份表面和颜色配方用于需求登记与就绪判断. 以实际材质路由选择各几何键.
+    static void VisitOpaqueDrawShaders(const ForwardFrameData &frame, const DrawRecord &draw,
+        const ViewResourceNeeds &needs, LightingProgram program, const auto &visit)
+    {
+        const auto route = frame.materialRows[draw.material]->route;
+        if (needs.NeedsCoreSurface())
+        {
+            visit(SurfaceShader(route, draw));
+        }
+        if (UsesForwardColor(needs, route))
+        {
+            visit(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, ColorPhase(needs), program));
+        }
+        if (needs.NeedsEarlyDepth())
+        {
+            visit(DrawShader(frame, draw, SurfacePhase::Depth));
+        }
     }
 
     /// @brief 同次 CPU 投影编码为相对原点的列主序 clip 矩阵. caster 常量偏移单独追加.
@@ -1197,10 +1282,6 @@ namespace Physara::Renderer::Detail
         {
             throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
         }
-        const bool coreLighting = frame.needs.deferredLighting && std::ranges::any_of(frame.materialRows, [](const auto &row)
-        {
-            return row->route == OpaqueSurfaceRoute::CoreDeferred;
-        });
         // 核心与辅助受光共享本 View 的灯表、Froxel、阴影及环境准备.
         const bool usesLighting = needsColor && !shadowLight && IsLitPreview(mode) &&
             std::ranges::any_of(frame.materialRows, [](const auto &row) { return row->values.unlit == 0; });
@@ -1238,16 +1319,12 @@ namespace Physara::Renderer::Detail
         {
             frame.shadow.reset();
         }
-        if (usesLighting && (frame.needs.deferredLighting || view.opaquePath == OpaquePath::ForwardPlus))
+        frame.environment.program = OpaqueColorProgram(frame, frame.source.opaquePath);
+        frame.deferredColor = DeferredColor(frame, frame.needs, frame.environment.program);
+        if (frame.deferredColor)
         {
-            // 实际可绘材质决定是否需要列表. 到这里阴影和环境角色均已选好, 只替换局部灯候选的来源.
-            frame.environment.program = WithFroxels(frame.environment.program);
-        }
-        if (coreLighting)
-        {
-            frame.deferredColor = DeferredLightingRequest(frame.environment.program);
+            frame.deferredViewValues = EncodeDeferredView(frame, view);
             device.shaderDemand.Add(*frame.deferredColor);
-            PrepareDeferredView(device, frame, view);
         }
         if (!frame.draws.empty())
         {
@@ -1272,55 +1349,183 @@ namespace Physara::Renderer::Detail
         }
         for (const auto &batch : frame.batches)
         {
-            const auto &draw = frame.draws[batch.firstDraw];
-            const auto route = frame.materialRows[draw.material]->route;
-            if (needsSurface)
+            VisitOpaqueDrawShaders(frame, frame.draws[batch.firstDraw], frame.needs, frame.environment.program,
+                [&](ShaderPipelineRequest key) { device.shaderDemand.Add(key); });
+        }
+        if (frame.alternate && !frame.alternate->failure)
+        {
+            const auto &candidate = *frame.alternate;
+            const auto program = OpaqueColorProgram(frame, candidate.path);
+            if (const auto core = DeferredColor(frame, candidate.needs, program))
             {
-                device.shaderDemand.Add(SurfaceShader(route, draw));
+                frame.deferredViewValues = EncodeDeferredView(frame, view);
+                device.shaderDemand.Add(*core, false);
             }
-            const bool forwardColor = UsesForwardColor(frame.needs, route);
-            if (forwardColor)
+            // 有效批次可能混合两种路由. 待选表面角色从其真正会处理的 Draw 收集.
+            for (const auto &draw : frame.draws)
             {
-                device.shaderDemand.Add(DrawShader(frame, draw, phase));
-            }
-            if (usesLighting && frame.alternatePath && forwardColor)
-            {
-                const auto program = FullListProgram(frame.environment.program);
-                const auto alternate = *frame.alternatePath == OpaquePath::ForwardPlus ? WithFroxels(program) : program;
-                device.shaderDemand.Add(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase,
-                                                        alternate), false);
-            }
-            if (frame.needs.NeedsEarlyDepth())
-            {
-                device.shaderDemand.Add(DrawShader(frame, draw, SurfacePhase::Depth));
+                VisitOpaqueDrawShaders(frame, draw, candidate.needs, program,
+                    [&](ShaderPipelineRequest key) { device.shaderDemand.Add(key, false); });
             }
         }
     }
 
-    // 每个批次的首项代表整批的原生键. 暂缺键先记下, 继续检查后续批次才能优先报告已有的硬失败.
-    std::optional<ForwardFailure> CheckAlternateColors(const ForwardDevice &device,
-        const ForwardFrameData &frame, LightingProgram program) noexcept
+    std::optional<ForwardFailure> CheckOpaqueShaders(const ForwardDevice &device,
+        const ForwardFrameData &frame, const ViewResourceNeeds &needs, LightingProgram program) noexcept
     {
-        const auto phase = ColorPhase(frame.needs);
-        std::optional<ForwardFailure> pending;
-        for (const auto &batch : frame.batches)
+        ShaderDemand checked;
+        std::optional<ForwardFailure> issue;
+        const auto visit = [&](ShaderPipelineRequest key)
         {
-            const auto &draw = frame.draws[batch.firstDraw];
-            if (!UsesForwardColor(frame.needs, frame.materialRows[draw.material]->route))
+            if ((issue && issue->reason != ViewSettingReason::ShaderPending) || checked.Contains(key))
             {
-                continue;
+                return;
             }
-            const auto key = GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, program);
-            if (auto issue = device.CheckSwitchShader(key))
+            checked.Add(key);
+            if (auto rejected = device.CheckSwitchShader(key))
             {
-                if (issue->reason != ViewSettingReason::ShaderPending)
-                {
-                    return issue;
-                }
-                pending = std::move(issue);
+                issue = std::move(rejected);
+            }
+        };
+        if (const auto core = DeferredColor(frame, needs, program))
+        {
+            visit(*core);
+        }
+        for (const auto &draw : frame.draws)
+        {
+            VisitOpaqueDrawShaders(frame, draw, needs, program, visit);
+            if (issue && issue->reason != ViewSettingReason::ShaderPending)
+            {
+                break;
             }
         }
-        return pending;
+        return issue;
+    }
+
+    OpaqueResourceDemand OpaqueRequirements(const ForwardDevice &device, const ForwardFrameData &frame,
+        const PreparedView &view, bool coreLighting, LightingProgram program) noexcept
+    {
+        const bool froxels = UsesFroxels(program);
+        if ((froxels && !view.froxels) || (coreLighting && !frame.deferredViewValues))
+        {
+            return {};
+        }
+        OpaqueResourceDemand demand{};
+        if (froxels)
+        {
+            demand.uploads = FroxelUpload::UploadRequirements();
+            // 四块 GPU 缓冲共用一个 Allocation, 按合计字节和一个条目计入设备额度.
+            demand.residency = {demand.uploads.first, 1};
+        }
+        if (coreLighting)
+        {
+            const auto values = std::as_bytes(std::span(&*frame.deferredViewValues, 1));
+            const auto *screen = frame.deferredView.get();
+            const bool resident = FitsDrawBuffer(device, screen, values.size());
+            if (!resident)
+            {
+                demand.residency.bytes += values.size();
+                ++demand.residency.entries;
+            }
+            if (!resident || !HasDrawBufferContents(*screen, values))
+            {
+                demand.uploads.first += values.size();
+                ++demand.uploads.second;
+            }
+        }
+        return demand;
+    }
+
+    void PrepareOpaqueResources(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+        const ViewResourceNeeds &needs, LightingProgram program, const GraphBufferSupport &buffers,
+        const std::optional<ResidencyDemand> &protectedResidency)
+    {
+        const auto core = DeferredColor(frame, needs, program);
+        if (protectedResidency)
+        {
+            const auto demand = OpaqueRequirements(device, frame, view, core.has_value(), program).residency;
+            if (demand.entries != 0)
+            {
+                // 私有资源在同一 context 顺序分配. 先核对整组及其它有效计划的余量, 再开始本路尝试.
+                device.CheckDeviceResidency({demand.bytes + protectedResidency->bytes,
+                                             demand.entries + protectedResidency->entries});
+            }
+        }
+        const bool rebatch = needs.NeedsCoreSurface() != frame.needs.NeedsCoreSurface() && !frame.draws.empty();
+        std::vector<DrawBatch> batches;
+        std::vector<RHI::DrawIndexedIndirectArguments> arguments;
+        if (rebatch)
+        {
+            BuildBatches(device, frame, needs.NeedsCoreSurface(), batches, arguments, frame.batches);
+            // 当前路由来自固定图元的源材质. 实例覆盖保留该路由, 所以只拆合批次边界, 原间接参数照常复用.
+            assert(std::ranges::equal(std::as_bytes(std::span(arguments)), frame.indirect->contents));
+        }
+        auto &uploads = frame.uploads;
+        const auto index = device.preparingView;
+        const auto savedBudget = device.viewBudgets[index];
+        const auto savedBytes = uploads.bytes;
+        const auto savedWrites = uploads.writes;
+        const auto savedBuffers = uploads.buffers.size();
+        const auto savedScreenUse = frame.deferredView ? frame.deferredView->lastUse[index] : 0;
+
+        // 候选写入先由上传批持有. 图取得正常回执前, 已接受的屏幕常量仍描述上一份内容.
+        auto screen = frame.deferredView;
+        std::optional<FroxelUpload> froxels;
+        try
+        {
+            const auto [bytes, writes] = frame.opaqueUploadReservation;
+            uploads.ReleaseWrites(bytes, writes);
+            if (core)
+            {
+                if (!frame.deferredViewValues)
+                {
+                    Reject(ViewSettingReason::InvalidProjection,
+                           "DeferredLighting inverse projection exceeds the GPU float range");
+                }
+                const auto values = std::as_bytes(std::span(&*frame.deferredViewValues, 1));
+                UseDrawBuffer(device, screen, GraphUsage::ConstantBuffer, values.size());
+                if (!HasDrawBufferContents(*screen, values))
+                {
+                    // 为正常回执预留 CPU 字节空间, 使确认阶段只需复制实际接受的行.
+                    screen->contents.reserve(values.size());
+                    uploads.Add(screen, screen->buffer, values, GraphUploadSource::ForwardView, index);
+                }
+            }
+            if (UsesFroxels(program))
+            {
+                if (!view.froxels)
+                {
+                    Core::BoundedText issue("Cannot prepare Froxel grid: ");
+                    issue.Append(FroxelStatusName(view.froxelStatus));
+                    Reject(ViewSettingReason::ScenePreparationFailed, issue.View());
+                }
+                froxels = FroxelUpload::Prepare(device, uploads, view, buffers);
+            }
+        }
+        catch (...)
+        {
+            // 撤回私有写入和使用证据. 缓存仍描述尝试前的内容及接受状态.
+            uploads.buffers.resize(savedBuffers);
+            uploads.bytes = savedBytes;
+            uploads.writes = savedWrites;
+            device.viewBudgets[index] = savedBudget;
+            if (frame.deferredView)
+            {
+                frame.deferredView->lastUse[index] = savedScreenUse;
+            }
+            throw;
+        }
+        if (rebatch)
+        {
+            frame.batches = std::move(batches);
+        }
+        frame.needs = needs;
+        frame.environment.program = program;
+        frame.deferredColor = core;
+        frame.deferredView = std::move(screen);
+        frame.froxelUpload = std::move(froxels);
+        frame.opaqueUploadReservation = {};
+        frame.opaqueResourcesReady = true;
     }
 
     /// @brief 从冻结代确认只读导入. 程序变化时才为原计划补办重绘, 沿用该 View 的准备预算.

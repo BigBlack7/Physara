@@ -60,6 +60,13 @@ namespace Physara::Renderer::Detail
         std::size_t environmentBytes = 0;
     };
 
+    /// @brief 尚未分配的设备驻留需求. 字节数是物理容量, 条目数按 Allocation 对象计.
+    struct ResidencyDemand
+    {
+        std::size_t bytes = 0;
+        std::size_t entries = 0;
+    };
+
     /// @brief 一代存储的逻辑预算与上传事实. accepted 允许后继有序读取, 不表示 GPU 已完成.
     /// @note 由派生类型的 shared_ptr 销毁, 最后一个缓存或帧槽引用释放时归还预算.
     struct Allocation
@@ -298,7 +305,7 @@ namespace Physara::Renderer::Detail
         void ReleaseWrites(std::size_t byteCount, std::size_t count) noexcept;
         /// @brief 撤回本次 View 使用, 只保留还有准备代引用的写入并据此重算批次额度.
         /// @pre 批次未封存. retained 的每项是该路仍有效的准备代, 零表示无候选.
-        /// 返回时 bytes/writes 只含保留下来的载荷与冷表页预留. 调用方再补计各路尚未物化的 Froxel 写组,
+        /// 返回时 bytes/writes 只含保留下来的载荷与冷表页预留. 调用方再补计各路尚未物化的不透明写入预留,
         /// 存活的显示常量及共用的一份 LUT.
         void DiscardView(std::size_t index, std::uint64_t stamp,
                          const std::array<std::uint64_t, ForwardViewCount> &retained) noexcept;
@@ -398,7 +405,8 @@ namespace Physara::Renderer::Detail
     /// @brief 明确区分同为 ShaderRead 的对象和材质页, 两者记录步长由生成接口决定.
     enum class TableLayout : std::uint8_t { Objects, Materials };
 
-    /// @brief 安全 View 槽可复用的只读实例块或间接参数. CPU 内容对应最后一次登记的上传版本.
+    /// @brief 安全 View 槽可复用的绘制缓冲. accepted 表示缓存字节具有正常读取资格.
+    /// 屏幕几何常量在图确认后更新缓存字节.
     struct DrawBuffer final : Allocation
     {
         using Allocation::Allocation;
@@ -482,8 +490,23 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<DrawBuffer> references;
     };
 
+    /// @brief 同一冻结 View 的待选路径和附件准入结果. 可执行的待选路径先准备自己的原生键.
+    struct OpaqueCandidate
+    {
+        OpaquePath path;
+        ViewResourceNeeds needs;
+        std::optional<ForwardFailure> failure;
+    };
+
+    /// @brief 本路不透明策略从现有槽存储出发所需的新分配及上传.
+    struct OpaqueResourceDemand
+    {
+        ResidencyDemand residency;
+        std::pair<std::size_t, std::size_t> uploads{}; ///< 字节数和写入次数.
+    };
+
     /// @brief 安全槽中的一个 View 候选. Draw, 灯光和阴影各自在实际消费前准备.
-    /// PlanDraws 为两条策略共用一套批次. 选路时一起确定 source 中的路径及颜色程序, 随后的图回调借用本槽.
+    /// 选路先共用可见表面及实例行, 再把一个策略的角色和私有写入交给本轮图.
     /// @note 同槽完成后方可重用常量、实例块和间接缓冲.
     struct ForwardFrameData : StaticDrawWork
     {
@@ -501,19 +524,24 @@ namespace Physara::Renderer::Detail
 
         ForwardWorkingSource source;
         ViewResourceNeeds needs;
-        std::optional<OpaquePath> alternatePath; ///< 只额外登记颜色准备键, 一路只选择一份图工作.
+        // 附件不兼容的候选也保留在这里, 供选择阶段向对应请求报告具体失败.
+        std::optional<OpaqueCandidate> alternate;
         bool usesLighting = false; ///< 当前颜色存在受光表面, 包括核心屏幕光照及辅助前向光照.
+        bool opaqueResourcesReady = false; ///< 选定策略已物化私有资源, 可继续绑定同一程序代.
         std::uint64_t preparationStamp{}; ///< 与 Allocation::lastUse 配对, 零表示本槽无准备或已撤回.
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
         RHI::BindingLayoutHandle lightLayout;
         RHI::BindingLayoutHandle froxelViewLayout; ///< 选定颜色角色的完整 PerView 布局, 深度仍使用普通布局.
         std::optional<ShaderPipelineRequest> deferredColor; ///< 实际有核心受光时才登记的颜色角色.
+        std::optional<StaticAbi::DeferredView> deferredViewValues; ///< 本轮核心角色所需的重建值, 无法编码时为空.
         std::shared_ptr<DrawBuffer> deferredView; ///< 安全帧槽可复用的屏幕几何常量.
+        bool deferredViewWriteRecorded = false; ///< 屏幕写入已尝试录制, 尚未获得完整图确认.
         RHI::GraphicsPipelineHandle deferredPipeline;
         RHI::BindingLayoutHandle deferredSurfaceLayout;
         std::optional<FroxelUpload> froxelUpload; ///< 本路拥有的上传组, 已发工作按安全槽完成保留预算凭据.
-        bool froxelReserved = false; ///< 只占本轮逻辑额度, 收尾就绪时转换成实际写入.
+        std::pair<std::size_t, std::size_t> opaqueUploadReservation{}; ///< 有效方案尚未物化的字节数和写入数.
+        std::optional<ResidencyDemand> effectiveOpaqueResidency; ///< 已有效策略尚待结算的设备驻留需求.
         EnvironmentFrame environment;
         std::optional<ShadowFrame> shadow;
         PostProcess::DisplayFrame display;
@@ -635,6 +663,9 @@ namespace Physara::Renderer::Detail
         void Use(Allocation &entry);
         /// @brief 分配前核对单 View 及全缓存容量, 尝试淘汰空闲代, 仍受占用时返回等待错误.
         void Reserve(std::size_t bytes, bool paged = false);
+        /// @brief 核对一组未分配的设备驻留需求, 包括其它有效计划需要保留的余量.
+        /// 仅淘汰空闲代. 实际字节和条目仍随分配对象寿命记账.
+        void CheckDeviceResidency(ResidencyDemand demand);
         /// @brief 从兼容页中借出一个新代的区间. 失败由已有准备边界回收未发布区间.
         void AllocateSlice(PageSlice &slice, const Allocation &owner, GraphUsage usage, std::uint8_t layout,
                            std::size_t bytes, std::size_t alignment, std::size_t tableRows = 0);
@@ -740,7 +771,18 @@ namespace Physara::Renderer::Detail
                    const ShadowLightPlan *shadowLight);
     /// @brief 从本帧选定代取得每个批次和天空所需的句柄. 缺项报告等待或硬失败, 不创建 Pipeline.
     void ApplyDrawShaders(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view);
-    /// @brief 用当前已驻留表面的实际批次核对待选颜色, 其它共享键照常在收尾绑定.
-    [[nodiscard]] std::optional<ForwardFailure> CheckAlternateColors(
-        const ForwardDevice &device, const ForwardFrameData &frame, LightingProgram program) noexcept;
+    /// @brief 从同一灯光配方选择该策略的候选来源.
+    [[nodiscard]] LightingProgram OpaqueColorProgram(const ForwardFrameData &frame, OpaquePath path) noexcept;
+    /// @brief 核对当前可见表面对所选表面及颜色路径所需的原生键.
+    [[nodiscard]] std::optional<ForwardFailure> CheckOpaqueShaders(const ForwardDevice &device,
+        const ForwardFrameData &frame, const ViewResourceNeeds &needs, LightingProgram program) noexcept;
+    /// @brief 从选定角色、CPU Froxel 和安全槽现有屏幕常量推导实际分配及写入需求.
+    [[nodiscard]] OpaqueResourceDemand OpaqueRequirements(const ForwardDevice &device, const ForwardFrameData &frame,
+        const PreparedView &view, bool coreLighting, LightingProgram program) noexcept;
+    /// @brief 完成所选路径的批次划分、屏幕常量和 Froxel. 局部失败保留先前已准备的策略.
+    /// @param protectedResidency 候选准入时传入其它有效策略尚未分配的容量. 有效策略直接结算实际分配.
+    /// @pre 当前设备记账指向该 View, 上传批尚未封存.
+    void PrepareOpaqueResources(ForwardDevice &device, ForwardFrameData &frame, const PreparedView &view,
+        const ViewResourceNeeds &needs, LightingProgram program, const GraphBufferSupport &buffers,
+        const std::optional<ResidencyDemand> &protectedResidency);
 }

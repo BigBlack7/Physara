@@ -339,8 +339,8 @@ namespace Physara::Renderer
         const auto preview = view.Preview();
         const FroxelRequest defaultFroxels;
         const auto effective = view.OpaqueSettings(shared.Source().Id()).effective;
-        // 选择在 Shader 准备后才确定. 任一路可能用 Forward+ 时, 先为当前相机生成一份可借用的 CPU 列表.
-        const bool needsFroxels = path == OpaquePath::ForwardPlus || effective == OpaquePath::ForwardPlus;
+        // 选路在 Shader 准备后确定. 两个可能策略共用当前相机的一份 CPU 列表.
+        const bool needsFroxels = UsesFroxelCandidates(path) || (effective && UsesFroxelCandidates(*effective));
         const bool automaticFroxels = !froxelRequest && needsFroxels && IsLitPreview(preview);
         const auto *listsRequest = automaticFroxels ? &defaultFroxels : froxelRequest;
         PreparedView result{.view = view.Id(), .requestRevision = request ? request->requestRevision : 0,

@@ -24,9 +24,10 @@ namespace Physara::Renderer
     // 进程只有一个活动宿主. View 在该宿主 owner 线程分配身份, 后续创建不会复用旧代.
     static std::uint64_t LastViewIdentity = 0;
 
+    // 文档和离屏请求共用连续枚举的值域. 附件与角色的可用性在取得帧输入后判断.
     [[nodiscard]] static constexpr bool ValidOpaquePath(OpaquePath path) noexcept
     {
-        return path == OpaquePath::Forward || path == OpaquePath::ForwardPlus;
+        return path <= OpaquePath::Deferred;
     }
 
     /// @brief 校验文档的路径, AA, 比例, 位姿和引用形状. 组合方核对 Scene 的具体相机引用.

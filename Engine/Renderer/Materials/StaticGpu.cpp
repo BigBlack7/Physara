@@ -1058,23 +1058,28 @@ namespace Physara::Renderer::Detail
         // 单 View 超限无法靠等待消除. 仅全缓存被其它引用占用时报告 Pending.
         const auto &budget = viewBudgets[preparingView];
         CheckViewCapacity(bytes, budget.bytes, budget.entries);
-        const auto storageBytes = paged ? 0 : bytes;
+        CheckDeviceResidency({paged ? 0 : bytes, 1});
+    }
+
+    void ForwardDevice::CheckDeviceResidency(ResidencyDemand demand)
+    {
         const auto full = [&]
         {
-            return storageBytes > ResidentBytes - capacity->bytes || capacity->entries == ResidentEntries;
+            return demand.bytes > ResidentBytes - capacity->bytes ||
+                demand.entries > ResidentEntries - capacity->entries;
         };
         if (full())
         {
             EvictUnused();
             if (full())
             {
-                if (capacity->entries == ResidentEntries)
+                if (demand.entries > ResidentEntries - capacity->entries)
                 {
                     RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward residency entries pending",
-                                   1, capacity->entries, ResidentEntries);
+                                   demand.entries, capacity->entries, ResidentEntries);
                 }
                 RejectCapacity(ViewSettingReason::SceneResidencyPending, "Forward residency bytes pending",
-                               storageBytes, capacity->bytes, ResidentBytes);
+                               demand.bytes, capacity->bytes, ResidentBytes);
             }
         }
     }

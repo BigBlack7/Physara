@@ -52,7 +52,7 @@ namespace Physara::Renderer
     {
         bool earlyDepth = false; ///< 普通颜色的独立深度预通道.
         bool coreGBuffer = false; ///< 为独立消费者额外交付最终不透明表面.
-        /// Direct 或 Physical Lighting 可请求内部 Deferred 子图. PlanView 拒绝与有效阴影诊断或 alternate 并用.
+        /// Direct 或 Physical Lighting 的 Deferred 策略使用最终表面. 显式内部请求拒绝与阴影诊断或 alternate 并用.
         /// 受光批次需要本 View 的 Froxel 列表. 核心颜色采样最终 D32, 辅助颜色在同一 D32 上做只读等深测试.
         bool deferredLighting = false;
         /// @brief 仅交付最终 GBuffer 与 D32, 调用方按需读取或导出这些图版本.
@@ -236,9 +236,10 @@ namespace Physara::Renderer
         [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
         /// @brief 封存前拥有的写入需求, 包含之后可能不进入存活计划的写入.
         [[nodiscard]] std::pair<std::size_t, std::size_t> UploadDemand() const noexcept;
-        /// @brief 读取当前规划的 Froxel 消费和待选路径的额外需求, 供实际资源准入排序.
+        /// @brief 读取当前规划的 Froxel 消费, 供多 View 私有资源准入排序.
         [[nodiscard]] bool UsesFroxels(std::size_t index) const noexcept;
-        [[nodiscard]] bool AddsFroxels(std::size_t index) const noexcept;
+        /// @brief 首次或待选策略是否引入 Froxel 或核心屏幕资源, 供收尾时优先结算已有效的消费者.
+        [[nodiscard]] bool AddsOpaqueResources(std::size_t index, std::optional<OpaquePath> effective) const noexcept;
 
         /// @brief 声明共享上传及被选中的各路 Forward 输出. 先声明 UI 纹理, 最后声明 UI 缓冲.
         /// @pre selected 只包含有完整准备值的路, 本槽继续保有图借用直至执行结束.
@@ -297,9 +298,10 @@ namespace Physara::Renderer
         /// @param display 本路预览模式和 AA 请求解析出的实际显示配置.
         /// @param resample 显示阶段需要从渲染栅格重采样时为 true, 对应一个额外的线性中间目标.
         /// @param needs 按实际准备需求核算 GBuffer、Forward 深度与显示附件. 仅表面时只检查 render.
+        /// @param samples 期望的原生采样数. 现有三路 profile 只交付单样本.
         /// @return 空值表示附件可容纳. 失败携带具体的 View 原因, 显式离屏请求可在共享场景提取前返回该原因.
         [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
-            DisplaySettings display, bool resample, ViewResourceNeeds needs = {}) const noexcept;
+            DisplaySettings display, bool resample, ViewResourceNeeds needs = {}, std::uint32_t samples = 1) const noexcept;
 
         /// @brief 在同一已选代中连续规划并完成一路 View. 空可见集允许背景输出.
         /// 产品多 View 帧分别调用 PlanView 和 FinishView, 在两者之间推进一次原生预算.
@@ -309,17 +311,18 @@ namespace Physara::Renderer
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0, const GraphBufferSupport &buffers = {});
         /// @brief 准备一路的常量, 批次及驻留资源, 汇入原生键供本帧统一选代.
         /// @param alternate 同一 View 另行准备的请求路径. view.opaquePath 是本轮先规划的策略.
-        /// @param holdFroxelWrites 为有效 Froxel 方案保留写入额度. 首次受光候选延至收尾才申请.
+        /// @param protectEffectiveResources 为仍可执行的有效策略预留私有写入并登记待分配的设备驻留需求.
         /// @pre frame 已由安全槽 Reset, index 是本帧尚未规划的位置. 局部失败仍允许规划其它路.
         [[nodiscard]] std::optional<ForwardFailure> PlanView(ForwardFrame &frame, const PreparedView &view,
             PreviewMode mode, ViewResourceNeeds needs = {}, std::size_t index = 0,
-            std::optional<OpaquePath> alternate = {}, bool holdFroxelWrites = true);
-        /// @brief 绑定选定代, 补办失效的 caster 准备, 仅为实际 Froxel 颜色角色向帧批次登记拥有型载荷.
+            std::optional<OpaquePath> alternate = {}, bool protectEffectiveResources = true);
+        /// @brief 绑定选定代, 补办失效的 caster 准备, 按实际核心屏幕及 Froxel 消费向帧批次登记拥有型载荷.
         /// @pre view 和 index 与成功的 PlanView 相同, 第一条成功绑定后本帧无 Shader 切换.
         /// @param buffers 同一设备的场景图缓冲区能力. 默认值只允许普通 Forward 与无 Froxel 消费的预览.
         [[nodiscard]] std::optional<ForwardFailure> FinishView(ForwardFrame &frame, const PreparedView &view,
             std::size_t index = 0, const GraphBufferSupport &buffers = {});
-        /// @brief 独立准备可选路径及其专用资源. 局部拒绝保留当轮仍有效的计划及原因.
+        /// @brief 检查待选路径的表面及颜色角色, 并物化它的专用资源. 局部拒绝保留当轮有效计划及原因.
+        /// @param view 返回本轮收尾要绑定的路径. 正常提交的采样或导出回执再确认 View 的有效路径.
         /// @pre 当前 View 已 PlanView, 两路需求已进入本帧原生准备. 调用方为此阶段独立捕获 RHI 错误.
         /// @return 无有效策略可接续的错误才交给调用方撤回准备.
         [[nodiscard]] std::optional<ForwardFailure> SelectOpaquePath(ForwardFrame &frame, PreparedView &view,

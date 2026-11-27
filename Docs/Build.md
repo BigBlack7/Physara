@@ -42,6 +42,8 @@ PhysaraAsset 使用 Core 的受控读取、SHA-256 和 CPU 作业, 通过私有�
 
 v1 的 `mainView.requested.antiAliasing` 可写 `none` 或 `fxaa`. 省略字段使用 None, 保存 None 时省略. 文档保存的是请求, 有效 AA 和显示尺寸由正常帧接受后确认.
 
+v1 的 `mainView.requested.opaquePath` 可写 `forward`、`forward-plus` 或 `deferred`。省略时使用 Forward。保存捕获主 View 请求，有效路径由匹配的受光帧确认。View Settings 与离屏 View 都可以请求三条路径。单样本 Physical Lighting 消费 None 或 FXAA，Direct Lighting 使用 LinearClamp/None。Deferred+MSAA 能力为 false。 [路径准备](Architecture.md#plan-readiness)
+
 v1 可省略顶层 `environment`. 对象使用 `path`、环境到世界的 xyzw 单位四元数 `rotation`、有限非负 `intensity` 和布尔用途 `lighting`、`sky`. 至少选择一个用途, 路径相对 exe 资源根并位于 `Assets/Environments`. Open 取得当前 CPU 版本后才整体恢复 Scene/View, Save 保留请求字段. [场景文档合同](Architecture.md#asset-persistence)
 
 ## Shader 构建
@@ -52,7 +54,7 @@ PhysaraShader 是 CPU 编译/包消费库, PUBLIC 使用 Core 的有界错误值
 
 默认产品构建还生成 `StaticCoreGBuffer` 与 `StaticSurfaceAux`, 两包共用当前 `StaticForward` 生成接口. Renderer 按显式表面需求准备原生角色. 工作色合成沿用现有前向颜色包的只读深度状态. 部署时将与程序同配置生成的 Shader 包一同交付. [D11-T02](Developments/D08-D11-RenderPaths.md#d11-t02)
 
-`DeferredLighting` 产品包族沿用 `StaticForward` 生成接口. Renderer 在内部 Deferred 子图需要核心受光时准备对应的 Direct、DFG 或 IBL 角色, 各自按实际阴影需求选择版本. 屏幕角色采样最终 GBuffer 和 D32, 使用同 View 的光照资源. 启动与热重载沿用同配置包及原有的帧前准备预算. [D11-T03](Developments/D08-D11-RenderPaths.md#d11-t03)
+`DeferredLighting` 产品包族沿用 `StaticForward` 生成接口. Renderer 在 Deferred 策略需要核心受光时准备对应的 Direct、DFG 或 IBL 角色, 各自按实际阴影需求选择版本. 屏幕角色采样最终 GBuffer 和 D32, 使用同 View 的光照资源. 启动与热重载沿用同配置包及原有的帧前准备预算. [D11-T04](Developments/D08-D11-RenderPaths.md#d11-t04)
 
 Compute 包使用 `LoadRhiComputeProgram` 校验 profile 与 ABI. RHI 的 `CreateComputePipeline` 在准备阶段链接单 CS, 之后由已打开的 Graphics 即时列表设置 Compute 状态并直接 `Dispatch`. 支持的存储格式、绑定和同步见 [OpenGL 能力范围](../RHI/README.md#opengl-原生消费边界).
 

@@ -83,10 +83,17 @@ namespace Physara::Renderer
         return Detail::UsesFroxels(m_Data->views[index].environment.program);
     }
 
-    bool ForwardFrame::AddsFroxels(std::size_t index) const noexcept
+    bool ForwardFrame::AddsOpaqueResources(std::size_t index, std::optional<OpaquePath> effective) const noexcept
     {
         const auto &view = m_Data->views[index];
-        return view.usesLighting && view.alternatePath == OpaquePath::ForwardPlus && !UsesFroxels(index);
+        const bool froxels = UsesFroxels(index);
+        if (effective != view.source.opaquePath)
+        {
+            return froxels || view.deferredColor.has_value();
+        }
+        return view.alternate && !view.alternate->failure &&
+            ((view.usesLighting && UsesFroxelCandidates(view.alternate->path) && !froxels) ||
+             (view.alternate->needs.deferredLighting && view.deferredViewValues));
     }
 
     /// @brief 解除本轮绘制引用. 槽内保留 View 行、实例块和参数缓冲供下次准备比较.
@@ -111,13 +118,22 @@ namespace Physara::Renderer
             view.shadow->depth = {};
         }
         view.activeLights.reset();
+        view.alternate.reset();
+        view.opaqueResourcesReady = false;
         view.lightLayout = nullptr;
         view.froxelViewLayout = nullptr;
         view.deferredColor.reset();
+        view.deferredViewValues.reset();
+        if (std::exchange(view.deferredViewWriteRecorded, false))
+        {
+            // 已尝试写入却没有完整图回执, 原内容可能已被覆盖. 下次使用时重新上传.
+            view.deferredView->accepted = false;
+        }
         view.deferredPipeline = nullptr;
         view.deferredSurfaceLayout = nullptr;
         view.froxelUpload.reset();
-        view.froxelReserved = false;
+        view.opaqueUploadReservation = {};
+        view.effectiveOpaqueResidency.reset();
         view.environment = {};
         view.display = {};
         view.displayReserved = false;
@@ -471,8 +487,14 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
-        DisplaySettings display, bool resample, ViewResourceNeeds needs) const noexcept
+        DisplaySettings display, bool resample, ViewResourceNeeds needs, std::uint32_t samples) const noexcept
     {
+        if (samples != 1)
+        {
+            const auto text = needs.deferredLighting ? "Deferred MSAA is unsupported" :
+                "Opaque rendering requires single-sample attachments";
+            return ForwardFailure{ViewSettingReason::InvalidViewRequest, Core::BoundedText(text)};
+        }
         if (render.width == 0 || render.height == 0 ||
             (!needs.surfaceOnly && (output.width == 0 || output.height == 0)))
         {
@@ -484,6 +506,34 @@ namespace Physara::Renderer
         {
             return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
                                   Core::BoundedText("Forward extent exceeds the attachment limit")};
+        }
+        if (needs.NeedsCoreSurface())
+        {
+            using RHI::FormatSupport;
+            const auto check = [&](RHI::Format format, FormatSupport required) -> std::optional<ForwardFailure>
+            {
+                if ((m_Device.QueryFormatSupport(format) & required) == required)
+                {
+                    return std::nullopt;
+                }
+                Core::BoundedText detail("Opaque surface attachment unsupported: ");
+                detail.Append(RHI::GetFormatInfo(format).name);
+                return ForwardFailure{ViewSettingReason::SceneAttachmentLimit, detail};
+            };
+            for (const auto format : CoreGBufferOutput::Formats)
+            {
+                const auto read = format == RHI::Format::R16_UINT ? FormatSupport::ShaderLoad :
+                    FormatSupport::ShaderLoad | FormatSupport::ShaderSample;
+                if (auto failure = check(format, FormatSupport::Texture | FormatSupport::RenderTarget | read))
+                {
+                    return failure;
+                }
+            }
+            const auto depthRead = needs.deferredLighting ? FormatSupport::ShaderSample : FormatSupport::None;
+            if (auto failure = check(DepthFormat, FormatSupport::Texture | FormatSupport::DepthStencil | depthRead))
+            {
+                return failure;
+            }
         }
         // 主 D32 为 4 字节. 最终表面另有 18 字节颜色, 或在普通颜色附带表面时合计 22 字节.
         std::size_t renderBytesPerPixel = 4 + (needs.NeedsCoreSurface() ? 18 : 0);
@@ -498,8 +548,9 @@ namespace Physara::Renderer
         }
         if (render.height > ForwardAttachmentBudget / renderBytesPerPixel / render.width)
         {
-            return ForwardFailure{ViewSettingReason::SceneAttachmentLimit,
-                                  Core::BoundedText("Forward attachments exceed the view byte budget")};
+            const auto text = needs.NeedsCoreSurface() ? "GBuffer attachments exceed the view byte budget" :
+                "Forward attachments exceed the view byte budget";
+            return ForwardFailure{ViewSettingReason::SceneAttachmentLimit, Core::BoundedText(text)};
         }
         if (needs.surfaceOnly)
         {
@@ -537,20 +588,17 @@ namespace Physara::Renderer
         std::ranges::transform(frame.views, retained.begin(), &Detail::ForwardFrameData::preparationStamp);
         frame.uploads.DiscardView(index, stamp, retained);
         view.froxelUpload.reset();
-        view.froxelReserved = false;
+        view.opaqueUploadReservation = {};
         view.displayReserved = false;
         view.display.ReleasePayload();
-        // DiscardView 已按实际载荷重算额度. 仍在等待收尾的 Froxel 写组各补计一次,
+        // DiscardView 已按实际载荷重算额度. 仍在等待收尾的不透明写入预留各补计一次,
         // 显示常量按路补计, 共享 LUT 只补一份.
         bool lutReserved = false;
         for (const auto &candidate : frame.views)
         {
-            if (candidate.froxelReserved)
-            {
-                const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
-                frame.uploads.bytes += bytes;
-                frame.uploads.writes += writes;
-            }
+            const auto [bytes, writes] = candidate.opaqueUploadReservation;
+            frame.uploads.bytes += bytes;
+            frame.uploads.writes += writes;
             if (candidate.displayReserved)
             {
                 const auto lutBytes = candidate.display.LutUploadBytes();
@@ -627,7 +675,7 @@ namespace Physara::Renderer
 
     std::optional<ForwardFailure> ForwardRenderer::PlanView(ForwardFrame &frame, const PreparedView &view,
         PreviewMode mode, ViewResourceNeeds needs, std::size_t index, std::optional<OpaquePath> alternate,
-        bool holdFroxelWrites)
+        bool protectEffectiveResources)
     try
     {
         assert(view.camera && view.reason == ViewSettingReason::None && index < ForwardViewCount);
@@ -648,10 +696,38 @@ namespace Physara::Renderer
         }
         const auto display = ResolveDisplaySettings(view.previewShadow ? PreviewMode::BaseColor : mode,
                                                     view.requestedAa);
-        if (const auto failure = CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
-                                                  display, view.layouts.render != view.layouts.display, needs))
+        const bool lit = IsLitPreview(mode) && !view.previewShadow;
+        auto path = needs.deferredLighting ? OpaquePath::Deferred :
+            lit && !needs.surfaceOnly ? view.opaquePath : OpaquePath::Forward;
+        needs.deferredLighting = path == OpaquePath::Deferred;
+        const auto check = [&](ViewResourceNeeds options)
         {
-            throw *failure;
+            return CheckAttachments(view.layouts.render.outputExtent, view.layouts.display.outputExtent,
+                                    display, view.layouts.render != view.layouts.display, options);
+        };
+        // 两条路径使用同一显示配置. Deferred 改变表面附件和深度用途, 因此单独核算其布局.
+        const auto attachmentFailure = check(needs);
+        std::optional<Detail::OpaqueCandidate> candidate;
+        if (alternate)
+        {
+            assert(lit && *alternate != path);
+            auto candidateNeeds = needs;
+            candidateNeeds.deferredLighting = *alternate == OpaquePath::Deferred;
+            const auto candidateFailure = candidateNeeds.deferredLighting == needs.deferredLighting
+                ? attachmentFailure : check(candidateNeeds);
+            candidate.emplace(Detail::OpaqueCandidate{*alternate, candidateNeeds, candidateFailure});
+        }
+        if (attachmentFailure)
+        {
+            if (!candidate || candidate->failure)
+            {
+                throw candidate ? *candidate->failure : *attachmentFailure;
+            }
+            // 旧策略的附件限制不能拦截当前仍可执行的请求.
+            path = candidate->path;
+            needs = candidate->needs;
+            candidate.reset();
+            protectEffectiveResources = false;
         }
         if (!m_Resources && !InitializeResources())
         {
@@ -683,9 +759,9 @@ namespace Physara::Renderer
             data.lightTable.reset();
         }
         data.source = {.view = view.view, .scene = view.scene.scene, .contentRevision = view.scene.contentRevision,
-            .mode = mode, .camera = *view.camera, .layout = view.layouts.render, .opaquePath = view.opaquePath};
+            .mode = mode, .camera = *view.camera, .layout = view.layouts.render, .opaquePath = path};
         data.needs = needs;
-        data.alternatePath = alternate;
+        data.alternate = std::move(candidate);
         m_Resources->BeginView(index);
         data.preparationStamp = m_Resources->viewBudgets[index].stamp;
         Detail::PlanDraws(*m_Resources, data, view, mode, needs.surfaceOnly ? nullptr : view.previewShadow);
@@ -693,22 +769,24 @@ namespace Physara::Renderer
         {
             PlanDisplay(*m_Resources, *frame.m_Data, data, view.layouts, display);
         }
-        if (holdFroxelWrites && Detail::UsesFroxels(data.environment.program) && view.froxels)
+        if (protectEffectiveResources)
         {
-            // 有效计划保留已知的写入需求. 首次受光和额外候选在实际收尾时准入.
-            const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
+            // 写入计入共享批次. 设备容量随实际分配记账, 待选策略须为尚未分配的有效计划留出余量.
+            const auto demand = Detail::OpaqueRequirements(*m_Resources, data, view,
+                data.deferredColor.has_value(), data.environment.program);
+            data.effectiveOpaqueResidency = demand.residency;
             try
             {
-                frame.m_Data->uploads.ReserveWrites(bytes, writes);
-                data.froxelReserved = true;
+                frame.m_Data->uploads.ReserveWrites(demand.uploads.first, demand.uploads.second);
+                data.opaqueUploadReservation = demand.uploads;
             }
             catch (const ForwardFailure &)
             {
-                if (!alternate)
+                if (!data.alternate)
                 {
                     throw;
                 }
-                // 待选全灯可在 Froxel 额度不足时独立就绪. 若仍使用旧路, 收尾尝试取得实际所需额度.
+                // 待选路径可独立取得更少的私有资源. 若仍使用旧路, 收尾按实际需求重新准入.
             }
         }
         frame.m_Data->planned.set(index);
@@ -732,12 +810,21 @@ namespace Physara::Renderer
                               Core::BoundedText("Forward plan allocation failed")};
     }
 
-    /// @brief 列表准备失败仍保留全灯工作集, 由需要 Froxel 的实际策略报告首因.
-    static ForwardFailure MissingFroxelLists(const PreparedView &view) noexcept
+    /// @brief 汇总其它仍在准备的有效计划需要的新存储. 已物化或撤回的计划由现有容量计数反映.
+    static Detail::ResidencyDemand PendingEffectiveResidency(const Detail::ForwardFrameStorage &frame,
+                                                              std::size_t index) noexcept
     {
-        Core::BoundedText issue("Cannot prepare Forward+ Froxel grid: ");
-        issue.Append(FroxelStatusName(view.froxelStatus));
-        return {ViewSettingReason::ScenePreparationFailed, issue};
+        Detail::ResidencyDemand demand{};
+        for (std::size_t peer = 0; peer < frame.views.size(); ++peer)
+        {
+            const auto &view = frame.views[peer];
+            if (peer != index && frame.planned[peer] && !view.opaqueResourcesReady && view.effectiveOpaqueResidency)
+            {
+                demand.bytes += view.effectiveOpaqueResidency->bytes;
+                demand.entries += view.effectiveOpaqueResidency->entries;
+            }
+        }
+        return demand;
     }
 
     std::optional<ForwardFailure> ForwardRenderer::SelectOpaquePath(ForwardFrame &frame, PreparedView &view,
@@ -755,62 +842,44 @@ namespace Physara::Renderer
         };
         const bool lit = IsLitPreview(view.preview) && !view.previewShadow;
         const auto effective = owner.OpaqueSettings(view.scene.scene).effective;
-        if (data.alternatePath && owner.CanSwitchOpaquePath(view, m_Resources->activeShaders->generation))
+        view.opaquePath = data.source.opaquePath;
+        if (data.alternate)
         {
-            auto program = Detail::FullListProgram(data.environment.program);
-            const bool froxels = data.usesLighting && *data.alternatePath == OpaquePath::ForwardPlus;
-            if (froxels)
+            const auto &candidate = *data.alternate;
+            if (candidate.failure)
             {
-                program = Detail::WithFroxels(program);
+                report(candidate.failure->reason, &candidate.failure->description);
+                return std::nullopt;
             }
-            // 等待或拒绝只影响待选路径. 共用的绘制及上传仍可由已接受策略提交.
-            std::optional<ForwardFailure> candidate;
-            if (data.usesLighting)
+            if (!owner.CanSwitchOpaquePath(view, m_Resources->activeShaders->generation))
             {
-                candidate = Detail::CheckAlternateColors(*m_Resources, data, program);
+                return std::nullopt;
             }
-            if (!candidate && froxels)
+            const auto program = Detail::OpaqueColorProgram(data, candidate.path);
+            if (const auto issue = Detail::CheckOpaqueShaders(*m_Resources, data, candidate.needs, program))
             {
-                if (!view.froxels)
-                {
-                    candidate = MissingFroxelLists(view);
-                }
-                else
-                {
-                    try
-                    {
-                        m_Resources->ResumeView(index);
-                        data.froxelUpload = Detail::FroxelUpload::Prepare(*m_Resources, storage.uploads, view, buffers);
-                    }
-                    catch (const ForwardFailure &failure)
-                    {
-                        candidate = failure;
-                    }
-                    catch (const std::bad_alloc &)
-                    {
-                        candidate = ForwardFailure{ViewSettingReason::ScenePreparationFailed,
-                                                    Core::BoundedText("Forward+ upload allocation failed")};
-                    }
-                }
+                report(issue->reason, &issue->description);
+                return std::nullopt;
             }
-            if (candidate)
+            // 局部失败仍可交付已准备的有效策略. 路径和工作集在私有资源就绪后一起切换.
+            try
             {
-                report(candidate->reason, &candidate->description);
+                m_Resources->ResumeView(index);
+                Detail::PrepareOpaqueResources(*m_Resources, data, view, candidate.needs, program, buffers,
+                                               PendingEffectiveResidency(storage, index));
+                view.opaquePath = data.source.opaquePath = candidate.path;
             }
-            else
+            catch (const ForwardFailure &failure)
             {
-                if (data.froxelReserved)
-                {
-                    const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
-                    storage.uploads.ReleaseWrites(bytes, writes);
-                    data.froxelReserved = false;
-                }
-                // PreparePreview 和 Declare 分别从这两份记录读取路径, 必须指向同一次选择.
-                view.opaquePath = data.source.opaquePath = *data.alternatePath;
-                data.environment.program = program;
+                report(failure.reason, &failure.description);
+            }
+            catch (const std::bad_alloc &)
+            {
+                const Core::BoundedText detail("Opaque candidate allocation failed");
+                report(ViewSettingReason::ScenePreparationFailed, &detail);
             }
         }
-        else if (!data.alternatePath && lit && !effective)
+        else if (lit && effective != data.source.opaquePath)
         {
             // 没有有效计划时也可保留失败输入. 调用方撤回本路准备, 其它路继续构图.
             if (!owner.CanSwitchOpaquePath(view, m_Resources->activeShaders->generation))
@@ -819,10 +888,7 @@ namespace Physara::Renderer
                 return ForwardFailure{status.reason, status.detail ? *status.detail :
                     Core::BoundedText("Opaque path submission was rejected")};
             }
-            if (data.usesLighting)
-            {
-                return Detail::CheckAlternateColors(*m_Resources, data, data.environment.program);
-            }
+            return Detail::CheckOpaqueShaders(*m_Resources, data, data.needs, data.environment.program);
         }
         return std::nullopt;
     }
@@ -839,7 +905,7 @@ namespace Physara::Renderer
     {
         assert(m_Resources && frame.m_Data && frame.m_Data->planned[index]);
         auto &data = frame.m_Data->views[index];
-        assert(data.source.view == view.view && data.source.opaquePath == view.opaquePath);
+        assert(data.source.view == view.view && data.source.scene == view.scene.scene);
         if (!frame.m_Data->shaders)
         {
             // 同一帧的两路 View 固定使用这张表, 直至槽安全 Reset.
@@ -854,29 +920,20 @@ namespace Physara::Renderer
             Detail::Reject(ViewSettingReason::ShaderPending, "Waiting for prepared display pipelines");
         }
         m_Resources->ResumeView(index);
+        if (!data.opaqueResourcesReady)
+        {
+            const auto protectedResidency = data.effectiveOpaqueResidency ? std::nullopt :
+                std::optional{PendingEffectiveResidency(*frame.m_Data, index)};
+            Detail::PrepareOpaqueResources(*m_Resources, data, view, data.needs, data.environment.program, buffers,
+                                           protectedResidency);
+        }
         Detail::ApplyDrawShaders(*m_Resources, data, view);
         if (!data.needs.surfaceOnly)
         {
             m_Resources->display.BindStages(data.display, frame.m_Data->shaders->display, display);
         }
-        const bool usesFroxels = Detail::UsesFroxels(data.environment.program);
-        assert(usesFroxels == bool(data.froxelViewLayout));
-        if (usesFroxels && !data.froxelUpload)
-        {
-            if (!view.froxels)
-            {
-                throw MissingFroxelLists(view);
-            }
-            // 角色已就绪, 取用本 View 的逻辑预留, 实际写入由上传组按同样的额度登记.
-            if (data.froxelReserved)
-            {
-                const auto [bytes, writes] = Detail::FroxelUpload::UploadRequirements();
-                frame.m_Data->uploads.ReleaseWrites(bytes, writes);
-                data.froxelReserved = false;
-            }
-            data.froxelUpload = Detail::FroxelUpload::Prepare(*m_Resources, frame.m_Data->uploads, view, buffers);
-            assert(data.froxelUpload);
-        }
+        assert(Detail::UsesFroxels(data.environment.program) == bool(data.froxelViewLayout));
+        assert(Detail::UsesFroxels(data.environment.program) == data.froxelUpload.has_value());
         frame.m_Data->hasPreparedView = true;
         frame.m_Data->planned.reset(index);
         return std::nullopt;
@@ -1143,7 +1200,16 @@ namespace Physara::Renderer
             }
             const auto first = uploads.size();
             auto &version = resources.BufferVersion(graph, upload.buffer, upload.page, false);
-            version = TakeGraph(AddBufferUpload(graph, version, upload.payload, uploads, upload.offset));
+            bool *recorded = nullptr;
+            if (upload.view)
+            {
+                auto &view = frame.views[*upload.view];
+                if (upload.revision == view.deferredView)
+                {
+                    recorded = &view.deferredViewWriteRecorded;
+                }
+            }
+            version = TakeGraph(AddBufferUpload(graph, version, upload.payload, uploads, upload.offset, recorded));
             record(upload.revision.get(), first, upload.source, upload.view);
         }
         DeclarePageUploads(graph, resources, frame, selected, uploads, storageWrites, tableWrites);
@@ -1605,24 +1671,6 @@ namespace Physara::Renderer
         return depth;
     }
 
-    /// @brief 只有请求真实早期深度的下游才新增几何 Pass.
-    static PassId PrepareSurface(RenderGraph &graph, SceneGraphResources &resources,
-                               const Detail::ForwardFrameData &frame, TextureId &depth)
-    {
-        if (frame.needs.earlyDepth)
-        {
-            return AddGeometryPass(graph, resources, frame, depth, nullptr, false);
-        }
-        return {};
-    }
-
-    /// @brief 按准备的路径同时产生颜色和深度, 或读取早期深度并只写颜色.
-    static PassId ShadeOpaque(RenderGraph &graph, SceneGraphResources &resources, const Detail::ForwardFrameData &frame,
-        TextureId &depth, TextureId &color, TextureId shadowDepth, const Detail::FroxelGraphInputs *froxels)
-    {
-        return AddGeometryPass(graph, resources, frame, depth, &color, frame.needs.earlyDepth, shadowDepth, froxels);
-    }
-
     /// @brief 天空读取本图的一个完整基础 cube, 加载不透明工作色后只填其未覆盖 RGB.
     struct SkyPass
     {
@@ -1904,12 +1952,62 @@ namespace Physara::Renderer
             }, DrawScene, PrepareRasterBindings));
     }
 
-    /// @brief 两类不透明子图共用的工作色及配对深度. 天空只接续 hdrColor.
-    struct OpaqueOutput
+    /// @brief 前向深度与附加表面独立成版. 只有真实的早期深度消费者需要前置通道.
+    static void PrepareForwardSurface(RenderGraph &graph, SceneGraphResources &resources,
+                                      const Detail::ForwardFrameData &frame, ForwardOutput &output)
     {
-        TextureId hdrColor;
-        TextureId depth;
+        if (frame.needs.coreGBuffer)
+        {
+            output.coreGBuffer = PrepareDeferredSurface(graph, resources, frame);
+        }
+        const auto extent = frame.source.layout.outputExtent;
+        output.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
+            .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
+        if (frame.needs.NeedsEarlyDepth())
+        {
+            output.depthPass = AddGeometryPass(graph, resources, frame, output.depth, nullptr, false);
+        }
+    }
+
+    /// @brief Deferred 屏幕光照和辅助几何共用同一份末版 D32.
+    static void PrepareDeferredOpaqueSurface(RenderGraph &graph, SceneGraphResources &resources,
+                                             const Detail::ForwardFrameData &frame, ForwardOutput &output)
+    {
+        output.coreGBuffer = PrepareDeferredSurface(graph, resources, frame);
+        output.depth = output.coreGBuffer->depth;
+    }
+
+    /// @brief 全灯和 Froxel 颜色共用几何入口, 按选定角色取得相应绑定.
+    static void ShadeForwardOpaque(RenderGraph &graph, SceneGraphResources &resources,
+        const Detail::ForwardFrameData &frame, ForwardOutput &output, const Detail::FroxelGraphInputs *froxels)
+    {
+        output.colorPass = AddGeometryPass(graph, resources, frame, output.depth, &output.workingColor,
+                                          frame.needs.NeedsEarlyDepth(), output.shadowDepth, froxels);
+    }
+
+    /// @brief 核心屏幕颜色后接续只读等深辅助绘制. 最终 D32 继续属于表面生产者.
+    static void ShadeDeferredView(RenderGraph &graph, SceneGraphResources &resources,
+        const Detail::ForwardFrameData &frame, ForwardOutput &output, const Detail::FroxelGraphInputs *froxels)
+    {
+        const auto &surface = *output.coreGBuffer;
+        ShadeDeferredOpaque(graph, resources, frame, surface, output.workingColor, output.shadowDepth, froxels);
+        output.colorPass = AddOpaqueForwardExtensions(graph, resources, frame, surface, output.workingColor,
+                                                      output.shadowDepth, froxels);
+    }
+
+    /// @brief 由同一个已选路径定位配对阶段. 天空和显示只消费它们交付的工作色和深度.
+    struct OpaqueStrategy
+    {
+        decltype(&PrepareForwardSurface) prepareSurface;
+        decltype(&ShadeForwardOpaque) shadeOpaque;
     };
+
+    static constexpr std::array OpaqueStrategies{
+        OpaqueStrategy{PrepareForwardSurface, ShadeForwardOpaque},
+        OpaqueStrategy{PrepareForwardSurface, ShadeForwardOpaque},
+        OpaqueStrategy{PrepareDeferredOpaqueSurface, ShadeDeferredView},
+    };
+    static_assert(OpaqueStrategies.size() == std::size_t(OpaquePath::Deferred) + 1);
 
     /// @brief 声明一个 View 的表面与显示目标, 私有输出不进入共享驻留映射.
     static ForwardOutput DeclareView(RenderGraph &graph, SceneGraphResources &versions,
@@ -1920,45 +2018,25 @@ namespace Physara::Renderer
         const auto firstPass = graph.Passes().size();
         ForwardOutput output;
         output.source = frame.source;
-        if (frame.needs.NeedsCoreSurface())
-        {
-            output.coreGBuffer = PrepareDeferredSurface(graph, versions, frame);
-        }
         if (frame.needs.surfaceOnly)
         {
             // 表面消费者以同一最终深度及表面写入范围交付, 无需声明颜色或显示阶段.
-            output.depth = output.coreGBuffer->depth;
+            PrepareDeferredOpaqueSurface(graph, versions, frame, output);
             output.firstPass = graph.Passes()[firstPass].id;
             output.lastPass = output.coreGBuffer->producer;
             return output;
         }
-        OpaqueOutput opaque{};
-        opaque.hdrColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
+        const auto &strategy = OpaqueStrategies[std::size_t(frame.source.opaquePath)];
+        strategy.prepareSurface(graph, versions, frame, output);
+        output.workingColor = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
             .format = WorkingFormat, .debugName = "Opaque linear working color", .isRenderTarget = true}));
         if (frame.shadow)
         {
             output.shadowDepth = DeclareShadowDepth(graph, versions, *frame.shadow);
             output.shadowBytes = frame.shadow->depth.LogicalBytes();
         }
-        if (frame.needs.deferredLighting)
-        {
-            const auto &surface = *output.coreGBuffer;
-            opaque.depth = surface.depth;
-            ShadeDeferredOpaque(graph, versions, frame, surface, opaque.hdrColor, output.shadowDepth, froxels);
-            output.colorPass = AddOpaqueForwardExtensions(graph, versions, frame, surface, opaque.hdrColor,
-                                                          output.shadowDepth, froxels);
-        }
-        else
-        {
-            opaque.depth = TakeGraph(graph.CreateTexture({.width = extent.width, .height = extent.height,
-                .format = DepthFormat, .debugName = "Forward reverse depth", .isRenderTarget = true}));
-            output.depthPass = PrepareSurface(graph, versions, frame, opaque.depth);
-            output.colorPass = ShadeOpaque(graph, versions, frame, opaque.depth, opaque.hdrColor,
-                                           output.shadowDepth, froxels);
-        }
-        AddSky(graph, versions, frame, opaque.hdrColor);
-        output.workingColor = opaque.hdrColor;
-        output.depth = opaque.depth;
+        strategy.shadeOpaque(graph, versions, frame, output, froxels);
+        AddSky(graph, versions, frame, output.workingColor);
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();
         output.displayColor = TakeGraph(frame.display.Declare(graph, uploads, output.workingColor,
@@ -2063,6 +2141,22 @@ namespace Physara::Renderer
             if (std::ranges::all_of(writes, [&](PassId pass) { return IsLivePass(plan, pass); }))
             {
                 storage->accepted = true;
+            }
+        }
+        for (auto &view : m_Data->views)
+        {
+            if (view.deferredViewWriteRecorded)
+            {
+                const auto write = output.m_StorageWrites.find(view.deferredView.get());
+                if (write != output.m_StorageWrites.end() && IsLivePass(plan, write->second.front()))
+                {
+                    // 屏幕常量只有这一笔生产写入. 以完整图的回执更新安全槽可复用的字节身份.
+                    const auto values = std::as_bytes(std::span(&*view.deferredViewValues, 1));
+                    auto &contents = view.deferredView->contents;
+                    contents.resize(values.size());
+                    std::ranges::copy(values, contents.begin());
+                    view.deferredViewWriteRecorded = false;
+                }
             }
         }
     }

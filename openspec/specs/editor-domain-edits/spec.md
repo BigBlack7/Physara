@@ -193,9 +193,9 @@ CPU 资产可用、Scene 或 View 已接受请求、正常帧最后接受的实�
 
 ### Requirement: Edit and inspect the main View opaque strategy
 
-View Settings SHALL 提供 Forward 和 Forward+ 两种主 View 路径请求。选择、Undo 和 Redo SHALL 通过同一当前文档、Scene 和 View 作用域的字段事务生效。每次接受有净变化的请求 SHALL 形成一条可重放编辑，并更新主 View 的持久化 revision。重复同值、目标失效、文档冻结或字段非法 SHALL 保持原请求和历史。渲染计划的确认或拒绝 SHALL 独立于该字段编辑。
+View Settings SHALL 提供 Forward、Forward+ 和 Deferred 三种主 View 路径请求。选择、Undo 和 Redo SHALL 通过同一当前文档、Scene 和 View 作用域的字段事务生效。每次接受有净变化的请求 SHALL 形成一条可重放编辑，并更新主 View 的持久化 revision。重复同值、目标失效、文档冻结或字段非法 SHALL 保持原请求和历史。渲染计划的确认或拒绝 SHALL 独立于该字段编辑。
 
-View Settings SHALL 同时呈现主 View 的当前请求、有效路径及准备原因。有效路径 SHALL 来自当前 Scene 已接受的受光计划，首次确认前显示尚未确认。等待或拒绝时 SHALL 保留实际仍有效的路径及候选原因。若某种预览或诊断只渲染与路径无关的输出，界面 SHALL 表明路径请求应用于受光输出。
+View Settings SHALL 同时呈现主 View 的当前请求、有效路径及准备原因。有效路径 SHALL 来自当前 Scene 已接受的受光计划，首次确认前显示尚未确认。等待或拒绝时 SHALL 保留实际仍有效的路径及当前候选原因，按实际情况显示准备等待、角色失败或不支持的路径配置。合法请求和实际显示配置 SHALL 可分别读取。若某种预览或诊断只渲染与路径无关的输出，界面 SHALL 表明路径请求应用于受光输出。
 
 #### Scenario: Apply and replay an opaque path edit
 
@@ -211,3 +211,8 @@ View Settings SHALL 同时呈现主 View 的当前请求、有效路径及准备
 
 - **WHEN** 用户尝试在 Open 冻结期间编辑或重放路径字段，或旧文档提交的意图在替换后才到达
 - **THEN** 原意图无法改变当前请求和编辑历史，旧计划回执无法为另一 Scene 确认路径
+
+#### Scenario: Keep a deferred request visible without confirming an unsupported configuration
+
+- **WHEN** 主 View 编辑为 Deferred，其当前附件配置被拒绝，随后查看诊断输出并返回可正常受光的布局
+- **THEN** 面板保留 Deferred 请求并显示适用范围和对应原因。已确认路径仍来自最近的正常受光提交。恢复后面板只按实际接受的 Deferred 帧更新有效路径和画质

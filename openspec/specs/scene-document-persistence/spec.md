@@ -26,7 +26,7 @@ v1 `mainView.requested.physicalCamera` SHALL 为可省略的物理请求对象�
 
 v1 `mainView.requested.antiAliasing` SHALL 是可省略的字符串，支持 `none` 和 `fxaa`，缺省为新建主 View 的 None。保存 SHALL 捕获有效请求的值，允许省略缺省的 `none`。显式未知值、`null` 或类型不符 SHALL 定位到该字段并拒绝整个 Open 候选。显示 profile、实际 AA 和渲染及输出像素布局 SHALL 从当前准备与成功接受的帧获得。
 
-v1 `mainView.requested.opaquePath` SHALL 是可省略的字符串，支持 `forward` 和 `forward-plus`，缺省为新建主 View 的 Forward。保存 SHALL 捕获已接受的路径请求，允许省略缺省的 `forward`。显式未知值、`null` 或类型不符 SHALL 定位到该字段并拒绝整个 Open 候选。打开成功时 SHALL 随完整文档恢复请求，实际有效路径由随后匹配的正常受光输出确认。
+v1 `mainView.requested.opaquePath` SHALL 是可省略的字符串，支持 `forward`、`forward-plus` 和 `deferred`，缺省为新建主 View 的 Forward。保存 SHALL 捕获已接受的路径请求，允许省略缺省的 `forward`。显式未知值、`null` 或类型不符 SHALL 定位到该字段并拒绝整个 Open 候选。打开成功时 SHALL 随完整文档恢复请求，实际有效路径由随后匹配的正常受光输出确认。
 
 额外 View、窗口设置、布局、选择、运行期 handle、编辑历史及有效渲染输出 SHALL 保持为各自运行期状态。待选计划、准备诊断、有效路径和历史资格 SHALL 由运行期帧准备与接受合同管理。
 
@@ -72,6 +72,11 @@ v1 `mainView.requested.opaquePath` SHALL 是可省略的字符串，支持 `forw
 
 - **WHEN** v1 文件的 `opaquePath` 是 `null`、非字符串或超出支持值域
 - **THEN** Open 诊断包含对应文件及 `mainView.requested.opaquePath`，原活动场景、文档路径、主 View 请求和接受记录依照失败恢复合同继续有效
+
+#### Scenario: Restore a deferred request with FXAA before its first accepted frame
+
+- **WHEN** 主 View 的 Deferred 与 FXAA 编辑已接受，Deferred 渲染仍在等待或被当前设备配置拒绝，用户保存并重开文档
+- **THEN** v1 文档恢复 `deferred` 和 `fxaa` 请求，设备准备状态和有效路径由当前主 View 在新场景下的输入及正常回执确认。文件只保有请求值
 
 ### Requirement: Validate the document format before restoration
 
