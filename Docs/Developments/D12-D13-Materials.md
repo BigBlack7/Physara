@@ -5,9 +5,11 @@
 <a id="dev-d12"></a>
 ## D12 · 完成标准不透明材质扩展
 
-**性质：** 基线。**入口：** [D11](D08-D11-RenderPaths.md#dev-d11) 的阶段出口通过。
+**性质：** 基线。**入口：** [D11](D08-D11-RenderPaths.md#dev-d11) 的阶段出口已通过。 [入口证据](../../openspec/changes/archive/2026-11-27-establish-three-path-equivalence-and-previews/tasks.md#final-verification)
 
 **阶段目标：** 沿标准 glTF 扩展、共享物理库和 ForwardExtension 路由逐项闭环，控制组合与能量近似。
+
+**A 开发档位建议 M。** IOR 与 specular 建立共享材质 ABI 和能量分配基础。clearcoat、sheen、anisotropy 与 iridescence 需要配对直接光、IBL 和扩展表面路由。T06 汇合合法组合、三路径遮挡及 Shader 就绪后的能力发布。 [分级依据](AgentModels.md#development-tier) · [同输入比较基准](../Performance/ThreePathReference.md)
 
 <a id="d12-t01"></a>
 ### D12-T01 · 实现 IOR 与 specular profile

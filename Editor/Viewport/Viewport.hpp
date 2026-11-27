@@ -49,18 +49,23 @@ namespace Physara::Editor::Detail
             double x, double y) const noexcept;
     };
 
-    /// @brief 本轮视口图像的逻辑矩形及 token. 记录索引以便定位合并后的封存命令.
-    /// @note 列表和字体来自本轮 ImGui. 图像命令与 token 在准备期一起验证.
+    /// @brief 本轮图像画布及 token. 普通视口还记录封存索引, 诊断画布供准备阶段拟合.
+    /// @note 列表和字体来自本轮 ImGui, 不跨帧持有.
     struct ViewportImage
     {
         const ImDrawList *list = nullptr;
-        unsigned firstIndex = 0; ///< 图像写入的首个索引, 供封存后定位实际采样命令.
+        std::optional<unsigned> firstIndex; ///< 仅普通视口在布局时已有图像索引.
         ImTextureID token = ImTextureID_Invalid;
         ImVec2 origin;
         ImVec2 size;
+        ImVec4 clip; ///< 布局期裁剪, 供诊断图像拟合使用.
         ImFont *font = nullptr;
         float fontSize = 0;
 
+        /// @brief 在当前窗口封存带逻辑身份的 Image, 并预备后续状态合成需要的 ASCII 字形.
+        [[nodiscard]] static ViewportImage Draw(ImTextureID token, ImVec2 size);
+        /// @brief 封存诊断画布, 实际拟合图像及原因由同轮 UI 准备产生.
+        [[nodiscard]] static ViewportImage Reserve(ImTextureID token, ImVec2 size);
         /// @brief 在参与合成的列表中按索引定位图像命令. 无对应列表或索引范围时为空.
         [[nodiscard]] const ImDrawCmd *FindDraw(const ImDrawData &data) const noexcept;
         /// @brief 用封存字体绘制输出来源, 实际预览模式或失败原因, 裁剪在本图像命令内.
@@ -68,9 +73,14 @@ namespace Physara::Editor::Detail
         /// retained 表示本命令确实采样旧代, 可以与等待或拒绝的原因同时显示.
         void DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
                         const Renderer::ViewOutput *output, bool retained) const;
+        /// @brief 在同帧图像裁剪内合成有界状态文字. 调用方选择匹配当前采样的标签.
+        void DrawLabel(ImDrawList &status, ImVec4 clipRect, std::string_view label, bool wrap = true) const;
         /// @brief 从同轮实际图像命令取得非空逻辑画布与裁剪, 不依赖颜色资源是否已经发布.
         [[nodiscard]] std::optional<ViewportRegion> Region(const ImDrawData &data) const noexcept;
     };
+
+    /// @brief UTF-8 路径按可打印 ASCII 表示, 让封存后生成的标签只消费本轮已预备的字形.
+    [[nodiscard]] Core::BoundedText SurfacePreviewLabel(std::string_view text) noexcept;
 
     /// @brief 单次面板布局. 窗口身份用于界面归属, 有效图像命中还需匹配正常已接受输出.
     struct ViewportLayout

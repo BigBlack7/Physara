@@ -16,7 +16,7 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows
         DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
-        DeferredLightingPhysicalShadows DeferredLightingIblShadows)
+        DeferredLightingPhysicalShadows DeferredLightingIblShadows SurfaceDepthPreview SurfaceGBufferPreview)
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})

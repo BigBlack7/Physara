@@ -56,6 +56,8 @@ namespace Physara::Runtime
                                   (directory / DeferredLightingIblPackageRelative).lexically_normal(),
                                   (directory / DeferredLightingShadowsPackageRelative).lexically_normal(),
                                   (directory / DeferredLightingPhysicalShadowsPackageRelative).lexically_normal(),
-                                  (directory / DeferredLightingIblShadowsPackageRelative).lexically_normal()}}};
+                                  (directory / DeferredLightingIblShadowsPackageRelative).lexically_normal()},
+                                 {(directory / SurfaceDepthPreviewPackageRelative).lexically_normal(),
+                                  (directory / SurfaceGBufferPreviewPackageRelative).lexically_normal()}}};
     }
 }

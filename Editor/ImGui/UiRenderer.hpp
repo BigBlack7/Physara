@@ -37,11 +37,14 @@ namespace Physara::Editor::Detail
         [[nodiscard]] static CreateResult Create(Platform::DeviceHost &host, const UiRendererDesc &desc);
         ~UiRenderer();
 
-        /// @brief 从封存的普通 draw 判断本轮主 View token 是否有非空像素裁剪.
-        /// @pre drawData 来自本次 ImGui::Render, token 为当前会话注册的主视口纹理身份.
-        /// @note 决定是否开始 Forward 驻留准备. UI 后续用同一像素裁剪规则解析实际采样版本并校验索引.
+        /// @brief 检查封存列表中是否有指定 token 的普通绘制命令, 且命令的像素裁剪框非空.
+        /// @pre drawData 来自本次 ImGui::Render, token 为当前会话注册的颜色角色.
+        /// @note 普通显示色已在布局时生成 Image 命令. 仅预留画布的表面预览使用下面的拟合检查.
         [[nodiscard]] static bool HasViewSample(const ImDrawData &drawData,
                                                 Platform::WindowExtent extent, ImTextureID token) noexcept;
+        /// @brief 与实际绘制共用栅格拟合及像素裁剪, 供原生 Shader 需求登记前检查.
+        [[nodiscard]] static bool HasSurfacePreviewSample(const ImDrawData &drawData, Platform::WindowExtent extent,
+                                                          const ViewportImage &preview, Renderer::ViewExtent raster) noexcept;
 
         /// @brief 测量本轮字节后统一预留帧槽. 复制像素和几何, 并封存本轮 draw 的采样依赖.
         /// @note 构图后才按存活上传核算 GPU 容量, 本入口只校验 CPU/驻留预算及固定几何资源.
@@ -51,7 +54,8 @@ namespace Physara::Editor::Detail
         [[nodiscard]] PrepareUiResult Prepare(const ImDrawData &drawData,
                                               Platform::WindowExtent extent, Core::FrameArena &arena,
                                               const Renderer::PreparedViewOutput &outputs, const ViewportImage &viewport,
-                                              UiFrameMode mode);
+                                              UiFrameMode mode, const ViewportImage &surfaceImage,
+                                              SurfacePreviewInput surface);
 
         /// @brief 基础 atlas 曾由有效 UI 回执确认. 后续取消不撤销这一会话启动事实.
         [[nodiscard]] bool BaseFontReady() const noexcept { return m_BaseFontReady; }
@@ -62,8 +66,9 @@ namespace Physara::Editor::Detail
         /// @brief 驻留注册与注销沿用纹理表的会话身份, 图拥有当前导入, 已发绑定由 RHI 保活.
         [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture, UiTextureImport imported);
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
-        /// @brief 为主视口注册稳定的逻辑身份, 具体颜色只在每次准备时解析.
-        [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view);
+        /// @brief 为主 View 的一个颜色角色注册独立 token, 当前图构建时再解析对应的纹理版本.
+        [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view,
+            Renderer::ViewOutputRole role = Renderer::ViewOutputRole::DisplayColor);
 
     private:
         friend class Physara::Editor::PreparedUiFrame;
@@ -78,6 +83,7 @@ namespace Physara::Editor::Detail
         /// @pre batch 仍属于活动准备值, 图执行结束前不能 Complete.
         [[nodiscard]] Renderer::GraphResult<Renderer::TextureId> BuildGraph(UiBatch &batch,
             Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
+            Renderer::TextureId surfacePreview, SurfacePreviewIssue previewIssue,
             FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
             Renderer::GraphExecutionDiagnostics diagnostics);
         /// @brief 结束唯一活动批次的元数据借用. 空回执取消请求, 非空回执已核对整图成功.

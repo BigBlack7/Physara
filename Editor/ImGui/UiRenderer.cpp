@@ -50,6 +50,30 @@ namespace Physara::Editor::Detail
         std::size_t binding = 0;
     };
 
+    /// @brief 几何元素数或已打包区段的起止偏移.
+    struct GeometrySize
+    {
+        std::size_t vertices = 0;
+        std::size_t indices = 0;
+        std::size_t commands = 0;
+
+        [[nodiscard]] std::size_t Bytes() const noexcept
+        {
+            return vertices * sizeof(ImDrawVert) + indices * sizeof(ImDrawIdx);
+        }
+    };
+
+    static constexpr std::size_t PreviewChoices = std::size_t(SurfacePreviewIssue::Omitted);
+    using PreviewLists = std::array<std::optional<ImDrawList>, PreviewChoices>;
+
+    /// @brief 单个选择在 CPU 后缀内的范围. 区段共用普通几何的上传前缀.
+    struct PreviewGeometry
+    {
+        GeometrySize begin, end;
+        bool drawable = false;
+        bool budgetRejected = false; ///< 可见候选无法与普通几何一起满足预算.
+    };
+
     /// @brief 从封存帧提取的一次录制输入. 按 draw 顺序保存 scissor 和绑定.
     /// 顶点和索引借用帧槽区段, 投影字节由批次拥有. 三者在图执行结束前均须保持稳定.
     /// 驻留快照保留准备时的原纹理和导入事实, 注销 registry 不影响本批构图.
@@ -75,6 +99,27 @@ namespace Physara::Editor::Detail
         std::uint64_t graphGeneration = 0;
         bool hasDraws = false;
         bool usesDiagnosticOutput = false;
+        bool usesSurfacePreview = false;
+        GeometrySize ordinary;
+        std::size_t previewInsert = 0;
+        std::array<PreviewGeometry, PreviewChoices> previews;
+        std::optional<Core::BoundedText> unavailablePreviewReason; ///< 可见 Unavailable 标签的原始正文.
+
+        [[nodiscard]] PreviewGeometry Preview(SurfacePreviewIssue issue) const noexcept
+        {
+            return issue == SurfacePreviewIssue::Omitted ? PreviewGeometry{} : previews[std::size_t(issue)];
+        }
+
+        [[nodiscard]] std::array<std::size_t, 3> GeometryUploadBytes(SurfacePreviewIssue issue) const noexcept
+        {
+            const auto chosen = Preview(issue);
+            if (!hasDraws && !chosen.drawable)
+            {
+                return {};
+            }
+            return {projection.size(), (ordinary.vertices + chosen.end.vertices - chosen.begin.vertices) * sizeof(ImDrawVert),
+                    (ordinary.indices + chosen.end.indices - chosen.begin.indices) * sizeof(ImDrawIdx)};
+        }
     };
 
     /// @brief 准备值的控制对象. owner 与 batch 一起解除后, 外部句柄可以安全地过期.
@@ -193,19 +238,47 @@ namespace Physara::Editor::Detail
         return false;
     }
 
-    /// @brief 封存几何的元素计数, 供拥有型缓冲预留和字节预算检查.
-    struct GeometrySize
+    /// @brief 当前栅格拟合后的逻辑边界及可见裁剪, 两者共用同一次像素判断.
+    struct FittedSurfacePreview
     {
-        std::size_t vertices = 0;
-        std::size_t indices = 0;
-        std::size_t commands = 0;
-
-        /// @brief 当前元素计数对应的字节数, 供几何预算检查. arena 预留另计对齐填充.
-        [[nodiscard]] std::size_t Bytes() const noexcept
-        {
-            return vertices * sizeof(ImDrawVert) + indices * sizeof(ImDrawIdx);
-        }
+        ImVec2 end;
+        ImVec4 clip;
     };
+
+    // 同一封存画布供需求登记及实际生成. 像素裁剪为空时, 不登记冷态 Pipeline 或预览几何.
+    static std::optional<FittedSurfacePreview> FitSurfacePreview(const ViewportImage &layout, const ImDrawData &data,
+        Platform::WindowExtent extent, Renderer::ViewExtent raster) noexcept
+    {
+        if (!layout.list || std::ranges::find(data.CmdLists, layout.list) == data.CmdLists.end())
+        {
+            return {};
+        }
+        ImVec2 size = layout.size;
+        if (raster.width != 0 && raster.height != 0)
+        {
+            const auto scale = data.FramebufferScale;
+            const float aspect = float(raster.width) / float(raster.height) * scale.y / scale.x;
+            size.x = std::min(size.x, size.y * aspect);
+            size.y = size.x / aspect;
+        }
+        const auto &origin = layout.origin;
+        const ImVec2 end{origin.x + size.x, origin.y + size.y};
+        const ImVec4 clip{std::max(origin.x, layout.clip.x), std::max(origin.y, layout.clip.y),
+                          std::min(end.x, layout.clip.z), std::min(end.y, layout.clip.w)};
+        const auto pixels = ClipRect(clip, data, extent);
+        return pixels && pixels->Width() > 0 && pixels->Height() > 0 ?
+            std::optional(FittedSurfacePreview{end, clip}) : std::nullopt;
+    }
+
+    bool UiRenderer::HasSurfacePreviewSample(const ImDrawData &data, Platform::WindowExtent extent,
+                                              const ViewportImage &preview, Renderer::ViewExtent raster) noexcept
+    {
+        UiShader::UiProjection projection;
+        return raster.width && raster.height && data.Valid &&
+            extent.width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+            extent.height <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+            PrepareProjection(data, projection) && FitSurfacePreview(preview, data, extent, raster).has_value();
+    }
 
     // 合成器生成的原因列表和 ImGui 封存列表使用同一总几何预算.
     static bool AddGeometry(const ImDrawList &list, GeometrySize &size) noexcept
@@ -257,12 +330,69 @@ namespace Physara::Editor::Detail
         return std::ranges::all_of(indices, [&](ImDrawIdx index) { return index < vertexCount - draw.VtxOffset; });
     }
 
-    // 分流回调后才处理普通命令. 先裁剪和校验局部索引, 再解析绑定并换算到连续缓冲的元素基址.
-    static std::optional<Core::BoundedText> PrepareGeometry(const ImDrawData &data,
-                                                           std::span<ImDrawList *const> lists,
-                                                           const GeometrySize &size,
-                                                           UiTextures &textures, UiBatch &batch,
-                                                           Core::FrameArena &arena, UiFrameBindings &bindings)
+    // 先按原列表核对局部索引和裁剪, 再把这一段复制到已预留的 CPU 存储.
+    static std::optional<Core::BoundedText> AppendGeometry(const ImDrawData &data, const ImDrawList &list,
+        UiTextures &textures, UiBatch &batch, UiFrameBindings &bindings, GeometrySize &offset, bool &drawable)
+    {
+        for (const auto &draw : list.CmdBuffer)
+        {
+            if (draw.UserCallback != nullptr)
+            {
+                if (draw.UserCallback != ImGui::GetPlatformIO().DrawCallback_ResetRenderState)
+                {
+                    return Core::BoundedText("Editor UI prepare rejected an undeclared draw callback");
+                }
+                batch.draws.emplace_back();
+                continue;
+            }
+            const auto clip = ClipRect(draw.ClipRect, data, batch.extent);
+            if (!clip)
+            {
+                return Core::BoundedText("Editor UI prepare rejected a non-finite clip rectangle");
+            }
+            if (!HasVisibleIndices(draw, *clip))
+            {
+                continue;
+            }
+            if (!HasValidDrawRange(list, draw))
+            {
+                return Core::BoundedText("Editor UI prepare rejected an out-of-range indexed draw");
+            }
+            auto binding = textures.Resolve(draw, batch.uploads, bindings);
+            if (!binding)
+            {
+                return Core::BoundedText("Editor UI prepare could not resolve a font or viewport binding");
+            }
+            // 总几何字节预算保证两个元素基址均能表示为 RHI 的 32 位参数.
+            RHI::DrawArguments arguments;
+            arguments.SetVertexCount(draw.ElemCount)
+                .SetStartIndexLocation(static_cast<std::uint32_t>(offset.indices + draw.IdxOffset))
+                .SetStartVertexLocation(static_cast<std::uint32_t>(offset.vertices + draw.VtxOffset));
+            batch.draws.push_back({*clip, arguments, *binding, false, 0});
+            drawable = true;
+        }
+        if (!list.VtxBuffer.empty())
+        {
+            const auto count = static_cast<std::size_t>(list.VtxBuffer.Size);
+            std::memcpy(batch.vertices.data() + offset.vertices * sizeof(ImDrawVert), list.VtxBuffer.Data,
+                        count * sizeof(ImDrawVert));
+            offset.vertices += count;
+        }
+        if (!list.IdxBuffer.empty())
+        {
+            const auto count = static_cast<std::size_t>(list.IdxBuffer.Size);
+            std::memcpy(batch.indices.data() + offset.indices * sizeof(ImDrawIdx), list.IdxBuffer.Data,
+                        count * sizeof(ImDrawIdx));
+            offset.indices += count;
+        }
+        offset.commands = batch.draws.size();
+        return std::nullopt;
+    }
+
+    // 普通几何先占据连续前缀. 互斥预览保留在 CPU 后缀, 并记录它们在合成顺序中的插入点.
+    static std::optional<Core::BoundedText> PrepareGeometry(const ImDrawData &data, std::span<ImDrawList *const> lists,
+        const GeometrySize &size, UiTextures &textures, UiBatch &batch, Core::FrameArena &arena,
+        UiFrameBindings &bindings, const ImDrawList *previewOwner, const PreviewLists &previews)
     {
         batch.vertices = arena.Allocate(size.vertices, sizeof(ImDrawVert), alignof(ImDrawVert));
         batch.indices = arena.Allocate(size.indices, sizeof(ImDrawIdx), alignof(ImDrawIdx));
@@ -271,63 +401,71 @@ namespace Physara::Editor::Detail
             return Core::BoundedText("Editor UI geometry exceeds the reserved frame storage");
         }
         batch.draws.reserve(size.commands);
-        std::size_t vertexBase = 0;
-        std::size_t indexBase = 0;
+        GeometrySize offset;
         for (const auto *list : lists)
         {
-            for (const auto &draw : list->CmdBuffer)
+            if (auto error = AppendGeometry(data, *list, textures, batch, bindings, offset, batch.hasDraws))
             {
-                if (draw.UserCallback != nullptr)
-                {
-                    if (draw.UserCallback != ImGui::GetPlatformIO().DrawCallback_ResetRenderState)
-                    {
-                        return Core::BoundedText("Editor UI prepare rejected an undeclared draw callback");
-                    }
-                    batch.draws.emplace_back();
-                    continue;
-                }
-                const auto clip = ClipRect(draw.ClipRect, data, batch.extent);
-                if (!clip)
-                {
-                    return Core::BoundedText("Editor UI prepare rejected a non-finite clip rectangle");
-                }
-                if (!HasVisibleIndices(draw, *clip))
-                {
-                    continue;
-                }
-                if (!HasValidDrawRange(*list, draw))
-                {
-                    return Core::BoundedText("Editor UI prepare rejected an out-of-range indexed draw");
-                }
-                auto binding = textures.Resolve(draw, batch.uploads, bindings);
-                if (!binding)
-                {
-                    return Core::BoundedText("Editor UI prepare could not resolve a font or viewport binding");
-                }
-                // 总几何字节预算保证两个元素基址均能表示为 RHI 的 32 位参数.
-                RHI::DrawArguments arguments;
-                arguments.SetVertexCount(draw.ElemCount)
-                    .SetStartIndexLocation(static_cast<std::uint32_t>(indexBase + draw.IdxOffset))
-                    .SetStartVertexLocation(static_cast<std::uint32_t>(vertexBase + draw.VtxOffset));
-                batch.draws.push_back({*clip, arguments, *binding, false, 0});
-                batch.hasDraws = true;
+                return error;
             }
-            if (!list->VtxBuffer.empty())
+            if (list == previewOwner)
             {
-                const auto count = static_cast<std::size_t>(list->VtxBuffer.Size);
-                std::memcpy(batch.vertices.data() + vertexBase * sizeof(ImDrawVert), list->VtxBuffer.Data,
-                            count * sizeof(ImDrawVert));
-                vertexBase += count;
+                batch.previewInsert = offset.commands;
             }
-            if (!list->IdxBuffer.empty())
+        }
+        batch.ordinary = offset;
+        for (std::size_t i = 0; i < previews.size(); ++i)
+        {
+            if (!previews[i])
             {
-                const auto count = static_cast<std::size_t>(list->IdxBuffer.Size);
-                std::memcpy(batch.indices.data() + indexBase * sizeof(ImDrawIdx), list->IdxBuffer.Data,
-                            count * sizeof(ImDrawIdx));
-                indexBase += count;
+                continue;
+            }
+            auto &range = batch.previews[i];
+            range.begin = offset;
+            if (auto error = AppendGeometry(data, *previews[i], textures, batch, bindings, offset, range.drawable))
+            {
+                return error;
+            }
+            range.end = offset;
+            if (!range.drawable)
+            {
+                range = {};
             }
         }
         return std::nullopt;
+    }
+
+    // 仅把选中区段紧接普通字节, 同步重定位索引基址. 绘制插回父列表后以维持 ImGui 的覆盖顺序.
+    static void SelectGeometry(UiBatch &batch, SurfacePreviewIssue issue) noexcept
+    {
+        const auto bytes = batch.GeometryUploadBytes(issue);
+        const auto chosen = batch.Preview(issue);
+        auto commandEnd = batch.ordinary.commands;
+        if (chosen.drawable)
+        {
+            const auto &base = batch.ordinary;
+            const auto vertexShift = chosen.begin.vertices - base.vertices;
+            const auto indexShift = chosen.begin.indices - base.indices;
+            std::memmove(batch.vertices.data() + base.vertices * sizeof(ImDrawVert),
+                         batch.vertices.data() + chosen.begin.vertices * sizeof(ImDrawVert),
+                         (chosen.end.vertices - chosen.begin.vertices) * sizeof(ImDrawVert));
+            std::memmove(batch.indices.data() + base.indices * sizeof(ImDrawIdx),
+                         batch.indices.data() + chosen.begin.indices * sizeof(ImDrawIdx),
+                         (chosen.end.indices - chosen.begin.indices) * sizeof(ImDrawIdx));
+            for (auto i = chosen.begin.commands; i < chosen.end.commands; ++i, ++commandEnd)
+            {
+                auto draw = batch.draws[i];
+                draw.arguments.startVertexLocation -= static_cast<std::uint32_t>(vertexShift);
+                draw.arguments.startIndexLocation -= static_cast<std::uint32_t>(indexShift);
+                batch.draws[commandEnd] = draw;
+            }
+            auto first = batch.draws.begin();
+            std::rotate(first + batch.previewInsert, first + base.commands, first + commandEnd);
+        }
+        batch.draws.resize(commandEnd);
+        batch.hasDraws |= chosen.drawable;
+        batch.vertices = batch.vertices.first(bytes[1]);
+        batch.indices = batch.indices.first(bytes[2]);
     }
 
     UiRenderer::UiRenderer(Platform::DeviceHost &host, RHI::Device &device) noexcept
@@ -519,7 +657,7 @@ namespace Physara::Editor::Detail
     PrepareUiResult UiRenderer::Prepare(const ImDrawData &drawData,
                                         Platform::WindowExtent extent, Core::FrameArena &arena,
                                         const Renderer::PreparedViewOutput &outputs, const ViewportImage &viewport,
-                                        UiFrameMode mode)
+                                        UiFrameMode mode, const ViewportImage &surfaceImage, SurfacePreviewInput surface)
     {
         if (m_Host.HasFatalGraphicsError())
         {
@@ -553,11 +691,6 @@ namespace Physara::Editor::Detail
             auto &batch = *frame->batch;
             batch.extent = extent;
             batch.projection = std::bit_cast<ProjectionBytes>(projection);
-            if (auto error = m_Textures.PlanUploads(drawData, batch.uploads))
-            {
-                return TexturePreparationError(*error, m_BaseFontReady);
-            }
-
             const bool hasUnavailableReason = outputs.UnavailableReason() != Renderer::ViewSettingReason::None;
             UiFrameBindings bindings{.output = outputs.Color(),
                                      .missingView = mode == UiFrameMode::SafeUi && !hasUnavailableReason ?
@@ -586,6 +719,27 @@ namespace Physara::Editor::Detail
             // 字形已在布局时请求. 准备期把状态文字放入独立列表, 保持原布局命令的顺序.
             std::optional<ImDrawList> status;
             std::optional<std::vector<ImDrawList *>> composed;
+            PreviewLists previews;
+            const auto insertAfter = [&](const ImDrawList *owner, ImDrawList &overlay)
+            {
+                if (overlay.VtxBuffer.empty())
+                {
+                    return true;
+                }
+                if (!AddGeometry(overlay, *size))
+                {
+                    return false;
+                }
+                if (!composed)
+                {
+                    composed.emplace(lists.begin(), lists.end());
+                }
+                const auto where = std::ranges::find(*composed, owner);
+                assert(where != composed->end());
+                composed->insert(where + 1, &overlay);
+                lists = *composed;
+                return true;
+            };
             const auto addStatus = [&]
             {
                 if (!bindings.viewportDraw)
@@ -598,24 +752,62 @@ namespace Physara::Editor::Detail
                 const auto reason = retained && hasUnavailableReason ? MissingViewportOutput(outputs) :
                                                                        bindings.viewportFallback;
                 viewport.DrawStatus(*status, *bindings.viewportDraw, reason, bindings.output, retained);
-                if (status->VtxBuffer.empty())
-                {
-                    return true;
-                }
-                if (!AddGeometry(*status, *size))
-                {
-                    return false;
-                }
-                // 跟在视口自己的列表之后, 保留其它面板与弹出层的原有覆盖顺序.
-                composed.emplace(lists.begin(), lists.end());
-                const auto where = std::ranges::find(*composed, viewport.list);
-                composed->insert(where + 1, &*status);
-                lists = *composed;
-                return true;
+                return insertAfter(viewport.list, *status);
             };
             if (!addStatus())
             {
                 return Core::BoundedText("Editor UI geometry budget exceeded with the viewport status");
+            }
+            if (const auto fitted = FitSurfacePreview(surfaceImage, drawData, extent, surface.raster))
+            {
+                const auto label = [&](SurfacePreviewIssue issue, std::string_view text)
+                {
+                    auto &list = previews[std::size_t(issue)].emplace(ImGui::GetDrawListSharedData());
+                    surfaceImage.DrawLabel(list, fitted->clip, text);
+                };
+                if (surface.imageReady)
+                {
+                    auto &image = previews[std::size_t(SurfacePreviewIssue::None)].emplace(ImGui::GetDrawListSharedData());
+                    image._ResetForNewFrame();
+                    const auto clip = fitted->clip;
+                    image.PushClipRect({clip.x, clip.y}, {clip.z, clip.w});
+                    image.AddImage(ImTextureRef(surfaceImage.token), surfaceImage.origin, fitted->end);
+                    label(SurfacePreviewIssue::PoolCapacity, SurfacePreviewCapacityMessage(SurfacePreviewIssue::PoolCapacity));
+                    label(SurfacePreviewIssue::UploadCapacity, SurfacePreviewCapacityMessage(SurfacePreviewIssue::UploadCapacity));
+                }
+                else
+                {
+                    // 批次保留会话选定的原文, 即使下方因几何超额丢弃标签, 构图仍可取回同一原因.
+                    const auto &reason = batch.unavailablePreviewReason.emplace(surface.reason);
+                    const auto printable = SurfacePreviewLabel(reason.View());
+                    label(SurfacePreviewIssue::Unavailable, printable.View());
+                }
+            }
+            const auto ordinary = *size;
+            // 每个候选分别与普通几何共用 8 MiB 上限. 通过的候选暂存于 CPU, 构图时只打包所选区段.
+            for (std::size_t i = 0; i < previews.size(); ++i)
+            {
+                auto &list = previews[i];
+                if (!list)
+                {
+                    continue;
+                }
+                auto combined = ordinary;
+                if (!AddGeometry(*list, combined))
+                {
+                    // 释放候选顶点前留下拒绝原因, 使构图时仍能区分额度不足与画布已裁剪.
+                    batch.previews[i].budgetRejected = true;
+                    list.reset();
+                    continue;
+                }
+                size->vertices += combined.vertices - ordinary.vertices;
+                size->indices += combined.indices - ordinary.indices;
+                size->commands += combined.commands - ordinary.commands;
+            }
+            // 生成标签后才读取纹理请求. 路径转义只使用封存前已准备的 ASCII 字形, 不触发 atlas 换代.
+            if (auto error = m_Textures.PlanUploads(drawData, batch.uploads))
+            {
+                return TexturePreparationError(*error, m_BaseFontReady);
             }
 
             // 所有加数来自有界几何/纹理预算. 发布第一段借用前一次预留, 包含准入的诊断像素.
@@ -634,14 +826,17 @@ namespace Physara::Editor::Detail
             {
                 return Core::BoundedText("Editor base font initialization did not prepare a usable atlas");
             }
-            if (auto error = PrepareGeometry(drawData, lists, *size, m_Textures, batch, arena, bindings))
+            if (auto error = PrepareGeometry(drawData, lists, *size, m_Textures, batch, arena, bindings,
+                                             surfaceImage.list, previews))
             {
                 return *error;
             }
             // 所有 draw 校验后移交强引用. 后续缓冲准备失败仍由 frame 析构一并结束快照和 pending 关系.
             batch.residents = std::move(bindings.residents);
             batch.usesDiagnosticOutput = bindings.usesDiagnostic;
-            if (batch.hasDraws && !PrepareBuffers(batch))
+            batch.usesSurfacePreview = bindings.usesSurfacePreview;
+            // 普通帧沿用现有缓冲准备. 诊断帧等选定一个后缀后, 再按实际上传范围准备缓冲.
+            if (batch.hasDraws && std::ranges::none_of(batch.previews, &PreviewGeometry::drawable) && !PrepareBuffers(batch))
             {
                 return Core::BoundedText("Editor UI prepare failed to allocate geometry buffers");
             }
@@ -767,6 +962,7 @@ namespace Physara::Editor::Detail
     // 场景路径可提前声明 UI 纹理, 保证所有纹理写先于场景及 UI 缓冲写; 不取得瞬态物理纹理.
     Renderer::GraphResult<Renderer::TextureId> UiRenderer::BuildGraph(UiBatch &batch,
         Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
+        Renderer::TextureId surfacePreview, SurfacePreviewIssue previewIssue,
         FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
         Renderer::GraphExecutionDiagnostics diagnostics)
     {
@@ -785,13 +981,19 @@ namespace Physara::Editor::Detail
         }
         // 一旦开始声明便消费该准备值的构图机会. 后续失败由调用方丢弃整张候选图并取消准备值.
         batch.graphGeneration = color.Identity().generation;
+        const auto selected = surfacePreview.IsValid() ? SurfacePreviewIssue::None : previewIssue;
+        SelectGeometry(batch, selected);
+        if (batch.hasDraws && !batch.vertexBuffer && !PrepareBuffers(batch))
+        {
+            return GraphError{GraphErrorCode::OutOfStorage, Core::BoundedText("Editor UI failed to allocate geometry buffers")};
+        }
         for (auto &draw : batch.draws)
         {
             if (draw.reset)
             {
                 continue;
             }
-            auto resolved = m_Textures.ResolveGraph(graph, draw.token, diagnostic, bindings, batch.residents);
+            auto resolved = m_Textures.ResolveGraph(graph, draw.token, diagnostic, surfacePreview, bindings, batch.residents);
             if (const auto *error = std::get_if<GraphError>(&resolved))
             {
                 return *error;
@@ -916,9 +1118,9 @@ namespace Physara::Editor::Detail
         return m_Textures.UnregisterResident(id);
     }
 
-    UiTextureResult UiRenderer::RegisterView(Renderer::ViewId view)
+    UiTextureResult UiRenderer::RegisterView(Renderer::ViewId view, Renderer::ViewOutputRole role)
     {
-        return m_Textures.RegisterView(view);
+        return m_Textures.RegisterView(view, role);
     }
 }
 
@@ -935,6 +1137,31 @@ namespace Physara::Editor
     bool PreparedUiFrame::UsesViewOutput() const noexcept
     {
         return m_Data && m_Data->batch && m_Data->batch->usesDiagnosticOutput;
+    }
+
+    bool PreparedUiFrame::UsesSurfacePreview() const noexcept
+    {
+        return m_Data && m_Data->batch && m_Data->batch->usesSurfacePreview;
+    }
+
+    bool PreparedUiFrame::SurfacePreviewGeometryRejected(SurfacePreviewIssue issue) const noexcept
+    {
+        return m_Data && m_Data->batch && m_Data->batch->Preview(issue).budgetRejected;
+    }
+
+    std::string_view PreparedUiFrame::SurfacePreviewLabelReason(SurfacePreviewIssue issue) const noexcept
+    {
+        if (issue == SurfacePreviewIssue::Unavailable && m_Data && m_Data->batch &&
+            m_Data->batch->unavailablePreviewReason)
+        {
+            return m_Data->batch->unavailablePreviewReason->View();
+        }
+        return SurfacePreviewCapacityMessage(issue);
+    }
+
+    std::array<std::size_t, 3> PreparedUiFrame::GeometryUploadBytes(SurfacePreviewIssue issue) const noexcept
+    {
+        return m_Data && m_Data->batch ? m_Data->batch->GeometryUploadBytes(issue) : std::array<std::size_t, 3>{};
     }
 
     std::size_t PreparedUiFrame::GraphStorageBytes() const noexcept
@@ -967,7 +1194,7 @@ namespace Physara::Editor
     Renderer::GraphResult<Renderer::TextureId> PreparedUiFrame::BuildGraph(
         Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
         FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
-        Renderer::GraphExecutionDiagnostics diagnostics)
+        Renderer::GraphExecutionDiagnostics diagnostics, Renderer::TextureId surfacePreview, SurfacePreviewIssue previewIssue)
     {
         if (!m_Data || !m_Data->owner || m_Data->batch->graphGeneration != 0)
         {
@@ -989,7 +1216,8 @@ namespace Physara::Editor
         }
         try
         {
-            return m_Data->owner->BuildGraph(*m_Data->batch, graph, color, diagnostic, bindings, uploads, diagnostics);
+            return m_Data->owner->BuildGraph(*m_Data->batch, graph, color, diagnostic, surfacePreview, previewIssue,
+                                            bindings, uploads, diagnostics);
         }
         catch (const std::bad_alloc &)
         {

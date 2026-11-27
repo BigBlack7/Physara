@@ -31,6 +31,7 @@ namespace Physara::Editor
         std::optional<Platform::SetWindowVSync> vsyncRequest;
         /// @brief 无可测量布局时为空. 有布局但像素换算失败时, 零范围供 View 报告拒绝.
         std::optional<Renderer::ViewportRequest> viewport; ///< 本轮主 View 与可见布局匹配时发布, 单位为离屏像素.
+        std::optional<Renderer::SurfacePreviewMode> surfacePreview; ///< 只用于当前封存 UI 的会话选择.
     };
 
     /// @brief 拥有单窗口 UI context, 工作区, 文档与编辑历史, 输入适配和可选的 RHI renderer.
@@ -146,10 +147,16 @@ namespace Physara::Editor
         [[nodiscard]] PrepareUiResult PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                      Core::FrameArena &arena,
                                                      const Renderer::PreparedViewOutput &outputs = {},
-                                                     UiFrameMode mode = UiFrameMode::Normal);
+                                                     UiFrameMode mode = UiFrameMode::Normal,
+                                                     SurfacePreviewInput surface = {});
 
         /// @brief 只读检查本轮封存的 Viewport token 是否仍有实际像素消费者.
         [[nodiscard]] bool HasViewportSample(Platform::WindowExtent extentPixels) const noexcept;
+        /// @brief 检查按本轮栅格拟合后的预览图像是否仍覆盖实际像素.
+        [[nodiscard]] bool HasSurfacePreviewSample(Platform::WindowExtent extentPixels,
+                                                   Renderer::ViewExtent raster) const noexcept;
+        /// @brief 仅记录已接受的预览历史. 本轮占位原因随对应图内采样选择显示.
+        void ReportSurfacePreview(const SurfacePreviewStatus &status) noexcept;
         /// @brief 基础字体曾由完整有效 UI 提交接受, 用于区分启动必需项失败与普通帧取消.
         [[nodiscard]] bool BaseFontReady() const noexcept;
         /// @brief 保存本轮失败的拥有型快照. 无新失败时只更新已有记录的恢复状态.

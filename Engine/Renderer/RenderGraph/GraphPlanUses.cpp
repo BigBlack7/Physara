@@ -21,7 +21,7 @@ namespace Physara::Renderer::Detail
     using RHI::TextureDimension;
 
     // 声明阶段已核对正数, 维度枚举及基本范围. 此处核对 mip 与样本的关系, 以及空间尺寸和 cube 面数.
-    static bool ValidTextureShape(const RHI::TextureDesc &desc) noexcept
+    bool ValidTextureShape(const RHI::TextureDesc &desc) noexcept
     {
         const bool multisample = desc.dimension == TextureDimension::Texture2DMS ||
                                  desc.dimension == TextureDimension::Texture2DMSArray;

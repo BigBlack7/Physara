@@ -77,14 +77,20 @@ namespace Physara::Runtime
         return Platform::PresentationStatus::Retry;
     }
 
-    // 票据只关联已接受工作, 与后续交换及实际完成独立.
-    static void ReportTicket(Core::Diagnostics &diagnostics, std::string_view event, std::uint64_t ticket) noexcept
+    // 票据只关联已接受工作, 与后续交换及实际完成独立. 事件名称固定, 可截断的原因放在票据之后.
+    static void ReportTicket(Core::Diagnostics &diagnostics, std::string_view event, std::uint64_t ticket,
+                             std::string_view reason = {}) noexcept
     {
         std::array<char, 24> number{};
         const auto converted = std::to_chars(number.data(), number.data() + number.size(), ticket);
         Core::BoundedText message(event);
         message.Append(", ticket=");
         message.Append({number.data(), static_cast<std::size_t>(converted.ptr - number.data())});
+        if (!reason.empty())
+        {
+            message.Append(", reason=");
+            message.Append(reason);
+        }
         static_cast<void>(diagnostics.Write(Core::Severity::Info, message.View()));
     }
 
@@ -201,6 +207,7 @@ namespace Physara::Runtime
         ViewSettingReason viewportReason = ViewSettingReason::None; ///< 移除视口生产者时传给占位或旧图, 区分等待和硬拒绝.
         bool viewportPublished = false; ///< 仅完整正常图采样并实际发布时确认输入映射.
         ViewId rejectedView; ///< 图失败有可证实的私有 Pass 归属时才有效.
+        bool surfacePreviewPublished = false; ///< 仅在匹配普通主 View 的完整正常回执上成立.
     };
 
     // 在离开图/准备作用域前复制阶段和原始 RHI 首错, 不让诊断借用图字符串或 arena.
@@ -223,6 +230,9 @@ namespace Physara::Runtime
     {
         TextureId color;
         TextureId viewport;
+        TextureId surfacePreview;
+        Editor::SurfacePreviewIssue surfacePreviewIssue = Editor::SurfacePreviewIssue::Unavailable;
+        std::optional<Core::BoundedText> omittedSurfacePreviewReason; ///< 跨越 UI 回执消费的原因正文, 随成功票据记录.
         std::optional<ForwardGraph> scene;
         PassId diagnosticUpload;
         std::vector<GraphUpload> uploads = std::vector<GraphUpload>(0);
@@ -257,10 +267,32 @@ namespace Physara::Runtime
             ui && ui->UsesViewOutput();
     }
 
+    // 构图期间先计入已声明的写入, 再加当前选择的 UI 几何与预览参数. 图编译后按存活写入做最终准入.
+    // 单独检查图像和原因标签, 使诊断选择可让出额度给已经准备好的两路场景.
+    static bool FitsSurfacePreviewUpload(Platform::DeviceHost &host, std::size_t chunkSize,
+        std::span<const GraphUpload> declared, const Editor::PreparedUiFrame &ui,
+        Editor::SurfacePreviewIssue issue, std::size_t previewBytes = 0)
+    {
+        GraphUploadBudget budget;
+        for (const auto &write : declared)
+        {
+            (write.texture ? budget.textures : budget.buffers).push_back(write.bytes);
+        }
+        if (previewBytes != 0)
+        {
+            budget.buffers.push_back(previewBytes);
+        }
+        const auto geometry = ui.GeometryUploadBytes(issue);
+        budget.buffers.insert(budget.buffers.end(), geometry.begin(), geometry.end());
+        return host.CheckUploadCapacity(chunkSize, budget.textures, budget.buffers) == Platform::UploadAdmission::Ready;
+    }
+
     // 主视口按实际 UI 采样选择新生产者或导入旧颜色. 附加 View 通过独立的 ShaderRead 出口保持活性.
     static GraphResult<FrameDeclaration> DeclareFrame(RenderGraph &graph, const Platform::PresentTarget &target,
         PreparedViewOutput &outputs, Editor::PreparedUiFrame *prepared, Editor::UiFrameMode mode,
-        FrameSlot &slot, GraphExecutionDiagnostics diagnostics, bool offscreen)
+        FrameSlot &slot, GraphExecutionDiagnostics diagnostics, bool offscreen,
+        const PreparedSurfacePreview *preview, const GraphResourcePool &graphPool,
+        Platform::DeviceHost &host, std::size_t uploadChunkSize)
     {
         FrameDeclaration declared;
         auto imported = graph.ImportTexture(target.texture, {target.entryState, target.finalState, false});
@@ -317,7 +349,36 @@ namespace Physara::Runtime
             declared.scene = std::get<ForwardGraph>(std::move(forward));
             if (main)
             {
-                declared.viewport = declared.scene->views[MainViewIndex]->displayColor;
+                const auto &source = *declared.scene->views[MainViewIndex];
+                declared.viewport = source.displayColor;
+                // 普通视口已有实际绘制, 预览还须有自己的读者. 只把本图结果交给下方的 UI 绑定表.
+                if (preview && prepared->UsesSurfacePreview())
+                {
+                    if (!graphPool.CanFitExtra(graph, preview->StorageDemand(source.source.layout.outputExtent)))
+                    {
+                        declared.surfacePreviewIssue = Editor::SurfacePreviewIssue::PoolCapacity;
+                    }
+                    else if (!FitsSurfacePreviewUpload(host, uploadChunkSize, declared.uploads, *prepared,
+                                                       Editor::SurfacePreviewIssue::None, preview->UploadBytes()))
+                    {
+                        declared.surfacePreviewIssue = Editor::SurfacePreviewIssue::UploadCapacity;
+                    }
+                    else
+                    {
+                        const auto produced = preview->Declare(graph, source, declared.uploads);
+                        if (const auto *error = std::get_if<GraphError>(&produced))
+                        {
+                            return *error;
+                        }
+                        declared.surfacePreview = std::get<TextureId>(produced);
+                        declared.surfacePreviewIssue = Editor::SurfacePreviewIssue::None;
+                    }
+                }
+                else if (prepared->SurfacePreviewGeometryRejected(Editor::SurfacePreviewIssue::None))
+                {
+                    declared.omittedSurfacePreviewReason.emplace("Surface preview UI geometry capacity unavailable");
+                    declared.surfacePreviewIssue = Editor::SurfacePreviewIssue::Omitted;
+                }
             }
             if (offscreen)
             {
@@ -330,8 +391,20 @@ namespace Physara::Runtime
         }
         if (prepared)
         {
+            // 标签因几何或上传额度被省略时复制 UI 选定的原因. 提交后 Finish 会先消费 UI 准备值.
+            const auto issue = declared.surfacePreviewIssue;
+            const auto omitted = Editor::SurfacePreviewIssue::Omitted;
+            if (prepared->SurfacePreviewGeometryRejected(issue) ||
+                ((main || offscreen) && !declared.surfacePreview.IsValid() &&
+                 prepared->GeometryUploadBytes(issue) != prepared->GeometryUploadBytes(omitted) &&
+                 !FitsSurfacePreviewUpload(host, uploadChunkSize, declared.uploads, *prepared, issue)))
+            {
+                declared.omittedSurfacePreviewReason.emplace(prepared->SurfacePreviewLabelReason(issue));
+                declared.surfacePreviewIssue = omitted;
+            }
             auto composed = prepared->BuildGraph(graph, declared.color, declared.viewport,
-                                                 slot.bindings, declared.uploads, diagnostics);
+                                                 slot.bindings, declared.uploads, diagnostics, declared.surfacePreview,
+                                                 declared.surfacePreviewIssue);
             if (const auto *error = std::get_if<GraphError>(&composed))
             {
                 return *error;
@@ -673,7 +746,8 @@ namespace Physara::Runtime
                 slot.forward.ExecutedWorkCounts(index, *declared.scene->views[index], plan),
                 measurements.residency, plan.passes.size(), result.swapped,
                 result.attempted ? std::optional(result.presentWaitSeconds) : std::nullopt, timer.state,
-                measurements.preparation});
+                measurements.preparation, slot.forward.ExecutedOpaqueWork(index, *declared.scene->views[index],
+                    graph, plan, measuredMain ? declared.surfacePreview : TextureId{})});
         }
         if (timer.query)
         {
@@ -696,7 +770,12 @@ namespace Physara::Runtime
         {
             ReportTicket(diagnostics, "Editor window presented", result.ticket);
         }
-        return {.status = AttemptStatus::Succeeded, .viewportPublished = published};
+        if (declared.omittedSurfacePreviewReason)
+        {
+            ReportTicket(diagnostics, "Surface preview omitted", receipt.ticket, declared.omittedSurfacePreviewReason->View());
+        }
+        return {.status = AttemptStatus::Succeeded, .viewportPublished = published,
+                .surfacePreviewPublished = published && declared.surfacePreview.IsValid()};
     }
 
     // 先准备 UI 并编译图. 按存活上传账单检查设备容量, 再向会话图池预留本计划的物理槽, 两者就绪才 Open.
@@ -705,7 +784,8 @@ namespace Physara::Runtime
     static AttemptResult TryFrame(Platform::DeviceHost &host, Editor::EditorSession &editor, View &view,
         const Platform::PresentationFrame &presentation, FrameSlot &slot, RHI::CommandList &commands,
         Core::Diagnostics &diagnostics, PreparedViewOutput &outputs, Editor::UiFrameMode mode,
-        FrameMeasurements measurements, OffscreenCandidate *offscreen, GraphResourcePool &graphPool)
+        FrameMeasurements measurements, OffscreenCandidate *offscreen, GraphResourcePool &graphPool,
+        const PreparedSurfacePreview *preview, std::string_view previewReason)
     {
         bool opened = false;
         try
@@ -717,7 +797,11 @@ namespace Physara::Runtime
             }};
             const auto preparationFailure = editor.BaseFontReady() ? AttemptStatus::Cancelled : AttemptStatus::Stopped;
             const auto uiStart = CpuClock::now();
-            auto ui = editor.PrepareUiFrame(presentation.target.extentPixels, slot.arena, outputs, mode);
+            const auto *color = outputs.Color();
+            const auto raster = mode == Editor::UiFrameMode::Normal && color && color->scene ?
+                color->scene->renderLayout.outputExtent : ViewExtent{};
+            auto ui = editor.PrepareUiFrame(presentation.target.extentPixels, slot.arena, outputs, mode,
+                                            {raster, previewReason, preview != nullptr});
             measurements.cpu.ui += SecondsSince(uiStart);
             if (const auto *error = std::get_if<Core::BoundedText>(&ui))
             {
@@ -731,14 +815,16 @@ namespace Physara::Runtime
             const auto declareStart = CpuClock::now();
             const auto sceneBytes = UsesMainScene(outputs, prepared, mode) || offscreen ?
                 slot.forward.GraphStorageBytes() : 0;
-            if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024 + sceneBytes))
+            const auto previewBytes = preview && prepared && prepared->UsesSurfacePreview() ? 1024u : 0u;
+            if (!slot.graphArena.Reserve((prepared ? prepared->GraphStorageBytes() : 0) + 1024 + sceneBytes + previewBytes))
             {
                 return Failed(host, preparationFailure, "Frame.Prepare",
                               Core::BoundedText("Cannot reserve graph storage"));
             }
             RenderGraph graph(slot.graphArena, host.GetDevice());
             auto declaration = DeclareFrame(graph, presentation.target, outputs, prepared, mode, slot, graphErrors,
-                                            offscreen != nullptr);
+                                            offscreen != nullptr, preview, graphPool, host,
+                                            commands.GetDesc().uploadChunkSize);
             // 其它图消费者的准备也属于此边界, Fatal 不能被编译或安全图覆盖.
             if (const auto *error = std::get_if<GraphError>(&declaration))
             {
@@ -1228,10 +1314,19 @@ namespace Physara::Runtime
         };
         // 先封存两路的实际计划. 能消费场景的主路才登记驻留和上传, 离屏继续独立声明自己的需求.
         const bool mainRequested = hasScene && editor.HasViewportSample(presentation.target.extentPixels);
+        const auto previewMode = editorFrame.surfacePreview;
+        const bool previewRequested = mainRequested && previewMode && editor.HasSurfacePreviewSample(
+            presentation.target.extentPixels, prepared.layouts.render.outputExtent);
         std::optional<ForwardFailure> mainFailure;
         if (mainRequested)
         {
             mainFailure = PlanOpaqueView(host, forward, slot.forward, view, prepared, MainViewIndex);
+            if (!mainFailure && previewRequested && IsLitPreview(prepared.preview) && !prepared.previewShadow &&
+                (*previewMode == SurfacePreviewMode::Depth || prepared.opaquePath == OpaquePath::Deferred ||
+                 view.RequestedOpaquePath() == OpaquePath::Deferred))
+            {
+                forward.RequestSurfacePreview(*previewMode);
+            }
         }
         if (host.HasFatalGraphicsError())
         {
@@ -1341,6 +1436,20 @@ namespace Physara::Runtime
             return stop();
         }
         auto outputs = std::move(std::get<PreparedViewOutput>(candidate));
+        std::optional<PreparedSurfacePreview> surfacePreview;
+        Core::BoundedText previewUnavailable("Surface preview requires a matching visible scene viewport");
+        if (previewRequested && mainRequested && !mainFailure && mode == Editor::UiFrameMode::Normal && outputs.Color())
+        {
+            auto preview = forward.PrepareSurfacePreview(slot.forward, prepared, *previewMode);
+            if (auto *ready = std::get_if<PreparedSurfacePreview>(&preview))
+            {
+                surfacePreview = std::move(*ready);
+            }
+            else
+            {
+                previewUnavailable = std::get<ForwardFailure>(preview).description;
+            }
+        }
         if (mainRequested && offscreen.request && !offscreen.planned &&
             offscreen.request->reason == ViewSettingReason::SceneUploadLimit)
         {
@@ -1417,7 +1526,13 @@ namespace Physara::Runtime
             slot.arena.Reset();
             slot.bindings.Reset();
             const auto attempt = TryFrame(host, editor, view, presentation, slot, commands, diagnostics, outputs, mode,
-                                          measurements, selectedOffscreen, graphPool);
+                                          measurements, selectedOffscreen, graphPool,
+                                          surfacePreview ? &*surfacePreview : nullptr, previewUnavailable.View());
+            if (attempt.surfacePreviewPublished)
+            {
+                const auto &sceneOutput = *view.LastRenderedScene();
+                editor.ReportSurfacePreview({*previewMode, sceneOutput.opaquePath, sceneOutput.submission});
+            }
             statistics.PublishPool(graphPool.Statistics());
             const bool attemptedOffscreen = selectedOffscreen != nullptr;
             selectedOffscreen = nullptr;

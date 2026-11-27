@@ -1,6 +1,7 @@
 #include "Viewport.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 
@@ -50,15 +51,15 @@ namespace Physara::Editor::Detail
 
     const ImDrawCmd *ViewportImage::FindDraw(const ImDrawData &data) const noexcept
     {
-        if (list == nullptr || std::ranges::find(data.CmdLists, list) == data.CmdLists.end())
+        if (!firstIndex || list == nullptr || std::ranges::find(data.CmdLists, list) == data.CmdLists.end())
         {
             return nullptr;
         }
         // ImGui 可合并相邻命令. 用图像首个索引在封存的绘制区间内定位.
         for (const auto &draw : list->CmdBuffer)
         {
-            if (draw.UserCallback == nullptr && draw.IdxOffset <= firstIndex &&
-                firstIndex - draw.IdxOffset < draw.ElemCount)
+            if (draw.UserCallback == nullptr && draw.IdxOffset <= *firstIndex &&
+                *firstIndex - draw.IdxOffset < draw.ElemCount)
             {
                 return &draw;
             }
@@ -107,14 +108,6 @@ namespace Physara::Editor::Detail
     void ViewportImage::DrawStatus(ImDrawList &status, const ImDrawCmd &draw, UiFallback reason,
                                    const Renderer::ViewOutput *output, bool retained) const
     {
-        const auto clip = draw.ClipRect;
-        const ImVec2 min(std::max(origin.x, clip.x), std::max(origin.y, clip.y));
-        const ImVec2 max(std::min(origin.x + size.x, clip.z), std::min(origin.y + size.y, clip.w));
-        if (min.x >= max.x || min.y >= max.y)
-        {
-            return;
-        }
-        constexpr float Inset = 4.0f;
         Core::BoundedText label(StatusText(reason));
         if (retained)
         {
@@ -139,14 +132,54 @@ namespace Physara::Editor::Detail
                 label = Core::BoundedText("Test viewport - no scene output");
             }
         }
-        // 独立列表沿用视口图像的裁剪. 字形已在布局期进入本帧 atlas, 此处只生成顶点.
+        DrawLabel(status, draw.ClipRect, label.View(), false);
+    }
+
+    void ViewportImage::DrawLabel(ImDrawList &status, ImVec4 clipRect, std::string_view label, bool wrap) const
+    {
+        const ImVec2 min(std::max(origin.x, clipRect.x), std::max(origin.y, clipRect.y));
+        const ImVec2 max(std::min(origin.x + size.x, clipRect.z), std::min(origin.y + size.y, clipRect.w));
+        if (min.x >= max.x || min.y >= max.y || label.empty())
+        {
+            return;
+        }
+        constexpr float Inset = 4.0f;
+        // 标签沿用封存图像的裁剪、字号与 atlas. 布局阶段已为固定的 ASCII 状态文字预备字形.
         status._ResetForNewFrame();
         status.PushClipRect(min, max);
         status.PushTexture(font->OwnerAtlas->TexRef);
-        const auto height = fontSize + 2 * Inset;
+        const auto wrapWidth = wrap ? std::max(fontSize, max.x - min.x - 2 * Inset) : 0.f;
+        const auto height = 2 * Inset + (wrap ? font->CalcTextSizeA(fontSize, (std::numeric_limits<float>::max)(),
+            wrapWidth, label.data(), label.data() + label.size()).y : fontSize);
         status.AddRectFilled(min, ImVec2(max.x, std::min(max.y, min.y + height)),
                              IM_COL32(30, 24, 32, 255));
-        status.AddText(font, fontSize, ImVec2(min.x + Inset, min.y + Inset), IM_COL32_WHITE, label.View().data());
+        status.AddText(font, fontSize, ImVec2(min.x + Inset, min.y + Inset), IM_COL32_WHITE,
+                       label.data(), label.data() + label.size(), wrapWidth);
+    }
+
+    Core::BoundedText SurfacePreviewLabel(std::string_view text) noexcept
+    {
+        Core::BoundedText label;
+        while (!text.empty() && !label.WasTruncated())
+        {
+            unsigned codepoint = static_cast<unsigned char>(text.front());
+            const auto bytes = codepoint < 128 ? 1 :
+                ImTextCharFromUtf8(&codepoint, text.data(), text.data() + text.size());
+            if (codepoint >= 32 && codepoint <= 126)
+            {
+                label.Append(text.substr(0, 1));
+            }
+            else
+            {
+                char digits[8];
+                const auto written = std::to_chars(digits, digits + sizeof(digits), codepoint, 16);
+                label.Append("\\u{");
+                label.Append({digits, static_cast<std::size_t>(written.ptr - digits)});
+                label.Append("}");
+            }
+            text.remove_prefix(static_cast<std::size_t>(bytes));
+        }
+        return label;
     }
 
     std::optional<Renderer::ViewExtent> MeasureViewport(double width, double height,
@@ -189,7 +222,6 @@ namespace Physara::Editor::Detail
     // 只封存逻辑图像和状态文字需要的字形. 正常候选与安全 UI 随后可在同一布局上分别解析.
     ViewportLayout Viewport::Draw() const
     {
-        const auto min = ImGui::GetCursorScreenPos();
         const auto size = ImGui::GetContentRegionAvail();
         ViewportLayout result;
         if (!m_View.IsValid() || size.x <= 0 || size.y <= 0)
@@ -197,22 +229,48 @@ namespace Physara::Editor::Detail
             return result;
         }
         // 先封存逻辑图像. 比例应用后, 本轮准备会解析实际颜色或在同一位置合成原因.
-        auto *list = ImGui::GetWindowDrawList();
-        const auto firstIndex = list->IdxBuffer.Size;
-        const auto token = EncodeUiTexture(m_Texture);
-        ImGui::Image(ImTextureRef(token), size);
-        if (list->IdxBuffer.Size != firstIndex)
+        result.image = ViewportImage::Draw(EncodeUiTexture(m_Texture), size);
+        if (result.image.list)
         {
-            result.image = {list, static_cast<unsigned>(firstIndex), token, min, size,
-                            ImGui::GetFont(), ImGui::GetFontSize()};
             result.window = ImGui::GetCurrentWindowRead()->ID;
-            // 封存前准备状态文字及源槽数字需要的 ASCII 字形, 避免 GPU 准备时修改 atlas 请求.
-            auto *baked = ImGui::GetFontBaked();
-            for (ImWchar character = 32; character <= 126; ++character)
-            {
-                static_cast<void>(baked->FindGlyph(character));
-            }
         }
         return result;
+    }
+
+    // 两种画布均在封存前取得本轮裁剪与字体, 诊断纹理的顶点由合成器随后选择.
+    static ViewportImage CaptureCanvas(ImTextureID token, ImVec2 size)
+    {
+        const auto min = ImGui::GetCursorScreenPos();
+        const auto *list = ImGui::GetWindowDrawList();
+        const auto clipMin = list->GetClipRectMin();
+        const auto clipMax = list->GetClipRectMax();
+        // 预备状态正文和路径转义需要的 ASCII 字形, 保持封存后的 atlas 集合稳定.
+        auto *baked = ImGui::GetFontBaked();
+        for (ImWchar character = 32; character <= 126; ++character)
+        {
+            static_cast<void>(baked->FindGlyph(character));
+        }
+        return {list, {}, token, min, size, {clipMin.x, clipMin.y, clipMax.x, clipMax.y},
+                ImGui::GetFont(), ImGui::GetFontSize()};
+    }
+
+    ViewportImage ViewportImage::Draw(ImTextureID token, ImVec2 size)
+    {
+        auto image = CaptureCanvas(token, size);
+        const auto first = image.list->IdxBuffer.Size;
+        ImGui::Image(ImTextureRef(token), size);
+        if (image.list->IdxBuffer.Size == first)
+        {
+            return {};
+        }
+        image.firstIndex = static_cast<unsigned>(first);
+        return image;
+    }
+
+    ViewportImage ViewportImage::Reserve(ImTextureID token, ImVec2 size)
+    {
+        auto image = CaptureCanvas(token, size);
+        ImGui::Dummy(size);
+        return image;
     }
 }

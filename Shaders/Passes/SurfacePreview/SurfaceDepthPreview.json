@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "SurfaceDepthPreview",
+  "interface": "SurfacePreview",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "Passes/Forward/Display.vert", "entry": "main" },
+    { "stage": "fragment", "source": "Passes/SurfacePreview/Depth.frag", "entry": "main" }
+  ],
+  "defines": []
+}

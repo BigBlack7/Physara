@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "SurfacePreview",
+  "uintConstants": {
+    "PreviewBaseColor": 1,
+    "PreviewOcclusion": 2,
+    "PreviewNormal": 3,
+    "PreviewRoughness": 4,
+    "PreviewMetallic": 5,
+    "PreviewEmission": 6,
+    "PreviewRoute": 7
+  },
+  "blocks": [
+    {
+      "name": "PreviewControls",
+      "layout": "std140",
+      "fields": [
+        { "name": "channelAndRoutes", "type": "uint4" }
+      ]
+    }
+  ],
+  "resources": [
+    { "name": "previewControls", "kind": "constant-buffer", "set": 0, "slot": 0, "stages": ["fragment"], "block": "PreviewControls" },
+    { "name": "previewDepth", "kind": "texture2d", "set": 0, "slot": 0, "stages": ["fragment"] },
+    { "name": "previewG0", "kind": "texture2d", "set": 0, "slot": 1, "stages": ["fragment"] },
+    { "name": "previewG1", "kind": "texture2d", "set": 0, "slot": 2, "stages": ["fragment"] },
+    { "name": "previewG2", "kind": "texture2d", "set": 0, "slot": 3, "stages": ["fragment"] },
+    { "name": "previewG3", "kind": "texture2d-uint", "set": 0, "slot": 4, "stages": ["fragment"] }
+  ],
+  "io": [
+    { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" }
+  ]
+}

@@ -86,6 +86,8 @@ namespace Physara::Editor::Detail
     struct WorkspaceFrame
     {
         ViewportLayout viewport;
+        std::optional<Renderer::SurfacePreviewMode> surfacePreview;
+        ViewportImage surfacePreviewImage; ///< 封存诊断画布, 当前颜色和状态由 UI 准备解析.
         FieldGestures gestures;
         std::optional<Scene::EntityHandle> selection;
         std::optional<CameraSource> camera;
@@ -126,6 +128,7 @@ namespace Physara::Editor::Detail
         bool allowActions;
         bool frozen;
         bool navigating;
+        UiTextureId surfacePreviewToken;
     };
 
     /// @brief 管理主窗口停靠和展示状态. 主视口显隐及比例由领域快照提供.
@@ -141,6 +144,7 @@ namespace Physara::Editor::Detail
                            WorkspaceFrame &frame);
         void EndRotationInput() noexcept { m_ScenePanels.EndRotationInput(); }
         [[nodiscard]] bool HasFileDialog() const noexcept { return m_Documents.HasDialog(); }
+        void ConfirmSurfacePreview(const SurfacePreviewStatus &status) noexcept { m_SurfaceStatus = status; }
 
     private:
         [[nodiscard]] bool Visible(ActionId action, EditState edits) const noexcept;
@@ -149,6 +153,7 @@ namespace Physara::Editor::Detail
         void Activate(ActionId action, const WorkspaceState &state, WorkspaceFrame &frame);
         void DrawActions(const WorkspaceState &state, WorkspaceFrame &frame);
         void DrawWindowMenu(const Platform::WindowSettings *window, WorkspaceFrame &frame, bool allowActions);
+        void DrawSurfacePreview(const WorkspaceState &state, WorkspaceFrame &frame);
 
         std::array<bool, 4> m_Visible{true, true, true, false}; ///< 层级, Inspector, View 和统计面板的展示状态.
         ScenePanels m_ScenePanels;
@@ -156,5 +161,8 @@ namespace Physara::Editor::Detail
         /// @brief 控件激活期间保留 UTF-8 草稿. 退出编辑后重新从宿主快照取值.
         std::array<char, Platform::MaxWindowTitleBytes + 1> m_TitleDraft{};
         bool m_TitleEditing = false;
+        bool m_SurfaceVisible = false;
+        int m_SurfaceChannel = 0; ///< ImGui combo 的序号与固定预览通道顺序一致.
+        std::optional<SurfacePreviewStatus> m_SurfaceStatus;
     };
 }

@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include "ImGui/UiTextures.hpp"
 #include "PhysicalInspector.hpp"
 #include "Session/ActionRouter.hpp"
 
@@ -49,6 +50,9 @@ namespace Physara::Editor::Detail
         Platform::Key key;
         unsigned modifiers;
     };
+
+    static constexpr std::array OpaquePathNames{"Forward", "Forward+", "Deferred"};
+    static_assert(OpaquePathNames.size() == std::size_t(Renderer::OpaquePath::Deferred) + 1);
 
     static constexpr std::array FileItems{
         CommandItem{ActionId::NewScene, "New Scene", "Ctrl+N", Platform::Key::N, Control},
@@ -564,6 +568,27 @@ namespace Physara::Editor::Detail
             ImGui::TextUnformatted("Window exchange skipped");
         }
         ImGui::Text("View surfaces %zu / lights %zu", frame.forward.draws, frame.forward.lights);
+        const auto &opaque = frame.opaque;
+        ImGui::Text("%s logical attachment bytes / depth %llu / working color %llu",
+            OpaquePathNames[std::size_t(source.opaquePath)], static_cast<unsigned long long>(opaque.depthBytes),
+            static_cast<unsigned long long>(opaque.workingColorBytes));
+        ImGui::Text("G0 %llu / G1 %llu / G2 %llu / G3 %llu / preview %llu B",
+            static_cast<unsigned long long>(opaque.gbufferBytes[0]), static_cast<unsigned long long>(opaque.gbufferBytes[1]),
+            static_cast<unsigned long long>(opaque.gbufferBytes[2]), static_cast<unsigned long long>(opaque.gbufferBytes[3]),
+            static_cast<unsigned long long>(opaque.previewBytes));
+        ImGui::Text("Opaque + sky logical accesses / read %llu / write %llu B",
+            static_cast<unsigned long long>(opaque.readBytes), static_cast<unsigned long long>(opaque.writeBytes));
+        if (opaque.surfaceCount)
+        {
+            const double scale = 100.0 / double(opaque.surfaceCount);
+            ImGui::Text("ForwardExtension %zu / %.2f%%, Unlit %zu / %.2f%% of %zu surfaces",
+                opaque.extensionCount, double(opaque.extensionCount) * scale,
+                opaque.unlitCount, double(opaque.unlitCount) * scale, opaque.surfaceCount);
+        }
+        else
+        {
+            ImGui::TextUnformatted("Route proportions unavailable for an empty opaque work set");
+        }
         ImGui::Text("Depth: %zu batches / %zu records. Color: %zu batches / %zu records",
                     frame.forward.depth.batches, frame.forward.depth.records,
                     frame.forward.color.batches, frame.forward.color.records);
@@ -918,8 +943,56 @@ namespace Physara::Editor::Detail
                     Activate(panel.action, state, frame);
                 }
             }
+            ImGui::MenuItem("Surface Preview", nullptr, &m_SurfaceVisible,
+                            state.allowActions && state.surfacePreviewToken.IsValid());
             ImGui::EndMenu();
         }
+    }
+
+    /// @brief 封存诊断画布和已接受的历史回执. 当帧图像的比例及占位由 UI 准备决定.
+    void Workspace::DrawSurfacePreview(const WorkspaceState &state, WorkspaceFrame &frame)
+    {
+        if (!m_SurfaceVisible || !state.surfacePreviewToken.IsValid())
+        {
+            return;
+        }
+        ImGui::SetNextWindowSize({360.f, 320.f}, ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Surface Preview###Physara.SurfacePreview", &m_SurfaceVisible,
+                         ImGuiWindowFlags_NoFocusOnAppearing) && m_SurfaceVisible)
+        {
+            using enum Renderer::SurfacePreviewMode;
+            static constexpr const char *Channels[]{"Reverse-Z depth", "Base color", "Ambient occlusion",
+                "World normal", "Perceptual roughness", "Metallic", "Pre-exposed emission", "Surface route"};
+            ImGui::BeginDisabled(!state.allowActions);
+            ImGui::Combo("Channel", &m_SurfaceChannel, Channels, IM_ARRAYSIZE(Channels));
+            ImGui::EndDisabled();
+            const auto mode = static_cast<Renderer::SurfacePreviewMode>(m_SurfaceChannel);
+            if (mode == Depth)
+            {
+                ImGui::TextUnformatted("Device depth, near = 1");
+            }
+            else if (mode == Route)
+            {
+                ImGui::TextWrapped("Core (cyan)  Unlit (orange)  ForwardExtension (violet)  Background (dark)");
+            }
+            else if (mode == Emission)
+            {
+                ImGui::TextUnformatted("Each channel uses x / (1 + x)");
+            }
+            if (m_SurfaceStatus && m_SurfaceStatus->mode == mode)
+            {
+                ImGui::Text("Last accepted preview: %s / ticket %llu", OpaquePathNames[std::size_t(m_SurfaceStatus->path)],
+                            static_cast<unsigned long long>(m_SurfaceStatus->submission));
+            }
+
+            const auto size = ImGui::GetContentRegionAvail();
+            if (size.x > 0.f && size.y > 0.f)
+            {
+                frame.surfacePreviewImage = ViewportImage::Reserve(EncodeUiTexture(state.surfacePreviewToken), size);
+                frame.surfacePreview = mode;
+            }
+        }
+        ImGui::End();
     }
 
     // 布局和诊断只读. 封存后由会话应用字段、文件和视口意图.
@@ -1143,6 +1216,7 @@ namespace Physara::Editor::Detail
         {
             EndRotationInput();
         }
+        DrawSurfacePreview(state, frame);
         return frame;
     }
 

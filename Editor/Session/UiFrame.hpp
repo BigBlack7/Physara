@@ -4,9 +4,11 @@
 /// @brief 编辑器封存帧的拥有型准备值, 当前槽的图绑定及同次执行的接受回执.
 /// Runtime 负责目标初始化, 图编译执行和宿主交接, UI 只声明依赖并确认自己的请求.
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -74,6 +76,35 @@ namespace Physara::Editor
         Renderer::TextureRange range;
     };
 
+    /// @brief 预览候选的栅格及早期占位原因. reason 只借用到本次 Prepare 返回.
+    struct SurfacePreviewInput
+    {
+        Renderer::ViewExtent raster;
+        std::string_view reason = "Waiting for the matching surface";
+        bool imageReady = false;
+    };
+
+    /// @brief 准备时可预生成标签, 由当前图选择与实际绑定相符的一种.
+    enum class SurfacePreviewIssue : std::uint8_t { None, Unavailable, PoolCapacity, UploadCapacity, Omitted };
+
+    [[nodiscard]] constexpr std::string_view SurfacePreviewCapacityMessage(SurfacePreviewIssue issue) noexcept
+    {
+        switch (issue)
+        {
+        case SurfacePreviewIssue::PoolCapacity: return "Surface preview exceeds the available graph pool capacity";
+        case SurfacePreviewIssue::UploadCapacity: return "Surface preview upload capacity unavailable";
+        default: return {};
+        }
+    }
+
+    /// @brief 最近一次已接受的表面预览身份. 只用于历史标记, 不保存图资源或当前失败原因.
+    struct SurfacePreviewStatus
+    {
+        Renderer::SurfacePreviewMode mode;
+        Renderer::OpaquePath path = Renderer::OpaquePath::Forward;
+        std::uint64_t submission{};
+    };
+
     /// @brief 当前槽使用期的解析表. Reset 只可在结束候选图或同槽真实完成后调用.
     /// @note 表项不进入跨帧 registry. 旧图的索引即使相同, 也不能用于新图代.
     struct FrameSlotUiFrameBindings
@@ -123,6 +154,18 @@ namespace Physara::Editor
 
         /// @brief 至少一条普通可见 draw 引用本轮 View 候选, 用于接受提交后的 View 发布判断.
         [[nodiscard]] bool UsesViewOutput() const noexcept;
+        /// @brief 封存帧内至少一条有效普通 draw 采样同 View 的表面预览角色.
+        [[nodiscard]] bool UsesSurfacePreview() const noexcept;
+        /// @brief 指定预览选项因 UI 几何预算被排除. 仅通过像素裁剪并生成的候选参与此准入.
+        /// @note 构图时按实际选项查询. 同帧的备用标签可以有不同的准入结果.
+        [[nodiscard]] bool SurfacePreviewGeometryRejected(SurfacePreviewIssue issue) const noexcept;
+        /// @brief 返回本次 UI 为指定标签使用的原始原因, 供省略诊断使用.
+        /// @return Unavailable 返回本次准备保存的原因, 容量标签返回对应的固定正文, 没有对应标签时返回空串.
+        /// @note 借用到准备值被消费或取消. 如需随提交票据记录, 在构图时复制正文.
+        [[nodiscard]] std::string_view SurfacePreviewLabelReason(SurfacePreviewIssue issue) const noexcept;
+        /// @brief 返回普通 UI 和指定预览选项的投影、顶点及索引字节. None 对应实际图像, Omitted 只含普通 UI.
+        /// @note 指定选项没有可绘区段时, 结果与 Omitted 相同.
+        [[nodiscard]] std::array<std::size_t, 3> GeometryUploadBytes(SurfacePreviewIssue issue) const noexcept;
         /// @brief 按本轮请求数预留图对象上界, 载荷 arena 由 Prepare 单独预留.
         [[nodiscard]] std::size_t GraphStorageBytes() const noexcept;
         /// @brief 在场景缓冲上传前提交 UI 的纹理生产者. 如需声明后续 UI, 使用同图及相同绑定表.
@@ -132,13 +175,16 @@ namespace Physara::Editor
             Renderer::TextureId target, FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads);
         /// @brief 追加纹理/几何上传和 Raster, 返回原窗口对象的合成版本.
         /// @pre bindings 为本次图的空表或已通过 DeclareTextureUploads 追加的表, diagnostics 借用至执行结束.
-        /// color 是本图已初始化的目标版本; 若 UsesViewOutput 为 true, diagnostic 须提供同图颜色版本.
+        /// color 是本图已初始化的目标版本. 若 UsesViewOutput 为 true, diagnostic 须提供同图普通显示色.
+        /// @param surfacePreview 同一普通主 View 的诊断颜色版本. 有效时保留预览图像的绘制命令.
+        /// @param previewIssue 缺少诊断颜色时选择本图的原因标签, 用已有字体绘制到预览画布.
         /// @note 只形成 CPU 声明. 回调仍借用本准备值的投影和回执地址, Finish/Cancel 前须结束图执行.
         /// 失败不回滚已追加的声明, 调用方须放弃候选图并取消准备值, 重试使用新准备值.
         [[nodiscard]] Renderer::GraphResult<Renderer::TextureId> BuildGraph(
             Renderer::RenderGraph &graph, Renderer::TextureId color, Renderer::TextureId diagnostic,
             FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &uploads,
-            Renderer::GraphExecutionDiagnostics diagnostics);
+            Renderer::GraphExecutionDiagnostics diagnostics, Renderer::TextureId surfacePreview = {},
+            SurfacePreviewIssue previewIssue = SurfacePreviewIssue::Unavailable);
         /// @brief 按存活终结 Pass 和成功导出逐项确认请求, 同时消费准备值.
         /// @return 回执匹配且完整颜色被接受时为 true, 不表示 GPU 已完成.
         /// @note 不匹配回执也会取消并消费活动准备值. 已被 Advance 取消的值直接返回 false.

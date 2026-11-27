@@ -45,6 +45,7 @@ namespace Physara::Renderer
         std::filesystem::path coreGBuffer;
         std::filesystem::path surfaceAux;
         std::array<std::filesystem::path, 6> deferredColors; ///< 与前向 Froxel 受光角色的次序一致.
+        std::array<std::filesystem::path, 2> surfacePreviews; ///< 主 D32 与最终 GBuffer 的预览配方.
     };
 
     /// @brief 按实际消费者准备表面. 普通主视口由 ShadeOpaque 同时写颜色和深度.
@@ -132,6 +133,7 @@ namespace Physara::Renderer
         ForwardWorkingSource source;
         PassId depthPass; ///< 普通 Forward 的独立深度预通道. 使用最终表面 D32 时此 ID 为空.
         PassId colorPass; ///< 普通路径为 ShadeOpaque, 接续核心工作色时为辅助重画. 无辅助批次时后者为空.
+        PassId lastWorkingPass; ///< 工作色生产的最后阶段, 包含实际天空, 早于显示及诊断消费.
         TextureId shadowDepth; ///< 本图用于受光或诊断的分层常规深度.
         std::uint64_t shadowBytes{}; ///< 这路消费的紧凑数组字节, 用于图准入.
         PassId firstPass, lastPass; ///< 本 View 私有子图的声明范围, 不含共享上传和 UI.
@@ -142,6 +144,31 @@ namespace Physara::Renderer
             return pass.IsValid() && pass.generation == firstPass.generation &&
                 pass.index >= firstPass.index && pass.index <= lastPass.index;
         }
+    };
+
+    struct GraphPoolCapacity;
+
+    /// @brief 持有当前 Shader 代的预览 Pipeline 与片元常量. 图回调和参数上传借用这个准备值.
+    class PreparedSurfacePreview final
+    {
+    public:
+        /// @brief 从同一已选 View 产生仅供本图 UI 采样的颜色版本, 并登记所需参数上传.
+        /// @pre source 来自本次准备的主 View. 从声明到执行或放弃期间, 准备值须存活且地址稳定.
+        /// @note 返回图错误时调用方须放弃候选图, 已追加的图节点和上传不单独回滚.
+        [[nodiscard]] GraphResult<TextureId> Declare(RenderGraph &graph, const ForwardOutput &source,
+            std::vector<GraphUpload> &uploads) const;
+        /// @brief 预览本身新增的颜色和常量存储, 不包括既有表面.
+        [[nodiscard]] GraphPoolCapacity StorageDemand(ViewExtent extent) const noexcept;
+        /// @brief 本配方的单次参数写入字节数. 深度配方无需参数写入.
+        [[nodiscard]] std::size_t UploadBytes() const noexcept;
+
+    private:
+        friend class ForwardRenderer;
+        PreparedSurfacePreview(SurfacePreviewMode mode, RHI::GraphicsPipelineHandle pipeline) noexcept;
+
+        SurfacePreviewMode m_Mode;
+        RHI::GraphicsPipelineHandle m_Pipeline;
+        std::array<std::byte, 16> m_Controls{};
     };
 
     namespace Detail
@@ -183,6 +210,16 @@ namespace Physara::Renderer
         std::size_t lights{};
         ForwardPassWork depth;
         ForwardPassWork color;
+    };
+
+    /// @brief 所选 View 已接受的不透明及天空工作量. 读写量按存活 Pass 的声明范围计, 单位为逻辑字节.
+    /// 路由计数以可绘实例表面为单位, 与作图命令或最终像素覆盖独立.
+    struct OpaqueWorkStatistics
+    {
+        std::uint64_t depthBytes{}, workingColorBytes{};
+        std::array<std::uint64_t, CoreGBufferOutput::Formats.size()> gbufferBytes{};
+        std::uint64_t readBytes{}, writeBytes{}, previewBytes{};
+        std::size_t surfaceCount{}, extensionCount{}, unlitCount{};
     };
 
     /// @brief 真正执行的对象、材质和世界灯行编码, 包括未产出可绘项的准备工作.
@@ -232,6 +269,10 @@ namespace Physara::Renderer
         /// @pre output 属于本槽 index 对应的 View, plan 来自完整执行且已接受的同一张图.
         [[nodiscard]] ForwardWorkCounts ExecutedWorkCounts(std::size_t index, const ForwardOutput &output,
                                                            const CompiledGraphPlan &plan) const noexcept;
+        /// @brief 根据实际接受 View 的工作集、纹理描述和存活图计划核算逻辑附件工作量.
+        /// @param preview 本轮实际由该 View 的 UI 消费的预览色. 空表示无该项生产.
+        [[nodiscard]] OpaqueWorkStatistics ExecutedOpaqueWork(std::size_t index, const ForwardOutput &output,
+            const RenderGraph &graph, const CompiledGraphPlan &plan, TextureId preview = {}) const noexcept;
         /// @brief 汇总自本槽 Reset 起两路实际执行的编码. 命中已编码的共享行时计数保持原值.
         [[nodiscard]] ForwardEncodingCounts EncodingCounts() const noexcept;
         /// @brief 封存前拥有的写入需求, 包含之后可能不进入存活计划的写入.
@@ -299,9 +340,17 @@ namespace Physara::Renderer
         /// @param resample 显示阶段需要从渲染栅格重采样时为 true, 对应一个额外的线性中间目标.
         /// @param needs 按实际准备需求核算 GBuffer、Forward 深度与显示附件. 仅表面时只检查 render.
         /// @param samples 期望的原生采样数. 现有三路 profile 只交付单样本.
+        /// @param surfacePreview 在已合法的普通计划上, 另核对一张 SRGBA8 诊断颜色的预算.
         /// @return 空值表示附件可容纳. 失败携带具体的 View 原因, 显式离屏请求可在共享场景提取前返回该原因.
         [[nodiscard]] std::optional<ForwardFailure> CheckAttachments(ViewExtent render, ViewExtent output,
-            DisplaySettings display, bool resample, ViewResourceNeeds needs = {}, std::uint32_t samples = 1) const noexcept;
+            DisplaySettings display, bool resample, ViewResourceNeeds needs = {}, std::uint32_t samples = 1,
+            bool surfacePreview = false) const noexcept;
+
+        /// @brief 在普通 View 需求之后登记一个可选原生预览键. 等待此键时普通颜色计划仍然可用.
+        void RequestSurfacePreview(SurfacePreviewMode mode) noexcept;
+        /// @brief 在普通主 View 收尾后检查选中表面、附件额度与同代配方. 失败只供预览占位使用.
+        [[nodiscard]] std::variant<PreparedSurfacePreview, ForwardFailure> PrepareSurfacePreview(
+            const ForwardFrame &frame, const PreparedView &view, SurfacePreviewMode mode) const noexcept;
 
         /// @brief 在同一已选代中连续规划并完成一路 View. 空可见集允许背景输出.
         /// 产品多 View 帧分别调用 PlanView 和 FinishView, 在两者之间推进一次原生预算.

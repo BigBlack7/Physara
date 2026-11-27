@@ -36,6 +36,7 @@ namespace Physara::Editor::Detail
         std::vector<UiTextureUpload> items = std::vector<UiTextureUpload>(0);
         std::size_t bytes = 0;
         bool usesPlaceholder = false;
+        bool reportedPlaceholder = false; ///< 本批首个纹理解析失败是否已触发告警. 有效预览沿独立的状态标签路径处理.
         Renderer::GraphTextureWrite placeholder;
     };
 
@@ -67,7 +68,8 @@ namespace Physara::Editor::Detail
     {
         const Renderer::ViewOutput *output = nullptr;
         UiFallback missingView = UiFallback::MissingOutput; ///< 无本 View 输出时使用的占位原因.
-        bool usesDiagnostic = false; ///< 沿用原字段名, 现在表示实际消费任一种 View 输出.
+        bool usesDiagnostic = false; ///< 有可见 draw 读普通显示色, 包括测试图或场景色. Runtime 据此判断主 View 能否发布.
+        bool usesSurfacePreview = false; ///< 诊断 Image 的消费独立于普通视口的接受条件.
         const ImDrawCmd *viewportDraw = nullptr;
         UiFallback viewportFallback = UiFallback::None;
         std::vector<UiResidentSnapshot> residents = std::vector<UiResidentSnapshot>(0);
@@ -91,8 +93,8 @@ namespace Physara::Editor::Detail
         [[nodiscard]] UiTextureResult RegisterResident(RHI::Texture &texture, UiTextureImport imported);
         /// @brief 仅停止外部驻留项的新解析. 已准备快照继续保活, 托管请求和 View 项不能经此入口移除.
         [[nodiscard]] bool UnregisterResident(UiTextureId id) noexcept;
-        /// @brief 为有效 View 登记稳定显示色角色, 测试图/场景切换不换 token, 不保存跨帧 GraphId.
-        [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view);
+        /// @brief 为有效 View 的指定输出角色分配会话 token. 图像换代时沿用该 token, 帧内解析当次纹理版本.
+        [[nodiscard]] UiTextureResult RegisterView(Renderer::ViewId view, Renderer::ViewOutputRole role);
         /// @brief 校验全部请求并结束逻辑销毁, 未使用上传仍可在后续图中裁剪.
         [[nodiscard]] std::optional<Core::BoundedText> PlanUploads(const ImDrawData &drawData,
                                                                   UiTextureUploads &uploads);
@@ -109,9 +111,12 @@ namespace Physara::Editor::Detail
         [[nodiscard]] Renderer::GraphFailure DeclareUploads(Renderer::RenderGraph &graph, UiTextureUploads &uploads,
             FrameSlotUiFrameBindings &bindings, std::vector<Renderer::GraphUpload> &writes);
         /// @brief 从规范导入的当前写版本解析 token. 不把 ImportTexture 返回的版本零当成最新内容.
+        /// @param surfacePreview 当前图的诊断颜色. 合成器在缺色时先换成标签绘制, 标签使用字体 token.
+        /// @pre 若调用方直接解析缺色的预览 token, bindings 中必须已有共享占位条目.
         /// @param residents 本批准备时捕获的驻留快照, 构图不再要求这些 token 仍在 registry 中.
         [[nodiscard]] Renderer::GraphResult<UiFrameTexture> ResolveGraph(Renderer::RenderGraph &graph,
-            UiTextureId token, Renderer::TextureId diagnostic, FrameSlotUiFrameBindings &bindings,
+            UiTextureId token, Renderer::TextureId diagnostic, Renderer::TextureId surfacePreview,
+            FrameSlotUiFrameBindings &bindings,
             std::span<const UiResidentSnapshot> residents);
         /// @brief 只确认同一成功执行中存活的终结写. 取消和裁剪均撤销尚未发布的 token.
         /// @pre 非空 submission 已由 PreparedUiFrame 核对整图成功, 非零票据及有效 outputs.
@@ -145,7 +150,7 @@ namespace Physara::Editor::Detail
         [[nodiscard]] Entry *Find(UiTextureId id) noexcept;
         /// @brief 按命令身份选择真实采样或占位原因, 不在此创建 GPU 绑定或确认请求.
         [[nodiscard]] Sample FindSample(const ImDrawCmd &draw, const UiFrameBindings &bindings) noexcept;
-        /// @brief 本批首次占位登记共享像素需求并报告 Warning, 不把缺失图像升级为整帧错误.
+        /// @brief 为解析失败的图像选择共享占位, 并向设备回调报告本批首个真实失败.
         void Placeholder(UiTextureUploads &uploads, UiFallback reason) const;
         /// @brief 从固定槽表分配不复用的代, 并接管条目强引用及托管字节记账.
         [[nodiscard]] UiTextureResult Register(Entry entry);

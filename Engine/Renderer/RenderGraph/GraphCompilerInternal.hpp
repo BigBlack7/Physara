@@ -62,6 +62,11 @@ namespace Physara::Renderer::Detail
     /// @brief 图内与设备池共用的完整存储兼容条件. 调试名不参与匹配.
     [[nodiscard]] bool CompatibleStorage(const RHI::TextureDesc &left, const RHI::TextureDesc &right) noexcept;
     [[nodiscard]] bool CompatibleStorage(const RHI::BufferDesc &left, const RHI::BufferDesc &right) noexcept;
+    /// @brief 核对声明阶段尚未验证的物理维度、样本与 mip 链.
+    [[nodiscard]] bool ValidTextureShape(const RHI::TextureDesc &desc) noexcept;
+    /// @brief 按格式块和完整描述计算逻辑容量. 超出可表示范围时返回空.
+    /// @pre mip 链符合物理尺寸, 各层的位移量在尺寸类型的位宽内.
+    [[nodiscard]] std::optional<std::uint64_t> TextureStorageBytes(const RHI::TextureDesc &desc) noexcept;
 
     /// @brief 从有序用途和图尾导出建立使用区间, 在对象和字节预算内分配瞬态槽.
     /// @pre plan 已填写同图代的存活顺序和导出, 资源映射与槽表为空, 预算总量为零.

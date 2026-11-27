@@ -131,10 +131,10 @@ namespace Physara::Editor::Detail
     }
 
     // 登记逻辑身份. 具体 View 颜色的句柄和采样绑定留在解析它的批次中.
-    UiTextureResult UiTextures::RegisterView(Renderer::ViewId view)
+    UiTextureResult UiTextures::RegisterView(Renderer::ViewId view, Renderer::ViewOutputRole role)
     {
         assert(view.IsValid());
-        return Register(Entry{.view = view, .role = Renderer::ViewOutputRole::DisplayColor});
+        return Register(Entry{.view = view, .role = role});
     }
 
     // 解除注册表持有并归还逻辑驻留预算, 已准备的驻留快照及 GPU 在途引用由各自 owner 释放.
@@ -350,8 +350,9 @@ namespace Physara::Editor::Detail
                       !entry->managed || entry->managed->Status != ImTextureStatus_WantCreate))
         {
             // 临时创建只由其 ImTextureData 引用采样. 直接 token 必须在本批准备前已经发布.
-            if (!entry->view.IsValid() ||
-                (bindings.output && bindings.output->view == entry->view && bindings.output->role == entry->role))
+            const bool matchingView = bindings.output && bindings.output->view == entry->view;
+            if (!entry->view.IsValid() || (matchingView && bindings.output->role == entry->role) ||
+                (entry->role == Renderer::ViewOutputRole::SurfacePreviewColor && (!bindings.output || matchingView)))
             {
                 return {entry};
             }
@@ -383,7 +384,15 @@ namespace Physara::Editor::Detail
             Placeholder(uploads, sample.fallback);
             return UiTextureId{};
         }
-        bindings.usesDiagnostic |= sample.entry->view.IsValid();
+        if (sample.entry->view.IsValid() && sample.entry->role == Renderer::ViewOutputRole::SurfacePreviewColor)
+        {
+            bindings.usesSurfacePreview = true;
+            // 缺少诊断颜色时由合成器绘制状态标签, 共用已有字体, 不需要单独初始化占位纹理.
+        }
+        else
+        {
+            bindings.usesDiagnostic |= sample.entry->view.IsValid();
+        }
         // 托管和 View 条目不能由注销入口移除, 下一次 Advance 又会先取消准备值, 只需快照外部驻留项.
         if (!sample.entry->view.IsValid() && !sample.entry->managed &&
             std::ranges::find(bindings.residents, sample.entry->id, &UiResidentSnapshot::token) ==
@@ -396,12 +405,12 @@ namespace Physara::Editor::Detail
         return sample.entry->id;
     }
 
-    // 所有占位共用同一像素. 首个占位请求登记图上传需求并记录本批诊断.
+    // 预留共享像素不代表已经发生解析失败. 首个真实失败单独锁存本批诊断.
     void UiTextures::Placeholder(UiTextureUploads &uploads, UiFallback reason) const
     {
-        if (!uploads.usesPlaceholder)
+        uploads.usesPlaceholder = true;
+        if (!std::exchange(uploads.reportedPlaceholder, true))
         {
-            uploads.usesPlaceholder = true;
             if (auto *callback = m_Device.GetMessageCallback())
             {
                 const char *message = "Editor UI texture identity is invalid or stale";
@@ -511,7 +520,8 @@ namespace Physara::Editor::Detail
 
     // 先取本轮生产者版本, 再使用驻留快照. 其余托管和 View 条目的寿命由活动准备值的会话合同保证.
     Renderer::GraphResult<UiFrameTexture> UiTextures::ResolveGraph(Renderer::RenderGraph &graph,
-        UiTextureId token, Renderer::TextureId diagnostic, FrameSlotUiFrameBindings &bindings,
+        UiTextureId token, Renderer::TextureId diagnostic, Renderer::TextureId surfacePreview,
+        FrameSlotUiFrameBindings &bindings,
         std::span<const UiResidentSnapshot> residents)
     {
         using namespace Renderer;
@@ -528,6 +538,20 @@ namespace Physara::Editor::Detail
             return GraphError{GraphErrorCode::InvalidResource, Core::BoundedText("Expired UI graph token")};
         }
         UiFrameTexture value{diagnostic.AsReadOnly(), {}};
+        if (entry && entry->role == ViewOutputRole::SurfacePreviewColor)
+        {
+            if (surfacePreview.IsValid())
+            {
+                value.texture = surfacePreview.AsReadOnly();
+            }
+            else
+            {
+                const auto placeholder = std::ranges::find(bindings.tokens, UiTextureId{},
+                                                            &FrameSlotUiFrameBindings::Token::token);
+                assert(placeholder != bindings.tokens.end());
+                value = placeholder->value;
+            }
+        }
         if (resident != residents.end() || !entry->view.IsValid())
         {
             const auto &texture = resident != residents.end() ? resident->texture : entry->texture;

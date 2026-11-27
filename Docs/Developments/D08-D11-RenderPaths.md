@@ -335,10 +335,10 @@
 
 **双路径基准** [Forward+ 画质与多灯成本参考](../Performance/ForwardPlusReference.md)。
 
-- [ ] 对核心/Unlit、mask、静态实例、阴影、无穷灯及 Froxel overflow 做同输入 HDR 等价回归。
-- [ ] 提供 GBuffer/深度/法线/路由可视化的 typed preview Pass，UI 不直接解释任意纹理位型。
-- [ ] 记录附件字节、带宽相关指标、ForwardExtension 占比和 CPU/GPU 成本，形成首次三路径可比结果。
+- [x] 对核心/Unlit、mask、静态实例、阴影、无穷灯及 Froxel overflow 做同输入 HDR 等价回归。
+- [x] 提供 GBuffer/深度/法线/路由可视化的 typed preview Pass，UI 不直接解释任意纹理位型。
+- [x] 记录附件字节、带宽相关指标、ForwardExtension 占比和 CPU/GPU 成本，形成首次三路径可比结果。
 
 **完成条件：** 三路径在已启用能力上可比较，新增扩展和时域效果后沿同一用例继续补齐。
 
-**D11 阶段出口：** 三路径在当前支持 profile 下可原子切换；核心材质 HDR 等价，Unlit/扩展表面遮挡正确，GBuffer 与 SurfaceOutput 语义可检查。
+**D11 阶段出口：** 已通过。当前支持的三路径可原子切换，匹配输入的核心 HDR 等价，Unlit 和辅助表面的覆盖可核对，GBuffer 与 SurfaceOutput 可通过类型化预览检查。 [最终验证](../../openspec/changes/archive/2026-11-27-establish-three-path-equivalence-and-previews/tasks.md#final-verification) · [归档记录](../../openspec/changes/archive/2026-11-27-establish-three-path-equivalence-and-previews/tasks.md#archive-closeout) · [三路径比较参考](../Performance/ThreePathReference.md)

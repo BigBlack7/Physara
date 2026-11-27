@@ -123,8 +123,10 @@ Release 程序位于 `build/bin/Release/Physara.exe`. 可见和隐藏模式装�
 - 在 `View Settings > Anti-aliasing` 选择 None 或 FXAA. FXAA 只在 Physical Lighting 生效, 诊断预览保留线性限幅和实际 None. 面板显示当前文档上次接受的场景 AA、显示 profile 和成对尺寸. 无场景测试图使用自己的有效尺寸并有独立标识. `Render scale` 调整场景渲染栅格, 正常场景按面板物理像素输出, 低分辨率结果在线性显示域放大. [D07 显示工作包](Developments/D06-D07-SceneAndForward.md#d07-t05)
 - 在 `Renderer` 开启 `Shadows` 后，Direct Lighting 和 Physical Lighting 使用当前 View 已准入的阴影。可在同一面板切换 Hard／PCF、分辨率和每 View 逻辑预算。
 - `Shadow diagnostic` 可显示主方向光级联或一盏局部灯。色相表示级联权重或所查点光面，明暗表示与普通光照共用的可见性。统计面板分别显示当前规划和最近接受帧的实际生产与复用。结束诊断后恢复原预览模式。
+- 在 `View > Surface Preview` 打开当前主视口的表面诊断。三条受光路径都可查看 Reverse-Z 深度，近端为 1。Deferred 还可查看基色、AO、世界法线、粗糙度、金属度、预曝光自发光和路由。自发光以 `x / (1 + x)` 映射，路由图例标出核心、Unlit、lit 前向扩展和空白。主视口需要同时可见并交付匹配的受光帧。预览等待输入或包时显示原因。两个产品包为 `SurfaceDepthPreview.pshader` 和 `SurfaceGBufferPreview.pshader`。
 - 读回 `ForwardOutput::workingColor` (RGBA16F) 和 `depth` (D32) 时, 从配对的 `source.mode` 读取实际生产模式及其渲染布局. 用 Physical Lighting 的受光和天空样点比较预曝光 HDR. 材质诊断通道和 Unlit 基色按各自的输出语义解释. 显示颜色和含 UI 的窗口颜色分别由 ViewOutput 和 PresentColor 提供. [Forward 输出](../Engine/Renderer/Paths/Forward.hpp) · [颜色合同](Architecture.md#display-output)
 - 在 `View > Frame Statistics` 查看最后正常接受的场景票据、CPU 阶段耗时、图执行区间内实际发出的 Draw、资源绑定、上传笔数和紧密字节、原生 barrier 和 Forward 缓存条目。GPU 以毫秒显示同一图执行区间，包含场景和 UI，结果带原票据。窗口交换耗时单独列出。固定场景的资源安装和标样见 [Forward 参考场景](../Assets/README.md#forward-参考场景)。
+- `Frame Statistics` 的不透明附件按已接受 View 列出 D32、工作色和 G0 至 G3 的逻辑字节，预览目标单列。逻辑读写按存活 Pass 声明的整附件范围累加。路由比例按可绘实例表面项计，分别显示 lit 前向扩展和 Unlit 的计数。
 - 通过 `View > Viewport` 或面板关闭按钮编辑主视口显隐. 在 `Edit` 菜单用 `Undo`、`Redo` 重放显隐和比例编辑, 也可用 `Ctrl+Z`、`Ctrl+Y`. 一次拖拽只生成一条记录, 按 Esc 或失焦会取消尚未结束的预览.
 - 在 `Window` 菜单切换 `VSync`, 用 `Effective interval` 查看宿主确认的交换区间. 在 `Title` 中输入标题后按 Enter 提交, 用标题栏和 `Requested title`、`Effective title` 核对结果. 字库缺失的字符在 `Draft title` 和标题回执中显示为 Unicode 码点, 如 `\u{4e2d}`. 两项窗口设置各有自己的确认结果和错误原因. [编辑与窗口设置计划](Developments/D03-D05-FramePipeline.md#d04-t05)
 

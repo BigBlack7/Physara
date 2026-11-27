@@ -79,6 +79,12 @@ namespace Physara::Shader
         {{ProductShader::DeferredLightingIblShadows, 2}, "DeferredLightingIblShadows", "StaticForward",
          "Passes/Deferred/DeferredLightingIblShadows.json", "Passes/Forward/Display.vert",
          "Passes/Deferred/LightingShadows.frag"},
+        {{ProductShader::SurfaceDepthPreview}, "SurfaceDepthPreview", "SurfacePreview",
+         "Passes/SurfacePreview/SurfaceDepthPreview.json", "Passes/Forward/Display.vert",
+         "Passes/SurfacePreview/Depth.frag"},
+        {{ProductShader::SurfaceGBufferPreview}, "SurfaceGBufferPreview", "SurfacePreview",
+         "Passes/SurfacePreview/SurfaceGBufferPreview.json", "Passes/Forward/Display.vert",
+         "Passes/SurfacePreview/GBuffer.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.

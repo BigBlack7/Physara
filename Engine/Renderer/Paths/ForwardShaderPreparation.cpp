@@ -13,6 +13,7 @@
 #include <ForwardDisplay/Data.hpp>
 #include <ForwardSky/Data.hpp>
 #include <Shader/Package.hpp>
+#include <SurfacePreview/Data.hpp>
 
 #include "../Materials/StaticGpu.hpp"
 
@@ -199,6 +200,48 @@ namespace Physara::Renderer::Detail
         return Shader::CheckActiveResources(package, groups);
     }
 
+    /// @brief 核对深度或混合 MRT 的精确片元配方, 包括整数采样及预览色输出. 未选中的热包也须通过.
+    static std::optional<Shader::Failure> CheckSurfacePreviewResources(const Shader::ShaderPackage &package,
+                                                                       ProductShader role) noexcept
+    {
+        using Stage = Shader::Stage;
+        using Kind = Shader::ResourceKind;
+        const bool depth = role == ProductShader::SurfaceDepthPreview;
+        static constexpr std::array<std::string_view, 1> Depth{"previewDepth"};
+        static constexpr std::array<std::string_view, 5> GBuffer{
+            "previewG0", "previewG1", "previewG2", "previewG3", "previewControls"};
+        const auto names = depth ? std::span<const std::string_view>(Depth) : std::span<const std::string_view>(GBuffer);
+        const std::array expected{Shader::ExpectedActiveResources{Stage::Vertex, 0, {}},
+                                  Shader::ExpectedActiveResources{Stage::Fragment, 0, names}};
+        if (const auto failure = Shader::CheckActiveResources(package, expected))
+        {
+            return failure;
+        }
+        // 两种片元都按像素取数, 全屏顶点无需向片元传插值量. 输出须匹配 UI 颜色目标.
+        for (const auto &module : package.modules)
+        {
+            const bool fragment = module.stage == Stage::Fragment;
+            if (!module.inputs.empty() || (fragment ? (module.outputs.size() != 1 ||
+                module.outputs.front().location != 0 || module.outputs.front().type != "float4") : !module.outputs.empty()))
+            {
+                return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = Core::BoundedText(
+                    "Surface preview requires fullscreen IO and one float4 color output at location 0")}};
+            }
+            for (const auto &resource : module.resources)
+            {
+                const auto kind = resource.name == "previewG3" ? Kind::Texture2DUInt :
+                    resource.name == "previewControls" ? Kind::ConstantBuffer : Kind::Texture2D;
+                if (resource.kind != kind || resource.set != 0)
+                {
+                    Core::BoundedText detail("Surface preview has an incompatible active resource: ");
+                    detail.Append(resource.name);
+                    return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = detail}};
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
     ProductProgramResult LoadProductProgram(RHI::Device &device, ProductShader role,
         const std::filesystem::path &path, const Shader::ProductPackages &packages, std::string_view abi,
         std::span<const Shader::ExpectedActiveResources> expected)
@@ -213,6 +256,13 @@ namespace Physara::Renderer::Detail
             if (abi == StaticAbi::AbiHash && package.abiHash == abi)
             {
                 if (const auto failure = CheckStaticForwardResources(package, role))
+                {
+                    return ProductProgramFailure{*failure, true};
+                }
+            }
+            if (IsSurfacePreview(role) && package.abiHash == abi)
+            {
+                if (const auto failure = CheckSurfacePreviewResources(package, role))
                 {
                     return ProductProgramFailure{*failure, true};
                 }
@@ -367,6 +417,8 @@ namespace Physara::Renderer::Detail
         case ProductShader::DisplayColorGrading:
         case ProductShader::DisplayFxaa:
         case ProductShader::DisplayScale: return Generated::DisplayPost::AbiHash;
+        case ProductShader::SurfaceDepthPreview:
+        case ProductShader::SurfaceGBufferPreview: return Generated::SurfacePreview::AbiHash;
         default: return StaticAbi::AbiHash;
         }
     }
@@ -510,6 +562,14 @@ namespace Physara::Renderer::Detail
             if (abi == StaticAbi::AbiHash)
             {
                 if (const auto failure = CheckStaticForwardResources(*package, role))
+                {
+                    checking = ShaderPipelineRequest{role, 0};
+                    Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());
+                }
+            }
+            if (IsSurfacePreview(role))
+            {
+                if (const auto failure = CheckSurfacePreviewResources(*package, role))
                 {
                     checking = ShaderPipelineRequest{role, 0};
                     Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());

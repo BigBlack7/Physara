@@ -15,6 +15,7 @@
 #include "GraphCompilerInternal.hpp"
 #include "GraphPoolInternal.hpp"
 #include "GraphRanges.hpp"
+#include "RenderGraph.hpp"
 
 namespace Physara::Renderer::Detail
 {
@@ -280,6 +281,47 @@ namespace Physara::Renderer
         m_Statistics.limit = limit;
         m_Statistics.idleLimit = {(std::min)(limit.bytes, idleLimit.bytes),
                                   (std::min)(limit.objects, idleLimit.objects)};
+    }
+
+    bool GraphResourcePool::CanFitExtra(const RenderGraph &graph, GraphPoolCapacity extra) const noexcept
+    {
+        const auto occupied = Statistics();
+        // 空闲项可由正式准入复用或淘汰. 已预留、在途和出口仍持有的容量先从可用额度扣除.
+        GraphPoolCapacity needed{occupied.used.bytes - occupied.idle.bytes, occupied.used.objects - occupied.idle.objects};
+        const auto add = [&](GraphPoolCapacity demand)
+        {
+            if (!Fits(demand, needed, occupied.limit))
+            {
+                return false;
+            }
+            needed.bytes += demand.bytes;
+            needed.objects += demand.objects;
+            return true;
+        };
+        if (!add(extra))
+        {
+            return false;
+        }
+        for (const auto &texture : graph.Textures())
+        {
+            if (!texture.importState)
+            {
+                // 预检发生在编译前, 先验证物理形状, 再使用依赖合法 mip 链的存储算法.
+                if (!Detail::ValidTextureShape(texture.desc))
+                {
+                    return false;
+                }
+                const auto bytes = Detail::TextureStorageBytes(texture.desc);
+                if (!bytes || !add({*bytes, 1}))
+                {
+                    return false;
+                }
+            }
+        }
+        return std::ranges::all_of(graph.Buffers(), [&](const auto &buffer)
+        {
+            return buffer.importState || add({buffer.desc.byteSize, 1});
+        });
     }
 
     void GraphResourcePool::ReleaseUnused() noexcept

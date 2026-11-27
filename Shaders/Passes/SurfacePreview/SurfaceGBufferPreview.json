@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "SurfaceGBufferPreview",
+  "interface": "SurfacePreview",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    { "stage": "vertex", "source": "Passes/Forward/Display.vert", "entry": "main" },
+    { "stage": "fragment", "source": "Passes/SurfacePreview/GBuffer.frag", "entry": "main" }
+  ],
+  "defines": []
+}

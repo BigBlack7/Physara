@@ -584,6 +584,7 @@ namespace Physara::Renderer::Detail
 
         std::array<Shader::RhiProgram, ForwardColorPrograms> colors;
         std::array<Shader::RhiProgram, DeferredLightingCount> deferredColors;
+        std::array<Shader::RhiProgram, SurfacePreviewRoleCount> surfacePreviews; ///< 随同代 Pipeline 保存各预览角色的程序及内容摘要.
         Shader::RhiProgram depth;
         Shader::RhiProgram shadowDepth;
         Shader::RhiProgram coreGBuffer;
@@ -601,6 +602,9 @@ namespace Physara::Renderer::Detail
         /// @brief 在当前固定角色槽准备全屏颜色程序及其三个集合, 交由冻结帧持有.
         void PrepareDeferredLighting(ForwardDevice &owner, ShaderPipelineRequest key,
                                      const Shader::ProductPackages &packages);
+        /// @brief 按独立预览接口建立固定单样本颜色 Pipeline. 结果沿普通 Shader 代保活.
+        void PrepareSurfacePreview(ForwardDevice &owner, ShaderPipelineRequest key,
+                                   const Shader::ProductPackages &packages);
         /// @brief 准备只写工作色 RGB 的天空 Pipeline, 成功后保存其包摘要供下次换代比较.
         void PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths, const Shader::ProductPackages &packages);
     };

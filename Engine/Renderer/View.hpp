@@ -282,10 +282,14 @@ namespace Physara::Renderer
     /// @brief Runtime 对诊断纹理像素记账的总字节上限, 同时约束单张诊断图的尺寸.
     inline constexpr std::size_t DiagnosticUploadBudget = 32 * 1024 * 1024;
 
-    /// @brief 视口 token 持有的显示色角色. 测试图和场景预览共享该角色.
+    /// @brief 主 View 表面诊断的单一显示通道. 深度适用于配对的 D32, 其余通道读取最终 GBuffer.
+    enum class SurfacePreviewMode : std::uint8_t { Depth, BaseColor, Occlusion, Normal, Roughness, Metallic, Emission, Route };
+
+    /// @brief 视口 token 持有的颜色角色. 测试图和场景色共享普通角色, 表面诊断有独立的帧内来源.
     enum class ViewOutputRole : std::uint8_t
     {
-        DisplayColor
+        DisplayColor,
+        SurfacePreviewColor
     };
 
     /// @brief 正常帧实际消费的源与角色. settings 交付查询参数及活跃角色, 可独立于活动 Scene 保留.

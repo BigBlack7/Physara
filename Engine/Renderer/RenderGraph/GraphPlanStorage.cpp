@@ -46,7 +46,7 @@ namespace Physara::Renderer::Detail
 
     // 预算覆盖所有 mip, 即使某些 mip 没有用途. 宽高按格式块向上取整, 体深随 mip 缩小.
     // 数组层数和样本数保持不变. 乘积和总和在运算前检查可表示范围.
-    static std::optional<ByteCount> StorageBytes(const RHI::TextureDesc &desc) noexcept
+    std::optional<ByteCount> TextureStorageBytes(const RHI::TextureDesc &desc) noexcept
     {
         const auto &format = RHI::GetFormatInfo(desc.format);
         const auto blocks = [size = ByteCount(format.blockSize)](std::uint32_t extent, std::uint32_t mip)
@@ -74,6 +74,11 @@ namespace Physara::Renderer::Detail
             total += bytes;
         }
         return total;
+    }
+
+    static std::optional<ByteCount> StorageBytes(const RHI::TextureDesc &desc) noexcept
+    {
+        return TextureStorageBytes(desc);
     }
 
     // 缓冲按完整字节容量计量, 图内访问范围只影响寿命.

@@ -68,6 +68,79 @@ namespace Physara::Renderer
         return counts;
     }
 
+    OpaqueWorkStatistics ForwardFrame::ExecutedOpaqueWork(std::size_t index, const ForwardOutput &output,
+        const RenderGraph &graph, const CompiledGraphPlan &plan, TextureId preview) const noexcept
+    {
+        OpaqueWorkStatistics work;
+        const auto &view = m_Data->views[index];
+        // 同一材质行可被多个实例引用. 路由占比的分母按可绘实例表面计, 每个 DrawRecord 贡献一项.
+        work.surfaceCount = view.draws.size();
+        for (const auto &draw : view.draws)
+        {
+            const auto route = view.materialRows[draw.material]->route;
+            work.extensionCount += route == Detail::OpaqueSurfaceRoute::OpaqueForwardExtension;
+            work.unlitCount += route == Detail::OpaqueSurfaceRoute::Unlit;
+        }
+
+        // 这里的六种表面及颜色目标都是一层、一 mip 的单样本栅格, 图版本共享各自的逻辑存储.
+        const auto bytes = [&](TextureId resource) -> std::uint64_t
+        {
+            if (!resource.IsValid() || !std::ranges::any_of(plan.textures, [&](const auto &texture)
+                { return texture.resource.Identity() == resource.Identity(); }))
+            {
+                return 0;
+            }
+            const auto &desc = graph.Textures()[resource.Identity().index].desc;
+            const auto &format = RHI::GetFormatInfo(desc.format);
+            assert(desc.mipLevels == 1 && desc.arraySize == 1 && desc.sampleCount == 1 && format.blockSize == 1);
+            return std::uint64_t(desc.width) * desc.height * format.bytesPerBlock;
+        };
+        constexpr std::size_t gbufferCount = CoreGBufferOutput::Formats.size();
+        std::array<TextureId, gbufferCount + 2> ids{output.depth, output.workingColor};
+        if (output.coreGBuffer)
+        {
+            std::ranges::copy(output.coreGBuffer->colors, ids.begin() + 2);
+        }
+        std::array<std::uint64_t, ids.size()> attachmentBytes{};
+        std::ranges::transform(ids, attachmentBytes.begin(), bytes);
+        work.depthBytes = attachmentBytes[0];
+        work.workingColorBytes = attachmentBytes[1];
+        std::copy_n(attachmentBytes.begin() + 2, gbufferCount, work.gbufferBytes.begin());
+        work.previewBytes = bytes(preview);
+
+        for (const auto &pass : plan.passes)
+        {
+            if (!output.OwnsPass(pass.id) || pass.id.index > output.lastWorkingPass.index)
+            {
+                continue;
+            }
+            // 只计此生产范围实际使用的主附件. 同一 Pass 的显式读、只读深度和 Load 在同一范围合并.
+            std::array<bool, ids.size()> reads{}, writes{};
+            for (const auto &entry : pass.uses)
+            {
+                const auto *texture = std::get_if<TextureUse>(&entry.declaration);
+                if (!texture)
+                {
+                    continue;
+                }
+                const auto found = std::ranges::find(ids, texture->access.resource.Identity(), &TextureId::Identity);
+                if (found == ids.end())
+                {
+                    continue;
+                }
+                const auto slot = std::size_t(found - ids.begin());
+                reads[slot] |= !texture->write || texture->write->ops.load == LoadOp::Load;
+                writes[slot] |= texture->write.has_value();
+            }
+            for (std::size_t i = 0; i < ids.size(); ++i)
+            {
+                work.readBytes += reads[i] ? attachmentBytes[i] : 0;
+                work.writeBytes += writes[i] ? attachmentBytes[i] : 0;
+            }
+        }
+        return work;
+    }
+
     ForwardEncodingCounts ForwardFrame::EncodingCounts() const noexcept
     {
         return m_Data ? m_Data->encodings : ForwardEncodingCounts{};
@@ -487,7 +560,8 @@ namespace Physara::Renderer
     }
 
     std::optional<ForwardFailure> ForwardRenderer::CheckAttachments(ViewExtent render, ViewExtent output,
-        DisplaySettings display, bool resample, ViewResourceNeeds needs, std::uint32_t samples) const noexcept
+        DisplaySettings display, bool resample, ViewResourceNeeds needs, std::uint32_t samples,
+        bool surfacePreview) const noexcept
     {
         if (samples != 1)
         {
@@ -541,6 +615,7 @@ namespace Physara::Renderer
         {
             const bool fxaa = display.antiAliasing == AntiAliasing::Fxaa;
             renderBytesPerPixel += 8 * (1 + std::size_t(fxaa) + std::size_t(resample));
+            renderBytesPerPixel += surfacePreview ? 4 : 0;
             if (!needs.deferredLighting && needs.coreGBuffer)
             {
                 renderBytesPerPixel += 4;
@@ -2037,6 +2112,8 @@ namespace Physara::Renderer
         }
         strategy.shadeOpaque(graph, versions, frame, output, froxels);
         AddSky(graph, versions, frame, output.workingColor);
+        // Deferred 可以只有核心光照而没有辅助重画. 用声明区间的终点覆盖两种情况及可选天空.
+        output.lastWorkingPass = graph.Passes().back().id;
         // 后处理只读天空合成后的版本. 比较或读回仍可在同图消费原工作色和 D32, 不必从显示色反推.
         const auto first = uploads.size();
         output.displayColor = TakeGraph(frame.display.Declare(graph, uploads, output.workingColor,

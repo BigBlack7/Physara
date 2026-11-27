@@ -35,6 +35,7 @@ physara_add_shader_interface(StaticForward Shader/Interface/StaticForward.json)
 physara_add_shader_interface(ForwardDisplay Shader/Interface/ForwardDisplay.json)
 physara_add_shader_interface(ForwardSky Shader/Interface/ForwardSky.json)
 physara_add_shader_interface(DisplayPost Shader/Interface/DisplayPost.json)
+physara_add_shader_interface(SurfacePreview Shader/Interface/SurfacePreview.json)
 physara_add_shader_program(StaticForward StaticForward ../Shaders/Passes/Forward/StaticForward.json ../Shaders PRODUCT)
 # 核心表面共用现有顶点和材质 ABI, 片元入口写四个固定类型附件.
 physara_add_shader_program(StaticCoreGBuffer StaticForward ../Shaders/Passes/GBuffer/StaticCoreGBuffer.json ../Shaders PRODUCT)
@@ -70,6 +71,11 @@ physara_add_shader_program(ForwardDisplay ForwardDisplay ../Shaders/Passes/Forwa
 foreach(program DisplayColorGrading DisplayFxaa DisplayScale)
     physara_add_shader_program(${program} DisplayPost ../Shaders/PostProcess/${program}.json ../Shaders PRODUCT)
 endforeach()
+# 表面诊断按深度或混合颜色类型准备原生配方, 共用一张普通 UI 颜色目标.
+set(surfacePreviewPrograms SurfaceDepthPreview SurfaceGBufferPreview)
+foreach(program IN LISTS surfacePreviewPrograms)
+    physara_add_shader_program(${program} SurfacePreview ../Shaders/Passes/SurfacePreview/${program}.json ../Shaders PRODUCT)
+endforeach()
 
 # Renderer 管理只读 Scene/View 工作集、生效颜色代及静态 Forward 准备与图声明.
 # 公开头使用 Scene 的位姿/身份和图值, 因此传播 Scene 与 RenderGraph 依赖.
@@ -98,12 +104,13 @@ add_library(PhysaraRenderer STATIC
     Renderer/PostProcess/Display.hpp Renderer/PostProcess/Display.cpp
     Renderer/Paths/Forward.hpp Renderer/Paths/Forward.cpp
     Renderer/Paths/ForwardShaderKeys.hpp Renderer/Paths/ForwardShaderPreparation.cpp
+    Renderer/Paths/SurfacePreview.cpp
 )
 target_link_libraries(PhysaraRenderer PUBLIC PhysaraCore PhysaraScene PhysaraRHI PhysaraRenderGraph
     PRIVATE PhysaraShader glm filament_display)
 target_include_directories(PhysaraRenderer PRIVATE "${PROJECT_BINARY_DIR}/Generated/Shader/$<CONFIG>")
 add_dependencies(PhysaraRenderer PhysaraShaderInterfaceStaticForward PhysaraShaderInterfaceForwardDisplay
-    PhysaraShaderInterfaceForwardSky PhysaraShaderInterfaceDisplayPost)
+    PhysaraShaderInterfaceForwardSky PhysaraShaderInterfaceDisplayPost PhysaraShaderInterfaceSurfacePreview)
 target_compile_features(PhysaraRenderer PUBLIC cxx_std_20)
 set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
@@ -113,7 +120,8 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
-        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms})
+        StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms}
+        ${surfacePreviewPrograms})
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

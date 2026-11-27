@@ -70,6 +70,9 @@ namespace Physara::Renderer
         /// @brief 在 Open 前匹配空闲对象及新建额度. 准入失败时无本次预留, 不调用设备创建.
         /// @return 成功时取得限用于 plan 的预留. 硬超限或已有占用阻挡时返回含请求量和上限的诊断.
         [[nodiscard]] GraphResult<std::unique_ptr<GraphPoolReservation>> Admit(const CompiledGraphPlan &plan) noexcept;
+        /// @brief 可选消费者的保守预算检查. 给现有图声明的全部瞬态对象先留空间, 不预支裁剪或同图复用.
+        /// @note 不变更池或拒绝计数. 正常准入仍使用编译后存活的精确槽表.
+        [[nodiscard]] bool CanFitExtra(const RenderGraph &graph, GraphPoolCapacity extra) const noexcept;
         /// @brief 在现有 Device 回收推进后淘汰完成且无继续持有的对象, 遵守空闲保留上限.
         void Collect() noexcept;
         /// @brief 读取此刻的容量与累计操作数. 完成进度由设备推进, 查询本身不轮询 fence.

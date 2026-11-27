@@ -90,6 +90,7 @@ namespace Physara::Editor
         std::unique_ptr<Detail::UiRenderer> renderer;
         Detail::Workspace workspace;
         Detail::Viewport viewport;
+        UiTextureId surfacePreviewToken;
         Detail::ViewportNavigation navigation;
         // 编辑状态在平台适配接入成功后建立, 结束会话时释放事务与历史.
         std::optional<Detail::EditHistory> edits;
@@ -98,6 +99,7 @@ namespace Physara::Editor
         std::optional<FrameDiagnostic> frameDiagnostic;
         // 逻辑布局与 DrawData 同轮封存. 像素请求在编辑应用后生成, 供准备时核对输出.
         Detail::ViewportLayout viewportLayout;
+        Detail::ViewportImage surfacePreviewImage;
         std::optional<Detail::ViewportRegion> viewportRegion;
         std::optional<Renderer::ViewportRequest> viewportRequest;
         std::optional<PreparedViewport> preparedViewport; ///< 候选专用, 仅供本轮 UI 准备校验.
@@ -206,6 +208,12 @@ namespace Physara::Editor
                     return *error;
                 }
                 state.viewport = Detail::Viewport(renderer->mainView, std::get<UiTextureId>(token));
+                auto preview = state.renderer->RegisterView(renderer->mainView, Renderer::ViewOutputRole::SurfacePreviewColor);
+                if (const auto *error = std::get_if<Core::BoundedText>(&preview))
+                {
+                    return *error;
+                }
+                state.surfacePreviewToken = std::get<UiTextureId>(preview);
             }
         }
         else if (!ImGui::GetIO().Fonts->Build())
@@ -507,6 +515,7 @@ namespace Physara::Editor
         }
         state.drawData = nullptr;
         state.viewportLayout = {};
+        state.surfacePreviewImage = {};
         state.viewportRegion.reset();
         state.viewportRequest.reset();
         state.preparedViewport.reset();
@@ -534,7 +543,7 @@ namespace Physara::Editor
         Detail::WorkspaceState snapshot{scene, state.selection, view, history.Snapshot(frozen), window,
             document ? &*document : nullptr, state.modelImport.Status(), state.physicalEdits.Status(),
             state.editError, state.fileError,
-            state.frameDiagnostic, statistics, !discard, frozen, wasNavigating};
+            state.frameDiagnostic, statistics, !discard, frozen, wasNavigating, state.surfacePreviewToken};
         Detail::InputClaims claims{.cursorMode = input.state.cursorMode};
         if (discard)
         {
@@ -556,6 +565,8 @@ namespace Physara::Editor
             state.drawData = ImGui::GetDrawData();
             state.extentPixels = input.window.framebufferSizePixels;
             state.viewportLayout = workspace.viewport;
+            state.surfacePreviewImage = workspace.surfacePreviewImage;
+            frame.surfacePreview = workspace.surfacePreview;
             frame.hasDrawData = state.drawData != nullptr;
             if (state.drawData)
             {
@@ -861,7 +872,7 @@ namespace Physara::Editor
     // 不重放 Advance 或编辑事务, 不在会话状态中保存图版本或取得原生目标.
     PrepareUiResult EditorSession::PrepareUiFrame(Platform::WindowExtent extentPixels,
                                                    Core::FrameArena &arena, const Renderer::PreparedViewOutput &outputs,
-                                                   UiFrameMode mode)
+                                                   UiFrameMode mode, SurfacePreviewInput surface)
     {
         auto &state = *m_State;
         // 暂停或零像素范围直接返回, 待处理纹理请求留给下一次有效准备.
@@ -889,7 +900,8 @@ namespace Physara::Editor
             {
                 return Core::BoundedText("Safe UI requires this View's retained output snapshot");
             }
-            return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
+            return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode,
+                                           state.surfacePreviewImage, {{}, "Surface preview unavailable in safe UI"});
         }
         if (outputs.IsRetained() || (color &&
             (!state.viewportRequest || !state.preparedViewport || color->view != state.viewportRequest->view ||
@@ -898,9 +910,11 @@ namespace Physara::Editor
         {
             // 生产来源失配时在图内采样前改用占位并撤销命中, 尺寸相同的旧场景也适用.
             state.imageInput.reset();
-            return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode);
+            return state.renderer->Prepare(*state.drawData, extentPixels, arena, {}, layout.image, mode,
+                                           state.surfacePreviewImage, {});
         }
-        return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode);
+        return state.renderer->Prepare(*state.drawData, extentPixels, arena, outputs, layout.image, mode,
+                                       state.surfacePreviewImage, surface);
     }
 
     bool EditorSession::HasViewportSample(Platform::WindowExtent extentPixels) const noexcept
@@ -908,6 +922,21 @@ namespace Physara::Editor
         const auto &state = *m_State;
         return state.drawData && state.renderer && extentPixels == state.extentPixels &&
             Detail::UiRenderer::HasViewSample(*state.drawData, extentPixels, state.viewportLayout.image.token);
+    }
+
+    bool EditorSession::HasSurfacePreviewSample(Platform::WindowExtent extentPixels, Renderer::ViewExtent raster) const noexcept
+    {
+        const auto &state = *m_State;
+        return state.drawData && state.renderer && extentPixels == state.extentPixels &&
+            Detail::UiRenderer::HasSurfacePreviewSample(*state.drawData, extentPixels, state.surfacePreviewImage, raster);
+    }
+
+    void EditorSession::ReportSurfacePreview(const SurfacePreviewStatus &status) noexcept
+    {
+        if (status.submission)
+        {
+            m_State->workspace.ConfirmSurfacePreview(status);
+        }
     }
 
     bool EditorSession::BaseFontReady() const noexcept

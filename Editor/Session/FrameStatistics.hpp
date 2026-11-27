@@ -113,6 +113,7 @@ namespace Physara::Editor
         std::optional<double> presentWaitSeconds;
         GpuIntervalState gpu;
         ScenePreparationStatistics preparation;
+        Renderer::OpaqueWorkStatistics opaque; ///< 与 source 同一 View 的逻辑附件及材质路由工作量.
     };
 
     /// @brief GPU 区间由后续帧观察, 始终附带当时的图身份, 响应延迟不计入区间.

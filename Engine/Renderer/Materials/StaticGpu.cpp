@@ -604,6 +604,11 @@ namespace Physara::Renderer::Detail
             assert(key.variant == 0);
             return DeferredPipelineBase + DeferredLightingIndex(key.role);
         }
+        if (IsSurfacePreview(key.role))
+        {
+            assert(key.variant == 0);
+            return SurfacePreviewPipelineBase + SurfacePreviewIndex(key.role);
+        }
         if (key.role == ProductShader::StaticCoreGBuffer)
         {
             return CorePipelineBase + key.variant;
@@ -668,6 +673,10 @@ namespace Physara::Renderer::Detail
         {
             return deferredColors[DeferredLightingIndex(role)].contentHash;
         }
+        if (IsSurfacePreview(role))
+        {
+            return surfacePreviews[SurfacePreviewIndex(role)].contentHash;
+        }
         switch (role)
         {
         case ProductShader::StaticCoreGBuffer: return coreGBuffer.contentHash;
@@ -699,6 +708,11 @@ namespace Physara::Renderer::Detail
             const auto mode = DeferredLightingIndex(key.role);
             auto shaders = source.deferredColors[mode];
             deferredColors[mode] = std::move(shaders);
+        }
+        else if (IsSurfacePreview(key.role))
+        {
+            const auto index = SurfacePreviewIndex(key.role);
+            surfacePreviews[index] = source.surfacePreviews[index];
         }
         else if (!SurfaceAttachments(key.role).empty())
         {
@@ -746,6 +760,11 @@ namespace Physara::Renderer::Detail
             deferredColors[DeferredLightingIndex(role)] = {};
             pipelines[PipelineSlot({role, 0})] = nullptr;
         }
+        else if (IsSurfacePreview(role))
+        {
+            surfacePreviews[SurfacePreviewIndex(role)] = {};
+            pipelines[PipelineSlot({role, 0})] = nullptr;
+        }
         else if (!SurfaceAttachments(role).empty())
         {
             auto &program = role == ProductShader::StaticCoreGBuffer ? coreGBuffer : surfaceAux;
@@ -786,6 +805,11 @@ namespace Physara::Renderer::Detail
         if (IsDeferredLighting(key.role))
         {
             PrepareDeferredLighting(owner, key, packages);
+            return;
+        }
+        if (IsSurfacePreview(key.role))
+        {
+            PrepareSurfacePreview(owner, key, packages);
             return;
         }
         auto &pipeline = pipelines[PipelineSlot(key)];
