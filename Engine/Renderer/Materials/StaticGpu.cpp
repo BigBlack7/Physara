@@ -352,7 +352,7 @@ namespace Physara::Renderer::Detail
         }
     }
 
-    static constexpr std::array<ProductShader, ForwardColorPrograms> LightingRoles{
+    static constexpr std::array<ProductShader, BaseForwardColorPrograms> LightingRoles{
         ProductShader::StaticForward, ProductShader::StaticForwardPhysical, ProductShader::StaticForwardIbl,
         ProductShader::StaticCascadePreview, ProductShader::StaticSpotShadowPreview, ProductShader::StaticPointShadowPreview,
         ProductShader::StaticForwardShadows, ProductShader::StaticForwardPhysicalShadows, ProductShader::StaticForwardIblShadows,
@@ -416,16 +416,35 @@ namespace Physara::Renderer::Detail
         return role == ProductShader::StaticDepth || role == ProductShader::StaticShadowDepth;
     }
 
-    // 颜色程序, 片元活动集和 set 3 布局共用同一个光照索引.
+    // 各颜色程序有独立原生槽. 扩展角色沿同一光照种类复用 PerView/PerPass 绑定.
     static std::size_t LightingIndex(ProductShader role) noexcept
     {
+        if (Shader::IsIorSpecularProgram(role))
+        {
+            return BaseForwardColorPrograms + Shader::IorSpecularProgramIndex(role);
+        }
         const auto found = std::ranges::find(LightingRoles, role);
         assert(found != LightingRoles.end());
         return static_cast<std::size_t>(found - LightingRoles.begin());
     }
 
+    /// @brief 扩展颜色按同一受光顺序排列, 跳过仅用于诊断的三项.
+    static LightingProgram LightingKind(ProductShader role) noexcept
+    {
+        if (Shader::IsIorSpecularProgram(role))
+        {
+            const auto index = Shader::IorSpecularProgramIndex(role);
+            return static_cast<LightingProgram>(index < 3 ? index : index + 3);
+        }
+        return static_cast<LightingProgram>(LightingIndex(role));
+    }
+
     bool IsFroxelProgram(ProductShader role) noexcept
     {
+        if (Shader::IsIorSpecularProgram(role))
+        {
+            return UsesFroxels(LightingKind(role));
+        }
         const auto froxelRoles = std::span(LightingRoles).subspan(ForwardPerPassLayouts);
         return std::ranges::find(froxelRoles, role) != froxelRoles.end();
     }
@@ -452,7 +471,7 @@ namespace Physara::Renderer::Detail
         {
             return std::span(&CoverageResources, 1);
         }
-        return LightingResources(FullListProgram(static_cast<LightingProgram>(LightingIndex(role))));
+        return LightingResources(FullListProgram(LightingKind(role)));
     }
 
     ForwardPrograms::ForwardPrograms(RHI::Device &device)
@@ -513,20 +532,23 @@ namespace Physara::Renderer::Detail
         return owner.froxelViewLayout.Get();
     }
 
-    void ForwardPrograms::PrepareLighting(ForwardDevice &owner, LightingProgram kind,
+    void ForwardPrograms::PrepareLighting(ForwardDevice &owner, ProductShader role,
                                           const Shader::ProductPackages &packages)
     {
-        const auto index = std::size_t(kind);
+        const auto index = LightingIndex(role);
         if (colors[index].vertex)
         {
             return;
         }
         const auto &paths = owner.packagePaths;
+        const auto kind = LightingKind(role);
+        const auto lightIndex = std::size_t(kind);
         const std::array<const std::filesystem::path *, ForwardPerPassLayouts> inputs{
             &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview, &paths.spotShadowPreview,
             &paths.pointShadowPreview, &paths.colorShadows, &paths.physicalShadows, &paths.iblShadows};
-        const auto &path = UsesFroxels(kind) ? paths.froxelColors[index - ForwardPerPassLayouts] : *inputs[index];
-        auto program = LoadProgram(owner.device, LightingRoles[index], path, packages, StaticAbi::AbiHash);
+        const auto &path = Shader::IsIorSpecularProgram(role) ? paths.iorSpecularColors[Shader::IorSpecularProgramIndex(role)] :
+            (UsesFroxels(kind) ? paths.froxelColors[lightIndex - ForwardPerPassLayouts] : *inputs[lightIndex]);
+        auto program = LoadProgram(owner.device, role, path, packages, StaticAbi::AbiHash);
         PrepareLightLayout(owner, kind);
         colors[index] = std::move(program);
     }
@@ -580,7 +602,7 @@ namespace Physara::Renderer::Detail
     }
 
     ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided, SurfacePhase phase,
-                                          LightingProgram kind) noexcept
+                                          LightingProgram kind, bool iorSpecular) noexcept
     {
         assert(layout < 8);
         auto role = LightingRoles[std::size_t(kind)];
@@ -591,6 +613,13 @@ namespace Physara::Renderer::Detail
         else if (phase == SurfacePhase::ShadowDepth)
         {
             role = ProductShader::StaticShadowDepth;
+        }
+        else if (iorSpecular)
+        {
+            assert(!IsShadowPreview(kind));
+            const auto index = std::size_t(kind);
+            role = static_cast<ProductShader>(std::size_t(ProductShader::StaticForwardIorSpecular) +
+                                              (index < 3 ? index : index - 3));
         }
         const auto raster = (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u);
         return {role, std::size_t(phase) * GeometryPhaseSlots + raster + layout};
@@ -848,7 +877,7 @@ namespace Physara::Renderer::Detail
         }
         else
         {
-            PrepareLighting(owner, static_cast<LightingProgram>(mode), packages);
+            PrepareLighting(owner, key.role, packages);
         }
         // 顶点存储仅依属性位决定, 同一格式可跨深度和颜色角色复用. 实际 Shader 输入由 Pipeline 核对.
         if (!inputLayouts[layout])
@@ -873,7 +902,7 @@ namespace Physara::Renderer::Detail
         RHI::GraphicsPipelineDesc desc;
         desc.SetVertexShader(shaders.vertex.Get()).SetFragmentShader(shaders.fragment.Get())
             .SetInputLayout(inputLayouts[layout].Get());
-        const auto lighting = static_cast<LightingProgram>(mode);
+        const auto lighting = depthOnly || surface ? LightingProgram::Legacy : LightingKind(key.role);
         if (UsesFroxels(lighting))
         {
             desc.AddBindingLayout(PrepareFroxelViewLayout(owner));

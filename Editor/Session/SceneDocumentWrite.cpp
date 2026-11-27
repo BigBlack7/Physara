@@ -4,6 +4,7 @@
 /// @brief 独立快照的场景 v1 编码. 模型数据和图像像素以受控引用表示.
 /// 主 View 只写捕获时的请求, 不写派生镜头, 曝光或最后渲染值; 安全文件替换由调用方负责.
 
+#include <algorithm>
 #include <cassert>
 #include <type_traits>
 #include <utility>
@@ -100,6 +101,9 @@ namespace Physara::Editor::Detail
         Set(node, "emissiveStrength", value.emissiveStrength);
         Set(node, "alphaCutoff", value.alphaCutoff);
         Set(node, "doubleSided", value.doubleSided);
+        Set(node, "ior", value.ior);
+        Set(node, "specularFactor", value.specularFactor);
+        Set(node, "specularColorFactor", value.specularColorFactor);
         if (value.alphaMode)
         {
             using Mode = Asset::ModelAlpha;
@@ -109,25 +113,12 @@ namespace Physara::Editor::Detail
         return node;
     }
 
-    /// @brief 映射 Scene 已验证的四类采样用途, 保持 v1 的稳定字段拼写.
-    static const char *TextureUse(Asset::ImageUse use) noexcept
+    /// @brief 映射 Scene 已验证的采样用途, 保持 v1 的稳定字段拼写.
+    static std::string_view TextureUse(Asset::ImageUse use) noexcept
     {
-        switch (use)
-        {
-        case Asset::ImageUse::BaseColor:
-            return "baseColor";
-        case Asset::ImageUse::OcclusionRoughnessMetallic:
-            return "occlusionRoughnessMetallic";
-        case Asset::ImageUse::Normal:
-            return "normal";
-        case Asset::ImageUse::Emissive:
-            return "emissive";
-        case Asset::ImageUse::EditorColor:
-        case Asset::ImageUse::LinearData:
-            break;
-        }
-        assert(false);
-        return "";
+        const auto found = std::ranges::find(DocumentTextureUses, use, [](const auto &value) { return value.second; });
+        assert(found != DocumentTextureUses.end());
+        return found->first;
     }
 
     /// @brief 外置图像写资源引用, sampler 和 UV 只写被修改的字段.
@@ -164,14 +155,12 @@ namespace Physara::Editor::Detail
         {
             node["material"] = WriteMaterial(value.material);
         }
-        constexpr std::array<std::string_view, Scene::MaterialSlotCount> Slots{
-            "baseColor", "metallicRoughness", "normal", "occlusion", "emissive"};
         auto textures = Json::object();
         for (std::size_t i = 0; i < value.textures.size(); ++i)
         {
             if (value.textures[i])
             {
-                textures[std::string(Slots[i])] = WriteTexture(*value.textures[i]);
+                textures[std::string(DocumentTextureSlots[i])] = WriteTexture(*value.textures[i]);
             }
         }
         if (!textures.empty())

@@ -46,9 +46,11 @@ namespace Physara::Renderer::Detail
     using ObjectKey = std::array<std::uint64_t, 4>; ///< Scene 与对象各自的槽和分配代.
     /// @brief 以对象身份和固定图元的局部基点定位对象行. 命中后核对实际变换代.
     using ObjectRowKey = std::pair<ObjectKey, std::array<float, 3>>;
-    /// @brief 模型版本, 源材质, 覆盖对象, 源 Primitive 槽和仅覆盖标志. 无实例覆盖时对象与槽取零.
-    /// 末项为 true 的行只准备深度写入和阴影诊断所需的覆盖资源, 完整颜色材质使用独立键.
-    using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t, bool>;
+    /// @brief 按消费者区分固定布局内绑定真实图像的位置. 主材质行可逐步补齐所需的连续槽.
+    enum class MaterialUse : std::uint8_t { Main, Coverage, OpaqueAuxiliary };
+    /// @brief 模型版本, 源材质, 覆盖对象, 源 Primitive 槽及消费用途. 无实例覆盖时对象与槽取零.
+    /// 独立 OPAQUE 辅助表面的键保留基色占位, 供颜色与表面请求各自复用正确的绑定.
+    using MaterialKey = std::tuple<AssetVersionKey, std::uint32_t, ObjectKey, std::uint32_t, MaterialUse>;
     using SamplerKey = std::array<std::uint32_t, 4>; ///< min、mag、wrapS、wrapT, 已填充缺省值.
 
     /// @brief 记账附着于资源实际寿命, 被替换而仍由槽保活的代继续占用额度.
@@ -218,7 +220,9 @@ namespace Physara::Renderer::Detail
         std::uint8_t attributes{};
         std::int8_t normalUv = -1;
         bool doubleSided{};
+        std::uint8_t surfaceAttributes{}; ///< SurfaceAux 使用的 MASK, 粗糙度及法线相关属性.
         std::uint8_t shadowAttributes{}; ///< 写阴影时仅依赖 MASK 实际使用的 UV.
+        std::uint8_t specularAttributes{}; ///< 只有扩展受光角色需要的附加 UV.
     };
 
     /// @brief 保活期间唯一的视图及 sampler 组合. 仅用于查找相等组合, 不是绘制排序值.
@@ -228,7 +232,9 @@ namespace Physara::Renderer::Detail
     /// @brief 可进入不透明绘制的材质 profile. MASK 的覆盖规则独立于路由.
     enum class OpaqueSurfaceRoute : std::uint8_t { CoreDeferred, Unlit, OpaqueForwardExtension };
 
-    /// @brief GPU 材质行与预解析集合. 缺席槽绑定共享白图, Shader 仍由有效 slot 判定是否采样.
+    /// @brief GPU 材质行与预解析集合. UV 行描述有效材质, sampledSlots 记录本次实际准备到哪个槽.
+    /// 未采样的槽复用已准备的句柄. 独立 OPAQUE 辅助行的基色槽也使用占位绑定.
+    /// 已冻结的 Draw 持有原行直至其帧槽释放.
     struct MaterialRow final : Allocation
     {
         using Allocation::Allocation;
@@ -239,6 +245,7 @@ namespace Physara::Renderer::Detail
         MaterialBinding binding;
         StaticAbi::ForwardMaterial values{};
         OpaqueSurfaceRoute route = OpaqueSurfaceRoute::CoreDeferred;
+        std::size_t sampledSlots{}; ///< 原生角色所需的有效绑定前缀长度, 含该角色的占位. 命中时核对内容就绪.
     };
 
     /// @brief 路由和版本只属于当前缓存, 已准备的 Draw 独立保有 GPU 行.
@@ -387,7 +394,9 @@ namespace Physara::Renderer::Detail
     inline constexpr std::uint32_t ShadowImageSlot = 3; ///< 本 View 的连续深度层, PerPass t3.
     inline constexpr std::uint32_t ShadowLayersSlot = 4; ///< 组首行和层投影表, PerPass t4.
     inline constexpr std::uint32_t ShadowReferencesSlot = 5; ///< 按灯行索引的组引用表, PerPass t5.
-    inline constexpr std::uint32_t MaterialTableSlot = Scene::MaterialSlotCount; ///< 纹理 t0 至 t4 后的材质表.
+    inline constexpr std::size_t CoreMaterialTextureCount = StaticAbi::SpecularTextureIndex;
+    static_assert(CoreMaterialTextureCount == std::size_t(Asset::MaterialSlot::Specular));
+    static_assert(StaticAbi::SpecularColorTextureIndex == std::size_t(Asset::MaterialSlot::SpecularColor));
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
     inline constexpr std::size_t AuxSurfaceTextureCount = std::size_t(Asset::MaterialSlot::Normal) + 1;
 
@@ -431,6 +440,7 @@ namespace Physara::Renderer::Detail
         std::uint8_t attributes;
         bool mirrored;
         bool doubleSided;
+        bool iorSpecularColor{}; ///< 当前 Draw 的受光颜色使用扩展产品角色.
     };
 
     /// @brief 相邻兼容状态的一次 indexed indirect 调用, 使用本 View 的实例块及参数区段.
@@ -598,7 +608,7 @@ namespace Physara::Renderer::Detail
 
     private:
         /// @brief 按颜色角色核对活动绑定并取得设备的固定布局. 三种阴影诊断共用基色覆盖和数组查询配方.
-        void PrepareLighting(ForwardDevice &owner, LightingProgram kind, const Shader::ProductPackages &packages);
+        void PrepareLighting(ForwardDevice &owner, Shader::ProductShader role, const Shader::ProductPackages &packages);
         /// @brief 在当前固定角色槽准备全屏颜色程序及其三个集合, 交由冻结帧持有.
         void PrepareDeferredLighting(ForwardDevice &owner, ShaderPipelineRequest key,
                                      const Shader::ProductPackages &packages);
@@ -744,7 +754,8 @@ namespace Physara::Renderer::Detail
     [[nodiscard]] VertexLayout StaticVertexLayout(std::uint8_t attributes) noexcept;
     /// @brief 把实际阶段及光照角色和固定状态映射到一个无碰撞的准备槽.
     [[nodiscard]] ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided,
-                                                        SurfacePhase phase, LightingProgram kind) noexcept;
+                                                        SurfacePhase phase, LightingProgram kind,
+                                                        bool iorSpecular = false) noexcept;
     /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
     [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
         std::uint32_t stride = 0, const char *name = "Forward buffer");

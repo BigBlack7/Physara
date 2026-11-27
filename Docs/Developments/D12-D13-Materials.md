@@ -16,9 +16,11 @@
 
 **职责位置：** Engine/Asset、Renderer/Materials、Shaders/Material/BRDF/Lighting。**前置：** 本阶段入口满足。**架构依据：** [8.5](../Architecture.md#materials)、[4.4](../Architecture.md#physical-inputs)、[8.6](../Architecture.md#lighting)。
 
-- [ ] 接入 KHR_materials_ior/specular 的规范默认值、因子/颜色/纹理与扩展关系，扩充权威 ABI 和 feature key。
-- [ ] 在共享 PixelParams 中计算 dielectric Fresnel 与能量分配，同时完成直接光和环境响应；核对标准 specular 的 F0/F90 适配，以及金属分支不受 dielectric weight 错误调制。
-- [ ] 接入 ForwardExtension、Inspector 和相同静态几何/alpha，验证不同 IOR/specular 与三路径 HDR 一致性。
+2026-11-28 已通过验收并归档。 [最终验证](../../openspec/changes/archive/2026-11-28-add-ior-specular-material-profile/tasks.md#final-verification) · [规格同步与归档](../../openspec/changes/archive/2026-11-28-add-ior-specular-material-profile/tasks.md#archive-closeout)
+
+- [x] 接入 KHR_materials_ior/specular 的规范默认值、因子/颜色/纹理与扩展关系，扩充权威 ABI 和 feature key。
+- [x] 在共享 PixelParams 中计算 dielectric Fresnel 与能量分配，同时完成直接光和环境响应；核对标准 specular 的 F0/F90 适配，以及金属分支不受 dielectric weight 错误调制。
+- [x] 接入 ForwardExtension、Inspector 和相同静态几何/alpha，验证不同 IOR/specular 与三路径 HDR 一致性。
 
 **完成条件：** 扩展通过完整输入到输出链，不只改变某条路径的直接光高光。
 

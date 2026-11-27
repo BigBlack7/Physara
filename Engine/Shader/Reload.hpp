@@ -18,7 +18,8 @@ namespace Physara::Shader
     struct ReloadLimits
     {
         std::size_t entries = 2 * ProductShaderCount;
-        std::size_t bytes = 8 * 1024 * 1024;
+        /// @brief 默认容纳当前活动代与共享接口重编所得的完整候选, 按实际大小计费.
+        std::size_t bytes = 16 * 1024 * 1024;
     };
 
     /// @brief worker 最近一次交付的占用, 以及累计包命中, 构建尝试和实际编译.

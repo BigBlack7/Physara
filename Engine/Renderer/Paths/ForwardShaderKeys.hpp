@@ -19,9 +19,11 @@ namespace Physara::Renderer::Detail
     // 深度和 GBuffer 预览各占一个屏幕槽. 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
     inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
-    // 前九项各有 set 3 配方. 后六项使用 Froxel set 0, 同一受光组合复用前面的 set 3.
+    // 基础颜色表的前九项各有 set 3 配方, 后六项使用 Froxel set 0 并复用对应的 set 3.
+    // IOR/specular 另占颜色 Pipeline 槽, 光照绑定仍由相同的灯表, 环境和阴影组合决定.
     inline constexpr std::size_t ForwardPerPassLayouts = 9;
-    inline constexpr std::size_t ForwardColorPrograms = ForwardPerPassLayouts + 6;
+    inline constexpr std::size_t BaseForwardColorPrograms = ForwardPerPassLayouts + 6;
+    inline constexpr std::size_t ForwardColorPrograms = BaseForwardColorPrograms + Shader::IorSpecularProgramCount;
     inline constexpr std::size_t CorePipelineBase = GeometryPipelineSlots * ForwardColorPrograms;
     inline constexpr std::size_t SurfaceAuxPipelineBase = CorePipelineBase + GeometryPhaseSlots;
     inline constexpr std::size_t DeferredPipelineBase = SurfaceAuxPipelineBase + GeometryPhaseSlots;

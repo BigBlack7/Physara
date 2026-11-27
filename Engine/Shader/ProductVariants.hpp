@@ -44,17 +44,47 @@ namespace Physara::Shader
         DeferredLightingIblShadows,
         SurfaceDepthPreview,
         SurfaceGBufferPreview,
+        StaticForwardIorSpecular,
+        StaticForwardIorSpecularPhysical,
+        StaticForwardIorSpecularIbl,
+        StaticForwardIorSpecularShadows,
+        StaticForwardIorSpecularPhysicalShadows,
+        StaticForwardIorSpecularIblShadows,
+        StaticForwardPlusIorSpecular,
+        StaticForwardPlusIorSpecularPhysical,
+        StaticForwardPlusIorSpecularIbl,
+        StaticForwardPlusIorSpecularShadows,
+        StaticForwardPlusIorSpecularPhysicalShadows,
+        StaticForwardPlusIorSpecularIblShadows,
         Count
     };
 
     inline constexpr std::size_t ProductShaderCount = static_cast<std::size_t>(ProductShader::Count);
     inline constexpr std::string_view PhysicalLightingField = "PHYSARA_PHYSICAL_LIGHTING";
+    inline constexpr std::string_view IorSpecularField = "PHYSARA_IOR_SPECULAR";
+    inline constexpr std::size_t IorSpecularProgramCount =
+        std::size_t(ProductShader::StaticForwardPlusIorSpecularIblShadows) -
+        std::size_t(ProductShader::StaticForwardIorSpecular) + 1;
 
-    /// @brief 固定产品角色及唯一获准的结构值. 零表示该角色未声明物理光照 define.
+    [[nodiscard]] constexpr bool IsIorSpecularProgram(ProductShader role) noexcept
+    {
+        return role >= ProductShader::StaticForwardIorSpecular &&
+            role <= ProductShader::StaticForwardPlusIorSpecularIblShadows;
+    }
+
+    /// @brief 角色按全灯/Froxel 分组, 每组为 Direct/Physical/IBL 及同序三个带阴影角色.
+    /// @pre IsIorSpecularProgram(role) 成立. 返回值用于对应组的产品路径和原生颜色程序表.
+    [[nodiscard]] constexpr std::size_t IorSpecularProgramIndex(ProductShader role) noexcept
+    {
+        return std::size_t(role) - std::size_t(ProductShader::StaticForwardIorSpecular);
+    }
+
+    /// @brief 固定产品角色及获准的结构值. 零表示相应 define 缺席.
     struct VariantKey
     {
         ProductShader role = ProductShader::Count;
         std::uint32_t physicalLighting = 0;
+        std::uint32_t iorSpecular = 0;
         bool operator==(const VariantKey &) const noexcept = default;
     };
 

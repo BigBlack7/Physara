@@ -273,13 +273,26 @@ namespace Physara::Renderer
         {
             store(production.surfaceAux, Shader::ProductShader::StaticSurfaceAux);
         }
-        // 顶点布局和绕序选择同一角色的不同 Pipeline 槽. 历史比较使用角色的包摘要.
-        if (!surfaceOnly && (composed ? auxiliary : !view.batches.empty()))
+        // 同一 View 可以同时使用核心与扩展颜色角色. 历史键记录实际绘制的每个角色.
+        if (!surfaceOnly)
         {
-            const auto key = Detail::GeometryRequest(0, false, false, Detail::SurfacePhase::Combined,
-                                                     view.environment.program);
-            store(production.forwardColor, key.role);
-            if (view.needs.NeedsEarlyDepth())
+            for (const auto &batch : view.batches)
+            {
+                const auto &draw = view.draws[batch.firstDraw];
+                const auto &material = *view.materialRows[draw.material];
+                if (composed && material.route == Detail::OpaqueSurfaceRoute::CoreDeferred)
+                {
+                    continue;
+                }
+                auto &digest = draw.iorSpecularColor ? production.forwardExtensionColor : production.forwardColor;
+                if (digest.front() == '\0')
+                {
+                    const auto key = Detail::GeometryRequest(0, false, false, Detail::SurfacePhase::Combined,
+                                                              view.environment.program, draw.iorSpecularColor);
+                    store(digest, key.role);
+                }
+            }
+            if (view.needs.NeedsEarlyDepth() && !view.batches.empty())
             {
                 store(production.earlyDepth, Shader::ProductShader::StaticDepth);
             }
@@ -1504,9 +1517,11 @@ namespace Physara::Renderer
             }
             static_cast<void>(ReadColorBuffer(graph, versions, reads, work.instanceBlocks[batch.instanceBlock]->buffer,
                                              GraphUsage::ShaderRead));
-            auto slots = material.textures.size();
+            auto slots = color && draw.iorSpecularColor ? material.textures.size() : Detail::CoreMaterialTextureCount;
             if (surfaceWrite && surfaces == RasterSurfaces::Auxiliary)
             {
+                // 原生 SurfaceAux 配方含 MASK 基色绑定. 独立 OPAQUE 行把该槽指向同一行的表面图像,
+                // 按实际绑定登记即可在图中合并相同图像的读.
                 slots = Detail::AuxSurfaceTextureCount;
             }
             else if ((!color && !surfaceWrite) || preview)

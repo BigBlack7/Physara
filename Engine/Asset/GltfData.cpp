@@ -129,9 +129,10 @@ namespace Physara::Asset::Gltf
         slot.texture = Texture(field.Field("index"));
         slot.texCoord = OptionalIndex(field.Field("texCoord")).value_or(0);
         slot.use = usage;
-        slot.domain = (usage == ImageUse::BaseColor || usage == ImageUse::Emissive) ?
-            ImageDomain::Srgb : ImageDomain::LinearData;
-        slot.alpha = AlphaMeaning::Ignored;
+        // 此时图像尚未解码. 基色槽的覆盖语义在 DecodeImages 取得源通道数后确定.
+        const auto sampling = *DescribeImageSampling(usage, false);
+        slot.domain = sampling.domain;
+        slot.alpha = sampling.alpha;
         const auto transform = field.Field("extensions").Field("KHR_texture_transform");
         slot.offset = Vector(transform.Field("offset"), slot.offset, -FloatMax, FloatMax);
         slot.scale = Vector(transform.Field("scale"), slot.scale, -FloatMax, FloatMax);
@@ -150,7 +151,32 @@ namespace Physara::Asset::Gltf
         const auto normal = field.Field("normalTexture");
         const auto occ = field.Field("occlusionTexture");
         const auto unlit = extensions.Field("KHR_materials_unlit");
+        const auto ior = extensions.Field("KHR_materials_ior");
+        const auto specular = extensions.Field("KHR_materials_specular");
         unlit.Object();
+        ior.Object();
+        specular.Object();
+        const auto specularGlossiness = extensions.Field("KHR_materials_pbrSpecularGlossiness");
+        if ((ior || specular) && (unlit || specularGlossiness))
+        {
+            (unlit ? unlit : specularGlossiness).Error(
+                "Cannot be combined with KHR_materials_ior or KHR_materials_specular");
+        }
+        material.hasIorExtension = static_cast<bool>(ior);
+        material.hasSpecularExtension = static_cast<bool>(specular);
+        if (const auto input = ior.Field("ior"))
+        {
+            const auto number = input.Number();
+            // 在窄化前区分合法的兼容零值和接近 0 或 1 的非法输入.
+            if ((number != 0 && number < 1) || number > FloatMax)
+            {
+                input.Error("ior must be zero or a finite float32 value greater than or equal to 1");
+            }
+            material.ior = static_cast<float>(number);
+        }
+        material.specularFactor = Scalar(specular.Field("specularFactor"), 1, 0, 1);
+        material.specularColorFactor =
+            Vector(specular.Field("specularColorFactor"), material.specularColorFactor, 0, FloatMax);
         material.unlit = static_cast<bool>(unlit);
         material.baseColor = Vector(pbr.Field("baseColorFactor"), material.baseColor, 0, 1);
         material.emissive = Vector(field.Field("emissiveFactor"), material.emissive, 0, 1);
@@ -199,6 +225,8 @@ namespace Physara::Asset::Gltf
         add(MaterialSlot::Normal, normal, ImageUse::Normal);
         add(MaterialSlot::Occlusion, occ, ImageUse::OcclusionRoughnessMetallic);
         add(MaterialSlot::Emissive, field.Field("emissiveTexture"), ImageUse::Emissive);
+        add(MaterialSlot::Specular, specular.Field("specularTexture"), ImageUse::Specular);
+        add(MaterialSlot::SpecularColor, specular.Field("specularColorTexture"), ImageUse::SpecularColor);
         return material;
     }
 
@@ -407,8 +435,7 @@ namespace Physara::Asset::Gltf
             if (color)
             {
                 const auto image = m_Record.textures[color->texture].image;
-                color->alpha = m_Record.images[image].pixels.hasSourceAlpha ?
-                    AlphaMeaning::StraightCoverage : AlphaMeaning::Opaque;
+                color->alpha = DescribeImageSampling(color->use, m_Record.images[image].pixels.hasSourceAlpha)->alpha;
             }
         }
     }

@@ -27,7 +27,7 @@ namespace Physara::RHI::OpenGL
             !glClearNamedFramebufferiv || !glClearNamedFramebufferuiv || !glClearNamedFramebufferfi ||
             !glCopyImageSubData || !glBlitNamedFramebuffer || !glNamedFramebufferDrawBuffer ||
             !glDrawArraysInstancedBaseInstance || !glDrawElementsInstancedBaseVertexBaseInstance ||
-            !glDrawElementsIndirect || !glMultiDrawElementsIndirect)
+            !glDrawElementsIndirect || !glMultiDrawElementsIndirect || !glMemoryBarrierByRegion)
         {
             device.Report("CreateDevice.Graphics", "Unsupported: required graphics execution entry missing");
             return false;

@@ -27,8 +27,30 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
         MaterialUvSample sampleUv = MaterialUv(3, gradients);
         occlusion = textureGrad(sampler2D(occlusionImage, occlusionSampler), sampleUv.uv, sampleUv.dx, sampleUv.dy).r;
     }
+#ifdef PHYSARA_IOR_SPECULAR
+    // 两个槽独立选择 UV 和 sampler. 强度取线性 A, 镜面色的 RGB 由 sRGB 纹理格式解码.
+    const int strengthSlot = int(SpecularTextureIndex);
+    const int colorSlot = int(SpecularColorTextureIndex);
+    vec4 specular = PHYSARA_FORWARD_MATERIAL.specular;
+    if (HasMaterialTexture(strengthSlot))
+    {
+        MaterialUvSample sampleUv = MaterialUv(strengthSlot, gradients);
+        specular.w *= textureGrad(sampler2D(specularImage, specularSampler),
+                                  sampleUv.uv, sampleUv.dx, sampleUv.dy).a;
+    }
+    if (HasMaterialTexture(colorSlot))
+    {
+        MaterialUvSample sampleUv = MaterialUv(colorSlot, gradients);
+        specular.rgb *= textureGrad(sampler2D(specularColorImage, specularColorSampler),
+                                    sampleUv.uv, sampleUv.dx, sampleUv.dy).rgb;
+    }
+#endif
     return MaterialInputs(baseColor, roughnessMetallic.x, roughnessMetallic.y,
-                          mix(1.0, occlusion, PHYSARA_FORWARD_MATERIAL.surface.z));
+                          mix(1.0, occlusion, PHYSARA_FORWARD_MATERIAL.surface.z)
+#ifdef PHYSARA_IOR_SPECULAR
+                          , PHYSARA_FORWARD_MATERIAL.ior, specular.w, specular.rgb
+#endif
+                          );
 }
 
 // 调用前须确认 HasMaterialTexture(2). 线性 RGB 从 [0, 1] 解码为切线空间方向, 只缩放 XY.

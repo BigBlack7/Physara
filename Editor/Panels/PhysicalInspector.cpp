@@ -21,7 +21,8 @@ namespace Physara::Editor::Detail
 {
     static constexpr auto Enter = ImGuiInputTextFlags_EnterReturnsTrue;
     static constexpr std::array TextureNames{"Base color texture [sRGB]", "Texture [Roughness = G, Metallic = B]",
-        "Normal texture [linear]", "Occlusion texture [R]", "Emissive texture [sRGB]"};
+        "Normal texture [linear]", "Occlusion texture [R]", "Emissive texture [sRGB]",
+        "Specular strength texture [A]", "Specular color texture [sRGB]"};
     static_assert(TextureNames.size() == Scene::MaterialSlotCount);
     static constexpr double DegreesPerRadian = 180.0 / std::numbers::pi;
 
@@ -269,6 +270,10 @@ namespace Physara::Editor::Detail
         const auto &value = effective->values;
         const auto sparse = over ? over->material : Scene::MaterialOverride{};
         using Material = Scene::MaterialOverride;
+        if (effective->iorSpecular)
+        {
+            ImGui::TextUnformatted("IOR/specular lighting profile");
+        }
         DrawMaterialField("Base color (linear RGBA)", target, &Material::baseColor, sparse, value.baseColor, frame);
         if (!value.unlit)
         {
@@ -280,6 +285,17 @@ namespace Physara::Editor::Detail
             DrawMaterialField("Emission (linear RGB)", target, &Material::emissive, sparse, value.emissive, frame);
             DrawMaterialField("Emissive strength", target, &Material::emissiveStrength, sparse,
                               value.emissiveStrength, frame);
+            if (value.ior == 0)
+            {
+                ImGui::TextDisabled("IOR 0 (inherited compatibility mode)");
+            }
+            else
+            {
+                DrawMaterialField("Index of refraction", target, &Material::ior, sparse, value.ior, frame);
+            }
+            DrawMaterialField("Specular factor", target, &Material::specularFactor, sparse, value.specularFactor, frame);
+            DrawMaterialField("Specular color (linear RGB)", target, &Material::specularColorFactor, sparse,
+                              value.specularColorFactor, frame);
         }
         DrawAlpha(target, sparse, value.alphaMode, frame);
         if (value.alphaMode == Asset::ModelAlpha::Mask)
@@ -481,7 +497,7 @@ namespace Physara::Editor::Detail
                 const auto report = model.supportReport.View();
                 ImGui::TextWrapped("Model revision %llu: %s", static_cast<unsigned long long>(model.revision.value),
                                    report.empty() ? "Static core profile" : report.data());
-                if (entity->record.properties.castsShadow && entity->sourceNode && entity->sourceNode->mesh)
+                if (entity->record.properties.castsShadow.has_value() && entity->sourceNode && entity->sourceNode->mesh)
                 {
                     PushIdentity(model.asset.generation);
                     PushIdentity(model.revision.value);

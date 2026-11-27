@@ -3,10 +3,13 @@
 /// @file
 /// @brief 场景 v1 编解码与文件作业交换拥有型记录. JSON 类型留在实现中.
 
+#include <array>
 #include <filesystem>
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <Core/ResourceIO.hpp>
@@ -17,6 +20,17 @@ namespace Physara::Editor::Detail
     inline constexpr std::size_t DocumentByteLimit = 16 * 1024 * 1024;
     inline constexpr int DocumentDepthLimit = 32;
     inline constexpr std::size_t DocumentNodeLimit = 2'000'000;
+
+    /// @brief v1 的 textures 对象按材质槽寻址. 下标与 Scene 的稀疏覆盖数组一致.
+    inline constexpr std::array<std::string_view, Scene::MaterialSlotCount> DocumentTextureSlots{
+        "baseColor", "metallicRoughness", "normal", "occlusion", "emissive", "specular", "specularColor"};
+    /// @brief 外置图像引用另存 use. 遮蔽与金属粗糙度两个槽共用同一线性数据用途.
+    inline constexpr std::array<std::pair<std::string_view, Asset::ImageUse>, 6> DocumentTextureUses{{
+        {"baseColor", Asset::ImageUse::BaseColor},
+        {"occlusionRoughnessMetallic", Asset::ImageUse::OcclusionRoughnessMetallic},
+        {"normal", Asset::ImageUse::Normal}, {"emissive", Asset::ImageUse::Emissive},
+        {"specular", Asset::ImageUse::Specular}, {"specularColor", Asset::ImageUse::SpecularColor}
+    }};
 
     /// @brief 指向 entities 中实例根的未解析模型引用. scene 和摘要共同限定源节点的解释版本.
     struct ModelFileReference

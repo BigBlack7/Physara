@@ -46,6 +46,8 @@ namespace Physara::Renderer
         std::filesystem::path surfaceAux;
         std::array<std::filesystem::path, 6> deferredColors; ///< 与前向 Froxel 受光角色的次序一致.
         std::array<std::filesystem::path, 2> surfacePreviews; ///< 主 D32 与最终 GBuffer 的预览配方.
+        /// @brief 由 IorSpecularProgramIndex 寻址. Deferred 的扩展颜色和 Forward+ 共用 Froxel 组的包.
+        std::array<std::filesystem::path, Shader::IorSpecularProgramCount> iorSpecularColors{};
     };
 
     /// @brief 按实际消费者准备表面. 普通主视口由 ShadeOpaque 同时写颜色和深度.

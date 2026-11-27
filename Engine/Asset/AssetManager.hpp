@@ -118,7 +118,9 @@ namespace Physara::Asset
         Emissive,
         Normal,
         OcclusionRoughnessMetallic,
-        LinearData
+        LinearData,
+        Specular,
+        SpecularColor
     };
 
     enum class ImageDomain
@@ -135,6 +137,16 @@ namespace Physara::Asset
         Ignored,
         Data
     };
+
+    /// @brief 同一用途在模型内嵌图像与项目纹理中的采样解释.
+    struct ImageSampling
+    {
+        ImageDomain domain;
+        AlphaMeaning alpha;
+    };
+
+    /// @brief 沿用途解释 RGB 和 A. hasSourceAlpha 只影响覆盖槽的缺省值.
+    [[nodiscard]] std::optional<ImageSampling> DescribeImageSampling(ImageUse use, bool hasSourceAlpha) noexcept;
 
     /// @brief 采样解释独立于像素. image 的拥有引用固定了 AssetId 和 ContentRevision.
     /// use 是用途身份的一部分; DescribeImage 只附加解释, 不转换字节或生成 GPU 资源.

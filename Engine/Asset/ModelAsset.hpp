@@ -87,7 +87,7 @@ namespace Physara::Asset
         std::uint32_t sampler;
     };
 
-    /// @brief 固定核心槽序. MetallicRoughness 使用 G/B, Occlusion 使用 R, Normal 保留标准 XYZ 方向.
+    /// @brief 材质槽顺序. 扩展槽位于固定的核心槽之后, Specular 使用 A, SpecularColor 使用 sRGB RGB.
     enum class MaterialSlot
     {
         BaseColor,
@@ -95,12 +95,14 @@ namespace Physara::Asset
         Normal,
         Occlusion,
         Emissive,
+        Specular,
+        SpecularColor,
         Count
     };
 
     /// @brief texture 和 texCoord 引用所属模型的纹理与顶点集. UV 变换不烘进几何.
     /// texCoord 已采用 KHR_texture_transform 的覆盖值; 变换顺序为 scale, rotation, offset.
-    /// domain 只描述 RGB 解释, alpha 的使用还须结合材质 alphaMode.
+    /// domain 只描述 RGB 解释. 覆盖 A 结合 alphaMode, specular 强度 A 是独立数据.
     struct ModelTextureSlot
     {
         std::uint32_t texture{};
@@ -137,6 +139,11 @@ namespace Physara::Asset
         bool doubleSided = false;
         bool unlit = false;
         std::array<std::optional<ModelTextureSlot>, static_cast<std::size_t>(MaterialSlot::Count)> slots;
+        float ior = 1.5f; ///< 源中的零值保留兼容模式, 大于等于 1 的值是物理折射率.
+        float specularFactor = 1;
+        std::array<float, 3> specularColorFactor{1, 1, 1};
+        bool hasIorExtension = false; ///< 空扩展对象仍表示启用相应材质模型.
+        bool hasSpecularExtension = false;
     };
 
     /// @brief 原始透视参数, yfov 为弧度, 裁剪距离为米. 空 zfar 为无限远, 空 aspectRatio 由 View 决定.

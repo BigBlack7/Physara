@@ -85,6 +85,42 @@ namespace Physara::Shader
         {{ProductShader::SurfaceGBufferPreview}, "SurfaceGBufferPreview", "SurfacePreview",
          "Passes/SurfacePreview/SurfaceGBufferPreview.json", "Passes/Forward/Display.vert",
          "Passes/SurfacePreview/GBuffer.frag"},
+        {{ProductShader::StaticForwardIorSpecular, 0, 1}, "StaticForwardIorSpecular", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecular.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardIorSpecularPhysical, 1, 1}, "StaticForwardIorSpecularPhysical", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecularPhysical.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardIorSpecularIbl, 2, 1}, "StaticForwardIorSpecularIbl", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecularIbl.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardIorSpecularShadows, 0, 1}, "StaticForwardIorSpecularShadows", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecularShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardIorSpecularPhysicalShadows, 1, 1}, "StaticForwardIorSpecularPhysicalShadows", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecularPhysicalShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardIorSpecularIblShadows, 2, 1}, "StaticForwardIorSpecularIblShadows", "StaticForward",
+         "Passes/Forward/StaticForwardIorSpecularIblShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecular, 0, 1}, "StaticForwardPlusIorSpecular", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecular.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecularPhysical, 1, 1}, "StaticForwardPlusIorSpecularPhysical", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecularPhysical.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecularIbl, 2, 1}, "StaticForwardPlusIorSpecularIbl", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecularIbl.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecularShadows, 0, 1}, "StaticForwardPlusIorSpecularShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecularShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecularPhysicalShadows, 1, 1}, "StaticForwardPlusIorSpecularPhysicalShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecularPhysicalShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusIorSpecularIblShadows, 2, 1}, "StaticForwardPlusIorSpecularIblShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusIorSpecularIblShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.
@@ -134,16 +170,20 @@ namespace Physara::Shader
             return MakeFailure(ErrorCode::UnsupportedProfile, "Unknown product Shader role.");
         }
         VariantKey key{program->key.role};
+        constexpr std::array members{
+            std::pair{PhysicalLightingField, &VariantKey::physicalLighting},
+            std::pair{IorSpecularField, &VariantKey::iorSpecular}};
         for (const auto &field : fields)
         {
-            if (field.name != PhysicalLightingField || key.physicalLighting != 0 ||
-                field.value != program->key.physicalLighting || field.value == 0)
+            const auto found = std::ranges::find_if(members, [&](const auto &entry) { return entry.first == field.name; });
+            const auto member = found == members.end() ? nullptr : found->second;
+            if (!member || key.*member != 0 || field.value != program->key.*member || field.value == 0)
             {
                 Core::BoundedText reason("/program/defines: ");
                 reason.Append(field.name);
                 reason.Append("=");
                 AppendValue(reason, field.value);
-                if (field.name == PhysicalLightingField && key.physicalLighting != 0)
+                if (member && key.*member != 0)
                 {
                     reason.Append(" duplicates this field in the product variant.");
                 }
@@ -151,27 +191,32 @@ namespace Physara::Shader
                 {
                     reason.Append(" is not allowed for ");
                     reason.Append(program->name);
-                    if (program->key.physicalLighting != 0)
+                    if (member && program->key.*member != 0)
                     {
-                        reason.Append("; the approved combination requires ");
-                        reason.Append(PhysicalLightingField);
+                        reason.Append(". The approved combination requires ");
+                        reason.Append(found->first);
                         reason.Append("=");
-                        AppendValue(reason, program->key.physicalLighting);
+                        AppendValue(reason, program->key.*member);
                         reason.Append(".");
                     }
                     else
                     {
-                        reason.Append("; this role declares no variant fields.");
+                        reason.Append(". This field is outside the role's declared variant.");
                     }
                 }
                 return MakeFailure(ErrorCode::UnsupportedProfile, reason.View());
             }
-            key.physicalLighting = field.value;
+            key.*member = field.value;
         }
-        if (key != program->key)
+        for (const auto &[fieldName, member] : members)
         {
-            return MakeFailure(ErrorCode::UnsupportedProfile,
-                               "/program/defines: missing required PHYSARA_PHYSICAL_LIGHTING field.");
+            if (key.*member != program->key.*member)
+            {
+                Core::BoundedText reason("/program/defines: missing required ");
+                reason.Append(fieldName);
+                reason.Append(" field.");
+                return MakeFailure(ErrorCode::UnsupportedProfile, reason.View());
+            }
         }
         return key;
     }

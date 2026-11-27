@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "StaticForwardIorSpecular",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Static.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/Color.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": [
+    {
+      "name": "PHYSARA_IOR_SPECULAR",
+      "allowed": [
+        1
+      ],
+      "value": 1
+    }
+  ]
+}

@@ -85,6 +85,9 @@ namespace Physara::RHI::OpenGL
         // 两类状态快照均借用对象. 包保活 Pipeline 和启用 trackLiveness 的集合, 其余集合由调用方保活到完成.
         // 区域标记只记录本 recording 的显式输入, 不从跨 recording 的 native 缓存推定已设置.
         GraphicsState graphics;
+        // 仅比较上一笔成功 Draw 的 FBO 身份. SetGraphicsState 已把 FBO 加入本包的资源引用,
+        // 因此重设逻辑状态后仍可比较该地址. 新 recording 从空标记开始.
+        Framebuffer *lastEqualColorFramebuffer{};
         bool graphicsSet = false;
         ComputeState compute;
         bool computeSet = false;

@@ -4,7 +4,12 @@
   "uintConstants": {
     "CoreDeferredEligible": 1,
     "SurfaceUnlit": 2,
-    "SurfaceForwardExtension": 4
+    "SurfaceForwardExtension": 4,
+    "SpecularTextureIndex": 5,
+    "SpecularColorTextureIndex": 6,
+    "MaterialTableSlot": 5,
+    "SpecularTextureSlot": 6,
+    "SpecularColorTextureSlot": 7
   },
   "blocks": [
     {
@@ -155,11 +160,13 @@
         { "name": "emissive", "type": "float4" },
         { "name": "surface", "type": "float4" },
         { "name": "normalBasis", "type": "float4" },
-        { "name": "uvX", "type": "float4", "array": 5 },
-        { "name": "uvY", "type": "float4", "array": 5 },
+        { "name": "uvX", "type": "float4", "array": 7 },
+        { "name": "uvY", "type": "float4", "array": 7 },
         { "name": "alphaCutoff", "type": "float32" },
         { "name": "masked", "type": "uint32" },
-        { "name": "unlit", "type": "uint32" }
+        { "name": "unlit", "type": "uint32" },
+        { "name": "ior", "type": "float32" },
+        { "name": "specular", "type": "float4" }
       ]
     },
     {
@@ -196,6 +203,10 @@
     { "name": "occlusionSampler", "kind": "sampler", "set": 2, "slot": 3, "stages": ["fragment"] },
     { "name": "emissiveImage", "kind": "texture2d", "set": 2, "slot": 4, "stages": ["fragment"] },
     { "name": "emissiveSampler", "kind": "sampler", "set": 2, "slot": 4, "stages": ["fragment"] },
+    { "name": "specularImage", "kind": "texture2d", "set": 2, "slot": 6, "stages": ["fragment"] },
+    { "name": "specularSampler", "kind": "sampler", "set": 2, "slot": 6, "stages": ["fragment"] },
+    { "name": "specularColorImage", "kind": "texture2d", "set": 2, "slot": 7, "stages": ["fragment"] },
+    { "name": "specularColorSampler", "kind": "sampler", "set": 2, "slot": 7, "stages": ["fragment"] },
     { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 },
     { "name": "environment", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardEnvironment" },
     { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },

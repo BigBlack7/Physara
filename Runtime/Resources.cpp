@@ -26,7 +26,7 @@ namespace Physara::Runtime
         const std::filesystem::path executable(std::wstring_view(module.data(), length));
         // 各配置相对 exe 定位包, Renderer 按实际表面和受光角色加载.
         const auto directory = executable.parent_path();
-        return ResourceLocations{directory, (directory / EditorUiPackageRelative).lexically_normal(),
+        ResourceLocations result{directory, (directory / EditorUiPackageRelative).lexically_normal(),
                                 {(directory / StaticForwardPackageRelative).lexically_normal(),
                                  (directory / StaticDepthPackageRelative).lexically_normal(),
                                  (directory / ForwardDisplayPackageRelative).lexically_normal(),
@@ -59,5 +59,11 @@ namespace Physara::Runtime
                                   (directory / DeferredLightingIblShadowsPackageRelative).lexically_normal()},
                                  {(directory / SurfaceDepthPreviewPackageRelative).lexically_normal(),
                                   (directory / SurfaceGBufferPreviewPackageRelative).lexically_normal()}}};
+        static_assert(std::size(IorSpecularPackageRelatives) == Shader::IorSpecularProgramCount);
+        for (std::size_t i = 0; i < result.forward.iorSpecularColors.size(); ++i)
+        {
+            result.forward.iorSpecularColors[i] = (directory / IorSpecularPackageRelatives[i]).lexically_normal();
+        }
+        return result;
     }
 }

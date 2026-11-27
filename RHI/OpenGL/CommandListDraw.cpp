@@ -261,6 +261,19 @@ namespace Physara::RHI::OpenGL
         {
             return false;
         }
+        // Intel 实机的共面重画在批次间加入局部屏障后得到预期覆盖色.
+        // 触发条件取上一笔成功 Draw 的只读等深状态, 以及本次 Draw 的 FBO 身份.
+        // 当前 Pipeline 可以不同. 图内跨 Pass 的资源用途与版本仍由 RenderGraph 登记.
+        if (m_Packet->lastEqualColorFramebuffer == state.framebuffer)
+        {
+            glMemoryBarrierByRegion(GL_FRAMEBUFFER_BARRIER_BIT);
+            ++m_Device->m_CommandCounts.barriers;
+            if (!m_Device->CheckNative("OrderEqualDepthColor"))
+            {
+                m_Packet->invalid = true;
+                return false;
+            }
+        }
         ApplyGraphics(state, pipeline);
         ApplyConstants(state.bindings, pipeline.Plan());
         return true;
@@ -275,8 +288,12 @@ namespace Physara::RHI::OpenGL
             return;
         }
         RecordNativeAccesses();
-        const auto &attachment = m_Packet->graphics.framebuffer->GetDesc().depthAttachment;
+        auto *framebuffer = m_Packet->graphics.framebuffer;
+        const auto &target = framebuffer->GetDesc();
+        const auto &attachment = target.depthAttachment;
         const auto &depth = pipeline.GetDesc().renderState.depthStencilState;
+        m_Packet->lastEqualColorFramebuffer = attachment.texture && attachment.isReadOnly && depth.depthTestEnable &&
+            depth.depthFunc == ComparisonFunc::Equal && !target.colorAttachments.empty() ? framebuffer : nullptr;
         // Draw 成功且允许深度写时, 按底层 mip 标记可能修改的深度内容. 同格式采样读取深度分量.
         if (attachment.texture && depth.depthTestEnable && depth.depthWriteEnable)
         {

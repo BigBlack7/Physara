@@ -67,7 +67,7 @@ uint QuerySurfaceFroxelCell(LightingSurface surface)
 // 两张局部索引表互斥, 行号同时选择灯记录和阴影引用. 正常空格仍消费全局局部灯.
 // 无有效格和溢出格沿完整灯入口求值, 不读取紧凑索引及全局局部灯数组.
 vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                            vec3 preExposedEmission, vec3 specularCompensation, uint cell)
+                            vec3 preExposedEmission, SpecularCompensation specularCompensation, uint cell)
 {
     if (cell != FroxelInvalidCell)
     {
@@ -110,7 +110,8 @@ vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 vi
 
 // 已有可靠像素和视深的调用方沿原画布查询入口选择候选.
 vec3 EvaluateFroxelLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                            vec3 preExposedEmission, vec3 specularCompensation, vec2 renderPixel, float viewDepth)
+                            vec3 preExposedEmission, SpecularCompensation specularCompensation,
+                            vec2 renderPixel, float viewDepth)
 {
     return EvaluateFroxelLighting(pixel, geometry, viewDirection, surface, preExposedEmission, specularCompensation,
                                   QueryFroxelCell(renderPixel, viewDepth));

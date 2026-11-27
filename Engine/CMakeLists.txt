@@ -60,6 +60,16 @@ physara_add_shader_program(StaticForwardPlusIbl StaticForward ../Shaders/Passes/
 physara_add_shader_program(StaticForwardPlusShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPlusPhysicalShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusPhysicalShadows.json ../Shaders PRODUCT)
 physara_add_shader_program(StaticForwardPlusIblShadows StaticForward ../Shaders/Passes/Forward/StaticForwardPlusIblShadows.json ../Shaders PRODUCT)
+# IOR/specular 只为受光颜色生成包. 顺序对应 ProductShader 的全灯与 Froxel 角色.
+set(iorSpecularPrograms
+    StaticForwardIorSpecular StaticForwardIorSpecularPhysical StaticForwardIorSpecularIbl
+    StaticForwardIorSpecularShadows StaticForwardIorSpecularPhysicalShadows StaticForwardIorSpecularIblShadows
+    StaticForwardPlusIorSpecular StaticForwardPlusIorSpecularPhysical StaticForwardPlusIorSpecularIbl
+    StaticForwardPlusIorSpecularShadows StaticForwardPlusIorSpecularPhysicalShadows StaticForwardPlusIorSpecularIblShadows
+)
+foreach(program IN LISTS iorSpecularPrograms)
+    physara_add_shader_program(${program} StaticForward ../Shaders/Passes/Forward/${program}.json ../Shaders PRODUCT)
+endforeach()
 # 核心屏幕光照使用相同的灯光 ABI. 每个 role 只建立一个 RGBA16F 全屏 Pipeline.
 set(deferredPrograms DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
     DeferredLightingPhysicalShadows DeferredLightingIblShadows)
@@ -116,12 +126,13 @@ set_target_properties(PhysaraRenderer PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
+set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_IOR_SPECULAR_PROGRAMS "${iorSpecularPrograms}")
 foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms}
-        ${surfacePreviewPrograms})
+        ${surfacePreviewPrograms} ${iorSpecularPrograms})
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

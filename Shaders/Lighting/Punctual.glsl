@@ -1,5 +1,5 @@
 // 不透明表面的逐灯求值. 灯量保留 lux/candela, 距离为米, 输出为当轮预曝光线性工作色.
-// 衰减采用项目的四次距离窗和 Khronos 余弦平方角衰减. 逐灯 BRDF 由核心库提供.
+// 衰减采用项目的四次距离窗和 Khronos 余弦平方角衰减. 各材质波瓣由共享 BRDF 提供.
 #include <Source/BRDF/CoreBrdf.glsl>
 #include <Source/Geometry/LightingPosition.glsl>
 #include <Source/Geometry/SurfaceGeometry.glsl>
@@ -11,7 +11,7 @@
 // 距离按最大分量缩放, 避免 r^2 自身的溢出及除以零. D 为发射轴, L 由表面指向灯.
 vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, PixelParams pixel,
                     SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                    float exposureMantissa, int exposureExponent, vec3 specularCompensation)
+                    float exposureMantissa, int exposureExponent, SpecularCompensation specularCompensation)
 {
     if (light.intensity == 0.0)
     {
@@ -91,14 +91,18 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
     float intensityMantissa = frexp(light.intensity, intensityExponent);
     float weight = (noL * attenuation) * (intensityMantissa * exposureMantissa) /
                    (distanceMantissa * distanceMantissa);
-    return ScaleWorkingLight((lobes.diffuse + lobes.specular * specularCompensation) * light.color * weight,
+    vec3 specular = lobes.specular * specularCompensation.base;
+#ifdef PHYSARA_IOR_SPECULAR
+    specular += lobes.metalSpecular * specularCompensation.metal;
+#endif
+    return ScaleWorkingLight((lobes.diffuse + specular) * light.color * weight,
                              intensityExponent + exposureExponent - 2 * distanceExponent);
 }
 
 // 以预曝光自发光为起值, 按完整灯表的前缀顺序累加. 完整模式使用两个有效段, Froxel 使用方向灯段.
 // count 是从第零行起读取的条目数. 返回累加值及预曝光的尾数和指数, 供调用方继续逐行累加后限幅.
 vec3 EvaluateLightingPrefix(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection,
-                            LightingSurface surface, vec3 preExposedEmission, vec3 specularCompensation,
+                            LightingSurface surface, vec3 preExposedEmission, SpecularCompensation specularCompensation,
                             uint count, out float exposure, out int exponent)
 {
     exposure = frexp(perView.preExposure, exponent);
@@ -114,7 +118,7 @@ vec3 EvaluateLightingPrefix(PixelParams pixel, SurfaceGeometry geometry, vec3 vi
 
 // 完整灯模式也是 Froxel 不可查询或溢出时的着色入口. 自发光以工作域值进入累加.
 vec3 EvaluateLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection, LightingSurface surface,
-                      vec3 preExposedEmission, vec3 specularCompensation)
+                      vec3 preExposedEmission, SpecularCompensation specularCompensation)
 {
     float exposure;
     int exponent;

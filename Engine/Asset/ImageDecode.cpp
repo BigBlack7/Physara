@@ -255,27 +255,35 @@ namespace Physara::Asset
                          channels == 2 || channels == 4, *size, {std::move(pixels), data}};
     }
 
-    std::optional<ImageSample> DescribeImage(ImageVersion image, ImageUse use) noexcept
+    std::optional<ImageSampling> DescribeImageSampling(ImageUse use, bool hasSourceAlpha) noexcept
     {
-        if (!image)
-        {
-            return std::nullopt;
-        }
         switch (use)
         {
         case ImageUse::BaseColor:
         case ImageUse::EditorColor:
-        {
-            const auto alpha = image->image.hasSourceAlpha ? AlphaMeaning::StraightCoverage : AlphaMeaning::Opaque;
-            return ImageSample{std::move(image), use, ImageDomain::Srgb, alpha};
-        }
+            return ImageSampling{ImageDomain::Srgb,
+                                 hasSourceAlpha ? AlphaMeaning::StraightCoverage : AlphaMeaning::Opaque};
         case ImageUse::Emissive:
-            return ImageSample{std::move(image), use, ImageDomain::Srgb, AlphaMeaning::Ignored};
+        case ImageUse::SpecularColor:
+            return ImageSampling{ImageDomain::Srgb, AlphaMeaning::Ignored};
         case ImageUse::Normal:
         case ImageUse::OcclusionRoughnessMetallic:
-            return ImageSample{std::move(image), use, ImageDomain::LinearData, AlphaMeaning::Ignored};
+            return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Ignored};
         case ImageUse::LinearData:
-            return ImageSample{std::move(image), use, ImageDomain::LinearData, AlphaMeaning::Data};
+        case ImageUse::Specular:
+            return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Data};
+        }
+        return std::nullopt;
+    }
+
+    std::optional<ImageSample> DescribeImage(ImageVersion image, ImageUse use) noexcept
+    {
+        if (image)
+        {
+            if (const auto sampling = DescribeImageSampling(use, image->image.hasSourceAlpha))
+            {
+                return ImageSample{std::move(image), use, sampling->domain, sampling->alpha};
+            }
         }
         return std::nullopt;
     }

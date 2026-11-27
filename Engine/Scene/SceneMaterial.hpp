@@ -13,6 +13,7 @@
 namespace Physara::Scene
 {
     /// @brief 缺席的字段沿用固定模型. 颜色因子在线性域.
+    /// 显式的 IOR 或镜面字段参与 profile 选择, 即使数值与继承值相等也须保留到清除覆盖.
     struct MaterialOverride
     {
         std::optional<std::array<float, 4>> baseColor;
@@ -25,6 +26,9 @@ namespace Physara::Scene
         std::optional<Asset::ModelAlpha> alphaMode;
         std::optional<float> alphaCutoff;
         std::optional<bool> doubleSided;
+        std::optional<float> ior;
+        std::optional<float> specularFactor;
+        std::optional<std::array<float, 3>> specularColorFactor;
 
         bool operator==(const MaterialOverride &) const = default;
     };
@@ -85,6 +89,7 @@ namespace Physara::Scene
         Asset::ModelMaterial values;
         std::array<std::optional<EffectiveTexture>, MaterialSlotCount> textures;
         std::optional<std::uint32_t> sourceTangentUv; ///< 原切线生成所用 UV, 可能与当前法线槽不同.
+        bool iorSpecular{}; ///< 源声明或当前显式覆盖启用扩展模型.
     };
 
     /// @brief 从固定模型解析已验证的稀疏覆盖. value 为空时解析标准源材质.

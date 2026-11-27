@@ -187,11 +187,23 @@ namespace Physara::Renderer::Detail
                 "materialRows", "baseColorImage", "baseColorSampler", "metallicRoughnessImage",
                 "metallicRoughnessSampler", "normalImage", "normalSampler", "occlusionImage",
                 "occlusionSampler", "emissiveImage", "emissiveSampler"};
+            // 扩展颜色片元即使绘制无贴图的实例也使用同一结构角色, 准入时须核对两个图像及各自的 sampler.
+            static constexpr auto IorSpecularMaterial = []
+            {
+                constexpr std::array<std::string_view, 4> extra{
+                    "specularImage", "specularSampler", "specularColorImage", "specularColorSampler"};
+                std::array<std::string_view, ColorMaterial.size() + extra.size()> all{};
+                std::ranges::copy(ColorMaterial, all.begin());
+                std::ranges::copy(extra, all.begin() + ColorMaterial.size());
+                return all;
+            }();
+            const auto material = Shader::IsIorSpecularProgram(role) ?
+                std::span<const std::string_view>(IorSpecularMaterial) : std::span<const std::string_view>(ColorMaterial);
             const std::array color{
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
                     froxels ? std::span<const std::string_view>(FroxelViewResources) :
                               std::span<const std::string_view>(View)},
-                Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, ColorMaterial}};
+                Shader::ExpectedActiveResources{Shader::Stage::Fragment, 2, material}};
             if (const auto failure = Shader::CheckActiveResources(package, color))
             {
                 return failure;

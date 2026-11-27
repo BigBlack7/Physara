@@ -71,8 +71,9 @@ namespace Physara::Asset::Gltf
         add(out.index, field.Field("indices"), Attribute::Index);
 
         const auto &surface = record.materials[material];
-        constexpr std::array<std::string_view, 5> Slots{
-            "baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(MaterialSlot::Count)> Slots{
+            "baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture",
+            "specularTexture", "specularColorTexture"};
         for (std::size_t i = 0; i < surface.slots.size(); ++i)
         {
             if (const auto &slot = surface.slots[i]; slot)

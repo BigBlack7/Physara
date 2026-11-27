@@ -156,7 +156,7 @@ namespace Physara::Renderer::Detail
     {
         if (a.baseColor != b.baseColor || a.emissive != b.emissive || a.surface != b.surface ||
             a.normalBasis != b.normalBasis || a.alphaCutoff != b.alphaCutoff || a.masked != b.masked ||
-            a.unlit != b.unlit)
+            a.unlit != b.unlit || a.ior != b.ior || a.specular != b.specular)
         {
             return false;
         }
@@ -181,6 +181,10 @@ namespace Physara::Renderer::Detail
         out.alphaCutoff = source.alphaCutoff;
         out.masked = source.alphaMode == Asset::ModelAlpha::Mask ? 1u : 0u;
         out.unlit = source.unlit ? 1u : 0u;
+        out.ior = source.ior;
+        out.specular = {source.specularColorFactor[0], source.specularColorFactor[1], source.specularColorFactor[2],
+                        source.specularFactor};
+        static_assert(out.uvX.size() == Scene::MaterialSlotCount && out.uvY.size() == Scene::MaterialSlotCount);
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
             const auto &texture = material.textures[i];
@@ -233,24 +237,32 @@ namespace Physara::Renderer::Detail
         return nullptr;
     }
 
-    /// @brief 由有效纹理槽一次确定几何所需属性和双面状态.
+    /// @brief 由有效纹理槽一次确定各表面角色所需的属性和双面状态.
     static MaterialGeometry MaterialRequirements(const Scene::EffectiveMaterial &material) noexcept
     {
         MaterialGeometry result{.doubleSided = material.values.doubleSided};
-        for (const auto &slot : material.textures)
+        const bool masked = material.values.alphaMode == Asset::ModelAlpha::Mask;
+        for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
-            if (slot)
+            if (const auto &slot = material.textures[i])
             {
-                result.attributes |= slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
+                const auto uv = slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
+                auto &attributes = i < CoreMaterialTextureCount ? result.attributes : result.specularAttributes;
+                attributes |= uv;
+                if (i < AuxSurfaceTextureCount && (i != 0 || masked))
+                {
+                    result.surfaceAttributes |= uv;
+                }
             }
         }
         if (const auto &normal = material.textures[NormalSlot])
         {
             result.attributes |= VertexTangent;
+            result.surfaceAttributes |= VertexTangent;
             result.normalUv = static_cast<std::int8_t>(normal->slot.texCoord);
         }
         const auto &baseColor = material.textures.front();
-        if (material.values.alphaMode == Asset::ModelAlpha::Mask && baseColor)
+        if (masked && baseColor)
         {
             result.shadowAttributes = baseColor->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
         }
@@ -272,13 +284,24 @@ namespace Physara::Renderer::Detail
             return;
         }
         // 集合绑定整张材质页. 即使实例的数值行不同, 页和采样组合相同时也可共用该集合.
+        // UV 数组按材质槽连续编号. 构造设备绑定时要跳过 t5 的材质表, 扩展图像及 sampler 落在 6 和 7.
         RHI::BindingSetDesc bindings;
-        bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(MaterialTableSlot, row.storage.page->buffer.Get()));
+        bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(StaticAbi::MaterialTableSlot,
+                                                                  row.storage.page->buffer.Get()));
         for (std::uint32_t i = 0; i < row.textures.size(); ++i)
         {
-            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(i, row.textures[i]->texture.Get())
+            auto slot = i;
+            if (i == StaticAbi::SpecularTextureIndex)
+            {
+                slot = StaticAbi::SpecularTextureSlot;
+            }
+            else if (i == StaticAbi::SpecularColorTextureIndex)
+            {
+                slot = StaticAbi::SpecularColorTextureSlot;
+            }
+            bindings.AddItem(RHI::BindingSetItem::Texture_SRV(slot, row.textures[i]->texture.Get())
                 .SetSubresources(row.textures[i]->sampling));
-            bindings.AddItem(RHI::BindingSetItem::Sampler(i, row.samplers[i].Get()));
+            bindings.AddItem(RHI::BindingSetItem::Sampler(slot, row.samplers[i].Get()));
         }
         auto binding = device.device.CreateBindingSet(bindings, device.activeShaders->programs.layouts[2].Get());
         if (!binding)
@@ -289,16 +312,23 @@ namespace Physara::Renderer::Detail
         cached = row.binding;
     }
 
-    /// @brief 准备新覆盖代或补齐缓存行未获接受的纹理. 相同字段及绑定沿用原存储.
+    /// @brief 路由只取决于冻结的有效材质, 可以供不同 View 的表面和颜色角色复用.
+    static OpaqueSurfaceRoute SurfaceRoute(const Scene::EffectiveMaterial &material) noexcept
+    {
+        if (material.values.unlit)
+        {
+            return OpaqueSurfaceRoute::Unlit;
+        }
+        return material.iorSpecular ? OpaqueSurfaceRoute::OpaqueForwardExtension : OpaqueSurfaceRoute::CoreDeferred;
+    }
+
+    /// @brief 准备新覆盖代或补齐缓存行的实际采样槽. 相同字段及绑定沿用原存储.
     static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, StaticDrawWork &frame,
         const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
-        const MaterialGeometry &geometry, const MaterialRow *cachedRow)
+        const MaterialGeometry &geometry, const MaterialRow *cachedRow, OpaqueSurfaceRoute route, std::size_t sampledSlots)
     {
         auto &uploads = frame.uploads;
         const auto values = cachedRow ? cachedRow->values : EncodeMaterial(material);
-        // 当前受支持的 lit 材质均可编码到核心布局. 路由随有效材质驻留, 与覆盖模式独立.
-        const auto route = cachedRow ? cachedRow->route : (material.values.unlit ? OpaqueSurfaceRoute::Unlit
-                                                                                : OpaqueSurfaceRoute::CoreDeferred);
         if (!cachedRow)
         {
             ++frame.encodings.materials;
@@ -306,7 +336,9 @@ namespace Physara::Renderer::Detail
         // 覆盖行除 ABI 数值外还比较实际纹理代和 sampler, 同一路径的新像素也须建立新行.
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
         std::array<RHI::SamplerHandle, Scene::MaterialSlotCount> samplers;
-        for (std::size_t i = 0; i < textures.size(); ++i)
+        const auto first = std::get<4>(key) == MaterialUse::OpaqueAuxiliary ? CoverageTextureCount : 0;
+        assert(first < sampledSlots && sampledSlots <= textures.size());
+        for (std::size_t i = first; i < sampledSlots; ++i)
         {
             const auto &active = material.textures[i];
             const auto sampler = EffectiveSampler(active ? active->sampler : Asset::ModelSampler{});
@@ -314,12 +346,18 @@ namespace Physara::Renderer::Detail
             textures[i] = active ? PrepareSlot(device, uploads, std::get<0>(key), *active, sampler[0] >= 9984)
                                  : WhiteTexture(device, uploads);
         }
+        // SurfaceAux 的基色绑定服务 MASK 分支. OPAQUE 时借用该行已准备的表面图像,
+        // 使原生配方与图读仍能使用完整的绑定前缀. 非活动尾槽沿用同一个句柄.
+        std::ranges::fill(std::span(textures).first(first), textures[first]);
+        std::ranges::fill(std::span(samplers).first(first), samplers[first]);
+        std::ranges::fill(std::span(textures).subspan(sampledSlots), textures[first]);
+        std::ranges::fill(std::span(samplers).subspan(sampledSlots), samplers[first]);
         if (const auto found = device.materials.find(key);
             found != device.materials.end() && device.Current(*found->second.resident))
         {
             auto &entry = found->second;
             auto &row = *entry.resident;
-            if (row.route == route && SameMaterial(row.values, values) &&
+            if (row.route == route && row.sampledSlots == sampledSlots && SameMaterial(row.values, values) &&
                 row.textures == textures && row.samplers == samplers)
             {
                 // 这些字段只参与后续准备. 在途 Draw 已保存自己的路由和 Pipeline.
@@ -335,6 +373,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
         row->route = route;
+        row->sampledSlots = sampledSlots;
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
         device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
@@ -526,9 +565,10 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 将主可见集或当前阴影子视图中的一个 Primitive 加入调用方的批次输入.
-    /// coverageOnly 只要求基色覆盖就绪. Shader 句柄由全部 View 完成规划后的选代阶段填写.
+    /// 按覆盖、独立表面或颜色的消费范围准备纹理. Shader 句柄由 View 完成规划后的选代阶段填写.
     static void PrepareDraw(ForwardDevice &device, StaticDrawWork &frame, const PreparedView &view,
-        std::uint32_t index, std::map<MaterialRow *, std::size_t> &rows, SurfacePhase phase, bool coverageOnly)
+        std::uint32_t index, std::map<MaterialRow *, std::size_t> &rows, SurfacePhase phase, bool coverageOnly,
+        bool litColor = false, bool surfaceOnly = false)
     {
         const auto &ref = view.scene.primitives[index];
         const auto &model = *view.scene.models[ref.model];
@@ -537,64 +577,84 @@ namespace Physara::Renderer::Detail
         const auto version = Version(model.asset, model.revision);
         const auto entity = ObjectIdentity(view.scene.scene, object.entity);
         MaterialKey key{version, ref.material, ref.materialOverride ? entity : ObjectKey{},
-                        ref.materialOverride ? ref.sourceSlot : 0, false};
+                        ref.materialOverride ? ref.sourceSlot : 0,
+                        surfaceOnly ? MaterialUse::OpaqueAuxiliary : MaterialUse::Main};
         ++device.materialRequests;
         const auto *cached = FindMaterial(device, key, ref.materialRevision);
+        if (surfaceOnly && !cached)
+        {
+            // 先查独立辅助绑定. 从颜色行可复用有效参数和几何要求, 仍须为 OPAQUE 准备占位绑定.
+            std::get<4>(key) = MaterialUse::Main;
+            cached = FindMaterial(device, key, ref.materialRevision);
+        }
         if (coverageOnly && (!cached || !frame.uploads.HasMaterialTexture(*cached->resident->textures.front())))
         {
             // 已有完整材质时复用其覆盖. 仅为阴影准备的材质另按实际使用的基色资源记账.
-            std::get<4>(key) = true;
+            std::get<4>(key) = MaterialUse::Coverage;
             cached = FindMaterial(device, key, ref.materialRevision);
         }
-        std::shared_ptr<MaterialRow> row;
         std::optional<Scene::EffectiveMaterial> sourceMaterial;
-        const Scene::EffectiveMaterial *material = nullptr;
-        MaterialGeometry requirements;
-        if (cached)
-        {
-            requirements = cached->geometry;
-            row = cached->resident;
-        }
-        // 深度图可能只确认材质行和基色纹理. 其余槽须各自有已接受内容或本批生产者, 才能直接使用原集合.
-        const auto sampled = coverageOnly ? CoverageTextureCount : Scene::MaterialSlotCount;
-        const bool texturesReady = row && std::ranges::all_of(std::span(row->textures).first(sampled), [&](const auto &texture)
-        {
-            return frame.uploads.HasMaterialTexture(*texture);
-        });
-        if (!texturesReady)
+        const auto resolveMaterial = [&]() -> const Scene::EffectiveMaterial *
         {
             if (ref.materialOverride)
             {
-                material = &view.scene.materialOverrides[*ref.materialOverride];
+                return &view.scene.materialOverrides[*ref.materialOverride];
             }
-            else
+            return &sourceMaterial.emplace(Scene::ResolveMaterial(model, source, nullptr));
+        };
+        const auto *material = cached ? nullptr : resolveMaterial();
+        if (material && material->values.alphaMode == Asset::ModelAlpha::Blend)
+        {
+            DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
+            return;
+        }
+        auto row = cached ? cached->resident : nullptr;
+        const auto route = row ? row->route : SurfaceRoute(*material);
+        const bool auxiliaryOnly = surfaceOnly && route != OpaqueSurfaceRoute::CoreDeferred;
+        const bool masked = row ? row->values.masked != 0 : material->values.alphaMode == Asset::ModelAlpha::Mask;
+        const auto cachedUse = std::get<4>(key);
+        if (auxiliaryOnly && !masked)
+        {
+            std::get<4>(key) = MaterialUse::OpaqueAuxiliary;
+        }
+        const bool iorSpecularColor = litColor && route == OpaqueSurfaceRoute::OpaqueForwardExtension;
+        auto sampled = iorSpecularColor ? Scene::MaterialSlotCount : CoreMaterialTextureCount;
+        if (coverageOnly)
+        {
+            sampled = CoverageTextureCount;
+        }
+        else if (auxiliaryOnly)
+        {
+            sampled = AuxSurfaceTextureCount;
+        }
+        // 仅复用同一用途的有效绑定. 颜色行真实基色与独立 OPAQUE 辅助行的占位各自就绪.
+        const bool texturesReady = row && cachedUse == std::get<4>(key) && row->sampledSlots >= sampled &&
+            std::ranges::all_of(std::span(row->textures).first(sampled), [&](const auto &texture)
             {
-                material = &sourceMaterial.emplace(Scene::ResolveMaterial(model, source, nullptr));
-            }
-            if (!row && material->values.alphaMode == Asset::ModelAlpha::Blend)
+                return frame.uploads.HasMaterialTexture(*texture);
+            });
+        if (!texturesReady)
+        {
+            if (!material)
             {
-                DescribeSkipped(frame, model, ref, "alphaMode BLEND is unsupported");
-                return;
+                material = resolveMaterial();
             }
-            if (std::get<4>(key))
+            if (std::get<4>(key) == MaterialUse::Coverage)
             {
                 if (ref.materialOverride)
                 {
                     sourceMaterial = *material;
                 }
                 auto &slots = sourceMaterial->textures;
-                const auto firstUnused = sourceMaterial->values.alphaMode == Asset::ModelAlpha::Mask ? 1u : 0u;
+                const auto firstUnused = masked ? CoverageTextureCount : 0;
                 for (std::size_t slot = firstUnused; slot < slots.size(); ++slot)
                 {
                     slots[slot].reset();
                 }
                 material = &*sourceMaterial;
             }
-            if (!row)
-            {
-                requirements = MaterialRequirements(*material);
-            }
         }
+        const auto requirements = cached ? cached->geometry : MaterialRequirements(*material);
 
         // 固定源局部基点构成缓存键. 世界 FP32 基点及余量只在对象真实换代时编码.
         assert(source.bounds);
@@ -614,9 +674,16 @@ namespace Physara::Renderer::Detail
             }
             return;
         }
-        // 深度角色的顶点布局只依赖覆盖. 命中完整材质或重建覆盖行得到相同的原生键.
-        const auto attributes = phase == SurfacePhase::ShadowDepth ? requirements.shadowAttributes :
-                                                                    requirements.attributes;
+        // 按实际角色取顶点流. 独立辅助表面无需颜色 UV, 即使本行已由颜色帧补齐.
+        auto attributes = std::uint8_t(requirements.attributes | (iorSpecularColor ? requirements.specularAttributes : 0));
+        if (coverageOnly)
+        {
+            attributes = requirements.shadowAttributes;
+        }
+        else if (auxiliaryOnly)
+        {
+            attributes = requirements.surfaceAttributes;
+        }
         std::int8_t tangentUv = -1;
         // 原切线只有在记录的 UV 与有效 normal 槽匹配时复用, 替换框架另建几何而不修改资产.
         const auto &sourceNormal = model.materials[ref.material].slots[NormalSlot];
@@ -659,7 +726,7 @@ namespace Physara::Renderer::Detail
         }
         if (texturesReady)
         {
-            // 快速命中跳过了逐槽准备. 本 View 的驻留账单仍须包含绑定集合引用的每个纹理代.
+            // 缓存行可能含更多纹理. 只登记当前绑定前缀引用的实际资源, 含原生配方要求的占位.
             ++device.materialHits;
             for (const auto &texture : std::span(row->textures).first(sampled))
             {
@@ -669,7 +736,8 @@ namespace Physara::Renderer::Detail
         }
         else
         {
-            row = PrepareMaterial(device, frame, key, ref.materialRevision, *material, requirements, row.get());
+            row = PrepareMaterial(device, frame, key, ref.materialRevision, *material, requirements, row.get(),
+                                  route, sampled);
         }
         const auto [slot, newRow] = rows.try_emplace(row.get(), frame.materialRows.size());
         if (newRow)
@@ -691,12 +759,14 @@ namespace Physara::Renderer::Detail
         }
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
             slot->second, {}, {}, {}, static_cast<std::uint32_t>(
-                GeometryRequest(attributes, mirror, doubleSided, phase, LightingProgram::Legacy).variant),
-            -z, index, attributes, mirror, doubleSided});
+                GeometryRequest(attributes, mirror, doubleSided, phase, LightingProgram::Legacy).variant +
+                (iorSpecularColor ? GeometryPipelineSlots : 0)),
+            -z, index, attributes, mirror, doubleSided, iorSpecularColor});
     }
 
-    /// @brief 给实际采样集合编号用于排序. 相同冻结输入以首次可见顺序编号, 资源地址只参与相等查找.
-    static void SortDraws(StaticDrawWork &frame)
+    /// @brief 核心和阴影按状态排序, 采样集合按首次可见顺序编号.
+    /// 主视图的辅助 Draw 在核心之后按冻结的 Primitive 顺序绘制, 与颜色角色及缓存命中无关.
+    static void SortDraws(StaticDrawWork &frame, bool orderAuxiliary = false)
     {
         std::map<SamplingKey, std::size_t> groups;
         std::vector<std::size_t> samplingOrder;
@@ -712,12 +782,30 @@ namespace Physara::Renderer::Detail
         };
         std::ranges::sort(frame.draws, [&](const DrawRecord &a, const DrawRecord &b)
         {
+            if (orderAuxiliary)
+            {
+                const auto auxiliary = [&](const DrawRecord &draw)
+                {
+                    return frame.materialRows[draw.material]->route != OpaqueSurfaceRoute::CoreDeferred;
+                };
+                const bool aAux = auxiliary(a);
+                const bool bAux = auxiliary(b);
+                if (aAux != bAux)
+                {
+                    return bAux;
+                }
+                if (aAux)
+                {
+                    // 两者都写辅助表面. 深度相等时后画者获胜, 批次状态只用于合并已经相邻的 Draw.
+                    return a.source < b.source;
+                }
+            }
             return order(a) < order(b);
         });
     }
 
-    /// @brief 比较同一 View 和实例块内仍可能变化的状态. 光照角色和前置深度由本路统一选择,
-    /// 固定状态槽同时确定颜色和深度的布局及光栅组合. 材质集合含表页和采样组合.
+    /// @brief 比较同一 View 和实例块内仍可能变化的状态. 固定状态槽区分材质颜色 profile、顶点布局及光栅组合.
+    /// 材质集合含表页和采样组合. 灯表和前置深度模式由本 View 统一选择.
     /// splitRoutes 使每批首项能代表整批的表面路由. 在相邻段上分批, 保留相等深度处的覆盖顺序.
     static bool SameBatch(const StaticDrawWork &frame, const DrawRecord &a, const DrawRecord &b,
                           bool splitRoutes) noexcept
@@ -917,7 +1005,8 @@ namespace Physara::Renderer::Detail
     static ShaderPipelineRequest DrawShader(const ForwardFrameData &frame, const DrawRecord &draw,
                                             SurfacePhase phase) noexcept
     {
-        return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program);
+        return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program,
+                               draw.iorSpecularColor);
     }
 
     /// @brief 按批首材质选择表面写入角色. 取余保留布局, 绕序及剔面, 去掉颜色阶段的等深只读状态.
@@ -971,7 +1060,8 @@ namespace Physara::Renderer::Detail
         }
         if (UsesForwardColor(needs, route))
         {
-            visit(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, ColorPhase(needs), program));
+            visit(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, ColorPhase(needs), program,
+                                  draw.iorSpecularColor));
         }
         if (needs.NeedsEarlyDepth())
         {
@@ -1274,16 +1364,19 @@ namespace Physara::Renderer::Detail
         const auto phase = ColorPhase(frame.needs);
         const bool needsSurface = frame.needs.NeedsCoreSurface();
         const bool needsColor = !frame.needs.surfaceOnly;
+        const bool litColor = needsColor && !shadowLight && IsLitPreview(mode);
+        const bool surfaceOnly = needsSurface && (!needsColor || shadowLight);
         for (const auto index : view.primitives)
         {
-            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !needsSurface);
+            PrepareDraw(device, frame, view, index, rows, phase, shadowLight != nullptr && !needsSurface, litColor,
+                        surfaceOnly);
         }
         if (frame.draws.empty() && frame.degradation)
         {
             throw ForwardFailure{ViewSettingReason::SceneUnsupported, *frame.degradation};
         }
         // 核心与辅助受光共享本 View 的灯表、Froxel、阴影及环境准备.
-        const bool usesLighting = needsColor && !shadowLight && IsLitPreview(mode) &&
+        const bool usesLighting = litColor &&
             std::ranges::any_of(frame.materialRows, [](const auto &row) { return row->values.unlit == 0; });
         frame.usesLighting = usesLighting;
         if (shadowLight)
@@ -1338,8 +1431,8 @@ namespace Physara::Renderer::Detail
                 }
             }
             PrepareViewRow(device, frame, view, mode);
-            // 先按固定状态和绑定分批, 每批首项即可代表本路的原生键. 句柄在两路完成规划后统一选代.
-            SortDraws(frame);
+            // 固定等深辅助覆盖的顺序后, 仅合并相邻且兼容的 Draw. 句柄在两路完成规划后统一选代.
+            SortDraws(frame, true);
             // GBuffer 按路由拆分批次, 两个辅助 Pass 沿相同的有序批次绘制.
             PackBatches(device, frame, needsSurface);
         }
@@ -1457,7 +1550,7 @@ namespace Physara::Renderer::Detail
         if (rebatch)
         {
             BuildBatches(device, frame, needs.NeedsCoreSurface(), batches, arguments, frame.batches);
-            // 当前路由来自固定图元的源材质. 实例覆盖保留该路由, 所以只拆合批次边界, 原间接参数照常复用.
+            // 本轮有效材质和颜色角色随 Draw 冻结. 这里只调整批次边界, 复用原间接参数.
             assert(std::ranges::equal(std::as_bytes(std::span(arguments)), frame.indirect->contents));
         }
         auto &uploads = frame.uploads;

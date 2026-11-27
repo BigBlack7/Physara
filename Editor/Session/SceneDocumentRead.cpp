@@ -54,6 +54,11 @@ namespace Physara::Editor::Detail
         /// @brief 限定 v1 对象成员集合; 必填字段由随后的 Required 单独检查.
         void Object(std::initializer_list<std::string_view> keys) const
         {
+            Object(std::span(keys.begin(), keys.size()));
+        }
+
+        void Object(std::span<const std::string_view> keys) const
+        {
             if (!m_Value.is_object())
             {
                 Error("Expected an object");
@@ -299,11 +304,23 @@ namespace Physara::Editor::Detail
         return value ? std::optional(value->Number<float>()) : std::nullopt;
     }
 
-    /// @brief 读取已修改的核心材质字段, 不在文件层展开源材质的缺省值.
+    /// @brief 在窄化前检查材料参数的文档范围. 源材质约束由 Scene 在恢复时检查.
+    static float MaterialFactor(const Field &field, double low, double high)
+    {
+        const auto number = field.Number();
+        if (number < low || number > high)
+        {
+            field.Error("Number outside the material field range");
+        }
+        return static_cast<float>(number);
+    }
+
+    /// @brief 读取已修改的材质字段, 不在文件层展开源材质的缺省值.
     static Scene::MaterialOverride ReadMaterial(const Field &field)
     {
         field.Object({"baseColor", "metallic", "roughness", "emissive", "emissiveStrength", "normalScale",
-                      "occlusionStrength", "alphaMode", "alphaCutoff", "doubleSided"});
+                      "occlusionStrength", "alphaMode", "alphaCutoff", "doubleSided", "ior", "specularFactor",
+                      "specularColorFactor"});
         Scene::MaterialOverride value;
         if (const auto color = field.Optional("baseColor"))
         {
@@ -319,6 +336,28 @@ namespace Physara::Editor::Detail
         value.occlusionStrength = OptionalFloat(field, "occlusionStrength");
         value.emissiveStrength = OptionalFloat(field, "emissiveStrength");
         value.alphaCutoff = OptionalFloat(field, "alphaCutoff");
+        constexpr auto FloatMax = std::numeric_limits<float>::max();
+        if (const auto ior = field.Optional("ior"))
+        {
+            value.ior = MaterialFactor(*ior, 1, FloatMax);
+        }
+        if (const auto specular = field.Optional("specularFactor"))
+        {
+            value.specularFactor = MaterialFactor(*specular, 0, 1);
+        }
+        if (const auto color = field.Optional("specularColorFactor"))
+        {
+            std::array<float, 3> rgb;
+            if (color->Size() != rgb.size())
+            {
+                color->Error("Expected three specular color components");
+            }
+            for (std::size_t i = 0; i < rgb.size(); ++i)
+            {
+                rgb[i] = MaterialFactor(color->Item(i), 0, FloatMax);
+            }
+            value.specularColorFactor = rgb;
+        }
         if (const auto mode = field.Optional("alphaMode"))
         {
             const auto text = mode->Text();
@@ -350,15 +389,12 @@ namespace Physara::Editor::Detail
     static Asset::ImageUse ReadUse(const Field &field)
     {
         const auto name = field.Text();
-        constexpr std::array Names{"baseColor", "occlusionRoughnessMetallic", "normal", "emissive"};
-        constexpr std::array Values{Asset::ImageUse::BaseColor, Asset::ImageUse::OcclusionRoughnessMetallic,
-                                    Asset::ImageUse::Normal, Asset::ImageUse::Emissive};
-        const auto found = std::ranges::find(Names, name);
-        if (found == Names.end())
+        const auto found = std::ranges::find(DocumentTextureUses, name, [](const auto &value) { return value.first; });
+        if (found == DocumentTextureUses.end())
         {
             field.Error("Unsupported scene texture use");
         }
-        return Values[static_cast<std::size_t>(found - Names.begin())];
+        return found->second;
     }
 
     /// @brief 读取可省略的下标或采样枚举, 有值时仍须满足整数表示约束.
@@ -413,12 +449,10 @@ namespace Physara::Editor::Detail
         }
         if (const auto textures = field.Optional("textures"))
         {
-            constexpr std::array<std::string_view, Scene::MaterialSlotCount> Slots{
-                "baseColor", "metallicRoughness", "normal", "occlusion", "emissive"};
-            textures->Object({Slots[0], Slots[1], Slots[2], Slots[3], Slots[4]});
-            for (std::size_t i = 0; i < Slots.size(); ++i)
+            textures->Object(DocumentTextureSlots);
+            for (std::size_t i = 0; i < DocumentTextureSlots.size(); ++i)
             {
-                if (const auto texture = textures->Optional(Slots[i]))
+                if (const auto texture = textures->Optional(DocumentTextureSlots[i]))
                 {
                     value.textures[i] = ReadTexture(*texture, document, value.primitiveSlot, i);
                 }

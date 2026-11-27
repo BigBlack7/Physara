@@ -11,7 +11,7 @@
 
 namespace Physara::Scene
 {
-    /// @brief 核心槽的采样解释与稳定诊断名称, 顺序对应 MaterialSlot.
+    /// @brief 各材质槽的采样解释与稳定诊断名称, 顺序对应 MaterialSlot.
     struct TextureSlotInfo
     {
         Asset::ImageUse use;
@@ -23,7 +23,9 @@ namespace Physara::Scene
         {Asset::ImageUse::OcclusionRoughnessMetallic, "Metallic/roughness"},
         {Asset::ImageUse::Normal, "Normal"},
         {Asset::ImageUse::OcclusionRoughnessMetallic, "Occlusion"},
-        {Asset::ImageUse::Emissive, "Emissive"}
+        {Asset::ImageUse::Emissive, "Emissive"},
+        {Asset::ImageUse::Specular, "Specular strength"},
+        {Asset::ImageUse::SpecularColor, "Specular color"}
     }};
 
     Asset::ImageUse TextureUse(Asset::MaterialSlot slot) noexcept
@@ -40,7 +42,7 @@ namespace Physara::Scene
     }
 
     /// @brief 检查显式字段并返回它的值域约束. 缺席值由已经验证的源材质提供.
-    static const char *MaterialError(const MaterialOverride &v) noexcept
+    static const char *MaterialError(const MaterialOverride &v, const Asset::ModelMaterial &source) noexcept
     {
         const auto unit = [](float value) { return value >= 0 && value <= 1; };
         const auto nonnegative = [](float value) { return std::isfinite(value) && value >= 0; };
@@ -75,6 +77,29 @@ namespace Physara::Scene
         if (v.alphaCutoff && !nonnegative(*v.alphaCutoff))
         {
             return "Alpha cutoff must be finite and nonnegative";
+        }
+        if (source.unlit && (v.ior || v.specularFactor || v.specularColorFactor))
+        {
+            return "IOR and specular overrides require a lit material";
+        }
+        if (v.ior)
+        {
+            if (source.ior == 0)
+            {
+                return "IOR is read-only for a source in compatibility mode";
+            }
+            if (!std::isfinite(*v.ior) || *v.ior < 1)
+            {
+                return "IOR override must be finite and greater than or equal to 1";
+            }
+        }
+        if (v.specularFactor && !unit(*v.specularFactor))
+        {
+            return "Specular factor must be finite and in [0, 1]";
+        }
+        if (v.specularColorFactor && !std::ranges::all_of(*v.specularColorFactor, nonnegative))
+        {
+            return "Linear specular color must have finite, nonnegative RGB components";
         }
         using Alpha = Asset::ModelAlpha;
         if (v.alphaMode && *v.alphaMode != Alpha::Opaque && *v.alphaMode != Alpha::Mask && *v.alphaMode != Alpha::Blend)
@@ -134,7 +159,7 @@ namespace Physara::Scene
                                                      const PrimitiveOverride &value)
     {
         const auto &base = model.materials[primitive.material];
-        if (const auto *error = MaterialError(value.material))
+        if (const auto *error = MaterialError(value.material, base))
         {
             return Core::BoundedText(error);
         }
@@ -172,6 +197,9 @@ namespace Physara::Scene
         out.alphaMode = value.alphaMode.value_or(out.alphaMode);
         out.alphaCutoff = value.alphaCutoff.value_or(out.alphaCutoff);
         out.doubleSided = value.doubleSided.value_or(out.doubleSided);
+        out.ior = value.ior.value_or(out.ior);
+        out.specularFactor = value.specularFactor.value_or(out.specularFactor);
+        out.specularColorFactor = value.specularColorFactor.value_or(out.specularColorFactor);
     }
 
     /// @brief 解析源图像和 sampler, 可分别以实例值替换.
@@ -225,9 +253,15 @@ namespace Physara::Scene
     {
         EffectiveMaterial result{model.materials[primitive.material], {}, {}};
         const auto &base = result.values.slots;
+        result.iorSpecular = result.values.hasIorExtension || result.values.hasSpecularExtension;
         if (value)
         {
             ApplyMaterial(result.values, value->material);
+            constexpr auto Specular = static_cast<std::size_t>(Asset::MaterialSlot::Specular);
+            constexpr auto SpecularColor = static_cast<std::size_t>(Asset::MaterialSlot::SpecularColor);
+            result.iorSpecular = result.iorSpecular || value->material.ior || value->material.specularFactor ||
+                                 value->material.specularColorFactor || value->textures[Specular] ||
+                                 value->textures[SpecularColor];
         }
         constexpr auto Normal = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
         if (primitive.hasTangent && base[Normal])

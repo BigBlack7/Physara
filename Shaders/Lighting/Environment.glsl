@@ -1,9 +1,34 @@
-// 两个物理变体以 NoV 和过滤后 p 查同一 DFG. 表的 R 是 B, G 是 A+B, 核心 BRDF 由此计算能量项.
-CoreDfgTerms PrepareCoreDfg(PixelParams pixel, vec3 normal, vec3 viewDirection)
+// 物理光照角色按同一 NoV 与粗糙度取 DFG. 直接镜面获得单独的补偿,
+// IBL 镜面使用已经乘过补偿的方向反照率, 两者均在外层施加光源尺度和曝光.
+struct LightingDfgTerms
+{
+    SpecularCompensation directSpecular;
+    vec3 environmentSpecular;
+    vec3 indirectDiffuseBudget;
+};
+
+// 两个物理变体以 NoV 和过滤后 p 查同一 DFG, R=B, G=A+B. IOR/specular 显式保留 F90.
+LightingDfgTerms PrepareLightingDfg(PixelParams pixel, vec3 normal, vec3 viewDirection)
 {
     float noV = CoreNormalViewCosine(normal, viewDirection);
     vec2 dfg = textureLod(sampler2D(dfgImage, environmentSampler), vec2(noV, pixel.perceptualRoughness), 0.0).rg;
-    return EvaluateCoreDfg(pixel, dfg);
+#ifdef PHYSARA_IOR_SPECULAR
+    float a = dfg.g - dfg.r;
+    float compensation = 1.0 / dfg.g - 1.0;
+    // 介质强度是 Fresnel 层的外部权重, 同时改变 F0 和 F90, 只在 E 中应用一次.
+    vec3 dielectric = (a * pixel.dielectricF0 + dfg.r) * pixel.specularWeight;
+    vec3 metal = a * pixel.baseColor + dfg.r;
+    SpecularCompensation direct = SpecularCompensation(1.0 + pixel.dielectricF0 * compensation,
+                                                       1.0 + pixel.baseColor * compensation);
+    dielectric *= direct.base;
+    metal *= direct.metal;
+    float diffuse = max(1.0 - MaxReflectance(dielectric), 0.0);
+    return LightingDfgTerms(direct, mix(dielectric, metal, pixel.metallic), vec3(diffuse));
+#else
+    CoreDfgTerms core = EvaluateCoreDfg(pixel, dfg);
+    return LightingDfgTerms(SpecularCompensation(core.specularCompensation),
+                            core.directionalAlbedo * core.specularCompensation, core.indirectDiffuseBudget);
+#endif
 }
 
 #if PHYSARA_PHYSICAL_LIGHTING == 2
@@ -27,12 +52,18 @@ vec3 DiffuseVisibility(float a, vec3 albedo)
 }
 
 // 漫反射与镜面共享环境逆旋转, 只将 AO 应用于间接分量.
-vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, CoreDfgTerms terms,
+vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, LightingDfgTerms terms,
                  float reflectionConfidence, vec3 preExposedReflection)
 {
     float noV = CoreNormalViewCosine(normal, viewDirection);
     vec3 diffuse = EvaluateEnvironmentSh(environment.environmentFromWorld * normal);
+#ifdef PHYSARA_IOR_SPECULAR
+    // 多反弹 AO 取完整介质的反照率, 再按金属度对漫反射贡献加权.
+    vec3 diffuseFactor = pixel.baseColor * terms.indirectDiffuseBudget * DiffuseVisibility(ao, pixel.baseColor);
+    diffuseFactor *= 1.0 - pixel.metallic;
+#else
     vec3 diffuseFactor = pixel.diffuseColor * terms.indirectDiffuseBudget * DiffuseVisibility(ao, pixel.diffuseColor);
+#endif
 
     vec3 reflected = mix(reflect(-viewDirection, normal), normal, pixel.alpha * pixel.alpha);
     // 主导方向在粗糙表面可能退化, 这时取同一着色法线方向.
@@ -42,7 +73,7 @@ vec3 EvaluateIbl(PixelParams pixel, vec3 normal, vec3 viewDirection, float ao, C
     float lod = environment.maxMip * p * (2.0 - p);
     vec3 specular = textureLod(samplerCube(reflectionImage, environmentSampler), direction, lod).rgb;
     float specularAo = clamp(pow(noV + ao, exp2(-16.0 * pixel.alpha - 1.0)) - 1.0 + ao, 0.0, 1.0);
-    vec3 specularFactor = terms.directionalAlbedo * terms.specularCompensation * specularAo;
+    vec3 specularFactor = terms.environmentSpecular * specularAo;
 
     ivec3 exponent = ivec3(environment.radianceExponent);
     // 屏幕反射已乘置信度与预曝光. 两路镜面使用同一核心波瓣权重, 环境标定只影响环境输入.
