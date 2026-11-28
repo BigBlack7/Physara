@@ -9,10 +9,12 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <span>
 #include <variant>
+#include <vector>
 
 #include <Core/Error.hpp>
 #include <Core/Identity.hpp>
@@ -273,7 +275,7 @@ namespace Physara::Renderer
     struct OpaqueProduction
     {
         std::array<char, 64> forwardColor{}, forwardExtensionColor{}, clearcoatColor{}, sky{}, earlyDepth{}, shadowDepth{},
-            coreSurface{}, surfaceAux{}, deferredColor{};
+            coreSurface{}, surfaceAux{}, deferredColor{}, sheenColor{}, sheenClearcoatColor{};
         RHI::Format color = RHI::Format::UNKNOWN;
         RHI::Format depth = RHI::Format::UNKNOWN;
         std::uint32_t samples = 1;
@@ -310,6 +312,38 @@ namespace Physara::Renderer
         bool diagnostic;
     };
 
+    enum class MaterialLayer : std::uint8_t { Clearcoat, Sheen };
+
+    /// @brief 源槽由实体代及其固定模型版本共同解释, 可在帧槽复用后与 Inspector 选择比对.
+    struct RenderedMaterialTarget
+    {
+        Scene::EntityHandle entity;
+        Asset::AssetId model;
+        Asset::ContentRevision revision;
+        std::uint32_t primitive;
+        bool operator==(const RenderedMaterialTarget &) const = default;
+    };
+
+    /// @brief 已录入正常颜色计划的叠层 Draw. 两层同时为真时使用同一个组合程序.
+    struct RenderedLayerDraw
+    {
+        RenderedMaterialTarget target;
+        bool clearcoat;
+        bool sheen;
+    };
+    using RenderedLayerDraws = std::shared_ptr<const std::vector<RenderedLayerDraw>>;
+
+    /// @brief 同一正常颜色候选的 Draw 身份和三个实际族摘要. 绘制记录经接受后成为只读快照.
+    struct RenderedLayerColors
+    {
+        RenderedLayerDraws draws;
+        std::array<char, 64> clearcoat{}, sheen{}, sheenClearcoat{};
+
+        /// @return 目标在本帧确有这层受光时借出其程序摘要, 否则返回空.
+        [[nodiscard]] const std::array<char, 64> *Program(const RenderedMaterialTarget &target,
+                                                           MaterialLayer layer) const noexcept;
+    };
+
     /// @brief 一代场景预览的身份, 相机与模式. 候选携带准备值, View 接受后才成为已渲染记录.
     struct RenderedScene
     {
@@ -331,7 +365,7 @@ namespace Physara::Renderer
         std::optional<RenderedShadows> shadows;
         OpaquePath opaquePath = OpaquePath::Forward; ///< 本颜色代采用的策略, 与请求及准备状态分别保存.
         std::uint64_t compatiblePredecessor{}; ///< 同一 View 此次可接续的受光提交, 零表示需重新开始.
-        std::array<char, 64> clearcoatColor{}; ///< 本次正常颜色实际使用的清漆程序摘要.
+        RenderedLayerColors layerColors;
     };
 
     /// @brief 最近一次成功诊断的身份. 普通画面替换颜色后仍可显示这次诊断的记录.
@@ -342,10 +376,9 @@ namespace Physara::Renderer
         std::uint64_t submission;
     };
 
-    /// @brief 最近获接受的清漆受光身份, 同一场景的材质诊断可以替换显示色并保留该记录.
-    struct RenderedClearcoatColor
+    /// @brief 最近获接受的扩展受光身份, 同一场景的材质诊断可以替换显示色并保留该记录.
+    struct RenderedMaterialColor
     {
-        Scene::SceneId scene;
         std::array<char, 64> program;
         std::uint64_t submission;
     };
@@ -496,11 +529,9 @@ namespace Physara::Renderer
         /// @brief 借用最近一次已接受的真实场景记录, 测试图和安全 UI 不推进此值; 后续 Publish 可替换它.
         /// @note 记录可能属于上一文档. 使用前须核对 Scene 身份及相关版本; 当前显示说明用 AcceptedScenePreview.
         [[nodiscard]] const std::optional<RenderedScene> &LastRenderedScene() const noexcept { return m_RenderedScene; }
-        /// @brief 借用同一场景最后接受的清漆受光票据. 借用至下一次 Publish 或 View 销毁.
-        [[nodiscard]] const RenderedClearcoatColor *LastClearcoatColor(Scene::SceneId scene) const noexcept
-        {
-            return m_LastClearcoatColor && m_LastClearcoatColor->scene == scene ? &*m_LastClearcoatColor : nullptr;
-        }
+        /// @brief 按固定实例和源槽查保存的叠层快照. 命中返回程序摘要及其提交票据, 无对应 Draw 时返回空.
+        [[nodiscard]] std::optional<RenderedMaterialColor> LastLayerColor(const RenderedMaterialTarget &target,
+                                                                           MaterialLayer layer) const noexcept;
         /// @brief 借用最后一次获接受的阴影诊断及票据. 展示历史时须核对 Scene, 当前颜色另见 AcceptedScenePreview.
         [[nodiscard]] const std::optional<RenderedShadowDiagnostic> &LastShadowDiagnostic() const noexcept
         {
@@ -600,11 +631,12 @@ namespace Physara::Renderer
         /// @param shaderGeneration 产品传入该帧槽持有的程序表编号, 随输出一起留给提交阶段核对.
         /// @param shadow 借用本轮受光或诊断消费的深度集合以记录候选工作量. 重新生产或无消费时解除旧深度引用.
         /// @param production 正常渲染入口传入本槽该 View 已绑定的 HDR/深度生产描述, 用于核对前次提交的兼容性.
+        /// @param layerDraws 本 View 的正常叠层 Draw 身份, 可独立于帧槽保留至诊断阶段.
         [[nodiscard]] std::variant<PreparedViewOutput, Core::BoundedText>
             PreparePreview(const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
                            std::optional<RenderedEnvironment> environment = std::nullopt,
                            std::uint64_t shaderGeneration = 0, const ShadowDepthSet *shadow = nullptr,
-                           OpaqueProduction production = {});
+                           OpaqueProduction production = {}, RenderedLayerDraws layerDraws = {});
         /// @brief 为本轮缺失的可绘输出记录同一原因, 供设置快照与 UI 占位读取.
         /// @note 已接受的显示色和有效设置仍归 View 持有.
         [[nodiscard]] PreparedViewOutput Unavailable(ViewSettingReason reason) noexcept;
@@ -670,7 +702,13 @@ namespace Physara::Renderer
         mutable std::optional<ShadowDepthSet> m_ShadowDepth; ///< 当前 View 已接受的只读深度数组.
         std::optional<ViewOutput> m_Accepted;
         std::optional<RenderedScene> m_RenderedScene;
-        std::optional<RenderedClearcoatColor> m_LastClearcoatColor;
+        struct LitLayerFrame
+        {
+            Scene::SceneId scene;
+            RenderedLayerColors colors;
+            std::uint64_t submission;
+        };
+        std::optional<LitLayerFrame> m_LitLayerFrame;
         std::optional<RenderedShadowDiagnostic> m_LastShadowDiagnostic;
     };
 }

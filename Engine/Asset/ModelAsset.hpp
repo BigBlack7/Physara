@@ -88,7 +88,7 @@ namespace Physara::Asset
         std::uint32_t sampler;
     };
 
-    /// @brief 材质槽顺序. 扩展槽位于固定的核心槽之后, Specular 使用 A, SpecularColor 使用 sRGB RGB.
+    /// @brief 材质槽顺序. 扩展槽接在核心槽之后, sheen 颜色使用 sRGB RGB, 粗糙度使用线性 A.
     enum class MaterialSlot
     {
         BaseColor,
@@ -101,12 +101,14 @@ namespace Physara::Asset
         Clearcoat,
         ClearcoatRoughness,
         ClearcoatNormal,
+        SheenColor,
+        SheenRoughness,
         Count
     };
 
     /// @brief texture 和 texCoord 引用所属模型的纹理与顶点集. UV 变换不烘进几何.
     /// texCoord 已采用 KHR_texture_transform 的覆盖值; 变换顺序为 scale, rotation, offset.
-    /// domain 只描述 RGB 解释. 覆盖 A 结合 alphaMode, specular 强度 A 是独立数据.
+    /// domain 只描述 RGB 解释. 覆盖 A 结合 alphaMode, specular 强度和 sheen 粗糙度的 A 是独立数据.
     struct ModelTextureSlot
     {
         std::uint32_t texture{};
@@ -153,6 +155,9 @@ namespace Physara::Asset
         float clearcoatNormalScale = 1;
         bool hasClearcoatExtension = false; ///< 空扩展保留声明身份, 缺省层权重为零.
         bool hasSpecularGlossinessExtension = false; ///< 核心回退仍保留用于实例扩展排斥的源声明.
+        std::array<float, 3> sheenColorFactor{};
+        float sheenRoughnessFactor{};
+        bool hasSheenExtension = false; ///< 保留源声明, 有效颜色因子决定是否准备 sheen 受光.
     };
 
     /// @brief 原始透视参数, yfov 为弧度, 裁剪距离为米. 空 zfar 为无限远, 空 aspectRatio 由 View 决定.

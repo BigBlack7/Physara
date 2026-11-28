@@ -15,7 +15,12 @@
     "ClearcoatNormalTextureIndex": 9,
     "ClearcoatTextureSlot": 8,
     "ClearcoatRoughnessTextureSlot": 9,
-    "ClearcoatNormalTextureSlot": 10
+    "ClearcoatNormalTextureSlot": 10,
+    "SheenColorTextureIndex": 10,
+    "SheenRoughnessTextureIndex": 11,
+    "SheenColorTextureSlot": 11,
+    "SheenRoughnessTextureSlot": 12,
+    "SheenReflectionSlot": 6
   },
   "blocks": [
     {
@@ -66,7 +71,8 @@
         { "name": "radianceMantissa", "type": "float32" },
         { "name": "radianceExponent", "type": "int32" },
         { "name": "shExponent", "type": "int3" },
-        { "name": "maxMip", "type": "float32" }
+        { "name": "maxMip", "type": "float32" },
+        { "name": "sheenMaxMip", "type": "float32" }
       ]
     },
     {
@@ -166,15 +172,16 @@
         { "name": "emissive", "type": "float4" },
         { "name": "surface", "type": "float4" },
         { "name": "normalBasis", "type": "float4" },
-        { "name": "uvX", "type": "float4", "array": 10 },
-        { "name": "uvY", "type": "float4", "array": 10 },
+        { "name": "uvX", "type": "float4", "array": 12 },
+        { "name": "uvY", "type": "float4", "array": 12 },
         { "name": "alphaCutoff", "type": "float32" },
         { "name": "masked", "type": "uint32" },
         { "name": "unlit", "type": "uint32" },
         { "name": "ior", "type": "float32" },
         { "name": "specular", "type": "float4" },
         { "name": "clearcoat", "type": "float4" },
-        { "name": "coatNormalBasis", "type": "float4" }
+        { "name": "coatNormalBasis", "type": "float4" },
+        { "name": "sheen", "type": "float4" }
       ]
     },
     {
@@ -221,6 +228,10 @@
     { "name": "clearcoatRoughnessSampler", "kind": "sampler", "set": 2, "slot": 9, "stages": ["fragment"] },
     { "name": "clearcoatNormalImage", "kind": "texture2d", "set": 2, "slot": 10, "stages": ["fragment"] },
     { "name": "clearcoatNormalSampler", "kind": "sampler", "set": 2, "slot": 10, "stages": ["fragment"] },
+    { "name": "sheenColorImage", "kind": "texture2d", "set": 2, "slot": 11, "stages": ["fragment"] },
+    { "name": "sheenColorSampler", "kind": "sampler", "set": 2, "slot": 11, "stages": ["fragment"] },
+    { "name": "sheenRoughnessImage", "kind": "texture2d", "set": 2, "slot": 12, "stages": ["fragment"] },
+    { "name": "sheenRoughnessSampler", "kind": "sampler", "set": 2, "slot": 12, "stages": ["fragment"] },
     { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 },
     { "name": "environment", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardEnvironment" },
     { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },
@@ -229,7 +240,8 @@
     { "name": "shadowView", "kind": "constant-buffer", "set": 3, "slot": 1, "stages": ["fragment"], "block": "ForwardShadowView" },
     { "name": "shadowImage", "kind": "texture2d-array", "set": 3, "slot": 3, "stages": ["fragment"] },
     { "name": "shadowLayers", "kind": "structured-buffer", "set": 3, "slot": 4, "stages": ["fragment"], "block": "ForwardShadowLayer", "capacity": 16 },
-    { "name": "shadowReferences", "kind": "structured-buffer", "set": 3, "slot": 5, "stages": ["fragment"], "block": "ForwardShadowReference", "capacity": 16384 }
+    { "name": "shadowReferences", "kind": "structured-buffer", "set": 3, "slot": 5, "stages": ["fragment"], "block": "ForwardShadowReference", "capacity": 16384 },
+    { "name": "sheenReflectionImage", "kind": "texturecube", "set": 3, "slot": 6, "stages": ["fragment"] }
   ],
   "io": [
     { "stage": "vertex", "direction": "in", "name": "aPosition", "location": 0, "type": "float3" },

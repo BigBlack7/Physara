@@ -9,7 +9,9 @@ struct SurfaceGeometry
     vec3 shadingNormal;
 #ifdef PHYSARA_CLEARCOAT
     vec3 coatNormal;
-    vec3 facingGeometricNormal; // 为上层光照统一半球, 原 geometricNormal 仍供阴影查询.
+#endif
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+    vec3 facingGeometricNormal; // 用于分层受光的实际半球, 原 geometricNormal 仍供阴影查询.
 #endif
 };
 

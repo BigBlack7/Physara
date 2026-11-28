@@ -154,11 +154,13 @@ namespace Physara::Asset::Gltf
         const auto ior = extensions.Field("KHR_materials_ior");
         const auto specular = extensions.Field("KHR_materials_specular");
         const auto clearcoat = extensions.Field("KHR_materials_clearcoat");
+        const auto sheen = extensions.Field("KHR_materials_sheen");
         const auto coatNormal = clearcoat.Field("clearcoatNormalTexture");
         unlit.Object();
         ior.Object();
         specular.Object();
         clearcoat.Object();
+        sheen.Object();
         const auto specularGlossiness = extensions.Field("KHR_materials_pbrSpecularGlossiness");
         // 在 Unlit 的基色专用分支之前判定同材质排斥. 空扩展对象也保留声明身份.
         if (clearcoat && (unlit || specularGlossiness))
@@ -170,6 +172,13 @@ namespace Physara::Asset::Gltf
         material.clearcoatFactor = Scalar(clearcoat.Field("clearcoatFactor"), 0, 0, 1);
         material.clearcoatRoughnessFactor = Scalar(clearcoat.Field("clearcoatRoughnessFactor"), 0, 0, 1);
         material.clearcoatNormalScale = Scalar(coatNormal.Field("scale"), 1, -FloatMax, FloatMax);
+        if (sheen && (unlit || specularGlossiness))
+        {
+            sheen.Error("Sheen cannot be combined with KHR_materials_unlit or KHR_materials_pbrSpecularGlossiness");
+        }
+        material.hasSheenExtension = static_cast<bool>(sheen);
+        material.sheenColorFactor = Vector(sheen.Field("sheenColorFactor"), material.sheenColorFactor, 0, 1);
+        material.sheenRoughnessFactor = Scalar(sheen.Field("sheenRoughnessFactor"), 0, 0, 1);
         if ((ior || specular) && (unlit || specularGlossiness))
         {
             (unlit ? unlit : specularGlossiness).Error(
@@ -243,6 +252,8 @@ namespace Physara::Asset::Gltf
         add(MaterialSlot::Clearcoat, clearcoat.Field("clearcoatTexture"), ImageUse::Clearcoat);
         add(MaterialSlot::ClearcoatRoughness, clearcoat.Field("clearcoatRoughnessTexture"), ImageUse::ClearcoatRoughness);
         add(MaterialSlot::ClearcoatNormal, coatNormal, ImageUse::ClearcoatNormal);
+        add(MaterialSlot::SheenColor, sheen.Field("sheenColorTexture"), ImageUse::SheenColor);
+        add(MaterialSlot::SheenRoughness, sheen.Field("sheenRoughnessTexture"), ImageUse::SheenRoughness);
         return material;
     }
 

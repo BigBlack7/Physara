@@ -1213,9 +1213,11 @@ namespace Physara::Runtime
             }
             return;
         }
+        const auto production = slot.forward.Production(OffscreenViewIndex);
         auto output = view.PreparePreview(prepared, slot.forward.Degradation(OffscreenViewIndex),
             slot.forward.Environment(OffscreenViewIndex), slot.forward.ShaderGeneration(),
-            slot.forward.PreparedShadowDepth(OffscreenViewIndex), slot.forward.Production(OffscreenViewIndex));
+            slot.forward.PreparedShadowDepth(OffscreenViewIndex), production,
+            slot.forward.LayerDraws(OffscreenViewIndex));
         if (const auto *error = std::get_if<Core::BoundedText>(&output))
         {
             request.reason = ViewSettingReason::ScenePreparationFailed;
@@ -1394,15 +1396,17 @@ namespace Physara::Runtime
                     remember(Failed(host, AttemptStatus::Cancelled, "Frame.ScenePrepare", failure->description).error);
                 }
                 candidate = viewportFallback(failure->reason, retainOnFailure ||
+                    failure->reason == ViewSettingReason::ScenePreparationFailed ||
                     failure->reason == ViewSettingReason::SceneLightTableRejected ||
                     failure->reason == ViewSettingReason::ShaderPending ||
                     failure->reason == ViewSettingReason::ScenePipelineUnavailable);
             }
             else
             {
+                const auto production = slot.forward.Production();
                 candidate = view.PreparePreview(prepared, slot.forward.Degradation(), slot.forward.Environment(),
-                                                slot.forward.ShaderGeneration(), slot.forward.PreparedShadowDepth(),
-                                                slot.forward.Production());
+                    slot.forward.ShaderGeneration(), slot.forward.PreparedShadowDepth(), production,
+                    slot.forward.LayerDraws());
             }
             if (host.HasFatalGraphicsError())
             {

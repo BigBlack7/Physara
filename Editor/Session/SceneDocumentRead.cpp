@@ -320,7 +320,8 @@ namespace Physara::Editor::Detail
     {
         field.Object({"baseColor", "metallic", "roughness", "emissive", "emissiveStrength", "normalScale",
                       "occlusionStrength", "alphaMode", "alphaCutoff", "doubleSided", "ior", "specularFactor",
-                      "specularColorFactor", "clearcoatFactor", "clearcoatRoughnessFactor", "clearcoatNormalScale"});
+                      "specularColorFactor", "clearcoatFactor", "clearcoatRoughnessFactor", "clearcoatNormalScale",
+                      "sheenColorFactor", "sheenRoughnessFactor"});
         Scene::MaterialOverride value;
         if (const auto color = field.Optional("baseColor"))
         {
@@ -344,6 +345,20 @@ namespace Physara::Editor::Detail
         if (const auto roughness = field.Optional("clearcoatRoughnessFactor"))
         {
             value.clearcoatRoughnessFactor = MaterialFactor(*roughness, 0, 1);
+        }
+        if (const auto color = field.Optional("sheenColorFactor"))
+        {
+            if (color->Size() != 3)
+            {
+                color->Error("Expected three sheen color components");
+            }
+            value.sheenColorFactor = std::array{MaterialFactor(color->Item(0), 0, 1),
+                                                MaterialFactor(color->Item(1), 0, 1),
+                                                MaterialFactor(color->Item(2), 0, 1)};
+        }
+        if (const auto roughness = field.Optional("sheenRoughnessFactor"))
+        {
+            value.sheenRoughnessFactor = MaterialFactor(*roughness, 0, 1);
         }
         constexpr auto FloatMax = std::numeric_limits<float>::max();
         if (const auto ior = field.Optional("ior"))

@@ -13,7 +13,7 @@
 namespace Physara::Scene
 {
     /// @brief 缺席的字段沿用固定模型. 颜色因子在线性域.
-    /// 显式扩展字段参与 profile 选择, 即使数值与继承值相等也须保留到清除覆盖.
+    /// 显式扩展字段保留覆盖身份, 即使数值与继承值相等也保留到清除覆盖.
     struct MaterialOverride
     {
         std::optional<std::array<float, 4>> baseColor;
@@ -32,6 +32,8 @@ namespace Physara::Scene
         std::optional<float> clearcoatFactor;
         std::optional<float> clearcoatRoughnessFactor;
         std::optional<float> clearcoatNormalScale;
+        std::optional<std::array<float, 3>> sheenColorFactor;
+        std::optional<float> sheenRoughnessFactor;
 
         bool operator==(const MaterialOverride &) const = default;
     };
@@ -94,6 +96,7 @@ namespace Physara::Scene
         std::optional<std::uint32_t> sourceTangentUv; ///< 原切线生成所用 UV, 可能与当前法线槽不同.
         bool iorSpecular{}; ///< 源声明或当前显式覆盖启用扩展模型.
         bool clearcoat{}; ///< 声明或覆盖启用清漆角色, 层强度仍由有效输入决定.
+        bool sheen{}; ///< 至少一个有效颜色因子大于零, 当前材质需要 sheen 受光.
     };
 
     /// @brief 从固定模型解析已验证的稀疏覆盖. value 为空时解析标准源材质.

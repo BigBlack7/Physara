@@ -9,7 +9,7 @@
 #include <glm/gtc/packing.hpp>
 
 /// @file
-/// @brief 以同一环境空间约定生成 cube、GGX mips 和 SH9. 积分留在 CPU 冷路径, 按行合作取消.
+/// @brief 以同一环境空间约定生成 cube、GGX/Charlie mips 和 SH9. CPU 合作取消按输出行检查.
 
 namespace Physara::Renderer::Detail
 {
@@ -21,6 +21,15 @@ namespace Physara::Renderer::Detail
     {
         const auto count = std::size_t(edge) * edge;
         return std::span(pixels).subspan(count * face, count);
+    }
+
+    const CubeLevel &BakedEnvironment::Level(EnvironmentCubeRole role, std::uint32_t mip) const noexcept
+    {
+        if (role == EnvironmentCubeRole::Sheen)
+        {
+            return *sheen[mip];
+        }
+        return mip == 0 ? *base : *prefiltered[mip - 1];
     }
 
     /// @brief 以 OpenGL 4.6 表 8.19 的主轴与 s/t 正方向表达贴面及逻辑行序.
@@ -271,33 +280,17 @@ namespace Physara::Renderer::Detail
         return result;
     }
 
-    std::shared_ptr<const BakedEnvironment> BakeEnvironment(const Asset::EnvironmentImage &source, bool lighting,
-        std::shared_ptr<const CubeLevel> base, std::stop_token stop)
+    /// @brief 只补齐 GGX 和 SH9, 与其它角色共享已发布的基础层.
+    static bool BakeReflections(BakedEnvironment &products, std::stop_token stop)
     {
-        auto products = std::make_shared<BakedEnvironment>();
-        products->base = std::move(base);
-        if (!products->base)
-        {
-            products->base = RenderCube(EnvironmentEdge, stop, [&](auto face, auto x, auto y) {
-                return SampleSource(source, glm::normalize(Direction(face, x, y, EnvironmentEdge)));
-            });
-        }
-        if (!products->base || stop.stop_requested())
-        {
-            return {};
-        }
-        if (!lighting)
-        {
-            return products;
-        }
-        products->sh = BuildSh(*products->base, stop);
+        products.sh = BuildSh(*products.base, stop);
         if (stop.stop_requested())
         {
-            return {};
+            return false;
         }
 
         // 普通缩小链仅作为卷积的采样输入. 输出层的内容来自独立的 GGX 半球积分.
-        std::array<std::shared_ptr<const CubeLevel>, InputMipCount> sourceLevels{products->base};
+        std::array<std::shared_ptr<const CubeLevel>, InputMipCount> sourceLevels{products.base};
         for (std::uint32_t mip = 1; mip != sourceLevels.size(); ++mip)
         {
             const auto &previous = *sourceLevels[mip - 1];
@@ -309,7 +302,7 @@ namespace Physara::Renderer::Detail
             });
             if (!sourceLevels[mip])
             {
-                return {};
+                return false;
             }
         }
         // 每个目标 texel 将同一组入射方向转到自己的切线框架, 然后按样本覆盖的立体角查源链.
@@ -317,7 +310,7 @@ namespace Physara::Renderer::Detail
         {
             const auto samples = FilterSamples(mip);
             const auto edge = EnvironmentEdge >> mip;
-            products->prefiltered[mip - 1] = RenderCube(edge, stop, [&](auto face, auto x, auto y) {
+            products.prefiltered[mip - 1] = RenderCube(edge, stop, [&](auto face, auto x, auto y) {
                 const auto n = glm::normalize(Direction(face, x, y, edge));
                 const auto axis = std::abs(n.z) < 0.999 ? glm::dvec3(0, 0, 1) : glm::dvec3(1, 0, 0);
                 const auto tangent = glm::normalize(glm::cross(axis, n));
@@ -337,12 +330,94 @@ namespace Physara::Renderer::Detail
                 }
                 return color;
             });
-            if (!products->prefiltered[mip - 1])
+            if (!products.prefiltered[mip - 1])
             {
-                return {};
+                return false;
             }
         }
-        products->lighting = true;
+        products.lighting = true;
+        return true;
+    }
+
+    /// @brief N=V 的 Charlie/Neubelt 归一卷积方向. μ 的密度正比于 μ(1−μ)^k.
+    /// 预计算分层样点, 在窄掠射波瓣中也直接命中有效方向. p 与运行时的线性 mip 映射配套.
+    static std::array<glm::dvec3, 512> SheenFilterDirections(std::uint32_t mip)
+    {
+        const double p = std::lerp(SheenMinPerceptualRoughness, 1.0, double(mip) / (SheenEnvironmentMipCount - 1));
+        const double b = 1.0 + 0.5 / (p * p);
+        std::array<glm::dvec3, 512> samples;
+        for (std::uint32_t i = 0; i != samples.size(); ++i)
+        {
+            const double survival = 1.0 - (i + 0.5) / samples.size();
+            // 对密度 mu * (1 - mu)^(b - 1) 积分可得下方的尾概率. 二分反解后每个方向占相同权重.
+            double low = 0.0;
+            double high = 1.0;
+            for (int iteration = 0; iteration < 24; ++iteration)
+            {
+                const double middle = (low + high) * 0.5;
+                if (std::pow(1.0 - middle, b) * (1.0 + b * middle) > survival)
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            const double mu = (low + high) * 0.5;
+            const double radius = std::sqrt(1.0 - mu * mu);
+            const double phi = 2.0 * Pi * RadicalInverse(i);
+            samples[i] = {radius * std::cos(phi), radius * std::sin(phi), mu};
+        }
+        return samples;
+    }
+
+    /// @brief 所有 Charlie mip 都积分源辐亮度, 每个结果归一后在运行时另乘实际视向反照率.
+    static bool BakeSheen(BakedEnvironment &products, std::stop_token stop)
+    {
+        for (std::uint32_t mip = 0; mip < SheenEnvironmentMipCount; ++mip)
+        {
+            const auto samples = SheenFilterDirections(mip);
+            const auto edge = SheenEnvironmentEdge >> mip;
+            products.sheen[mip] = RenderCube(edge, stop, [&](auto face, auto x, auto y)
+            {
+                const auto n = glm::normalize(Direction(face, x, y, edge));
+                const auto axis = std::abs(n.z) < 0.999 ? glm::dvec3(0, 0, 1) : glm::dvec3(1, 0, 0);
+                const auto tangent = glm::normalize(glm::cross(axis, n));
+                const auto bitangent = glm::cross(n, tangent);
+                Color3 sum(0);
+                for (const auto &sample : samples)
+                {
+                    const auto direction = sample.x * tangent + sample.y * bitangent + sample.z * n;
+                    sum += SampleCube(*products.base, direction);
+                }
+                return sum / double(samples.size());
+            });
+            if (!products.sheen[mip])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::shared_ptr<const BakedEnvironment> BakeEnvironment(const Asset::EnvironmentImage &source, bool lighting,
+        bool sheen, const std::shared_ptr<const BakedEnvironment> &existing, std::stop_token stop)
+    {
+        auto products = existing ? std::make_shared<BakedEnvironment>(*existing) : std::make_shared<BakedEnvironment>();
+        if (!products->base)
+        {
+            products->base = RenderCube(EnvironmentEdge, stop, [&](auto face, auto x, auto y)
+            {
+                return SampleSource(source, glm::normalize(Direction(face, x, y, EnvironmentEdge)));
+            });
+        }
+        if (!products->base || stop.stop_requested() ||
+            (lighting && !products->lighting && !BakeReflections(*products, stop)) ||
+            (sheen && !products->sheen.front() && !BakeSheen(*products, stop)))
+        {
+            return {};
+        }
         return products;
     }
 
@@ -398,9 +473,12 @@ namespace Physara::Renderer::Detail
         std::vector<ClothSample> cloth(4096);
         for (std::uint32_t y = 0; y != DfgEdge; ++y)
         {
-            // y 对应感知粗糙度 p, x 对应 NoV. 固定一行后两个积分可以分别复用其半角序列.
+            // R/G 保留原 texel 中心. B 使用平方坐标和两端样点, 将采样集中到低粗糙度和掠射端.
             const double p = (y + 0.5) / DfgEdge;
             const double alpha = p * p;
+            const double row = double(y) / (DfgEdge - 1);
+            const double sheenP = SheenMinPerceptualRoughness + (1.0 - SheenMinPerceptualRoughness) * row * row;
+            const double sheenAlpha = sheenP * sheenP;
             for (std::uint32_t i = 0; i != ggx.size(); ++i)
             {
                 ggx[i] = GgxHalf(i, std::uint32_t(ggx.size()), alpha);
@@ -412,7 +490,7 @@ namespace Physara::Renderer::Detail
                 const double r = std::sqrt(r2);
                 const double phi = 2.0 * Pi * i / double(cloth.size());
                 cloth[i] = {{r * std::cos(phi), r * std::sin(phi), z},
-                            (2.0 + 1.0 / alpha) * std::pow(r2, 0.5 / alpha) / (2.0 * Pi)};
+                            (2.0 + 1.0 / sheenAlpha) * std::pow(r2, 0.5 / sheenAlpha) / (2.0 * Pi)};
             }
             for (std::uint32_t x = 0; x != DfgEdge; ++x)
             {
@@ -423,8 +501,10 @@ namespace Physara::Renderer::Detail
                 const double noV = (x + 0.5) / DfgEdge;
                 const glm::dvec3 view(std::sqrt(1.0 - noV * noV), 0.0, noV);
                 const auto rg = IntegrateGgx(view, alpha, ggx);
-                const double b = IntegrateCloth(view, cloth);
-                // 积分误差只在物理方向反照率的区间内量化, 以半精度发布后再次确认能量分母.
+                const double column = double(x) / (DfgEdge - 1);
+                const double sheenNoV = column * column;
+                const double b = IntegrateCloth({std::sqrt(1.0 - sheenNoV * sheenNoV), 0.0, sheenNoV}, cloth);
+                // GGX 的 G 是补偿分母, 量化后仍须为正. Charlie 的 B 保存原始积分, 可大于 1.
                 const auto g = glm::packHalf1x16(float(std::min(1.0, rg.y)));
                 if (!std::isfinite(rg.x) || !std::isfinite(rg.y) || !std::isfinite(b) ||
                     !(glm::unpackHalf1x16(g) > 0.0f))

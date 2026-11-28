@@ -22,6 +22,26 @@ namespace Physara::Renderer::Detail
     using Shader::ProductShader;
     using PrepareClock = std::chrono::steady_clock;
 
+    /// @brief 一次设备准备工作占一个帧前额度, 成功、拒绝和异常均计入实际耗时.
+    class NativePreparationStep final
+    {
+    public:
+        explicit NativePreparationStep(ShaderPreparationStatistics &statistics) noexcept : m_Statistics(statistics)
+        {
+            ++m_Statistics.started;
+        }
+        ~NativePreparationStep() noexcept
+        {
+            m_Statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - m_Start).count();
+        }
+        NativePreparationStep(const NativePreparationStep &) = delete;
+        NativePreparationStep &operator=(const NativePreparationStep &) = delete;
+
+    private:
+        ShaderPreparationStatistics &m_Statistics;
+        PrepareClock::time_point m_Start = PrepareClock::now();
+    };
+
     void ShaderDemand::Add(ShaderPipelineRequest key, bool required) noexcept
     {
         assert(key.role < ProductShader::Count && key.variant < GeometryPipelineSlots);
@@ -96,9 +116,9 @@ namespace Physara::Renderer::Detail
         return std::nullopt;
     }
 
-    /// @brief 检查清漆颜色依赖的活动 IO. 格式、位置和插值已由包的 ABI 验证.
-    static std::optional<Shader::Failure> CheckClearcoatIo(const Shader::ShaderModule &module,
-        std::span<const std::string_view> names, bool input) noexcept
+    /// @brief 检查叠层颜色依赖的活动 IO. 格式、位置和插值已由包的 ABI 验证.
+    static std::optional<Shader::Failure> CheckLayerIo(const Shader::ShaderModule &module,
+        std::span<const std::string_view> names, std::string_view layer, bool input) noexcept
     {
         const auto &active = input ? module.inputs : module.outputs;
         for (const auto name : names)
@@ -107,7 +127,9 @@ namespace Physara::Renderer::Detail
             {
                 Core::BoundedText issue(module.sourcePath);
                 issue.Append(module.stage == Shader::Stage::Vertex ? " [vertex]: " : " [fragment]: ");
-                issue.Append(input ? "missing active clearcoat input: " : "missing active clearcoat output: ");
+                issue.Append("missing active ");
+                issue.Append(layer);
+                issue.Append(input ? " input: " : " output: ");
                 issue.Append(name);
                 return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = issue}};
             }
@@ -127,29 +149,31 @@ namespace Physara::Renderer::Detail
         const auto groups = OpaqueProgramResources(role);
         const bool perPass = std::ranges::any_of(groups, [](const auto &group) { return group.set == 3; });
         const bool froxels = IsFroxelProgram(role);
-        const bool clearcoat = Shader::IsClearcoatProgram(role);
+        const bool clearcoat = Shader::UsesClearcoatFrame(role);
+        const bool sheen = Shader::IsSheenProgram(role);
         const bool aux = role == ProductShader::StaticSurfaceAux;
         const auto attachments = SurfaceAttachments(role);
         for (const auto &module : package.modules)
         {
             const bool fragment = module.stage == Shader::Stage::Fragment;
-            if (clearcoat)
+            if (clearcoat || sheen)
             {
-                // 完整颜色配方按材质行选择 UV 和框架. 包须保留两套坐标和切线, 以及表面与光照使用的插值量.
+                // 完整颜色配方保留两套 UV 及表面/照明插值. 清漆组合再取得自身切线及其跨阶段传递.
                 static constexpr std::array<std::string_view, 7> Attributes{
                     "aPosition", "aNormal", "aColor", "aUv0", "aUv1", "aTangent", "aCoatTangent"};
                 static constexpr std::array<std::string_view, 10> Varyings{
                     "vColor", "vUv0", "vUv1", "vNormal", "vTangent", "vLightingAnchor", "vLightingOffsetHigh",
                     "vLightingOffsetLow", "vMaterialRow", "vCoatTangent"};
-                const auto inputs = fragment ? std::span<const std::string_view>(Varyings) :
-                    std::span<const std::string_view>(Attributes);
-                if (const auto failure = CheckClearcoatIo(module, inputs, true))
+                const auto attributes = std::span(Attributes).first(Attributes.size() - (clearcoat ? 0u : 1u));
+                const auto varyings = std::span(Varyings).first(Varyings.size() - (clearcoat ? 0u : 1u));
+                const auto *layer = clearcoat ? "clearcoat" : "sheen";
+                if (const auto failure = CheckLayerIo(module, fragment ? varyings : attributes, layer, true))
                 {
                     return failure;
                 }
                 if (!fragment)
                 {
-                    if (const auto failure = CheckClearcoatIo(module, Varyings, false))
+                    if (const auto failure = CheckLayerIo(module, varyings, layer, false))
                     {
                         return failure;
                     }
@@ -249,8 +273,24 @@ namespace Physara::Renderer::Detail
                 std::ranges::copy(extra, all.begin() + IorSpecularMaterial.size());
                 return all;
             }();
+            static constexpr auto withSheen = []<std::size_t N>(const std::array<std::string_view, N> &base)
+            {
+                constexpr std::array<std::string_view, 4> extra{
+                    "sheenColorImage", "sheenColorSampler", "sheenRoughnessImage", "sheenRoughnessSampler"};
+                std::array<std::string_view, N + extra.size()> all{};
+                std::ranges::copy(base, all.begin());
+                std::ranges::copy(extra, all.begin() + N);
+                return all;
+            };
+            static constexpr auto SheenMaterial = withSheen(IorSpecularMaterial);
+            static constexpr auto SheenClearcoatMaterial = withSheen(ClearcoatMaterial);
             std::span<const std::string_view> material = ColorMaterial;
-            if (clearcoat)
+            if (sheen)
+            {
+                material = clearcoat ? std::span<const std::string_view>(SheenClearcoatMaterial) :
+                                       std::span<const std::string_view>(SheenMaterial);
+            }
+            else if (clearcoat)
             {
                 material = ClearcoatMaterial;
             }
@@ -313,6 +353,21 @@ namespace Physara::Renderer::Detail
         return std::nullopt;
     }
 
+    /// @brief 同 ABI, 源和活动绑定可对应不同结构值. 产品名来自编译前已核对的目录项.
+    static std::optional<Shader::Failure> CheckProductRole(const Shader::ShaderPackage &package,
+                                                          const Shader::ProductProgram &program) noexcept
+    {
+        if (package.productName == program.name)
+        {
+            return std::nullopt;
+        }
+        Core::BoundedText issue("Package product role mismatch. Expected ");
+        issue.Append(program.name);
+        issue.Append(", found ");
+        issue.Append(package.productName.empty() ? std::string_view("no product identity") : package.productName);
+        return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = issue}};
+    }
+
     ProductProgramResult LoadProductProgram(RHI::Device &device, ProductShader role,
         const std::filesystem::path &path, const Shader::ProductPackages &packages, std::string_view abi,
         std::span<const Shader::ExpectedActiveResources> expected)
@@ -324,6 +379,10 @@ namespace Physara::Renderer::Detail
         using Shader::ErrorCode;
         const auto create = [&](const Shader::ShaderPackage &package) -> ProductProgramResult
         {
+            if (const auto failure = CheckProductRole(package, *program))
+            {
+                return ProductProgramFailure{*failure, true};
+            }
             if (abi == StaticAbi::AbiHash && package.abiHash == abi)
             {
                 if (const auto failure = CheckStaticForwardResources(package, role))
@@ -613,9 +672,8 @@ namespace Physara::Renderer::Detail
         return false;
     }
 
-    // 包级准入遍历全部角色, 包括当前 View 未选中的角色. 固定布局冲突应在替换活动代之前报告.
-    // 角色通过 CPU 检查后才复用原生槽. 缺少的 Pipeline 随各 View 的实际需求分批创建.
-    static void AdmitCandidate(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
+    /// @brief 在跨帧设备预检前核对所有包的 CPU 合同和设备表归属.
+    static void CheckCandidatePackages(const ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
         const auto &result = *device.candidateInput;
         const auto &active = *device.activeShaders;
@@ -629,6 +687,11 @@ namespace Physara::Renderer::Detail
                 checking = ShaderPipelineRequest{role, 0};
                 Reject(ViewSettingReason::ScenePipelineUnavailable,
                        "Candidate Shader ABI does not match the interface compiled into the running renderer");
+            }
+            if (const auto failure = CheckProductRole(*package, program))
+            {
+                checking = ShaderPipelineRequest{role, 0};
+                Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());
             }
             if (abi == StaticAbi::AbiHash)
             {
@@ -652,6 +715,13 @@ namespace Physara::Renderer::Detail
         {
             Reject(ViewSettingReason::ScenePipelineUnavailable, "Native Shader table belongs to a different device or driver");
         }
+    }
+
+    /// @brief 仅在所有角色完成准入后建立候选表, 继承同一身份的兼容固定状态槽.
+    static void CreateCandidateTable(ForwardDevice &device)
+    {
+        const auto &result = *device.candidateInput;
+        const auto &active = *device.activeShaders;
         auto candidate = std::make_shared<ForwardShaderGeneration>(active);
         for (const auto &program : Shader::ProductPrograms())
         {
@@ -676,6 +746,46 @@ namespace Physara::Renderer::Detail
         }
         ++candidate->generation;
         device.candidateShaders = std::move(candidate);
+    }
+
+    /// @brief 用本轮剩余额度验证变化的 sheen 包, 包括未选角色. 临时阶段对象在每次预检结束时释放.
+    static void AdvanceCandidateAdmission(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
+    {
+        auto &input = *device.candidateInput;
+        if (!input.nextBinding)
+        {
+            CheckCandidatePackages(device, checking);
+            input.nextBinding = std::size_t(ProductShader::StaticForwardSheen);
+        }
+
+        const auto programs = Shader::ProductPrograms();
+        for (auto &index = *input.nextBinding; index < programs.size(); ++index)
+        {
+            const auto &program = programs[index];
+            const auto &package = input.packages[index];
+            const auto &previous = device.activePackages[index];
+            if (previous && previous->contentHash == package->contentHash)
+            {
+                continue;
+            }
+            if (device.shaderStatistics.started >= device.shaderStatistics.budget)
+            {
+                return;
+            }
+
+            checking = ShaderPipelineRequest{program.key.role, 0};
+            const NativePreparationStep step(device.shaderStatistics);
+            auto shaders = Shader::CreateRhiProgram(device.device, *package, ConsumerAbi(program.key.role), {},
+                "Source/" + std::string(program.fragment), "Source/" + std::string(program.vertex));
+            if (const auto *failure = std::get_if<Shader::Failure>(&shaders))
+            {
+                Reject(ViewSettingReason::ScenePipelineUnavailable, failure->context.description.View());
+            }
+            device.activeShaders->programs.CheckLightingBindings(device, program.key.role,
+                                                                 std::get<Shader::RhiProgram>(shaders));
+            checking.reset();
+        }
+        CreateCandidateTable(device);
     }
 
     // 只归还候选表的原生句柄. 是否保留已编译的 CPU 包, 由取消或失败的调用方决定.
@@ -718,7 +828,7 @@ namespace Physara::Renderer::Detail
                     });
                 if (!matched)
                 {
-                    device.candidateInput = std::move(result);
+                    device.candidateInput.emplace(ForwardDevice::ShaderCandidateInput{std::move(result->packages), {}});
                 }
                 device.sourcePending = !matched;
             }
@@ -763,6 +873,19 @@ namespace Physara::Renderer::Detail
                 statistics.reason = Core::BoundedText(statistics.inCache >= statistics.cacheLimit
                     ? "Waiting for native Shader cache capacity" : "Waiting for frame preparation budget");
             }
+            else if (device.candidateInput)
+            {
+                const auto next = device.candidateInput->nextBinding;
+                if (next && *next < Shader::ProductShaderCount)
+                {
+                    statistics.role = Shader::ProductPrograms()[*next].key.role;
+                    statistics.reason = Core::BoundedText("Waiting for frame preparation budget for Shader bindings");
+                }
+                else
+                {
+                    statistics.reason = Core::BoundedText("Waiting for Shader candidate admission");
+                }
+            }
             else
             {
                 statistics.reason = Core::BoundedText("Waiting for Shader inputs");
@@ -779,14 +902,14 @@ namespace Physara::Renderer::Detail
     void ForwardDevice::AdvanceShaders(std::uint64_t request, std::optional<Shader::ReloadResult> result,
                                        bool continueActive) noexcept
     {
-        lastShaderFailure.reset();
         auto &statistics = shaderStatistics;
-        statistics.started = continueActive ? statistics.started : 0;
-        statistics.demand = shaderDemand.Count();
         if (request < statistics.request)
         {
             return;
         }
+        lastShaderFailure.reset();
+        statistics.started = continueActive ? statistics.started : 0;
+        statistics.demand = shaderDemand.Count();
         if (!continueActive)
         {
             ObserveShaderRequest(*this, request, std::move(result));
@@ -813,7 +936,7 @@ namespace Physara::Renderer::Detail
             shaderCacheDirty = false;
         }
 
-        auto phase = ShaderPreparationPhase::Admission;
+        auto phase = ShaderPreparationPhase::Active;
         std::optional<ShaderPipelineRequest> key;
         const auto fail = [&](const Core::BoundedText &description) {
             lastShaderFailure = phase;
@@ -840,12 +963,7 @@ namespace Physara::Renderer::Detail
         };
         try
         {
-            if (!continueActive && candidateInput && !candidateShaders && !sourceFailure &&
-                retiredShaders.size() <= shaderLimits.frames)
-            {
-                AdmitCandidate(*this, key);
-            }
-            // 共享键优先接续仍有效的对象, 设备额度只约束需要新增的 Pipeline.
+            // 共享键优先接续仍有效的 Pipeline, 只为实际开始的准备计入额度.
             const auto advance = [&](ForwardShaderGeneration &generation, const Shader::ProductPackages &packages,
                                      const ForwardShaderGeneration *other) {
                 const bool active = phase == ShaderPreparationPhase::Active;
@@ -861,8 +979,7 @@ namespace Physara::Renderer::Detail
                     {
                         return;
                     }
-                    const auto start = PrepareClock::now();
-                    ++statistics.started;
+                    const NativePreparationStep step(statistics);
                     try
                     {
                         if (PostProcess::DisplayDevice::IsRole(key->role))
@@ -876,7 +993,6 @@ namespace Physara::Renderer::Detail
                     }
                     catch (const ShaderPackageRejection &error)
                     {
-                        statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - start).count();
                         if (!active)
                         {
                             throw;
@@ -886,20 +1002,19 @@ namespace Physara::Renderer::Detail
                         activeFailures.push_back({key->role, error.description, std::nullopt});
                         continue;
                     }
-                    catch (...)
-                    {
-                        statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - start).count();
-                        throw;
-                    }
-                    statistics.nativeSeconds += std::chrono::duration<double>(PrepareClock::now() - start).count();
                     ++statistics.nativeCreated;
                     ++statistics.inCache;
                 }
             };
 
-            // 优先让当前有效代应对新的 View 需求, 余下额度用于源候选.
-            phase = ShaderPreparationPhase::Active;
+            // 先服务活动代, 剩余额度依次用于候选绑定预检和实际需要的 Pipeline.
             advance(*activeShaders, activePackages, candidateShaders.get());
+            if (!continueActive && candidateInput && !candidateShaders && !sourceFailure &&
+                retiredShaders.size() <= shaderLimits.frames)
+            {
+                phase = ShaderPreparationPhase::Admission;
+                AdvanceCandidateAdmission(*this, key);
+            }
             phase = ShaderPreparationPhase::Candidate;
             if (!continueActive && candidateShaders)
             {

@@ -34,6 +34,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "GraphicsShaderBindings.hpp"
 #include "ImmediateGraphics.hpp"
 #include "Validation.hpp"
 
@@ -460,7 +461,7 @@ namespace Physara::RHI::Validation
     /// @brief 可组合的公共输入校验设备, 强持有底层 Device, 拒绝发生在底层工作之前.
     /// @note 不缓存原生 caps 或维护资源地址注册表, 实际归属和 GPU 寿命仍由原生后端验证.
     /// 校验只借用输入, 返回对象的所有权沿底层合同; 普通 CPU 分配异常可传播, 不承诺全部转换为空句柄.
-    class DeviceWrapper : public RefCounter<Device>
+    class DeviceWrapper : public RefCounter<Device>, public GraphicsShaderBindingPreparation
     {
       public:
         friend class CommandListWrapper;
@@ -573,6 +574,8 @@ namespace Physara::RHI::Validation
 
         /// @brief 核对附件用途, 子资源和共同尺寸/样本后委托, 归属与原生完整性仍由底层检查.
         FramebufferHandle CreateFramebuffer(const FramebufferDesc &desc) override;
+        [[nodiscard]] std::optional<std::string> CheckGraphicsShaderBindings(
+            Shader &vertex, Shader &fragment, const BindingLayoutVector &layouts) const override;
 
         /// @brief 公共描述校验后按兼容值委托; framebuffer 重载保留实际对象到对应底层工厂.
         /// @note 两入口共用校验, 不在本层把 framebuffer 对象转换成纯值后改走另一个创建入口.

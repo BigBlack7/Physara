@@ -50,6 +50,8 @@ namespace Physara::Renderer
         std::array<std::filesystem::path, Shader::IorSpecularProgramCount> iorSpecularColors{};
         /// @brief 清漆包沿同一光照顺序覆盖全灯与 Froxel, 其基底由材质行选择.
         std::array<std::filesystem::path, Shader::ClearcoatProgramCount> clearcoatColors{};
+        /// @brief 前十二项为独立 sheen, 后十二项同时取清漆框架. 由 SheenProgramIndex 寻址.
+        std::array<std::filesystem::path, Shader::SheenProgramCount> sheenColors{};
     };
 
     /// @brief 按实际消费者准备表面. 普通主视口由 ShadeOpaque 同时写颜色和深度.
@@ -79,6 +81,7 @@ namespace Physara::Renderer
 
     /// @brief 有界源码请求和帧前原生准备统计. active 记录准备器选中的代, 已接受的 View 另有提交票据.
     /// @note demand 按最近登记的不同键计数, started 和 budget 是本轮准备量, nativeSeconds 是累计秒数.
+    /// 设备绑定预检与 Pipeline 创建共用准备量及耗时, nativeCreated 只累计成功创建的 Pipeline.
     struct ShaderPreparationStatistics
     {
         std::uint64_t active{}, request{}, nativeCreated{}, nativeHits{};
@@ -303,10 +306,13 @@ namespace Physara::Renderer
         /// @brief 借出该路实际消费的深度集合, 无消费时返回空指针. retained 有值表示本次使用已接受的数组.
         /// @pre 本路 FinishView 已成功. 返回值只借用到槽 Reset 或再次准备.
         [[nodiscard]] const ShadowDepthSet *PreparedShadowDepth(std::size_t index = 0) const noexcept;
-        /// @brief 从已绑定的实际阶段和固定附件生成不透明生产身份, 随 View 的颜色接受结果保存.
+        /// @brief 复制收尾时冻结的不透明生产身份, 随 View 的颜色接受结果保存.
         /// 仅表面请求记录其深度格式和参与写入的表面阶段.
         /// @pre 本槽的 index 已成功完成绑定. 返回值拥有程序摘要, 可随输出保存到槽复用之后.
         [[nodiscard]] OpaqueProduction Production(std::size_t index = 0) const noexcept;
+        /// @brief 取得该路已冻结的只读叠层 Draw 快照, 未生产叠层颜色时为空.
+        /// @pre 本路 FinishView 已成功. 结果独立保活, 读取不分配存储.
+        [[nodiscard]] RenderedLayerDraws LayerDraws(std::size_t index = 0) const noexcept;
         /// @brief 结束本帧场景和显示上传的 CPU 借用. 此后不能再用本批次声明或确认上传.
         /// @pre 图已结束录制或已放弃. 正常发布的候选先 Confirm; 放弃的候选跳过确认. GPU 引用仍由槽和提交包保活.
         void ReleasePayload() noexcept;
@@ -392,7 +398,7 @@ namespace Physara::Renderer
         void AdvanceShaderPreparation(std::uint64_t request = 0,
             std::optional<Shader::ReloadResult> result = {}) noexcept;
         /// @brief 用本轮剩余额度补备当前代, 供归还上传额度后重试的 View 使用.
-        /// @pre 本帧已调用 AdvanceShaderPreparation 并登记重试所需的键. 已开始的原生创建继续计入同一额度.
+        /// @pre 本帧已调用 AdvanceShaderPreparation 并登记重试所需的键. 已开始的预检与创建继续计入同一额度.
         /// 源码候选的准入和发布仍在帧边界处理.
         void ContinueShaderPreparation() noexcept;
         /// @brief 开始汇总本帧需求和显示资源结果. 槽忙时继续沿用最近一次规划的事实.

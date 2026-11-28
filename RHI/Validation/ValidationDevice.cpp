@@ -744,6 +744,13 @@ namespace Physara::RHI::Validation
         return m_Device->GetNativeObject(objectType);
     }
 
+    std::optional<std::string> DeviceWrapper::CheckGraphicsShaderBindings(
+        Shader &vertex, Shader &fragment, const BindingLayoutVector &layouts) const
+    {
+        // Shader 和 BindingLayout 沿原工厂返回底层对象, 原生设备核对阶段和归属.
+        return RHI::CheckGraphicsShaderBindings(*m_Device, vertex, fragment, layouts);
+    }
+
     HeapHandle DeviceWrapper::CreateHeap(const HeapDesc &d)
     {
         if (Profile::RejectOpenGL(m_Device))

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <ForwardSky/Bindings.hpp>
+#include <GraphicsShaderBindings.hpp>
 #include <StaticForward/Bindings.hpp>
 
 /// @file
@@ -363,7 +364,8 @@ namespace Physara::Renderer::Detail
     static_assert(std::size_t(LightingProgram::FroxelIblShadows) + 1 == LightingRoles.size());
 
     /// @brief 共用 StaticForward ABI 的颜色角色. 每个活动资源名指向 schema 中的唯一绑定.
-    static std::span<const Shader::ExpectedActiveResources> LightingResources(LightingProgram kind) noexcept
+    static std::span<const Shader::ExpectedActiveResources> LightingResources(LightingProgram kind,
+                                                                             bool sheen = false) noexcept
     {
         static constexpr std::array<std::string_view, 1> Legacy{"lightRows"};
         static constexpr std::array<std::string_view, 3> Physical{"lightRows", "dfgImage", "environmentSampler"};
@@ -373,13 +375,32 @@ namespace Physara::Renderer::Detail
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Legacy},
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Physical},
             Shader::ExpectedActiveResources{Shader::Stage::Fragment, 3, Ibl}};
+        if (sheen)
+        {
+            static constexpr std::array<std::string_view, 6> SheenIbl{
+                "lightRows", "dfgImage", "environmentSampler", "environment", "reflectionImage",
+                "sheenReflectionImage"};
+            static constexpr std::array<std::string_view, 10> SheenIblShadows{
+                "lightRows", "dfgImage", "environmentSampler", "environment", "reflectionImage",
+                "sheenReflectionImage", "shadowView", "shadowImage", "shadowLayers", "shadowReferences"};
+            static constexpr Shader::ExpectedActiveResources ibl{Shader::Stage::Fragment, 3, SheenIbl};
+            static constexpr Shader::ExpectedActiveResources shadows{Shader::Stage::Fragment, 3, SheenIblShadows};
+            switch (kind)
+            {
+            case LightingProgram::Legacy: return std::span(&groups[1], 1);
+            case LightingProgram::LegacyShadows: return ShadowProgramResources(ProductShader::StaticForwardPhysicalShadows);
+            case LightingProgram::Ibl: return std::span(&ibl, 1);
+            case LightingProgram::IblShadows: return std::span(&shadows, 1);
+            default: break;
+            }
+        }
         const auto index = std::size_t(kind);
         const auto shadows = ShadowProgramResources(LightingRoles[index]);
         return shadows.empty() ? std::span(&groups[index], 1) : shadows;
     }
 
     /// @brief 从 PerPass 生成布局筛选此次角色实际使用的资源. 诊断只消费查询表与深度.
-    static bool UsesLightingBinding(LightingProgram kind, const RHI::BindingLayoutItem &item) noexcept
+    static bool UsesLightingBinding(LightingProgram kind, bool sheen, const RHI::BindingLayoutItem &item) noexcept
     {
         using Type = RHI::ResourceType;
         const auto slot = item.slot;
@@ -402,11 +423,11 @@ namespace Physara::Renderer::Detail
         const bool dfg = item.type == Type::Texture_SRV && slot == DfgSlot;
         switch (kind)
         {
-        case LightingProgram::Legacy: return lights;
+        case LightingProgram::Legacy: return lights || (sheen && (item.type == Type::Sampler || dfg));
         case LightingProgram::Physical: return lights || item.type == Type::Sampler || dfg;
         case LightingProgram::Ibl:
             return lights || item.type == Type::Sampler || dfg || (item.type == Type::ConstantBuffer && slot == 0) ||
-                (item.type == Type::Texture_SRV && slot == ReflectionSlot);
+                (item.type == Type::Texture_SRV && (slot == ReflectionSlot || (sheen && slot == SheenReflectionSlot)));
         default: return false;
         }
     }
@@ -419,6 +440,11 @@ namespace Physara::Renderer::Detail
     // 各颜色程序有独立原生槽. 扩展角色沿同一光照种类复用 PerView/PerPass 绑定.
     static std::size_t LightingIndex(ProductShader role) noexcept
     {
+        if (Shader::IsSheenProgram(role))
+        {
+            return BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramCount +
+                Shader::SheenProgramIndex(role);
+        }
         if (Shader::IsClearcoatProgram(role))
         {
             return BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramIndex(role);
@@ -435,6 +461,11 @@ namespace Physara::Renderer::Detail
     /// @brief 扩展颜色按同一受光顺序排列, 跳过仅用于诊断的三项.
     static LightingProgram LightingKind(ProductShader role) noexcept
     {
+        if (Shader::IsSheenProgram(role))
+        {
+            const auto index = Shader::SheenProgramIndex(role) % Shader::ClearcoatProgramCount;
+            return static_cast<LightingProgram>(index < 3 ? index : index + 3);
+        }
         if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role))
         {
             const auto index = Shader::IsClearcoatProgram(role) ?
@@ -446,7 +477,7 @@ namespace Physara::Renderer::Detail
 
     bool IsFroxelProgram(ProductShader role) noexcept
     {
-        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role))
+        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role) || Shader::IsSheenProgram(role))
         {
             return UsesFroxels(LightingKind(role));
         }
@@ -476,7 +507,7 @@ namespace Physara::Renderer::Detail
         {
             return std::span(&CoverageResources, 1);
         }
-        return LightingResources(FullListProgram(LightingKind(role)));
+        return LightingResources(FullListProgram(LightingKind(role)), Shader::IsSheenProgram(role));
     }
 
     ForwardPrograms::ForwardPrograms(RHI::Device &device)
@@ -504,16 +535,19 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 按实际 PerPass 灯、环境与阴影组合取得同设备可共享的布局.
-    static RHI::BindingLayout *PrepareLightLayout(ForwardDevice &owner, LightingProgram kind)
+    static RHI::BindingLayout *PrepareLightLayout(ForwardDevice &owner, LightingProgram kind, bool sheen = false)
     {
         const auto fullList = FullListProgram(kind);
-        auto &layout = owner.lightLayouts[std::size_t(fullList)];
+        auto &layout = owner.lightLayouts[LightLayoutIndex(fullList, sheen)];
         if (!layout)
         {
             // 同一 schema 给出 set 3 的所有槽. 每个角色保留自己预期的活动绑定和布局.
             auto layoutsForProgram = StaticAbi::MakeBindingLayouts();
             auto &desc = layoutsForProgram.back();
-            std::erase_if(desc.bindings, [fullList](const auto &item) { return !UsesLightingBinding(fullList, item); });
+            std::erase_if(desc.bindings, [fullList, sheen](const auto &item)
+            {
+                return !UsesLightingBinding(fullList, sheen, item);
+            });
             layout = owner.device.CreateBindingLayout(desc);
             if (!layout)
             {
@@ -535,6 +569,34 @@ namespace Physara::Renderer::Detail
             }
         }
         return owner.froxelViewLayout.Get();
+    }
+
+    RHI::BindingLayoutVector ForwardPrograms::GeometryBindings(ForwardDevice &owner, ProductShader role) const
+    {
+        RHI::BindingLayoutVector bindings;
+        const bool color = !IsDepthRole(role) && SurfaceAttachments(role).empty();
+        const auto lighting = color ? LightingKind(role) : LightingProgram::Legacy;
+        bindings.push_back(UsesFroxels(lighting) ? PrepareFroxelViewLayout(owner) : layouts.front().Get());
+        for (const auto &layout : std::span(layouts).subspan(1))
+        {
+            bindings.push_back(layout);
+        }
+        if (color)
+        {
+            bindings.push_back(PrepareLightLayout(owner, lighting, Shader::IsSheenProgram(role)));
+        }
+        return bindings;
+    }
+
+    void ForwardPrograms::CheckLightingBindings(ForwardDevice &owner, ProductShader role,
+                                                const Shader::RhiProgram &program) const
+    {
+        const auto bindings = GeometryBindings(owner, role);
+        if (const auto failure = RHI::CheckGraphicsShaderBindings(owner.device, *program.vertex, *program.fragment,
+                                                                  bindings))
+        {
+            Reject(ViewSettingReason::ScenePipelineUnavailable, *failure);
+        }
     }
 
     void ForwardPrograms::PrepareLighting(ForwardDevice &owner, ProductShader role,
@@ -560,9 +622,11 @@ namespace Physara::Renderer::Detail
         {
             path = &paths.clearcoatColors[Shader::ClearcoatProgramIndex(role)];
         }
-        auto program = LoadProgram(owner.device, role, *path, packages, StaticAbi::AbiHash);
-        PrepareLightLayout(owner, kind);
-        colors[index] = std::move(program);
+        else if (Shader::IsSheenProgram(role))
+        {
+            path = &paths.sheenColors[Shader::SheenProgramIndex(role)];
+        }
+        colors[index] = LoadProgram(owner.device, role, *path, packages, StaticAbi::AbiHash);
     }
 
     void ForwardPrograms::PrepareSky(RHI::Device &device, const ForwardPackagePaths &paths,
@@ -637,8 +701,14 @@ namespace Physara::Renderer::Detail
         {
             assert(!IsShadowPreview(kind));
             const auto index = std::size_t(kind);
-            const auto first = color == MaterialColorProfile::Clearcoat ?
-                ProductShader::StaticForwardClearcoat : ProductShader::StaticForwardIorSpecular;
+            auto first = ProductShader::StaticForwardIorSpecular;
+            switch (color)
+            {
+            case MaterialColorProfile::Clearcoat: first = ProductShader::StaticForwardClearcoat; break;
+            case MaterialColorProfile::Sheen: first = ProductShader::StaticForwardSheen; break;
+            case MaterialColorProfile::SheenClearcoat: first = ProductShader::StaticForwardSheenClearcoat; break;
+            default: break;
+            }
             role = static_cast<ProductShader>(std::size_t(first) + (index < 3 ? index : index - 3));
         }
         const auto raster = ((doubleSided ? 2u : 0u) + (mirrored ? 1u : 0u)) * GeometryLayoutCount;
@@ -924,23 +994,7 @@ namespace Physara::Renderer::Detail
         RHI::GraphicsPipelineDesc desc;
         desc.SetVertexShader(shaders.vertex.Get()).SetFragmentShader(shaders.fragment.Get())
             .SetInputLayout(inputLayouts[layout].Get());
-        const auto lighting = depthOnly || surface ? LightingProgram::Legacy : LightingKind(key.role);
-        if (UsesFroxels(lighting))
-        {
-            desc.AddBindingLayout(PrepareFroxelViewLayout(owner));
-        }
-        else
-        {
-            desc.AddBindingLayout(layouts.front().Get());
-        }
-        for (const auto &binding : std::span(layouts).subspan(1))
-        {
-            desc.AddBindingLayout(binding.Get());
-        }
-        if (!depthOnly && !surface)
-        {
-            desc.AddBindingLayout(owner.lightLayouts[std::size_t(FullListProgram(lighting))].Get());
-        }
+        desc.bindingLayouts = GeometryBindings(owner, key.role);
         // glTF 的正面是 NDC 中的 CCW. 映射到公共左上目标坐标后为顺时针, 负 determinant 再翻转一次.
         desc.renderState.rasterState.SetFrontCounterClockwise(mirrored).EnableScissor()
             .SetCullMode(doubleSided ? RHI::RasterCullMode::None : RHI::RasterCullMode::Back);

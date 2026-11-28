@@ -42,9 +42,11 @@
 
 **职责位置：** Asset、Materials、Shaders/BRDF/Lighting、EnvironmentCache。**前置：** [D12-T01](#d12-t01)。**架构依据：** [8.5](../Architecture.md#materials)、[8.6](../Architecture.md#lighting)。
 
-- [ ] 导入 sheen color/roughness 与标准交互关系，接入共享参数、纹理与 UI 编辑。
-- [ ] 实现 Charlie/Neubelt 及固定参考的叠层/能量处理，准备并验证对应 DFG/IBL 数据。
-- [ ] 验证布料参考、极端 roughness、其他层组合、路由和几何各出口，记录所采用实时近似的边界。
+D12-T03 已验收并归档。 [最终验证](../../openspec/changes/archive/2026-11-28-add-sheen-material-profile/tasks.md#final-verification) · [归档记录](../../openspec/changes/archive/2026-11-28-add-sheen-material-profile/tasks.md#archive-closeout)
+
+- [x] 导入 sheen color/roughness 与标准交互关系，接入共享参数、纹理与 UI 编辑。
+- [x] 实现 Charlie/Neubelt 及固定参考的叠层/能量处理，准备并验证对应 DFG/IBL 数据。
+- [x] 验证布料参考、极端 roughness、其他层组合、路由和几何各出口，记录所采用实时近似的边界。
 
 **完成条件：** sheen 不借用无配套环境项的普通 GGX 高光，不宣称具备未设计的完整皮下散射。
 

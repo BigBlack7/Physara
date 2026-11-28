@@ -101,9 +101,9 @@ namespace Physara::Renderer::Detail
     }
 
     /// @brief 识别同烘焙键及角色下可读的代. 提前登记本轮使用, 避免后续资源准备淘汰它.
-    static const ResidentEnvironment *FindCube(ForwardDevice &device, EnvironmentKey key, bool reflection)
+    static const ResidentEnvironment *FindCube(ForwardDevice &device, EnvironmentKey key, EnvironmentCubeRole role)
     {
-        const auto found = device.environmentTextures.find({key, reflection});
+        const auto found = device.environmentTextures.find({key, role});
         if (found != device.environmentTextures.end() && device.Current(*found->second.texture))
         {
             device.Use(*found->second.texture);
@@ -112,24 +112,28 @@ namespace Physara::Renderer::Detail
         return nullptr;
     }
 
-    /// @brief 按完整 cube 范围准备新代. 反射产品保存 SH9, 后续查询无需访问烘焙像素.
+    /// @brief 按角色准备完整 cube. GGX 与 Charlie 都有五级, mip 0 已各有不同的源像素.
+    /// 上传批保活只读源, 驻留记录保留 SH9 供后续 GGX 光照常量复用.
     static const ResidentEnvironment &PrepareCube(ForwardDevice &device, UploadBatch &uploads, EnvironmentKey key,
-        const std::shared_ptr<const BakedEnvironment> &data, bool reflection)
+        const std::shared_ptr<const BakedEnvironment> &data, EnvironmentCubeRole role)
     {
-        auto pixels = data->base->pixels.size();
-        const auto mips = reflection ? EnvironmentMipCount : 1u;
-        if (reflection)
+        const auto mips = role == EnvironmentCubeRole::Sheen ? SheenEnvironmentMipCount :
+                          role == EnvironmentCubeRole::Reflection ? EnvironmentMipCount : 1u;
+        std::size_t pixels = 0;
+        for (std::uint32_t mip = 0; mip < mips; ++mip)
         {
-            for (const auto &mip : data->prefiltered)
-            {
-                pixels += mip->pixels.size();
-            }
+            pixels += data->Level(role, mip).pixels.size();
         }
+        const auto edge = data->Level(role, 0).edge;
+        const auto *name = role == EnvironmentCubeRole::Sheen ? "Environment Charlie reflection" :
+                           role == EnvironmentCubeRole::Reflection ? "Environment GGX reflection" : "Environment sky";
         const auto bytes = pixels * sizeof(EnvironmentTexel);
         uploads.ReserveWrites(bytes, 6 * mips);
-        auto entry = CreateEnvironmentTexture(device, {.width = EnvironmentEdge, .height = EnvironmentEdge, .arraySize = 6, .mipLevels = mips, .format = RHI::Format::RGBA32_FLOAT, .dimension = RHI::TextureDimension::TextureCube, .debugName = reflection ? "Environment GGX reflection" : "Environment sky", .initialState = TextureBoundary, .keepInitialState = true}, bytes);
-        uploads.environmentTextures.push_back({entry, data, {}});
-        return device.environmentTextures.insert_or_assign({key, reflection}, ResidentEnvironment{entry, data->sh})
+        auto entry = CreateEnvironmentTexture(device, {.width = edge, .height = edge, .arraySize = 6,
+            .mipLevels = mips, .format = RHI::Format::RGBA32_FLOAT, .dimension = RHI::TextureDimension::TextureCube,
+            .debugName = name, .initialState = TextureBoundary, .keepInitialState = true}, bytes);
+        uploads.environmentTextures.push_back({entry, data, {}, role});
+        return device.environmentTextures.insert_or_assign({key, role}, ResidentEnvironment{entry, data->sh})
             .first->second;
     }
 
@@ -157,6 +161,7 @@ namespace Physara::Renderer::Detail
         constants.radianceMantissa = scale.mantissa;
         constants.radianceExponent = scale.exponent;
         constants.maxMip = float(EnvironmentMipCount - 1);
+        constants.sheenMaxMip = float(SheenEnvironmentMipCount - 1);
         std::array<float, 3> maxCoefficients{};
         for (const auto &term : sh)
         {
@@ -211,21 +216,26 @@ namespace Physara::Renderer::Detail
     {
         const auto &source = view.scene.environment;
         const bool physical = mode == PreviewMode::PhysicalLighting;
-        const bool dfg = physical && litDraws;
-        const bool ibl = dfg && source && source->settings.lighting;
+        const bool sheen = litDraws &&
+            std::ranges::any_of(frame.draws, [](const auto &draw) { return UsesSheen(draw.color); });
+        const bool dfg = litDraws && (physical || sheen);
+        const bool ibl = physical && litDraws && source && source->settings.lighting;
+        const bool sheenIbl = sheen && ibl;
         const bool sky = physical && source && source->settings.sky;
         if (!dfg && !sky)
         {
             return;
         }
         const auto key = (ibl || sky) ? EnvironmentKey{source->source->sourceFingerprint} : EnvironmentKey{};
-        const auto *reflection = ibl ? FindCube(device, key, true) : nullptr;
-        const auto *background = sky ? FindCube(device, key, false) : nullptr;
-        // 两种角色可分别命中. 复用反射纹理时从同代保存的 SH9 生成查询常量, 仅为缺少的角色索取 CPU 产品.
-        const bool needsEnvironment = (ibl && !reflection) || (sky && !background);
+        using Cube = EnvironmentCubeRole;
+        const auto *reflection = ibl ? FindCube(device, key, Cube::Reflection) : nullptr;
+        const auto *background = sky ? FindCube(device, key, Cube::Sky) : nullptr;
+        const auto *sheenReflection = sheenIbl ? FindCube(device, key, Cube::Sheen) : nullptr;
+        // 按实际 Draw 补缺少的环境角色. Direct sheen 只取独立于环境源的方向表.
+        const bool needsEnvironment = (ibl && !reflection) || (sky && !background) || (sheenIbl && !sheenReflection);
         const bool needsDfg = dfg && (!device.dfgTexture || !device.Current(*device.dfgTexture));
         auto prepared = device.environmentCache.Prepare(needsEnvironment ? source->source : nullptr,
-                                                         ibl && !reflection, needsDfg);
+                                                         ibl && !reflection, sheenIbl && !sheenReflection, needsDfg);
         if (const auto *failure = std::get_if<EnvironmentPreparationFailure>(&prepared))
         {
             throw ForwardFailure{failure->pending ? ViewSettingReason::EnvironmentPending : ViewSettingReason::EnvironmentRejected, failure->reason};
@@ -234,7 +244,10 @@ namespace Physara::Renderer::Detail
         auto &environment = frame.environment;
         if (dfg)
         {
-            environment.program = ibl ? LightingProgram::Ibl : LightingProgram::Physical;
+            if (physical)
+            {
+                environment.program = ibl ? LightingProgram::Ibl : LightingProgram::Physical;
+            }
             environment.dfg = PrepareDfg(device, frame.uploads, products.dfg);
         }
         if (dfg || sky)
@@ -249,18 +262,26 @@ namespace Physara::Renderer::Detail
             {
                 if (!reflection)
                 {
-                    reflection = &PrepareCube(device, frame.uploads, key, products.environment, true);
+                    reflection = &PrepareCube(device, frame.uploads, key, products.environment, Cube::Reflection);
                 }
                 environment.reflection = reflection->texture;
                 const auto values = LightingConstants(reflection->sh, inverse, scale);
                 environment.lightingConstants = WriteConstants(device, frame.uploads, std::as_bytes(std::span(&values, 1)));
+            }
+            if (sheenIbl)
+            {
+                if (!sheenReflection)
+                {
+                    sheenReflection = &PrepareCube(device, frame.uploads, key, products.environment, Cube::Sheen);
+                }
+                environment.sheenReflection = sheenReflection->texture;
             }
             if (sky)
             {
                 // 天空资源已准备后才纳入本路计划. 选定本帧代之后再取得对应的 Pipeline 和布局.
                 if (!background)
                 {
-                    background = &PrepareCube(device, frame.uploads, key, products.environment, false);
+                    background = &PrepareCube(device, frame.uploads, key, products.environment, Cube::Sky);
                 }
                 environment.sky = background->texture;
                 const auto values = SkyConstants(*view.camera, inverse, scale);

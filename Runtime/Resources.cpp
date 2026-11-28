@@ -69,6 +69,11 @@ namespace Physara::Runtime
         {
             result.forward.clearcoatColors[i] = (directory / ClearcoatPackageRelatives[i]).lexically_normal();
         }
+        static_assert(std::size(SheenPackageRelatives) == Shader::SheenProgramCount);
+        for (std::size_t i = 0; i < result.forward.sheenColors.size(); ++i)
+        {
+            result.forward.sheenColors[i] = (directory / SheenPackageRelatives[i]).lexically_normal();
+        }
         return result;
     }
 }

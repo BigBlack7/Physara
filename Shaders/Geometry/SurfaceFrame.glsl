@@ -30,7 +30,10 @@ SurfaceGeometry PrepareSurfaceGeometry(vec3 tangentNormal, bool usesNormalMap)
     // 有效正面已考虑实例绕序. 双面翻转在完成贴图求值后作用于着色法线一次.
     return SurfaceGeometry(geometricNormal, gl_FrontFacing ? shadingNormal : -shadingNormal
 #ifdef PHYSARA_CLEARCOAT
-        , gl_FrontFacing ? geometricNormal : -geometricNormal, gl_FrontFacing ? geometricNormal : -geometricNormal
+        , gl_FrontFacing ? geometricNormal : -geometricNormal
+#endif
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+        , gl_FrontFacing ? geometricNormal : -geometricNormal
 #endif
     );
 }

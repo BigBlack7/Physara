@@ -1,7 +1,7 @@
 #ifndef PHYSARA_MATERIAL_INPUTS_GLSL
 #define PHYSARA_MATERIAL_INPUTS_GLSL
 
-#if defined(PHYSARA_IOR_SPECULAR) || defined(PHYSARA_CLEARCOAT)
+#if defined(PHYSARA_IOR_SPECULAR) || defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
 #define PHYSARA_HAS_SPECULAR_INPUTS
 #endif
 
@@ -20,10 +20,16 @@ struct MaterialInputs
     float specularWeight;
     vec3 specularColor;
 #endif
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+    bool iorSpecularBase;
+#endif
 #ifdef PHYSARA_CLEARCOAT
     float coatStrength;
     float coatRoughness;
-    bool iorSpecularBase;
+#endif
+#ifdef PHYSARA_SHEEN
+    vec3 sheenColor;
+    float sheenRoughness;
 #endif
 };
 

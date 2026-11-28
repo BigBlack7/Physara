@@ -25,7 +25,8 @@ namespace Physara::Renderer::Detail
     inline constexpr std::size_t ForwardPerPassLayouts = 9;
     inline constexpr std::size_t BaseForwardColorPrograms = ForwardPerPassLayouts + 6;
     inline constexpr std::size_t ForwardColorPrograms =
-        BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramCount;
+        BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramCount +
+        Shader::SheenProgramCount;
     inline constexpr std::size_t CorePipelineBase = GeometryPipelineSlots * ForwardColorPrograms;
     inline constexpr std::size_t SurfaceAuxPipelineBase = CorePipelineBase + GeometryPhaseSlots;
     inline constexpr std::size_t DeferredPipelineBase = SurfaceAuxPipelineBase + GeometryPhaseSlots;
@@ -39,8 +40,18 @@ namespace Physara::Renderer::Detail
     inline constexpr std::uint32_t PreviewDepthSlot = 0;
     inline constexpr std::uint32_t PreviewGBufferSlot = 1;
 
-    /// @brief 已冻结的受光颜色结构. 清漆角色内另以材质数据选择基底.
-    enum class MaterialColorProfile : std::uint8_t { Core, IorSpecular, Clearcoat };
+    /// @brief 已冻结的受光颜色角色. sheen 和清漆可共存, 两者的基底由材质行选择.
+    enum class MaterialColorProfile : std::uint8_t { Core, IorSpecular, Clearcoat, Sheen, SheenClearcoat };
+
+    [[nodiscard]] constexpr bool UsesSheen(MaterialColorProfile profile) noexcept
+    {
+        return profile == MaterialColorProfile::Sheen || profile == MaterialColorProfile::SheenClearcoat;
+    }
+
+    [[nodiscard]] constexpr bool UsesClearcoat(MaterialColorProfile profile) noexcept
+    {
+        return profile == MaterialColorProfile::Clearcoat || profile == MaterialColorProfile::SheenClearcoat;
+    }
 
     [[nodiscard]] constexpr bool IsDeferredLighting(Shader::ProductShader role) noexcept
     {

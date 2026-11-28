@@ -16,11 +16,12 @@ add_library(PhysaraRHI STATIC
 )
 
 # 即时录制互操作随公共头提供. 具体接管检查由 Validation 和原生后端实现.
-# GraphicsStatistics 是宿主和 Editor 可复制的值类型, 公共消费者无需包含 GL 头.
+# GraphicsStatistics 和 Shader 绑定预检供公共消费者使用, 无需包含 GL 头.
 target_sources(PhysaraRHI PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/RHI.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ImmediateGraphics.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/GraphicsStatistics.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/GraphicsShaderBindings.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Resource.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Containers.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ShaderTypes.hpp"

@@ -29,13 +29,17 @@ namespace Physara::Scene
         {Asset::ImageUse::SpecularColor, "Specular color"},
         {Asset::ImageUse::Clearcoat, "Clearcoat strength"},
         {Asset::ImageUse::ClearcoatRoughness, "Clearcoat roughness"},
-        {Asset::ImageUse::ClearcoatNormal, "Clearcoat normal"}
+        {Asset::ImageUse::ClearcoatNormal, "Clearcoat normal"},
+        {Asset::ImageUse::SheenColor, "Sheen color"},
+        {Asset::ImageUse::SheenRoughness, "Sheen roughness"}
     }};
 
     static constexpr auto Normal = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
     static constexpr auto Coat = static_cast<std::size_t>(Asset::MaterialSlot::Clearcoat);
     static constexpr auto CoatRoughness = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatRoughness);
     static constexpr auto CoatNormal = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatNormal);
+    static constexpr auto SheenColor = static_cast<std::size_t>(Asset::MaterialSlot::SheenColor);
+    static constexpr auto SheenRoughness = static_cast<std::size_t>(Asset::MaterialSlot::SheenRoughness);
 
     /// @brief 采用扩展字段或槽的存在性, 保留显式零值的覆盖身份.
     static bool HasClearcoatOverride(const PrimitiveOverride &value) noexcept
@@ -138,6 +142,14 @@ namespace Physara::Scene
         {
             return "Clearcoat normal scale must be finite";
         }
+        if (v.sheenColorFactor && !std::ranges::all_of(*v.sheenColorFactor, unit))
+        {
+            return "Linear sheen color must have finite RGB components in [0, 1]";
+        }
+        if (v.sheenRoughnessFactor && !unit(*v.sheenRoughnessFactor))
+        {
+            return "Sheen roughness factor must be finite and in [0, 1]";
+        }
         using Alpha = Asset::ModelAlpha;
         if (v.alphaMode && *v.alphaMode != Alpha::Opaque && *v.alphaMode != Alpha::Mask && *v.alphaMode != Alpha::Blend)
         {
@@ -236,6 +248,12 @@ namespace Physara::Scene
         {
             return Core::BoundedText("Clearcoat overrides require a compatible lit metallic-roughness material");
         }
+        const bool sheenOverride = value.material.sheenColorFactor || value.material.sheenRoughnessFactor ||
+                                   value.textures[SheenColor] || value.textures[SheenRoughness];
+        if (sheenOverride && (base.unlit || base.hasSpecularGlossinessExtension))
+        {
+            return Core::BoundedText("Sheen overrides require a compatible lit metallic-roughness material");
+        }
         for (std::size_t i = 0; i < value.textures.size(); ++i)
         {
             if (!value.textures[i])
@@ -297,6 +315,8 @@ namespace Physara::Scene
         out.clearcoatFactor = value.clearcoatFactor.value_or(out.clearcoatFactor);
         out.clearcoatRoughnessFactor = value.clearcoatRoughnessFactor.value_or(out.clearcoatRoughnessFactor);
         out.clearcoatNormalScale = value.clearcoatNormalScale.value_or(out.clearcoatNormalScale);
+        out.sheenColorFactor = value.sheenColorFactor.value_or(out.sheenColorFactor);
+        out.sheenRoughnessFactor = value.sheenRoughnessFactor.value_or(out.sheenRoughnessFactor);
     }
 
     /// @brief 解析源图像和 sampler, 可分别以实例值替换.
@@ -361,6 +381,8 @@ namespace Physara::Scene
                                  value->material.specularColorFactor || value->textures[Specular] ||
                                  value->textures[SpecularColor];
         }
+        // Draw 在纹理采样前选择角色. 显式零覆盖也要先压过源因子, 之后才判断是否需要 sheen 颜色.
+        result.sheen = std::ranges::any_of(result.values.sheenColorFactor, [](float component) { return component > 0; });
         result.sourceTangentUv = SourceTangentUv(result.values, primitive);
         for (std::size_t i = 0; i < base.size(); ++i)
         {

@@ -107,6 +107,8 @@ namespace Physara::Editor::Detail
         Set(node, "clearcoatFactor", value.clearcoatFactor);
         Set(node, "clearcoatRoughnessFactor", value.clearcoatRoughnessFactor);
         Set(node, "clearcoatNormalScale", value.clearcoatNormalScale);
+        Set(node, "sheenColorFactor", value.sheenColorFactor);
+        Set(node, "sheenRoughnessFactor", value.sheenRoughnessFactor);
         if (value.alphaMode)
         {
             using Mode = Asset::ModelAlpha;

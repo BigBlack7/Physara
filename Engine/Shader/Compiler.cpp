@@ -274,6 +274,7 @@ namespace Physara::Shader
                     std::to_string(approved.iorSpecular));
             require("requested PHYSARA_CLEARCOAT", std::to_string(requested.clearcoat),
                     std::to_string(approved.clearcoat));
+            require("requested PHYSARA_SHEEN", std::to_string(requested.sheen), std::to_string(approved.sheen));
         }
     }
 
@@ -404,6 +405,10 @@ namespace Physara::Shader
                 BuildOutput output;
                 auto &package = output.package;
                 package.profile = program.profile;
+                if (request.variant)
+                {
+                    package.productName = program.name;
+                }
                 package.abiHash = interfaceInput.schema.abiHash;
                 package.declaration = SnapshotInterface(interfaceInput.schema);
                 const Json options{

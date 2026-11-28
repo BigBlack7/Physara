@@ -24,7 +24,8 @@ namespace Physara::Editor::Detail
     static constexpr std::array TextureNames{"Base color texture [sRGB]", "Texture [Roughness = G, Metallic = B]",
         "Normal texture [linear]", "Occlusion texture [R]", "Emissive texture [sRGB]",
         "Specular strength texture [A]", "Specular color texture [sRGB]", "Clearcoat strength texture [R]",
-        "Clearcoat roughness texture [G]", "Clearcoat normal texture [linear]"};
+        "Clearcoat roughness texture [G]", "Clearcoat normal texture [linear]", "Sheen color texture [sRGB]",
+        "Sheen roughness texture [A]"};
     static_assert(TextureNames.size() == Scene::MaterialSlotCount);
     static constexpr double DegreesPerRadian = 180.0 / std::numbers::pi;
 
@@ -259,9 +260,13 @@ namespace Physara::Editor::Detail
         ImGui::TreePop();
     }
 
-    /// @brief 展示当前 View 的颜色准备与上次正常提交, 只引用当前场景的清漆程序.
-    static void DrawClearcoatOutput(const Scene::Scene &scene, const Renderer::View &view)
+    /// @brief 展示所选固定实例的叠层准备和正常受光票据. 诊断期间从 View 查询保留的实际 Draw 身份.
+    static void DrawLayerOutput(const Scene::Scene &scene, const Renderer::View &view,
+        const Renderer::RenderedMaterialTarget &target, Renderer::MaterialLayer profile)
     {
+        const bool sheen = profile == Renderer::MaterialLayer::Sheen;
+        const auto *layer = sheen ? "Sheen" : "Clearcoat";
+        const auto *layerLower = sheen ? "sheen" : "clearcoat";
         const auto preview = view.Preview();
         const auto *current = view.AcceptedScenePreview();
         const bool matchesRequest = current && current->scene == scene.Id() &&
@@ -281,28 +286,28 @@ namespace Physara::Editor::Detail
         }
         else if (!Renderer::IsLitPreview(preview))
         {
-            ImGui::TextWrapped("%s preview does not request clearcoat lighting.",
-                               PreviewNames[static_cast<std::size_t>(preview)]);
+            ImGui::TextWrapped("%s preview does not request %s lighting.",
+                               PreviewNames[static_cast<std::size_t>(preview)], layerLower);
         }
         else
         {
             const auto status = view.OpaqueSettings(scene.Id());
             if (status.detail)
             {
-                ImGui::TextWrapped("Clearcoat view preparation: %s", status.detail->View().data());
+                ImGui::TextWrapped("%s view preparation: %s", layer, status.detail->View().data());
             }
             else if (!matchesRequest || displaysShadow || current->opaquePath != status.requested)
             {
-                ImGui::TextUnformatted("Clearcoat view is awaiting a matching lit frame.");
+                ImGui::Text("%s view is awaiting a matching lit frame.", layer);
             }
-            else if (current->clearcoatColor.front() == '\0')
+            else if (!current->layerColors.Program(target, profile))
             {
-                ImGui::TextUnformatted("The accepted lit frame has no clearcoat color.");
+                ImGui::Text("The accepted lit frame has no %s color for this primitive.", layerLower);
             }
         }
-        if (const auto *last = view.LastClearcoatColor(scene.Id()))
+        if (const auto last = view.LastLayerColor(target, profile))
         {
-            ImGui::Text("Last clearcoat color: %.12s (frame %llu)", last->program.data(),
+            ImGui::Text("Last %s color: %.12s (frame %llu)", layerLower, last->program.data(),
                         static_cast<unsigned long long>(last->submission));
         }
     }
@@ -319,6 +324,7 @@ namespace Physara::Editor::Detail
         const auto *over = FindSurfaceOverride(record, target.primitive);
         const auto &value = effective->values;
         const auto sparse = over ? over->material : Scene::MaterialOverride{};
+        const Renderer::RenderedMaterialTarget rendered{target.entity, target.model, target.revision, target.primitive};
         using Material = Scene::MaterialOverride;
         if (effective->iorSpecular)
         {
@@ -329,7 +335,18 @@ namespace Physara::Editor::Detail
             ImGui::TextUnformatted("Clearcoat lighting profile");
             if (view)
             {
-                DrawClearcoatOutput(scene, *view);
+                DrawLayerOutput(scene, *view, rendered, Renderer::MaterialLayer::Clearcoat);
+            }
+        }
+        constexpr auto SheenColor = std::size_t(Asset::MaterialSlot::SheenColor);
+        constexpr auto SheenRoughness = std::size_t(Asset::MaterialSlot::SheenRoughness);
+        if (value.hasSheenExtension || sparse.sheenColorFactor || sparse.sheenRoughnessFactor ||
+            (over && (over->textures[SheenColor] || over->textures[SheenRoughness])))
+        {
+            ImGui::TextUnformatted(effective->sheen ? "Sheen lighting profile" : "Sheen color factor is zero.");
+            if (view)
+            {
+                DrawLayerOutput(scene, *view, rendered, Renderer::MaterialLayer::Sheen);
             }
         }
         DrawMaterialField("Base color (linear RGBA)", target, &Material::baseColor, sparse, value.baseColor, frame);
@@ -362,6 +379,10 @@ namespace Physara::Editor::Detail
                                   value.clearcoatRoughnessFactor, frame);
                 DrawMaterialField("Clearcoat normal scale", target, &Material::clearcoatNormalScale, sparse,
                                   value.clearcoatNormalScale, frame);
+                DrawMaterialField("Sheen color (linear RGB)", target, &Material::sheenColorFactor, sparse,
+                                  value.sheenColorFactor, frame);
+                DrawMaterialField("Sheen roughness", target, &Material::sheenRoughnessFactor, sparse,
+                                  value.sheenRoughnessFactor, frame);
             }
         }
         DrawAlpha(target, sparse, value.alphaMode, frame);

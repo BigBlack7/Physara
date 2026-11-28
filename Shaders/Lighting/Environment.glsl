@@ -73,7 +73,7 @@ vec3 DiffuseVisibility(float a, vec3 albedo)
     return min(max(vec3(a), ((a * x + y) * a + z) * a), vec3(1.0));
 }
 
-// 两层按自己的粗糙度和反射方向查同一代预滤波环境.
+// 基底与清漆各按自己的粗糙度查 GGX 立方图. sheen 在 EvaluateIbl 中使用独立的 Charlie 立方图.
 vec3 SampleEnvironmentReflection(vec3 normal, vec3 viewDirection, float alpha, float p)
 {
     vec3 reflected = mix(reflect(-viewDirection, normal), normal, alpha * alpha);
@@ -105,12 +105,17 @@ vec3 EvaluateIbl(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection
     vec3 specular = SampleEnvironmentReflection(normal, viewDirection, pixel.alpha, pixel.perceptualRoughness);
     float specularAo = EnvironmentSpecularAo(noV, ao, pixel.alpha);
     vec3 specularFactor = terms.environmentSpecular * specularAo;
+    float coatTransmission = 1.0;
 #ifdef PHYSARA_CLEARCOAT
     // 先用层透过率衰减基底波瓣, 使其在预曝光后进入工作色限幅时仍保留可表示的亮区.
-    float transmittance = 1.0 - pixel.coatWeight;
-    diffuseFactor *= transmittance;
-    specularFactor *= transmittance;
+    coatTransmission = 1.0 - pixel.coatWeight;
 #endif
+    float lowerTransmission = coatTransmission;
+#ifdef PHYSARA_SHEEN
+    lowerTransmission *= SheenBaseTransmission(pixel);
+#endif
+    diffuseFactor *= lowerTransmission;
+    specularFactor *= lowerTransmission;
 
     ivec3 exponent = ivec3(environment.radianceExponent);
     // 屏幕反射已乘置信度与预曝光. 两路镜面使用同一核心波瓣权重, 环境标定只影响环境输入.
@@ -118,6 +123,18 @@ vec3 EvaluateIbl(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection
                           (1.0 - reflectionConfidence) + preExposedReflection * specularFactor;
     vec3 base = ScaleEnvironmentLight(diffuse, diffuseFactor, environment.radianceMantissa,
                                       exponent + environment.shExponent) + reflectedLight;
+#ifdef PHYSARA_SHEEN
+    if (pixel.sheenAlbedo > 0.0)
+    {
+        vec3 direction = environment.environmentFromWorld * reflect(-viewDirection, normal);
+        float p = (pixel.sheenRoughness - MinPerceptualRoughness) / (1.0 - MinPerceptualRoughness);
+        float lod = p * environment.sheenMaxMip;
+        vec3 sheen = textureLod(samplerCube(sheenReflectionImage, environmentSampler), direction, lod).rgb;
+        float visibility = EnvironmentSpecularAo(noV, ao, pixel.sheenAlpha);
+        vec3 factor = pixel.sheenColor * (pixel.sheenAlbedo * visibility * coatTransmission);
+        base += ScaleEnvironmentLight(sheen, factor, environment.radianceMantissa, exponent);
+    }
+#endif
 #ifdef PHYSARA_CLEARCOAT
     if (terms.coatEnvironment > 0.0)
     {

@@ -75,15 +75,18 @@ namespace Physara::Asset::Gltf
         constexpr std::array<std::string_view, static_cast<std::size_t>(MaterialSlot::Count)> Slots{
             "baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture",
             "specularTexture", "specularColorTexture", "clearcoatTexture", "clearcoatRoughnessTexture",
-            "clearcoatNormalTexture"};
+            "clearcoatNormalTexture", "sheenColorTexture", "sheenRoughnessTexture"};
         for (std::size_t i = 0; i < surface.slots.size(); ++i)
         {
             if (const auto &slot = surface.slots[i]; slot)
             {
                 if (slot->texCoord >= out.uv.size() || !out.uv[slot->texCoord])
                 {
-                    field.Field(Slots[i]).Error("Texture needs an available effective TEXCOORD_0 or TEXCOORD_1",
-                                                AssetError::UnsupportedModel);
+                    Core::BoundedText reason(Slots[i]);
+                    reason.Append(" requires effective TEXCOORD_");
+                    reason.Append(std::to_string(slot->texCoord));
+                    reason.Append(" in this primitive's attributes");
+                    attributes.Error(reason.View(), AssetError::UnsupportedModel);
                 }
                 if (i == static_cast<std::size_t>(MaterialSlot::Normal))
                 {

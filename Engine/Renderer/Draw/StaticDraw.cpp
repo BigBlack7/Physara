@@ -157,7 +157,7 @@ namespace Physara::Renderer::Detail
         if (a.baseColor != b.baseColor || a.emissive != b.emissive || a.surface != b.surface ||
             a.normalBasis != b.normalBasis || a.alphaCutoff != b.alphaCutoff || a.masked != b.masked ||
             a.unlit != b.unlit || a.ior != b.ior || a.specular != b.specular || a.clearcoat != b.clearcoat ||
-            a.coatNormalBasis != b.coatNormalBasis)
+            a.coatNormalBasis != b.coatNormalBasis || a.sheen != b.sheen)
         {
             return false;
         }
@@ -187,6 +187,8 @@ namespace Physara::Renderer::Detail
                         source.specularFactor};
         out.clearcoat = {source.clearcoatFactor, source.clearcoatRoughnessFactor, source.clearcoatNormalScale,
                          material.iorSpecular ? 1.f : 0.f};
+        out.sheen = {source.sheenColorFactor[0], source.sheenColorFactor[1], source.sheenColorFactor[2],
+                     source.sheenRoughnessFactor};
         static_assert(out.uvX.size() == Scene::MaterialSlotCount && out.uvY.size() == Scene::MaterialSlotCount);
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
@@ -249,15 +251,17 @@ namespace Physara::Renderer::Detail
         const bool coatEnabled = material.values.clearcoatFactor > 0.f;
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
-            if (i >= IorSpecularTextureCount && !coatEnabled)
+            if ((i >= IorSpecularTextureCount && i < ClearcoatTextureCount && !coatEnabled) ||
+                (i >= ClearcoatTextureCount && !material.sheen))
             {
-                break;
+                continue;
             }
             if (const auto &slot = material.textures[i])
             {
                 const auto uv = slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
                 auto &attributes = i < CoreMaterialTextureCount ? result.attributes :
-                    (i < IorSpecularTextureCount ? result.specularAttributes : result.coatAttributes);
+                    i < IorSpecularTextureCount ? result.specularAttributes :
+                    i < ClearcoatTextureCount ? result.coatAttributes : result.sheenAttributes;
                 attributes |= uv;
                 if (i < AuxSurfaceTextureCount && (i != 0 || masked))
                 {
@@ -281,8 +285,9 @@ namespace Physara::Renderer::Detail
             }
         }
         result.iorSpecularBase = material.iorSpecular;
-        result.color = material.clearcoat ? MaterialColorProfile::Clearcoat :
-            (material.iorSpecular ? MaterialColorProfile::IorSpecular : MaterialColorProfile::Core);
+        using Color = MaterialColorProfile;
+        result.color = material.sheen ? (material.clearcoat ? Color::SheenClearcoat : Color::Sheen) :
+            material.clearcoat ? Color::Clearcoat : material.iorSpecular ? Color::IorSpecular : Color::Core;
         const auto &baseColor = material.textures.front();
         if (masked && baseColor)
         {
@@ -316,7 +321,9 @@ namespace Physara::Renderer::Detail
                           StaticAbi::SpecularColorTextureSlot == StaticAbi::SpecularColorTextureIndex + 1 &&
                           StaticAbi::ClearcoatTextureSlot == StaticAbi::ClearcoatTextureIndex + 1 &&
                           StaticAbi::ClearcoatRoughnessTextureSlot == StaticAbi::ClearcoatRoughnessTextureIndex + 1 &&
-                          StaticAbi::ClearcoatNormalTextureSlot == StaticAbi::ClearcoatNormalTextureIndex + 1);
+                          StaticAbi::ClearcoatNormalTextureSlot == StaticAbi::ClearcoatNormalTextureIndex + 1 &&
+                          StaticAbi::SheenColorTextureSlot == StaticAbi::SheenColorTextureIndex + 1 &&
+                          StaticAbi::SheenRoughnessTextureSlot == StaticAbi::SheenRoughnessTextureIndex + 1);
             const auto slot = i + (i >= StaticAbi::MaterialTableSlot ? 1u : 0u);
             bindings.AddItem(RHI::BindingSetItem::Texture_SRV(slot, row.textures[i]->texture.Get())
                 .SetSubresources(row.textures[i]->sampling));
@@ -338,14 +345,15 @@ namespace Physara::Renderer::Detail
         {
             return OpaqueSurfaceRoute::Unlit;
         }
-        return material.iorSpecular || material.clearcoat ?
+        return material.iorSpecular || material.clearcoat || material.sheen ?
             OpaqueSurfaceRoute::OpaqueForwardExtension : OpaqueSurfaceRoute::CoreDeferred;
     }
 
     /// @brief 准备新覆盖代或补齐缓存行的实际采样槽. 相同字段及绑定沿用原存储.
     static std::shared_ptr<MaterialRow> PrepareMaterial(ForwardDevice &device, StaticDrawWork &frame,
         const MaterialKey &key, std::uint64_t revision, const Scene::EffectiveMaterial &material,
-        const MaterialGeometry &geometry, const MaterialRow *cachedRow, OpaqueSurfaceRoute route, std::size_t sampledSlots)
+        const MaterialGeometry &geometry, const MaterialRow *cachedRow, OpaqueSurfaceRoute route,
+        std::uint32_t sampledSlots)
     {
         auto &uploads = frame.uploads;
         const auto values = cachedRow ? cachedRow->values : EncodeMaterial(material);
@@ -357,15 +365,16 @@ namespace Physara::Renderer::Detail
         std::array<std::shared_ptr<ResidentTexture>, Scene::MaterialSlotCount> textures;
         std::array<RHI::SamplerHandle, Scene::MaterialSlotCount> samplers;
         const auto first = std::get<4>(key) == MaterialUse::OpaqueAuxiliary ? CoverageTextureCount : 0;
-        assert(first < sampledSlots && sampledSlots <= textures.size());
-        for (std::size_t i = first; i < sampledSlots; ++i)
+        assert((sampledSlots & (1u << first)) != 0);
+        for (std::size_t i = first; i < textures.size(); ++i)
         {
             const bool unusedSpecular = i >= CoreMaterialTextureCount && i < IorSpecularTextureCount &&
                 !geometry.iorSpecularBase;
-            const bool unusedCoat = i >= IorSpecularTextureCount && values.clearcoat[0] == 0.f;
-            if (unusedSpecular || unusedCoat)
+            const bool unusedCoat = i >= IorSpecularTextureCount && i < ClearcoatTextureCount &&
+                                    values.clearcoat[0] == 0.f;
+            if ((sampledSlots & (1u << i)) == 0 || unusedSpecular || unusedCoat)
             {
-                // 核心基底的镜面扩展槽与零强度的清漆槽只补原生绑定.
+                // 实际颜色角色之外的槽及未生效的子层借用本行已有视图, 只补原生集合.
                 textures[i] = textures[first];
                 samplers[i] = samplers[first];
                 continue;
@@ -377,11 +386,9 @@ namespace Physara::Renderer::Detail
                                  : WhiteTexture(device, uploads);
         }
         // SurfaceAux 的基色绑定服务 MASK 分支. OPAQUE 时借用该行已准备的表面图像,
-        // 使原生配方与图读仍能使用完整的绑定前缀. 非活动尾槽沿用同一个句柄.
+        // 使原生配方与图读登记同一已准备的资源.
         std::ranges::fill(std::span(textures).first(first), textures[first]);
         std::ranges::fill(std::span(samplers).first(first), samplers[first]);
-        std::ranges::fill(std::span(textures).subspan(sampledSlots), textures[first]);
-        std::ranges::fill(std::span(samplers).subspan(sampledSlots), samplers[first]);
         if (const auto found = device.materials.find(key);
             found != device.materials.end() && device.Current(*found->second.resident))
         {
@@ -403,7 +410,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
         row->route = route;
-        row->sampledSlots = static_cast<std::uint32_t>(sampledSlots);
+        row->sampledSlots = sampledSlots;
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
         device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
@@ -658,21 +665,24 @@ namespace Physara::Renderer::Detail
         }
         const auto requirements = cached ? cached->geometry : MaterialRequirements(*material);
         const auto color = litColor ? requirements.color : MaterialColorProfile::Core;
-        auto sampled = ColorTextureCount(color);
+        auto sampled = ColorTextureSlots(color);
         if (coverageOnly)
         {
-            sampled = CoverageTextureCount;
+            sampled = MaterialTexturePrefix(CoverageTextureCount);
         }
         else if (auxiliaryOnly)
         {
-            sampled = AuxSurfaceTextureCount;
+            sampled = MaterialTexturePrefix(AuxSurfaceTextureCount);
         }
         // 仅复用同一用途的有效绑定. 颜色行真实基色与独立 OPAQUE 辅助行的占位各自就绪.
-        const bool texturesReady = row && cachedUse == std::get<4>(key) && row->sampledSlots >= sampled &&
-            std::ranges::all_of(std::span(row->textures).first(sampled), [&](const auto &texture)
+        bool texturesReady = row && cachedUse == std::get<4>(key) && (row->sampledSlots & sampled) == sampled;
+        for (std::size_t i = 0; texturesReady && i < row->textures.size(); ++i)
+        {
+            if ((sampled & (1u << i)) != 0)
             {
-                return frame.uploads.HasMaterialTexture(*texture);
-            });
+                texturesReady = frame.uploads.HasMaterialTexture(*row->textures[i]);
+            }
+        }
         if (!texturesReady)
         {
             if (!material)
@@ -714,10 +724,11 @@ namespace Physara::Renderer::Detail
             return;
         }
         // 按实际角色取顶点流. 独立辅助表面无需颜色 UV, 即使本行已由颜色帧补齐.
-        const bool coatColor = color == MaterialColorProfile::Clearcoat;
+        const bool coatColor = UsesClearcoat(color);
         auto attributes = std::uint8_t(requirements.attributes |
             (litColor && requirements.iorSpecularBase ? requirements.specularAttributes : 0) |
-            (coatColor ? requirements.coatAttributes : 0));
+            (coatColor ? requirements.coatAttributes : 0) |
+            (UsesSheen(color) ? requirements.sheenAttributes : 0));
         if (coverageOnly)
         {
             attributes = requirements.shadowAttributes;
@@ -775,11 +786,14 @@ namespace Physara::Renderer::Detail
         }
         if (texturesReady)
         {
-            // 缓存行可能含更多纹理. 只登记当前绑定前缀引用的实际资源, 含原生配方要求的占位.
+            // 缓存行可能含更多纹理. 按当前角色的槽位集合登记驻留, 含原生配方要求的占位.
             ++device.materialHits;
-            for (const auto &texture : std::span(row->textures).first(sampled))
+            for (std::size_t i = 0; i < row->textures.size(); ++i)
             {
-                device.Use(*texture);
+                if ((sampled & (1u << i)) != 0)
+                {
+                    device.Use(*row->textures[i]);
+                }
             }
             device.Use(*row);
         }
@@ -1763,7 +1777,8 @@ namespace Physara::Renderer::Detail
         if (!frame.needs.surfaceOnly)
         {
             const auto program = frame.environment.program;
-            frame.lightLayout = device.lightLayouts[std::size_t(FullListProgram(program))];
+            frame.lightLayout = device.lightLayouts[LightLayoutIndex(program)];
+            frame.sheenLightLayout = device.lightLayouts[LightLayoutIndex(program, true)];
             if (UsesFroxels(program))
             {
                 assert(device.froxelViewLayout);

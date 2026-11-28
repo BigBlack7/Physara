@@ -18,13 +18,24 @@ struct PixelParams
     float metallic;
     float perceptualRoughness;
     float alpha;
-#ifdef PHYSARA_CLEARCOAT
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
     bool iorSpecularBase;
+#endif
+#ifdef PHYSARA_CLEARCOAT
     float coatWeight; // 先持有层强度, 光照前乘一次视向 Fresnel.
     float coatRoughness;
     float coatAlpha;
 #endif
+#ifdef PHYSARA_SHEEN
+    vec3 sheenColor;
+    float sheenRoughness;
+    float sheenAlpha;
+    float sheenScale; // 零表示当前片元无 sheen 波瓣, 否则为逐灯方向归一乘数.
+    float sheenAlbedo; // 限制到 [0, 1] 的匹配 Charlie/Neubelt 方向反照率.
+#endif
 };
+
+const float MinPerceptualRoughness = 0.045; // 固定 Filament 的桌面感知粗糙度下限.
 
 // roughness 是有效材质的原感知粗糙度, kernel 为 ComputeGeometricRoughnessKernel 的结果.
 // 在 pRaw^4 域加入 kernel, 取两次平方根恢复 p, 限制到 [0.045, 1] 后再求 alpha=p^2.
@@ -32,14 +43,13 @@ float FilterCoreRoughness(float roughness, float kernel)
 {
     float rawAlpha = roughness * roughness;
     float filteredAlphaSquared = clamp(rawAlpha * rawAlpha + kernel, 0.0, 1.0);
-    // 0.045 是固定 Filament 的桌面感知粗糙度下限.
-    return clamp(sqrt(sqrt(filteredAlphaSquared)), 0.045, 1.0);
+    return clamp(sqrt(sqrt(filteredAlphaSquared)), MinPerceptualRoughness, 1.0);
 }
 
-// 两种基底仍各自使用已验收的响应. 仅清漆程序在材质数据中选择实际基底.
+// 叠层程序从材质数据选择实际基底, 专用 IOR/specular 角色固定其基底.
 bool UsesIorSpecular(PixelParams pixel)
 {
-#ifdef PHYSARA_CLEARCOAT
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
     return pixel.iorSpecularBase;
 #elif defined(PHYSARA_IOR_SPECULAR)
     return true;
@@ -55,8 +65,14 @@ PixelParams CorePixelParams(vec3 baseColor, float metallic, float filteredRoughn
                        mix(vec3(0.04), baseColor, metallic),
                        1.0, baseColor, vec3(0.04), 1.0, metallic,
                        filteredRoughness, filteredRoughness * filteredRoughness
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+                       , false
+#endif
 #ifdef PHYSARA_CLEARCOAT
-                       , false, 0.0, 0.0, 0.0
+                       , 0.0, 0.0, 0.0
+#endif
+#ifdef PHYSARA_SHEEN
+                       , vec3(0.0), MinPerceptualRoughness, MinPerceptualRoughness * MinPerceptualRoughness, 0.0, 0.0
 #endif
                        );
 }
@@ -66,11 +82,18 @@ PixelParams BuildPixelParams(MaterialInputs inputs, float kernel)
 {
     float roughness = FilterCoreRoughness(inputs.perceptualRoughness, kernel);
     PixelParams pixel = CorePixelParams(inputs.baseColor.rgb, inputs.metallic, roughness);
-#ifdef PHYSARA_CLEARCOAT
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
     pixel.iorSpecularBase = inputs.iorSpecularBase;
+#endif
+#ifdef PHYSARA_CLEARCOAT
     pixel.coatWeight = inputs.coatStrength;
     pixel.coatRoughness = FilterCoreRoughness(inputs.coatRoughness, kernel);
     pixel.coatAlpha = pixel.coatRoughness * pixel.coatRoughness;
+#endif
+#ifdef PHYSARA_SHEEN
+    pixel.sheenColor = inputs.sheenColor;
+    pixel.sheenRoughness = FilterCoreRoughness(inputs.sheenRoughness, kernel);
+    pixel.sheenAlpha = pixel.sheenRoughness * pixel.sheenRoughness;
 #endif
 #ifdef PHYSARA_HAS_SPECULAR_INPUTS
     if (UsesIorSpecular(pixel))

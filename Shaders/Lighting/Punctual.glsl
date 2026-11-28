@@ -4,6 +4,9 @@
 #include <Source/Geometry/LightingPosition.glsl>
 #include <Source/Geometry/SurfaceGeometry.glsl>
 #include <Source/Lighting/WorkingLight.glsl>
+#ifdef PHYSARA_SHEEN
+#include <Source/BRDF/SheenBrdf.glsl>
+#endif
 #ifdef PHYSARA_FORWARD_SHADOWS
 #include <Source/Shadow/Visibility.glsl>
 #endif
@@ -107,6 +110,15 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
         specular += lobes.metalSpecular * specularCompensation.metal;
     }
     vec3 response = (lobes.diffuse + specular) * light.color * weight;
+#ifdef PHYSARA_SHEEN
+    // weight 已含基底法线的 NoL, sheen 共用此余弦. 清漆随后衰减这两个已合成的下层波瓣.
+    response *= SheenBaseTransmission(pixel);
+    if (pixel.sheenScale > 0.0 && noL > 0.0 && dot(geometry.facingGeometricNormal, L) > 0.0)
+    {
+        float sheen = EvaluateSheenBrdf(pixel, geometry.shadingNormal, viewDirection, L, noL);
+        response += light.color * pixel.sheenColor * (sheen * weight);
+    }
+#endif
 #ifdef PHYSARA_CLEARCOAT
     response *= 1.0 - pixel.coatWeight;
     if (coatNoL > 0.0)

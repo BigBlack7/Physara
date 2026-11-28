@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <exception>
 #include <new>
+#include <span>
 #include <system_error>
 #include <utility>
 
@@ -17,7 +18,8 @@ namespace Physara::Renderer::Detail
         {
             if (job.source)
             {
-                return {job.serial, BakeEnvironment(job.source->image, job.request.lighting, job.base, stop)};
+                return {job.serial, BakeEnvironment(job.source->image, job.request.product == Product::Reflection,
+                    job.request.product == Product::Sheen, job.existing, stop)};
             }
             return {job.serial, BakeDfg(stop)};
         }
@@ -67,14 +69,7 @@ namespace Physara::Renderer::Detail
             }
             else if (const auto *error = std::get_if<Core::BoundedText>(&done->product))
             {
-                if (request.key)
-                {
-                    m_EnvironmentFailure.emplace(request, *error);
-                }
-                else
-                {
-                    m_DfgFailure = *error;
-                }
+                m_Failures[std::size_t(request.product)] = *error;
             }
         }
     }
@@ -85,44 +80,49 @@ namespace Physara::Renderer::Detail
         m_Active.reset();
     }
 
-    void EnvironmentCache::BeginFrame(const Asset::EnvironmentVersion &source) noexcept
+    void EnvironmentCache::SelectEnvironment(const std::optional<EnvironmentKey> &key) noexcept
     {
-        m_NeedsEnvironment = m_NeedsDfg = false;
+        if (m_EnvironmentKey == key)
+        {
+            return;
+        }
         // 换源时应先撤销旧序号, 否则队列中已经完成的旧环境仍能在本轮 Collect 中发布.
-        const auto key = source ? std::optional(EnvironmentKey{source->sourceFingerprint}) : std::nullopt;
-        if (m_Active && m_Active->request.key && m_Active->request.key != key)
+        if (m_Active && m_Active->request.key)
         {
             CancelActive();
         }
-        if (m_EnvironmentFailure && m_EnvironmentFailure->first.key != key)
+        m_EnvironmentKey = key;
+        for (auto &failure : std::span(m_Failures).first(std::size_t(Product::Dfg)))
         {
-            m_EnvironmentFailure.reset();
+            failure.reset();
         }
+    }
+
+    void EnvironmentCache::BeginFrame(const Asset::EnvironmentVersion &source) noexcept
+    {
+        m_Needs.fill(false);
+        SelectEnvironment(source ? std::optional(EnvironmentKey{source->sourceFingerprint}) : std::nullopt);
         Collect();
     }
 
     void EnvironmentCache::EndFrame() noexcept
     {
-        if (m_Active && !(m_Active->request.key ? m_NeedsEnvironment : m_NeedsDfg))
+        if (m_Active && !m_Needs[std::size_t(m_Active->request.product)])
         {
             CancelActive();
         }
     }
 
     std::variant<EnvironmentProducts, EnvironmentPreparationFailure> EnvironmentCache::Prepare(
-        const Asset::EnvironmentVersion &source, bool lighting, bool needsDfg)
+        const Asset::EnvironmentVersion &source, bool lighting, bool sheen, bool needsDfg)
     {
         const auto key = source ? std::optional(EnvironmentKey{source->sourceFingerprint}) : std::nullopt;
         // 一路没有环境需求不代表同帧其它路也不需要. 实际换源仍先拒收旧作业.
-        if (key && m_Active && m_Active->request.key && m_Active->request.key != key)
+        if (key)
         {
-            CancelActive();
+            SelectEnvironment(key);
         }
         Collect();
-        if (key && m_EnvironmentFailure && m_EnvironmentFailure->first.key != key)
-        {
-            m_EnvironmentFailure.reset();
-        }
 
         std::shared_ptr<const BakedEnvironment> existing;
         if (key)
@@ -134,25 +134,26 @@ namespace Physara::Renderer::Detail
                 existing = m_Stored[0].product;
             }
         }
-        const bool missingEnvironment = source && (!existing || (lighting && !existing->lighting));
+        const bool missingReflection = lighting && (!existing || !existing->lighting);
+        const bool missingSheen = sheen && (!existing || !existing->sheen.front());
+        const bool missingBase = source && !existing;
         const bool missingDfg = needsDfg && !m_Dfg;
-        m_NeedsEnvironment |= missingEnvironment;
-        m_NeedsDfg |= missingDfg;
-        if (!missingEnvironment && !missingDfg)
+        if (!missingBase && !missingReflection && !missingSheen && !missingDfg)
         {
             return EnvironmentProducts{std::move(existing), needsDfg ? m_Dfg : nullptr};
         }
 
-        // 缺两种产品时先做可跨场景使用的 DFG. 同源从天空升级到照明可以沿用基础层.
-        const Request required = missingDfg ? Request{} : Request{key, lighting};
-        if (missingDfg && m_DfgFailure)
+        // 每个子产品完成后独立发布. Sky 可先取基础层, 普通照明可在 Charlie 等待时取已完成的 GGX/SH.
+        const auto product = missingDfg ? Product::Dfg : missingBase ? Product::Base :
+                             missingReflection ? Product::Reflection : Product::Sheen;
+        if (const auto &failure = m_Failures[std::size_t(product)]; failure)
         {
-            return EnvironmentPreparationFailure{false, *m_DfgFailure};
+            return EnvironmentPreparationFailure{false, *failure};
         }
-        if (missingEnvironment && m_EnvironmentFailure && m_EnvironmentFailure->first == required)
-        {
-            return EnvironmentPreparationFailure{false, m_EnvironmentFailure->second};
-        }
+        m_Needs[std::size_t(Product::Base)] |= missingBase;
+        m_Needs[std::size_t(Product::Reflection)] |= missingReflection;
+        m_Needs[std::size_t(Product::Sheen)] |= missingSheen;
+        m_Needs[std::size_t(Product::Dfg)] |= missingDfg;
         if (!m_Active)
         {
             auto serial = m_LastSerial;
@@ -174,8 +175,9 @@ namespace Physara::Renderer::Detail
                     return EnvironmentPreparationFailure{false, reason};
                 }
             }
+            const Request required{product == Product::Dfg ? std::nullopt : key, product};
             const auto submitted = m_Queue->TrySubmit(std::make_unique<Input>(serial, required,
-                required.key ? source : nullptr, existing ? existing->base : nullptr));
+                required.key ? source : nullptr, std::move(existing)));
             if (const auto *id = std::get_if<WorkQueue::Id>(&submitted))
             {
                 m_LastSerial = serial;
@@ -186,7 +188,9 @@ namespace Physara::Renderer::Detail
                 return EnvironmentPreparationFailure{false, Core::BoundedText("Environment bake queue unavailable")};
             }
         }
-        return EnvironmentPreparationFailure{true, Core::BoundedText(
-            missingDfg ? "Preparing the shared DFG lookup table" : "Baking the requested HDR environment")};
+        constexpr std::array Pending{"Baking the requested HDR environment base",
+            "Baking the requested GGX/SH environment", "Baking the requested Charlie environment",
+            "Preparing the shared DFG lookup table"};
+        return EnvironmentPreparationFailure{true, Core::BoundedText(Pending[std::size_t(product)])};
     }
 }

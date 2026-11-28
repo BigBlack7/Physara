@@ -13,9 +13,9 @@ namespace Physara::Asset::Gltf
     /// @brief 扩展声明是文件级合同, 不随当前选择的 scene 变更.
     static void ReportSupport(const Json &root, Core::BoundedText &report)
     {
-        constexpr std::array<std::string_view, 7> Supported{
+        constexpr std::array<std::string_view, 8> Supported{
             "KHR_lights_punctual", "KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform",
-            "KHR_materials_ior", "KHR_materials_specular", "KHR_materials_clearcoat"};
+            "KHR_materials_ior", "KHR_materials_specular", "KHR_materials_clearcoat", "KHR_materials_sheen"};
         const auto used = root.Field("extensionsUsed");
         std::set<std::string_view> names;
         for (std::size_t i = 0; i < used.Size(); ++i)

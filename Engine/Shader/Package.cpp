@@ -7,6 +7,7 @@
 #include <array>
 #include <set>
 
+#include "ProductVariants.hpp"
 #include "Spirv.hpp"
 
 namespace Physara::Shader
@@ -59,6 +60,8 @@ namespace Physara::Shader
                            IsHash(package.contentHash) && IsHash(package.compilerFingerprint),
                        "Invalid package identity/profile.");
         RequirePackage(package.abiHash == expected.abiHash, "Package ABI does not describe its interface snapshot.");
+        RequirePackage(package.productName.empty() || (package.profile == GraphicsProfile &&
+                           FindProductProgram(package.productName)), "Unknown product Shader identity.");
         CheckProgramInterfaces(package.modules, package.profile);
         RequirePackage(!package.dependencies.empty() && package.dependencies.size() <= 256,
                        "Invalid package dependency count.");
@@ -159,7 +162,7 @@ namespace Physara::Shader
                                  {"line", edge.line},
                                  {"expanded", edge.expanded}});
         }
-        const Json metadata{{"interface", declaration},
+        Json metadata{{"interface", declaration},
                             {"profile", package.profile},
                             {"abiHash", package.abiHash},
                             {"contentHash", package.contentHash},
@@ -167,6 +170,10 @@ namespace Physara::Shader
                             {"modules", modules},
                             {"dependencies", dependencies},
                             {"sourceMap", sourceMap}};
+        if (!package.productName.empty())
+        {
+            metadata["product"] = package.productName;
+        }
         const auto text = metadata.dump();
         const auto paddedBytes = (text.size() + 3) / 4 * 4;
         RequirePackage(paddedBytes <= MaxPackageBytes - PrefixBytes &&
@@ -239,13 +246,17 @@ namespace Physara::Shader
             "package metadata");
         CheckFields(metadata,
                     {"interface", "profile", "abiHash", "contentHash", "compilerFingerprint", "modules", "dependencies",
-                     "sourceMap"},
+                     "sourceMap", "product"},
                     "package metadata");
         ShaderPackage package;
         package.profile = metadata.at("profile").get<std::string>();
         package.abiHash = metadata.at("abiHash").get<std::string>();
         package.contentHash = metadata.at("contentHash").get<std::string>();
         package.compilerFingerprint = metadata.at("compilerFingerprint").get<std::string>();
+        if (metadata.contains("product"))
+        {
+            package.productName = Identifier(metadata.at("product"), "package metadata/product");
+        }
         if (package.abiHash != expectedAbiHash)
         {
             throw BuildError(ErrorCode::InterfaceMismatch, "Package ABI differs from the consumer's expected ABI.");

@@ -387,7 +387,7 @@ namespace Physara::Editor::Detail
         ImGui::Text("Shader active %llu / request %llu %s", counts(shader.active), counts(shader.request), status);
         ImGui::Text("Programs %zu / Pipeline demand %zu / step %zu of %zu", Shader::ProductShaderCount,
                     shader.demand, shader.started, shader.budget);
-        ImGui::Text("Pipeline cache %zu / %zu, hits %llu, created %llu, CPU %.3f ms",
+        ImGui::Text("Pipeline cache %zu / %zu, hits %llu, created %llu, native preparation CPU %.3f ms",
                     shader.inCache, shader.cacheLimit, counts(shader.nativeHits), counts(shader.nativeCreated),
                     shader.nativeSeconds * 1000);
         if (shader.request)

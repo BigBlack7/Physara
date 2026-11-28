@@ -265,6 +265,7 @@ namespace Physara::Asset
                                  hasSourceAlpha ? AlphaMeaning::StraightCoverage : AlphaMeaning::Opaque};
         case ImageUse::Emissive:
         case ImageUse::SpecularColor:
+        case ImageUse::SheenColor:
             return ImageSampling{ImageDomain::Srgb, AlphaMeaning::Ignored};
         case ImageUse::Normal:
         case ImageUse::OcclusionRoughnessMetallic:
@@ -274,6 +275,7 @@ namespace Physara::Asset
             return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Ignored};
         case ImageUse::LinearData:
         case ImageUse::Specular:
+        case ImageUse::SheenRoughness:
             return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Data};
         }
         return std::nullopt;

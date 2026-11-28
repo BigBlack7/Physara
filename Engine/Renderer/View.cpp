@@ -20,6 +20,37 @@
 
 namespace Physara::Renderer
 {
+    const std::array<char, 64> *RenderedLayerColors::Program(const RenderedMaterialTarget &target,
+                                                            MaterialLayer layer) const noexcept
+    {
+        if (draws)
+        {
+            const auto draw = std::ranges::find(*draws, target, &RenderedLayerDraw::target);
+            if (draw != draws->end() && (layer == MaterialLayer::Sheen ? draw->sheen : draw->clearcoat))
+            {
+                if (draw->clearcoat && draw->sheen)
+                {
+                    return &sheenClearcoat;
+                }
+                return draw->sheen ? &sheen : &clearcoat;
+            }
+        }
+        return nullptr;
+    }
+
+    std::optional<RenderedMaterialColor> View::LastLayerColor(const RenderedMaterialTarget &target,
+                                                              MaterialLayer layer) const noexcept
+    {
+        if (m_LitLayerFrame && m_LitLayerFrame->scene == target.entity.scene)
+        {
+            if (const auto *program = m_LitLayerFrame->colors.Program(target, layer))
+            {
+                return RenderedMaterialColor{*program, m_LitLayerFrame->submission};
+            }
+        }
+        return std::nullopt;
+    }
+
     static constexpr std::size_t PixelBytes = 4;
     // 进程只有一个活动宿主. View 在该宿主 owner 线程分配身份, 后续创建不会复用旧代.
     static std::uint64_t LastViewIdentity = 0;
@@ -653,7 +684,7 @@ namespace Physara::Renderer
     std::variant<PreparedViewOutput, Core::BoundedText> View::PreparePreview(
         const PreparedView &prepared, std::optional<Core::BoundedText> degradation,
         std::optional<RenderedEnvironment> environment, std::uint64_t shaderGeneration,
-        const ShadowDepthSet *shadow, OpaqueProduction production)
+        const ShadowDepthSet *shadow, OpaqueProduction production, RenderedLayerDraws layerDraws)
     {
         // 即使布局相同也分配独立场景代, 失败回退仍可只读上一代颜色及其相机记录.
         assert(prepared.camera && prepared.view == m_Id && prepared.reason == ViewSettingReason::None);
@@ -711,7 +742,9 @@ namespace Physara::Renderer
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
                           prepared.layouts.display.outputExtent, shaderGeneration, cascades,
                           prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
-                          0, shadowWork, prepared.opaquePath, compatiblePredecessor, production.clearcoatColor}};
+                          0, shadowWork, prepared.opaquePath, compatiblePredecessor,
+                          {std::move(layerDraws), production.clearcoatColor, production.sheenColor,
+                           production.sheenClearcoatColor}}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -822,6 +855,8 @@ namespace Physara::Renderer
             {
                 ObserveScene(scene->scene);
                 m_AcceptedOpaquePlan = AcceptedOpaquePlan{std::move(*outputs.m_OpaquePlan), ticket};
+                // 只有实际提交的受光计划能推进叠层票据. 无法显示阴影诊断而回退到正常受光时仍有此计划.
+                m_LitLayerFrame = LitLayerFrame{scene->scene, scene->layerColors, ticket};
                 if (scene->opaquePath == RequestedOpaquePath())
                 {
                     m_OpaqueReason = ViewSettingReason::None;
@@ -832,14 +867,10 @@ namespace Physara::Renderer
             // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
             outputs.m_Output->scene->submission = ticket;
             m_RenderedScene = outputs.m_Output->scene;
-            // 材质诊断更新当前显示帧. 只有实际清漆受光提交更新本场景的清漆票据.
-            if (IsLitPreview(scene->mode) && scene->clearcoatColor.front() != '\0')
+            // 实际显示的诊断可替换场景帧, 同场景的受光快照仍由原票据保有.
+            if (m_LitLayerFrame && m_LitLayerFrame->scene != scene->scene)
             {
-                m_LastClearcoatColor = RenderedClearcoatColor{scene->scene, scene->clearcoatColor, ticket};
-            }
-            else if (m_LastClearcoatColor && m_LastClearcoatColor->scene != scene->scene)
-            {
-                m_LastClearcoatColor.reset();
+                m_LitLayerFrame.reset();
             }
             if (m_RenderedScene->directionalCascades != 0 || m_RenderedScene->localShadow)
             {

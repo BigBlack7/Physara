@@ -32,7 +32,7 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
     const int strengthSlot = int(SpecularTextureIndex);
     const int colorSlot = int(SpecularColorTextureIndex);
     vec4 specular = PHYSARA_FORWARD_MATERIAL.specular;
-#ifdef PHYSARA_CLEARCOAT
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
     bool iorSpecularBase = PHYSARA_FORWARD_MATERIAL.clearcoat.w != 0.0;
 #else
     const bool iorSpecularBase = true;
@@ -65,13 +65,35 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
                                     uv.uv, uv.dx, uv.dy).g;
     }
 #endif
+#ifdef PHYSARA_SHEEN
+    // 颜色纹理由 sRGB 格式解码 RGB. 粗糙度纹理的 A 是独立线性数据, 有效 UV 各自解析.
+    vec4 sheen = PHYSARA_FORWARD_MATERIAL.sheen;
+    const int sheenColorSlot = int(SheenColorTextureIndex);
+    const int sheenRoughnessSlot = int(SheenRoughnessTextureIndex);
+    if (HasMaterialTexture(sheenColorSlot))
+    {
+        MaterialUvSample uv = MaterialUv(sheenColorSlot, gradients);
+        sheen.rgb *= textureGrad(sampler2D(sheenColorImage, sheenColorSampler), uv.uv, uv.dx, uv.dy).rgb;
+    }
+    if (HasMaterialTexture(sheenRoughnessSlot))
+    {
+        MaterialUvSample uv = MaterialUv(sheenRoughnessSlot, gradients);
+        sheen.a *= textureGrad(sampler2D(sheenRoughnessImage, sheenRoughnessSampler), uv.uv, uv.dx, uv.dy).a;
+    }
+#endif
     return MaterialInputs(baseColor, roughnessMetallic.x, roughnessMetallic.y,
                           mix(1.0, occlusion, PHYSARA_FORWARD_MATERIAL.surface.z)
 #ifdef PHYSARA_HAS_SPECULAR_INPUTS
                           , PHYSARA_FORWARD_MATERIAL.ior, specular.w, specular.rgb
 #endif
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+                          , iorSpecularBase
+#endif
 #ifdef PHYSARA_CLEARCOAT
-                          , coatStrength, coatRoughness, iorSpecularBase
+                          , coatStrength, coatRoughness
+#endif
+#ifdef PHYSARA_SHEEN
+                          , sheen.rgb, sheen.a
 #endif
                           );
 }

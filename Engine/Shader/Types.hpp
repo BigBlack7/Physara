@@ -188,6 +188,7 @@ namespace Physara::Shader
         std::string abiHash;
         std::string contentHash;
         std::string compilerFingerprint;
+        std::string productName; ///< 通过目录校验的入口及结构配方, 独立编译或旧包为空.
         InterfaceDeclaration declaration;
         std::vector<ShaderModule> modules;
         std::vector<SourceDependency> dependencies;

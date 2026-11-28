@@ -225,6 +225,7 @@ namespace Physara::Renderer::Detail
         std::uint8_t shadowAttributes{}; ///< 写阴影时仅依赖 MASK 实际使用的 UV.
         std::uint8_t specularAttributes{}; ///< 只有扩展受光角色需要的附加 UV.
         std::uint8_t coatAttributes{}; ///< 清漆颜色额外读取的流. 两套有效 UV 不同时包含第二条切线.
+        std::uint8_t sheenAttributes{}; ///< sheen 两个槽额外读取的 UV, 与切线框架无关.
         std::int8_t coatNormalUv = -1; ///< 负值表示本次颜色准备无需清漆法线框架.
         MaterialColorProfile color{};
         bool iorSpecularBase{};
@@ -237,7 +238,7 @@ namespace Physara::Renderer::Detail
     /// @brief 可进入不透明绘制的材质 profile. MASK 的覆盖规则独立于路由.
     enum class OpaqueSurfaceRoute : std::uint8_t { CoreDeferred, Unlit, OpaqueForwardExtension };
 
-    /// @brief GPU 材质行与预解析集合. UV 行描述有效材质, sampledSlots 记录本次实际准备到哪个槽.
+    /// @brief GPU 材质行与预解析集合. UV 行描述有效材质, sampledSlots 记录当前角色所需的采样位.
     /// 未采样的槽复用已准备的句柄. 独立 OPAQUE 辅助行的基色槽也使用占位绑定.
     /// 已冻结的 Draw 持有原行直至其帧槽释放.
     struct MaterialRow final : Allocation
@@ -249,7 +250,7 @@ namespace Physara::Renderer::Detail
         SamplingKey sampling;
         MaterialBinding binding;
         OpaqueSurfaceRoute route = OpaqueSurfaceRoute::CoreDeferred;
-        std::uint32_t sampledSlots{}; ///< 原生角色所需的有效绑定前缀长度, 含该角色的占位.
+        std::uint32_t sampledSlots{}; ///< 原生角色所需的采样槽位集合, 含该角色的占位.
         StaticAbi::ForwardMaterial values{};
     };
 
@@ -288,13 +289,14 @@ namespace Physara::Renderer::Detail
         std::vector<std::vector<std::byte>> levels;
     };
 
-    /// @brief 每项持有一种紧密 CPU 载荷. dfg 按单层上传, environment 由目标 mip 数决定所需的六面.
+    /// @brief 每项持有一种紧密 CPU 载荷. DFG 写单层, cube 由 role 选择源层链并写入目标各 mip 的六个面.
     /// revision 标记同一目标的全部写入, 完整图接受后方可在后继帧直接读取.
     struct EnvironmentUpload
     {
         std::shared_ptr<ResidentTexture> revision;
         std::shared_ptr<const BakedEnvironment> environment;
         std::shared_ptr<const DfgTable> dfg;
+        EnvironmentCubeRole role = EnvironmentCubeRole::Sky;
     };
 
     /// @brief 帧拥有的写入内容. 缓冲按精确字节区间, 纹理按完整 mip 层写入.
@@ -365,6 +367,14 @@ namespace Physara::Renderer::Detail
             ? static_cast<LightingProgram>(std::size_t(program) - std::size_t(LightingProgram::Froxel)) : program;
     }
 
+    /// @brief sheen 的 Direct 增加 DFG, IBL 增加 Charlie 读. DFG-only 可复用原 PerPass 配方.
+    [[nodiscard]] constexpr std::size_t LightLayoutIndex(LightingProgram program, bool sheen = false) noexcept
+    {
+        const auto full = FullListProgram(program);
+        const bool separate = sheen && full != LightingProgram::Physical && full != LightingProgram::PhysicalShadows;
+        return std::size_t(full) + (separate ? ForwardPerPassLayouts : 0);
+    }
+
     /// @brief 根据已解析的普通受光角色取得同资源组合的 Froxel 颜色角色.
     /// @pre program 属于全灯 Direct, Physical 或 IBL 及其带阴影版本. 诊断角色单独规划.
     [[nodiscard]] constexpr LightingProgram WithFroxels(LightingProgram program) noexcept
@@ -395,6 +405,7 @@ namespace Physara::Renderer::Detail
 
     inline constexpr std::uint32_t DfgSlot = 1; ///< StaticForward 的 PerPass t1.
     inline constexpr std::uint32_t ReflectionSlot = 2; ///< StaticForward 的 PerPass t2.
+    inline constexpr std::uint32_t SheenReflectionSlot = StaticAbi::SheenReflectionSlot;
     inline constexpr std::uint32_t ShadowConstantsSlot = 1; ///< StaticForward 的 PerPass b1.
     inline constexpr std::uint32_t ShadowImageSlot = 3; ///< 本 View 的连续深度层, PerPass t3.
     inline constexpr std::uint32_t ShadowLayersSlot = 4; ///< 组首行和层投影表, PerPass t4.
@@ -406,17 +417,31 @@ namespace Physara::Renderer::Detail
     static_assert(IorSpecularTextureCount == std::size_t(Asset::MaterialSlot::Clearcoat));
     static_assert(StaticAbi::ClearcoatRoughnessTextureIndex == std::size_t(Asset::MaterialSlot::ClearcoatRoughness));
     static_assert(StaticAbi::ClearcoatNormalTextureIndex == CoatNormalSlot);
+    inline constexpr std::size_t ClearcoatTextureCount = StaticAbi::SheenColorTextureIndex;
+    static_assert(ClearcoatTextureCount == std::size_t(Asset::MaterialSlot::SheenColor));
+    static_assert(StaticAbi::SheenRoughnessTextureIndex == std::size_t(Asset::MaterialSlot::SheenRoughness));
+    static_assert(Scene::MaterialSlotCount < 32);
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
     inline constexpr std::size_t AuxSurfaceTextureCount = std::size_t(Asset::MaterialSlot::Normal) + 1;
 
-    /// @brief 颜色角色的连续材质槽范围, 图读与上传使用同一边界.
-    [[nodiscard]] constexpr std::size_t ColorTextureCount(MaterialColorProfile profile) noexcept
+    /// @brief 将从基色开始的连续槽数转换成位掩码. count 至多为 MaterialSlotCount.
+    [[nodiscard]] constexpr std::uint32_t MaterialTexturePrefix(std::size_t count) noexcept
     {
+        return (1u << count) - 1;
+    }
+
+    /// @brief 颜色角色的采样槽集合, 图读与上传使用同一配方. 单独 sheen 跳过清漆图像.
+    [[nodiscard]] constexpr std::uint32_t ColorTextureSlots(MaterialColorProfile profile) noexcept
+    {
+        constexpr auto SheenSlots = MaterialTexturePrefix(Scene::MaterialSlotCount) &
+                                    ~MaterialTexturePrefix(ClearcoatTextureCount);
         switch (profile)
         {
-        case MaterialColorProfile::IorSpecular: return IorSpecularTextureCount;
-        case MaterialColorProfile::Clearcoat: return Scene::MaterialSlotCount;
-        default: return CoreMaterialTextureCount;
+        case MaterialColorProfile::IorSpecular: return MaterialTexturePrefix(IorSpecularTextureCount);
+        case MaterialColorProfile::Clearcoat: return MaterialTexturePrefix(ClearcoatTextureCount);
+        case MaterialColorProfile::Sheen: return MaterialTexturePrefix(IorSpecularTextureCount) | SheenSlots;
+        case MaterialColorProfile::SheenClearcoat: return MaterialTexturePrefix(Scene::MaterialSlotCount);
+        default: return MaterialTexturePrefix(CoreMaterialTextureCount);
         }
     }
 
@@ -479,6 +504,7 @@ namespace Physara::Renderer::Detail
         LightingProgram program = LightingProgram::Legacy;
         std::shared_ptr<ResidentTexture> dfg;
         std::shared_ptr<ResidentTexture> reflection;
+        std::shared_ptr<ResidentTexture> sheenReflection;
         std::shared_ptr<ResidentTexture> sky;
         std::shared_ptr<ConstantRow> lightingConstants;
         std::shared_ptr<ConstantRow> skyConstants;
@@ -562,6 +588,7 @@ namespace Physara::Renderer::Detail
         std::shared_ptr<LightTable> lightTable; ///< 本槽可复用的非空表.
         std::shared_ptr<LightTable> activeLights;
         RHI::BindingLayoutHandle lightLayout;
+        RHI::BindingLayoutHandle sheenLightLayout;
         RHI::BindingLayoutHandle froxelViewLayout; ///< 选定颜色角色的完整 PerView 布局, 深度仍使用普通布局.
         std::optional<ShaderPipelineRequest> deferredColor; ///< 实际有核心受光时才登记的颜色角色.
         std::optional<StaticAbi::DeferredView> deferredViewValues; ///< 本轮核心角色所需的重建值, 无法编码时为空.
@@ -576,6 +603,8 @@ namespace Physara::Renderer::Detail
         std::optional<ShadowFrame> shadow;
         PostProcess::DisplayFrame display;
         bool displayReserved = false; ///< PlanDisplay 已为这份输入登记额度, 本轮失败时可撤回.
+        OpaqueProduction production; ///< FinishView 冻结的实际生产身份.
+        RenderedLayerDraws layerDraws; ///< 同次完成的叠层 Draw 快照, View 接受后可跨帧槽保留.
     };
 
     struct ForwardShaderGeneration;
@@ -603,6 +632,9 @@ namespace Physara::Renderer::Detail
         [[nodiscard]] RHI::GraphicsPipelineHandle FindPipeline(ShaderPipelineRequest key) const noexcept;
         /// @brief 在当前设备 context 创建缺少的角色程序, 布局与指定槽. 创建被拒时抛出 ForwardFailure.
         void PreparePipeline(ForwardDevice &owner, ShaderPipelineRequest key, const Shader::ProductPackages &packages);
+        /// @brief 用实际颜色集合验证两阶段资源和设备限额. 首次使用可建立共享布局, Program 链接留到实际绘制需求.
+        void CheckLightingBindings(ForwardDevice &owner, Shader::ProductShader role, const Shader::RhiProgram &program)
+            const;
         /// @brief 借用该角色已载入包的内容摘要, 尚未载入时为空. 替换程序后重新取值.
         [[nodiscard]] std::string_view ProgramContent(Shader::ProductShader role) const noexcept;
         /// @brief 接续同设备同角色, 包内容及固定状态相同的 Pipeline. 天空槽随带布局, 颜色角色共用设备布局.
@@ -627,7 +659,9 @@ namespace Physara::Renderer::Detail
         std::array<RHI::GraphicsPipelineHandle, ScenePipelineCount> pipelines;
 
     private:
-        /// @brief 按颜色角色核对活动绑定并取得设备的固定布局. 三种阴影诊断共用基色覆盖和数组查询配方.
+        /// @brief 颜色和表面角色共用几何集合, 受光角色按配方附加灯光集合.
+        [[nodiscard]] RHI::BindingLayoutVector GeometryBindings(ForwardDevice &owner, Shader::ProductShader role) const;
+        /// @brief 按颜色角色取得通过包级准入的阶段对象. 三种阴影诊断共用基色覆盖和数组查询配方.
         void PrepareLighting(ForwardDevice &owner, Shader::ProductShader role, const Shader::ProductPackages &packages);
         /// @brief 在当前固定角色槽准备全屏颜色程序及其三个集合, 交由冻结帧持有.
         void PrepareDeferredLighting(ForwardDevice &owner, ShaderPipelineRequest key,
@@ -663,6 +697,13 @@ namespace Physara::Renderer::Detail
     struct ForwardDevice
     {
         enum class ShaderPreparationPhase : std::uint8_t { Admission, Active, Candidate };
+
+        /// @brief 当前请求自持的 CPU 包及设备准入进度. 新请求整体撤销, 固定状态槽失败重选时继续持有.
+        struct ShaderCandidateInput
+        {
+            Shader::ProductPackages packages;
+            std::optional<std::size_t> nextBinding; ///< 空表示尚未通过 CPU 准入. 完成时等于目录大小.
+        };
 
         ForwardDevice(RHI::Device &source, const ForwardPackagePaths &paths, std::uint32_t textureLimit,
                       std::uint32_t uniformAlignment, Core::BoundedText nativeIdentity,
@@ -719,7 +760,7 @@ namespace Physara::Renderer::Detail
         std::vector<std::weak_ptr<const ForwardShaderGeneration>> retiredShaders;
         std::vector<RHI::GraphicsPipeline *> countedPipelines; ///< 预留全部表的计数空间, 只在 owner 内借用.
         Shader::ProductPackages activePackages;
-        std::optional<Shader::ReloadResult> candidateInput; ///< 最新请求的 CPU 包. 原生键失败后保留至重选或请求换代.
+        std::optional<ShaderCandidateInput> candidateInput;
         bool sourcePending{};
         bool shaderCacheDirty{};
         bool retryOnReselection{}; ///< 已观察到候选的原生失败键退出计划, 同一键再出现时重试.
@@ -727,7 +768,7 @@ namespace Physara::Renderer::Detail
         std::vector<ShaderPreparationFailure> activeFailures; ///< 保留活动代仍在需求中的失败角色或单键及首因.
         std::optional<ShaderPreparationPhase> lastShaderFailure; ///< 记录本次推进失败的诊断归属.
         PostProcess::DisplayDevice display;
-        std::array<RHI::BindingLayoutHandle, ForwardPerPassLayouts> lightLayouts; ///< 两个候选策略共用的固定配方.
+        std::array<RHI::BindingLayoutHandle, 2 * ForwardPerPassLayouts> lightLayouts; ///< 基础和 sheen 的固定配方.
         RHI::BindingLayoutHandle froxelViewLayout; ///< 首次需要 Froxel Pipeline 时准备, 同设备各代共用.
         RHI::BindingLayoutHandle deferredSurfaceLayout; ///< 屏幕常量和最终表面采样, 同设备各代共用.
         std::shared_ptr<ResidencyCapacity> capacity = std::make_shared<ResidencyCapacity>();
@@ -763,7 +804,7 @@ namespace Physara::Renderer::Detail
         std::uint64_t encodedLightStructure{};
         std::map<std::pair<std::uint32_t, std::uint64_t>, EncodedLight> encodedLights; ///< 当前 Scene 的实体槽和代.
         EnvironmentCache environmentCache;
-        std::map<std::pair<EnvironmentKey, bool>, ResidentEnvironment> environmentTextures;
+        std::map<std::pair<EnvironmentKey, EnvironmentCubeRole>, ResidentEnvironment> environmentTextures;
         std::shared_ptr<ResidentTexture> dfgTexture;
         RHI::SamplerHandle environmentSampler;
     };

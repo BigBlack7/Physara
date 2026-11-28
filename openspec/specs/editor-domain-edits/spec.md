@@ -145,6 +145,8 @@ Inspector SHALL 按选中实体的固定源版本列出可编辑的源 Primitive
 
 Inspector SHALL 为当前 lit metallic-roughness 实例提供 clearcoat 强度、感知粗糙度和独立清漆 normal scale，以及强度、粗糙度、清漆法线三个槽的继承值和稀疏编辑。提交、清除和恢复 SHALL 使用同一个有效材质校验，按目标 Primitive 检查槽用途、UV、切线空间、因子与材质组合。清漆与基底法线的字段和纹理 SHALL 可独立编辑。已声明或覆盖的清漆 SHALL 在 Inspector 中显示对应实际准备状态及最后正常接受的颜色身份。
 
+Inspector SHALL 对兼容的 lit metallic-roughness 实例提供 sheen 线性 RGB、感知粗糙度、颜色槽和粗糙度槽的继承或稀疏编辑。有效零颜色、继承值和已有独立槽 SHALL 可辨认。提交、清除与恢复 SHALL 经同一材质校验。面板 SHALL 根据当前请求、实际准备和最后接受的正常受光帧显示 sheen 状态。
+
 #### Scenario: Edit and reset one inherited surface field
 - **WHEN** 同一模型被实例化两次，用户在其中一个 Primitive 上写入 roughness 覆盖、清除该字段，然后撤销清除
 - **THEN** 该实例后续被接受的帧先使用覆盖，再使用源 roughness，最后恢复覆盖；该 Primitive 的其它覆盖、另一实例及共享源保持原值
@@ -168,6 +170,16 @@ Inspector SHALL 为当前 lit metallic-roughness 实例提供 clearcoat 强度�
 #### Scenario: Retain the current clearcoat edit when the target cannot use its normal slot
 - **WHEN** 用户为现有 lit 实例提交使用不可用 UV 或无法取得切线框架的清漆法线覆盖
 - **THEN** 面板定位被拒绝的槽和原因，原来接受的稀疏覆盖、场景修订、历史及可读帧保有资格
+
+#### Scenario: Edit and restore sheen for only one instance
+
+- **WHEN** 两实例固定同一源模型，用户为一实例编辑 sheen 颜色与粗糙度槽、提交显式零、清除单项覆盖并撤销或重做
+- **THEN** 后续正常受光帧和面板对应目标实例的当前有效数据及色角色，相关内容变化使该 View 的不兼容历史失效。另一实例继承其源数据，诊断或准备中的预览保有上一份已接受受光身份
+
+#### Scenario: Keep the last compatible state after an invalid sheen edit
+
+- **WHEN** 用户提交与目标 sheen 槽用途不兼容的图像或该 Primitive 缺席的有效 UV
+- **THEN** 诊断定位至该槽和原因，以前接受的实例覆盖、场景版本、历史和可读结果保有资格
 
 ### Requirement: Edit punctual light parameters with explicit units
 

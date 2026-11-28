@@ -26,6 +26,7 @@
 /// @brief GL 后端跨文件私有合同, Device 拥有 caps, 物理包和删除 FIFO, wrapper 持有描述与 Device 引用.
 
 #include "../OpenGL.hpp"
+#include "../GraphicsShaderBindings.hpp"
 
 #include <array>
 #include <atomic>
@@ -127,7 +128,7 @@ namespace Physara::RHI::OpenGL
     /// @brief 原生设备状态的唯一 owner, 跨实现文件管理能力, 上传, 提交与删除.
     /// @invariant Active 接受新工作, Faulted 保留未知完成前缀, Draining 仅推进退出, Stopped 后才可最终析构.
     /// @note context 健康与阶段独立, CPU 引用释放不能代替 GPU 完成证明.
-    class OpenGLDevice final : public RefCounter<RHI::Device>
+    class OpenGLDevice final : public RefCounter<RHI::Device>, public GraphicsShaderBindingPreparation
     {
     public:
         /// @brief owner 线程读取命令与原生绑定缓存各自记录的事实.
@@ -241,6 +242,8 @@ namespace Physara::RHI::OpenGL
         void ResetTimerQuery(TimerQuery *query) override;
         GraphicsAPI GetGraphicsAPI() override;
         FramebufferHandle CreateFramebuffer(const FramebufferDesc &desc) override;
+        [[nodiscard]] std::optional<std::string> CheckGraphicsShaderBindings(
+            Shader &vertex, Shader &fragment, const BindingLayoutVector &layouts) const override;
         /// @brief 按格式/样本兼容信息核对单样本状态与 IO, 生成绑定计划并事务式链接 Program.
         /// @note framebuffer 重载先核对本设备归属再取兼容信息; 两者均不保活具体附件或执行 Draw.
         GraphicsPipelineHandle CreateGraphicsPipeline(const GraphicsPipelineDesc &desc,

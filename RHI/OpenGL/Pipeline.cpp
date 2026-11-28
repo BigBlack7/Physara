@@ -319,6 +319,37 @@ namespace Physara::RHI::OpenGL
         }
     }
 
+    /// @brief 绑定规划只解释本设备的布局, 包括未被活动 Shader 使用的集合.
+    static void CheckBindingOwners(const OpenGLDevice &device, const BindingLayoutVector &layouts)
+    {
+        for (const auto &layout : layouts)
+        {
+            const auto *native = dynamic_cast<OpenGLBindingLayout *>(layout.Get());
+            RequirePreparation(native && native->Owner() == &device, "InvalidResource: pipeline binding layout");
+        }
+    }
+
+    std::optional<std::string> OpenGLDevice::CheckGraphicsShaderBindings(
+        Shader &vertex, Shader &fragment, const BindingLayoutVector &layouts) const
+    {
+        try
+        {
+            auto *vs = dynamic_cast<OpenGLShader *>(&vertex);
+            auto *fs = dynamic_cast<OpenGLShader *>(&fragment);
+            RequirePreparation(vs && vs->Owner() == this && vs->GetDesc().shaderType == ShaderType::Vertex &&
+                                   fs && fs->Owner() == this && fs->GetDesc().shaderType == ShaderType::Pixel,
+                               "InvalidResource: graphics Shader ownership or stage");
+            CheckBindingOwners(*this, layouts);
+            const std::array shaders{vs, fs};
+            static_cast<void>(BuildBindingPlan(shaders, layouts, m_Caps.shader));
+            return std::nullopt;
+        }
+        catch (const std::exception &error)
+        {
+            return error.what();
+        }
+    }
+
     GraphicsPipelineHandle OpenGLDevice::CreateGraphicsPipeline(const GraphicsPipelineDesc &desc,
                                                                 const FramebufferInfo &info)
     {
@@ -366,11 +397,7 @@ namespace Physara::RHI::OpenGL
             }
             CheckRenderState(desc.renderState, info);
             CheckInterfaces(*vertex, fragment, input, info);
-            for (const auto &layout : desc.bindingLayouts)
-            {
-                const auto *native = dynamic_cast<OpenGLBindingLayout *>(layout.Get());
-                RequirePreparation(native && native->Owner() == this, "InvalidResource: pipeline binding layout");
-            }
+            CheckBindingOwners(*this, desc.bindingLayouts);
             std::array<OpenGLShader *, 2> shaders{vertex, fragment};
             // 计划与 CPU owner 均先于 GL 创建, 任何准备异常都不会发布半成品.
             auto plan = BuildBindingPlan({shaders.data(), fragment ? 2u : 1u}, desc.bindingLayouts, m_Caps.shader);
