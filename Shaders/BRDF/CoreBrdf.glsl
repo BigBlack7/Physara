@@ -1,4 +1,4 @@
-// 各向同性 GGX 的单次散射与匹配 DFG 能量项, 只接收参数, 不访问灯或资源绑定.
+// GGX 的单次散射与匹配 DFG 能量项, 只接收参数, 不访问灯或资源绑定.
 // 采用 FP32 和完整 height-correlated Smith; 算法依据见 Docs/Reference/Filament/Lighting.md 11.3/11.7.
 // 多散射与间接漫反射预算沿用其中的实时近似, 不承诺任意材质组合严格能量守恒.
 #include <Source/Common/UnitDirection.glsl>
@@ -37,9 +37,10 @@ float MaxReflectance(vec3 value)
 
 // 输入为同一空间的单位着色法线和指向眼点的单位视向, 返回限制到 [1e-4, 1] 的 NoV.
 // 核心波瓣与 DFG 查表共用此值, 保持掠射附近的模型和能量补偿一致.
+const float MinCoreNormalViewCosine = 1e-4;
 float CoreNormalViewCosine(vec3 normal, vec3 viewDirection)
 {
-    return clamp(dot(normal, viewDirection), 1e-4, 1.0);
+    return clamp(dot(normal, viewDirection), MinCoreNormalViewCosine, 1.0);
 }
 
 // GGX 与预积分 DFG 使用相同的完整 height-correlated Smith. NoL 和 NoH 由各波瓣的调用方裁定.
@@ -56,6 +57,34 @@ float IsotropicMicrofacet(vec3 normal, vec3 halfDirection, float alpha, float no
     float lambdaL = noV * sqrt(alphaSquared + (1.0 - alphaSquared) * noL * noL);
     return distribution * (0.5 / (lambdaV + lambdaL));
 }
+
+#ifdef PHYSARA_ANISOTROPY
+// 固定 Filament 的各向异性 GGX D 和高度相关 Smith V. 双轴 alpha 已按 Khronos 映射.
+// V 包含微表面分母, 逐灯调用方仍只乘一次 NoL.
+float AnisotropicMicrofacet(PixelParams pixel, vec3 halfDirection, vec3 viewDirection,
+                            vec3 lightDirection, float noH, float noV, float noL)
+{
+    const float inversePi = 0.3183098861837907;
+    vec3 tangent = pixel.anisotropyTangent;
+    vec3 bitangent = pixel.anisotropyBitangent;
+    float at = pixel.anisotropyAlphaT;
+    float ab = pixel.alpha;
+    vec3 h = vec3(dot(tangent, halfDirection) / at, dot(bitangent, halfDirection) / ab, noH);
+    float squared = dot(h, h);
+    float distribution = inversePi / (at * ab * squared * squared);
+    vec2 viewPlane = vec2(dot(tangent, viewDirection), dot(bitangent, viewDirection));
+    if (noV == MinCoreNormalViewCosine)
+    {
+        // Smith 以钳位后的 NoV 决定切向幅度, 与等向分支一致. 保留投影方位, 无方位时取基底粗糙度轴.
+        float viewPlaneLength = length(viewPlane);
+        vec2 azimuth = viewPlaneLength > 0.0 ? viewPlane / viewPlaneLength : vec2(0.0, 1.0);
+        viewPlane = azimuth * sqrt(1.0 - noV * noV);
+    }
+    float lambdaV = noL * length(vec3(at * viewPlane.x, ab * viewPlane.y, noV));
+    float lambdaL = noV * length(vec3(at * dot(tangent, lightDirection), ab * dot(bitangent, lightDirection), noL));
+    return distribution * (0.5 / (lambdaV + lambdaL));
+}
+#endif
 
 // pixel 来自 BuildPixelParams; 法线和两方向均为有限单位向量且处于同一空间.
 // 视向指向眼点, 入射方向指向光源; NoL<=0 时所有波瓣均为零.
@@ -92,7 +121,13 @@ CoreBrdfLobes EvaluateCoreBrdf(PixelParams pixel, vec3 normal, vec3 viewDirectio
     }
 
     float noV = CoreNormalViewCosine(normal, viewDirection);
+#ifdef PHYSARA_ANISOTROPY
+    float microfacet = pixel.anisotropyStrength > 0.0 ?
+        AnisotropicMicrofacet(pixel, halfDirection, viewDirection, lightDirection, noH, noV, noL) :
+        IsotropicMicrofacet(normal, halfDirection, pixel.alpha, noH, noV, noL);
+#else
     float microfacet = IsotropicMicrofacet(normal, halfDirection, pixel.alpha, noH, noV, noL);
+#endif
     if (UsesIorSpecular(pixel))
     {
         vec3 metal = pixel.baseColor + (1.0 - pixel.baseColor) * fresnelWeight;

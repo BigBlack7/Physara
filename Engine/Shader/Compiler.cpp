@@ -275,6 +275,8 @@ namespace Physara::Shader
             require("requested PHYSARA_CLEARCOAT", std::to_string(requested.clearcoat),
                     std::to_string(approved.clearcoat));
             require("requested PHYSARA_SHEEN", std::to_string(requested.sheen), std::to_string(approved.sheen));
+            require("requested PHYSARA_ANISOTROPY", std::to_string(requested.anisotropy),
+                    std::to_string(approved.anisotropy));
         }
     }
 

@@ -52,6 +52,8 @@ namespace Physara::Renderer
         std::array<std::filesystem::path, Shader::ClearcoatProgramCount> clearcoatColors{};
         /// @brief 前十二项为独立 sheen, 后十二项同时取清漆框架. 由 SheenProgramIndex 寻址.
         std::array<std::filesystem::path, Shader::SheenProgramCount> sheenColors{};
+        /// @brief 依次为全灯和 Froxel 的各向异性颜色包.
+        std::array<std::filesystem::path, Shader::AnisotropyProgramCount> anisotropyColors{};
     };
 
     /// @brief 按实际消费者准备表面. 普通主视口由 ShadeOpaque 同时写颜色和深度.

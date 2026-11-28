@@ -26,6 +26,10 @@ namespace Physara::Renderer
         if (draws)
         {
             const auto draw = std::ranges::find(*draws, target, &RenderedLayerDraw::target);
+            if (layer == MaterialLayer::Anisotropy)
+            {
+                return draw != draws->end() && draw->anisotropy ? &anisotropy : nullptr;
+            }
             if (draw != draws->end() && (layer == MaterialLayer::Sheen ? draw->sheen : draw->clearcoat))
             {
                 if (draw->clearcoat && draw->sheen)
@@ -744,7 +748,7 @@ namespace Physara::Renderer
                           prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
                           0, shadowWork, prepared.opaquePath, compatiblePredecessor,
                           {std::move(layerDraws), production.clearcoatColor, production.sheenColor,
-                           production.sheenClearcoatColor}}};
+                           production.sheenClearcoatColor, production.anisotropyColor}}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }

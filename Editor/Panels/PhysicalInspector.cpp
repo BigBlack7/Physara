@@ -25,7 +25,7 @@ namespace Physara::Editor::Detail
         "Normal texture [linear]", "Occlusion texture [R]", "Emissive texture [sRGB]",
         "Specular strength texture [A]", "Specular color texture [sRGB]", "Clearcoat strength texture [R]",
         "Clearcoat roughness texture [G]", "Clearcoat normal texture [linear]", "Sheen color texture [sRGB]",
-        "Sheen roughness texture [A]"};
+        "Sheen roughness texture [A]", "Anisotropy texture [linear RGB]"};
     static_assert(TextureNames.size() == Scene::MaterialSlotCount);
     static constexpr double DegreesPerRadian = 180.0 / std::numbers::pi;
 
@@ -264,9 +264,11 @@ namespace Physara::Editor::Detail
     static void DrawLayerOutput(const Scene::Scene &scene, const Renderer::View &view,
         const Renderer::RenderedMaterialTarget &target, Renderer::MaterialLayer profile)
     {
-        const bool sheen = profile == Renderer::MaterialLayer::Sheen;
-        const auto *layer = sheen ? "Sheen" : "Clearcoat";
-        const auto *layerLower = sheen ? "sheen" : "clearcoat";
+        static constexpr std::array Names{"Clearcoat", "Sheen", "Anisotropy"};
+        static constexpr std::array LowerNames{"clearcoat", "sheen", "anisotropy"};
+        const auto index = static_cast<std::size_t>(profile);
+        const auto *layer = Names[index];
+        const auto *layerLower = LowerNames[index];
         const auto preview = view.Preview();
         const auto *current = view.AcceptedScenePreview();
         const bool matchesRequest = current && current->scene == scene.Id() &&
@@ -325,7 +327,32 @@ namespace Physara::Editor::Detail
         const auto &value = effective->values;
         const auto sparse = over ? over->material : Scene::MaterialOverride{};
         const Renderer::RenderedMaterialTarget rendered{target.entity, target.model, target.revision, target.primitive};
+        using Layer = Renderer::MaterialLayer;
         using Material = Scene::MaterialOverride;
+        using SourceFallback = Asset::AnisotropySourceFallback;
+        constexpr auto DirectionSlot = std::size_t(Asset::MaterialSlot::Anisotropy);
+        constexpr auto NormalSlot = std::size_t(Asset::MaterialSlot::Normal);
+        if (value.anisotropySourceFallback != SourceFallback::None)
+        {
+            const char *layer =
+                value.anisotropySourceFallback == SourceFallback::Clearcoat ? "clearcoat" : "active sheen";
+            ImGui::TextWrapped("Source anisotropy omitted because this material combines it with %s.", layer);
+        }
+        // 零强度也可有独立的旋转或槽覆盖. 保留这些编辑入口, 以便用户逐项清除并恢复继承.
+        const bool hasAnisotropy = value.hasAnisotropyExtension || sparse.anisotropyStrength ||
+            sparse.anisotropyRotation || (over && over->textures[DirectionSlot]);
+        const bool editAnisotropy = !value.unlit && !value.hasSpecularGlossinessExtension &&
+            value.alphaMode != Asset::ModelAlpha::Blend &&
+            (hasAnisotropy || (!effective->clearcoat && !effective->sheen &&
+                (primitive.hasSourceTangent || effective->textures[NormalSlot])));
+        if (hasAnisotropy || (view && view->LastLayerColor(rendered, Layer::Anisotropy)))
+        {
+            ImGui::TextUnformatted(effective->anisotropy ? "Anisotropy lighting profile" : "Anisotropy strength is zero.");
+            if (view)
+            {
+                DrawLayerOutput(scene, *view, rendered, Layer::Anisotropy);
+            }
+        }
         if (effective->iorSpecular)
         {
             ImGui::TextUnformatted("IOR/specular lighting profile");
@@ -383,6 +410,13 @@ namespace Physara::Editor::Detail
                                   value.sheenColorFactor, frame);
                 DrawMaterialField("Sheen roughness", target, &Material::sheenRoughnessFactor, sparse,
                                   value.sheenRoughnessFactor, frame);
+                if (editAnisotropy)
+                {
+                    DrawMaterialField("Anisotropy strength", target, &Material::anisotropyStrength, sparse,
+                                      value.anisotropyStrength, frame);
+                    DrawMaterialField("Anisotropy rotation (rad)", target, &Material::anisotropyRotation, sparse,
+                                      value.anisotropyRotation, frame);
+                }
             }
         }
         DrawAlpha(target, sparse, value.alphaMode, frame);
@@ -392,7 +426,8 @@ namespace Physara::Editor::Detail
         }
         DrawMaterialField("Double sided", target, &Material::doubleSided, sparse, value.doubleSided, frame);
         const auto textures = value.unlit ? 1 : value.hasSpecularGlossinessExtension ?
-            static_cast<std::size_t>(Asset::MaterialSlot::Clearcoat) : TextureNames.size();
+            static_cast<std::size_t>(Asset::MaterialSlot::Clearcoat) :
+            editAnisotropy ? TextureNames.size() : DirectionSlot;
         for (std::size_t i = 0; i < textures; ++i)
         {
             DrawTexture({target, static_cast<Asset::MaterialSlot>(i)}, primitive, effective->textures[i],

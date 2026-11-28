@@ -3,6 +3,7 @@
 /// @file
 /// @brief 将 glTF 材质、图片用途、相机和灯转换为可独立持有的 CPU 记录.
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <numbers>
@@ -155,12 +156,14 @@ namespace Physara::Asset::Gltf
         const auto specular = extensions.Field("KHR_materials_specular");
         const auto clearcoat = extensions.Field("KHR_materials_clearcoat");
         const auto sheen = extensions.Field("KHR_materials_sheen");
+        const auto anisotropy = extensions.Field("KHR_materials_anisotropy");
         const auto coatNormal = clearcoat.Field("clearcoatNormalTexture");
         unlit.Object();
         ior.Object();
         specular.Object();
         clearcoat.Object();
         sheen.Object();
+        anisotropy.Object();
         const auto specularGlossiness = extensions.Field("KHR_materials_pbrSpecularGlossiness");
         // 在 Unlit 的基色专用分支之前判定同材质排斥. 空扩展对象也保留声明身份.
         if (clearcoat && (unlit || specularGlossiness))
@@ -179,6 +182,37 @@ namespace Physara::Asset::Gltf
         material.hasSheenExtension = static_cast<bool>(sheen);
         material.sheenColorFactor = Vector(sheen.Field("sheenColorFactor"), material.sheenColorFactor, 0, 1);
         material.sheenRoughnessFactor = Scalar(sheen.Field("sheenRoughnessFactor"), 0, 0, 1);
+        if (anisotropy && (unlit || specularGlossiness))
+        {
+            anisotropy.Error(
+                "Anisotropy cannot be combined with KHR_materials_unlit or KHR_materials_pbrSpecularGlossiness");
+        }
+        material.hasAnisotropyExtension = static_cast<bool>(anisotropy);
+        material.anisotropyStrength = Scalar(anisotropy.Field("anisotropyStrength"), 0, 0, 1);
+        material.anisotropyRotation = Scalar(anisotropy.Field("anisotropyRotation"), 0, -FloatMax, FloatMax);
+        if (material.anisotropyStrength > 0 &&
+            (material.hasClearcoatExtension || std::ranges::any_of(material.sheenColorFactor,
+                [](float component) { return component > 0; })))
+        {
+            const std::string_view reason = material.hasClearcoatExtension ?
+                "Anisotropy combined with clearcoat is unsupported" :
+                "Anisotropy combined with active sheen is unsupported";
+            if (m_AnisotropyRequired)
+            {
+                anisotropy.Error(reason, AssetError::UnsupportedModel);
+            }
+            // 可选组合保留已支持的层, 被省略的方向图不参与依赖收集或几何需求.
+            material.anisotropySourceFallback = material.hasClearcoatExtension ?
+                AnisotropySourceFallback::Clearcoat : AnisotropySourceFallback::Sheen;
+            m_Record.supportReport.Append(m_Record.supportReport.View().empty() ? "" : "\n");
+            m_Record.supportReport.Append(anisotropy.Location());
+            m_Record.supportReport.Append(": ");
+            m_Record.supportReport.Append(reason);
+            m_Record.supportReport.Append("; optional anisotropy omitted");
+            material.hasAnisotropyExtension = false;
+            material.anisotropyStrength = 0;
+            material.anisotropyRotation = 0;
+        }
         if ((ior || specular) && (unlit || specularGlossiness))
         {
             (unlit ? unlit : specularGlossiness).Error(
@@ -254,12 +288,21 @@ namespace Physara::Asset::Gltf
         add(MaterialSlot::ClearcoatNormal, coatNormal, ImageUse::ClearcoatNormal);
         add(MaterialSlot::SheenColor, sheen.Field("sheenColorTexture"), ImageUse::SheenColor);
         add(MaterialSlot::SheenRoughness, sheen.Field("sheenRoughnessTexture"), ImageUse::SheenRoughness);
+        if (material.hasAnisotropyExtension)
+        {
+            add(MaterialSlot::Anisotropy, anisotropy.Field("anisotropyTexture"), ImageUse::Anisotropy);
+        }
         return material;
     }
 
     Tables::Tables(Json root, Resources &resources, ModelRecord &record)
         : m_Root(std::move(root)), m_Resources(resources), m_Record(record)
     {
+        const auto required = m_Root.Field("extensionsRequired");
+        for (std::size_t i = 0; i < required.Size(); ++i)
+        {
+            m_AnisotropyRequired |= required.At(i).Text() == "KHR_materials_anisotropy";
+        }
     }
 
     std::uint32_t Tables::Material(const Json &source)

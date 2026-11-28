@@ -73,11 +73,11 @@ vec3 DiffuseVisibility(float a, vec3 albedo)
     return min(max(vec3(a), ((a * x + y) * a + z) * a), vec3(1.0));
 }
 
-// 基底与清漆各按自己的粗糙度查 GGX 立方图. sheen 在 EvaluateIbl 中使用独立的 Charlie 立方图.
-vec3 SampleEnvironmentReflection(vec3 normal, vec3 viewDirection, float alpha, float p)
+// reflected 是波瓣在世界空间的反射向量. 主导方向向原波瓣法线收拢, LOD 使用过滤后的感知粗糙度 p.
+vec3 SampleEnvironmentReflection(vec3 normal, vec3 reflected, float alpha, float p)
 {
-    vec3 reflected = mix(reflect(-viewDirection, normal), normal, alpha * alpha);
-    vec3 direction = environment.environmentFromWorld * UnitOr(reflected, normal);
+    vec3 dominant = mix(reflected, normal, alpha * alpha);
+    vec3 direction = environment.environmentFromWorld * UnitOr(dominant, normal);
     float lod = environment.maxMip * p * (2.0 - p);
     return textureLod(samplerCube(reflectionImage, environmentSampler), direction, lod).rgb;
 }
@@ -102,7 +102,27 @@ vec3 EvaluateIbl(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection
     {
         diffuseFactor *= 1.0 - pixel.metallic;
     }
-    vec3 specular = SampleEnvironmentReflection(normal, viewDirection, pixel.alpha, pixel.perceptualRoughness);
+    vec3 reflectionNormal = normal;
+#ifdef PHYSARA_ANISOTROPY
+    if (pixel.anisotropyStrength > 0.0)
+    {
+        // 固定 Filament 的 bent-reflection. 最窄轴提供视向投影平面, 同一 GGX cube 和 DFG 继续服务基底.
+        vec3 axis = pixel.anisotropyBitangent;
+        vec3 projectedView = cross(axis, cross(viewDirection, axis));
+        float bend = pixel.anisotropyStrength * min(5.0 * pixel.perceptualRoughness, 1.0);
+        vec3 bent = mix(normal, projectedView, bend);
+        // 单位输入的平行投影和混合方向都可能只剩 FP32 残差. 低于此平方长度时保留原法线.
+        const float minDirectionSquared = 1e-12;
+        if (dot(projectedView, projectedView) > minDirectionSquared && dot(bent, bent) > minDirectionSquared)
+        {
+            reflectionNormal = normalize(bent);
+        }
+        reflectionConfidence = 0.0;
+        preExposedReflection = vec3(0.0);
+    }
+#endif
+    vec3 specular = SampleEnvironmentReflection(normal, reflect(-viewDirection, reflectionNormal),
+                                                pixel.alpha, pixel.perceptualRoughness);
     float specularAo = EnvironmentSpecularAo(noV, ao, pixel.alpha);
     vec3 specularFactor = terms.environmentSpecular * specularAo;
     float coatTransmission = 1.0;
@@ -139,7 +159,7 @@ vec3 EvaluateIbl(PixelParams pixel, SurfaceGeometry geometry, vec3 viewDirection
     if (terms.coatEnvironment > 0.0)
     {
         float coatNoV = CoreNormalViewCosine(geometry.coatNormal, viewDirection);
-        vec3 coating = SampleEnvironmentReflection(geometry.coatNormal, viewDirection,
+        vec3 coating = SampleEnvironmentReflection(geometry.coatNormal, reflect(-viewDirection, geometry.coatNormal),
                                                    pixel.coatAlpha, pixel.coatRoughness);
         float visibility = EnvironmentSpecularAo(coatNoV, ao, pixel.coatAlpha);
         base += ScaleEnvironmentLight(coating, vec3(terms.coatEnvironment * visibility),

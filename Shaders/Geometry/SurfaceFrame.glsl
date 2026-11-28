@@ -38,6 +38,16 @@ SurfaceGeometry PrepareSurfaceGeometry(vec3 tangentNormal, bool usesNormalMap)
     );
 }
 
+#ifdef PHYSARA_ANISOTROPY
+// 在面向和贴图处理后正交化方向. 局部退化的投影用零轴标识, 由参数层选择等向波瓣.
+vec3 ResolveAnisotropyAxis(vec3 normal, vec2 direction)
+{
+    vec3 axis = UnitOr(vAnisotropyTangent * direction.x + vAnisotropyBitangent * direction.y, vec3(0.0));
+    vec3 projected = axis - normal * dot(normal, axis);
+    return dot(projected, projected) > 1e-10 ? UnitOr(projected, vec3(0.0)) : vec3(0.0);
+}
+#endif
+
 // 输入为 PrepareSurfaceGeometry 的单位 geometricNormal, 返回 [0, 0.04] 的 alpha 平方域增量.
 // 片元调用方须在 discard 及非一致控制流前取得导数, 再将结果交给 BuildPixelParams 一次.
 // 采用固定 Filament 的 variance=0.15 与 threshold=0.2, 阈值先平方; 当前 footprint 为一个光栅像素.

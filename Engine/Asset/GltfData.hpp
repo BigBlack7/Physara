@@ -34,6 +34,7 @@ namespace Physara::Asset::Gltf
         Json m_Root;
         Resources &m_Resources;
         ModelRecord &m_Record;
+        bool m_AnisotropyRequired = false; ///< 已核对文件级声明, 用于可达材质的组合检查.
         std::map<std::optional<std::uint32_t>, std::uint32_t> m_Materials;
         std::map<std::optional<std::uint32_t>, std::uint32_t> m_Samplers;
         std::map<std::uint32_t, std::uint32_t> m_Textures;

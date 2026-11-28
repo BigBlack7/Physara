@@ -321,7 +321,7 @@ namespace Physara::Editor::Detail
         field.Object({"baseColor", "metallic", "roughness", "emissive", "emissiveStrength", "normalScale",
                       "occlusionStrength", "alphaMode", "alphaCutoff", "doubleSided", "ior", "specularFactor",
                       "specularColorFactor", "clearcoatFactor", "clearcoatRoughnessFactor", "clearcoatNormalScale",
-                      "sheenColorFactor", "sheenRoughnessFactor"});
+                      "sheenColorFactor", "sheenRoughnessFactor", "anisotropyStrength", "anisotropyRotation"});
         Scene::MaterialOverride value;
         if (const auto color = field.Optional("baseColor"))
         {
@@ -338,6 +338,11 @@ namespace Physara::Editor::Detail
         value.emissiveStrength = OptionalFloat(field, "emissiveStrength");
         value.alphaCutoff = OptionalFloat(field, "alphaCutoff");
         value.clearcoatNormalScale = OptionalFloat(field, "clearcoatNormalScale");
+        value.anisotropyRotation = OptionalFloat(field, "anisotropyRotation");
+        if (const auto strength = field.Optional("anisotropyStrength"))
+        {
+            value.anisotropyStrength = MaterialFactor(*strength, 0, 1);
+        }
         if (const auto strength = field.Optional("clearcoatFactor"))
         {
             value.clearcoatFactor = MaterialFactor(*strength, 0, 1);

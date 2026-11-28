@@ -55,9 +55,11 @@ D12-T03 已验收并归档。 [最终验证](../../openspec/changes/archive/2026
 
 **职责位置：** Asset、Materials、Shaders/Geometry/BRDF/Lighting。**前置：** [D12-T01](#d12-t01)。**架构依据：** [8.5](../Architecture.md#materials)、[8.6](../Architecture.md#lighting)、[8.2](../Architecture.md#geometry)。
 
-- [ ] 导入 anisotropy 强度/方向/纹理并校验切线依赖；按架构适配标准 glTF 与 Filament 的参数化，统一 UV 变换和切线/副切线语义，不直接复制同名参数。
-- [ ] 实现各向异性微表面、粗糙度与方向处理，完成匹配的直接光和 IBL 近似。
-- [ ] 验证旋转、镜像 UV、负缩放、非均匀缩放和缺失切线的可见行为，补路由、Inspector 及参考图。
+2026-11-28 已通过验收并归档。 [最终验证](../../openspec/changes/archive/2026-11-28-add-anisotropy-material-profile/tasks.md#final-verification) · [规格同步与归档](../../openspec/changes/archive/2026-11-28-add-anisotropy-material-profile/tasks.md#archive-closeout)
+
+- [x] 导入 anisotropy 强度/方向/纹理并校验切线依赖；按架构适配标准 glTF 与 Filament 的参数化，统一 UV 变换和切线/副切线语义，不直接复制同名参数。
+- [x] 实现各向异性微表面、粗糙度与方向处理，完成匹配的直接光和 IBL 近似。
+- [x] 验证旋转、镜像 UV、负缩放、非均匀缩放和缺失切线的可见行为，补路由、Inspector 及参考图。
 
 **完成条件：** 方向随正确几何空间变化，三路径表现一致且默认 isotropic 材质成本不被无谓增加。
 

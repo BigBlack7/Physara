@@ -272,6 +272,7 @@ namespace Physara::Asset
         case ImageUse::Clearcoat:
         case ImageUse::ClearcoatRoughness:
         case ImageUse::ClearcoatNormal:
+        case ImageUse::Anisotropy:
             return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Ignored};
         case ImageUse::LinearData:
         case ImageUse::Specular:

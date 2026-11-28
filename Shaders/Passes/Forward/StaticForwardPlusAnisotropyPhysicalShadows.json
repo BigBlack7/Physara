@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "StaticForwardPlusAnisotropyPhysicalShadows",
+  "interface": "StaticForward",
+  "profile": "GraphicsBaselineV1",
+  "stages": [
+    {
+      "stage": "vertex",
+      "source": "Passes/Forward/Static.vert",
+      "entry": "main"
+    },
+    {
+      "stage": "fragment",
+      "source": "Passes/Forward/FroxelShadowColor.frag",
+      "entry": "main"
+    }
+  ],
+  "defines": [
+    {
+      "name": "PHYSARA_PHYSICAL_LIGHTING",
+      "allowed": [
+        1,
+        2
+      ],
+      "value": 1
+    },
+    {
+      "name": "PHYSARA_ANISOTROPY",
+      "allowed": [
+        1
+      ],
+      "value": 1
+    }
+  ]
+}

@@ -13,6 +13,7 @@ set(forwardResourcePaths "")
 get_target_property(iorSpecularPrograms PhysaraRenderer PHYSARA_IOR_SPECULAR_PROGRAMS)
 get_target_property(clearcoatPrograms PhysaraRenderer PHYSARA_CLEARCOAT_PROGRAMS)
 get_target_property(sheenPrograms PhysaraRenderer PHYSARA_SHEEN_PROGRAMS)
+get_target_property(anisotropyPrograms PhysaraRenderer PHYSARA_ANISOTROPY_PROGRAMS)
 foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
@@ -20,14 +21,14 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows
         DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
         DeferredLightingPhysicalShadows DeferredLightingIblShadows SurfaceDepthPreview SurfaceGBufferPreview
-        ${iorSpecularPrograms} ${clearcoatPrograms} ${sheenPrograms})
+        ${iorSpecularPrograms} ${clearcoatPrograms} ${sheenPrograms} ${anisotropyPrograms})
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})
     string(APPEND forwardResourcePaths
         "    inline constexpr auto ${program}PackageRelative = \"$<PATH:RELATIVE_PATH,${${program}Package},$<TARGET_FILE_DIR:Physara>>\";\n")
 endforeach()
-# 复用 Renderer 登记的扩展角色顺序, 从相同配置产物取得路径.
+# 扩展路径数组沿用 Renderer 的枚举顺序. Runtime 按族内下标装配路径, 此处须保留登记次序.
 set(iorSpecularResourcePaths "")
 foreach(program IN LISTS iorSpecularPrograms)
     string(APPEND iorSpecularResourcePaths "        ${program}PackageRelative,\n")
@@ -40,10 +41,14 @@ set(sheenResourcePaths "")
 foreach(program IN LISTS sheenPrograms)
     string(APPEND sheenResourcePaths "        ${program}PackageRelative,\n")
 endforeach()
+set(anisotropyResourcePaths "")
+foreach(program IN LISTS anisotropyPrograms)
+    string(APPEND anisotropyResourcePaths "        ${program}PackageRelative,\n")
+endforeach()
 # 每个构建配置生成自己的私有路径头. Resources.cpp 以 Win32 查询到的 exe 目录为基准拼接.
 # CPU 资产根直接使用该 exe 目录, 不把开发机的项目源目录写入产品.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>/RuntimeResources.hpp"
-    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}    inline constexpr const char *IorSpecularPackageRelatives[]{\n${iorSpecularResourcePaths}    };\n    inline constexpr const char *ClearcoatPackageRelatives[]{\n${clearcoatResourcePaths}    };\n    inline constexpr const char *SheenPackageRelatives[]{\n${sheenResourcePaths}    };\n}\n")
+    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}    inline constexpr const char *IorSpecularPackageRelatives[]{\n${iorSpecularResourcePaths}    };\n    inline constexpr const char *ClearcoatPackageRelatives[]{\n${clearcoatResourcePaths}    };\n    inline constexpr const char *SheenPackageRelatives[]{\n${sheenResourcePaths}    };\n    inline constexpr const char *AnisotropyPackageRelatives[]{\n${anisotropyResourcePaths}    };\n}\n")
 target_include_directories(Physara PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>")
 # Runtime 装配开发会话的 Shader 源观察, 编译依赖保持在 Shader 模块中.
 target_link_libraries(Physara PRIVATE PhysaraPlatform PhysaraCore PhysaraAsset PhysaraScene PhysaraEditor PhysaraRenderer

@@ -75,7 +75,7 @@ namespace Physara::Asset::Gltf
         constexpr std::array<std::string_view, static_cast<std::size_t>(MaterialSlot::Count)> Slots{
             "baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture",
             "specularTexture", "specularColorTexture", "clearcoatTexture", "clearcoatRoughnessTexture",
-            "clearcoatNormalTexture", "sheenColorTexture", "sheenRoughnessTexture"};
+            "clearcoatNormalTexture", "sheenColorTexture", "sheenRoughnessTexture", "anisotropyTexture"};
         for (std::size_t i = 0; i < surface.slots.size(); ++i)
         {
             if (const auto &slot = surface.slots[i]; slot)
@@ -102,6 +102,11 @@ namespace Physara::Asset::Gltf
         {
             field.Field("clearcoatNormalTexture").Error("Clearcoat normal requires NORMAL and TANGENT or a base normal map",
                                                         AssetError::UnsupportedModel);
+        }
+        if (surface.hasAnisotropyExtension && !out.tangent && !out.normalUv)
+        {
+            attributes.Error("KHR_materials_anisotropy requires NORMAL and TANGENT or a usable base normal texture",
+                             AssetError::UnsupportedModel);
         }
         return out;
     }

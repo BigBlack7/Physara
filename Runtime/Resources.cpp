@@ -74,6 +74,11 @@ namespace Physara::Runtime
         {
             result.forward.sheenColors[i] = (directory / SheenPackageRelatives[i]).lexically_normal();
         }
+        static_assert(std::size(AnisotropyPackageRelatives) == Shader::AnisotropyProgramCount);
+        for (std::size_t i = 0; i < result.forward.anisotropyColors.size(); ++i)
+        {
+            result.forward.anisotropyColors[i] = (directory / AnisotropyPackageRelatives[i]).lexically_normal();
+        }
         return result;
     }
 }

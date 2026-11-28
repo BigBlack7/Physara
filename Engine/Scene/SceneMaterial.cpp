@@ -31,7 +31,8 @@ namespace Physara::Scene
         {Asset::ImageUse::ClearcoatRoughness, "Clearcoat roughness"},
         {Asset::ImageUse::ClearcoatNormal, "Clearcoat normal"},
         {Asset::ImageUse::SheenColor, "Sheen color"},
-        {Asset::ImageUse::SheenRoughness, "Sheen roughness"}
+        {Asset::ImageUse::SheenRoughness, "Sheen roughness"},
+        {Asset::ImageUse::Anisotropy, "Anisotropy"}
     }};
 
     static constexpr auto Normal = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
@@ -40,6 +41,13 @@ namespace Physara::Scene
     static constexpr auto CoatNormal = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatNormal);
     static constexpr auto SheenColor = static_cast<std::size_t>(Asset::MaterialSlot::SheenColor);
     static constexpr auto SheenRoughness = static_cast<std::size_t>(Asset::MaterialSlot::SheenRoughness);
+    static constexpr auto Anisotropy = static_cast<std::size_t>(Asset::MaterialSlot::Anisotropy);
+
+    /// @brief sheen 是否需要颜色角色只由采样前的有效因子决定.
+    static bool HasSheenColor(const std::array<float, 3> &color) noexcept
+    {
+        return std::ranges::any_of(color, [](float component) { return component > 0; });
+    }
 
     /// @brief 采用扩展字段或槽的存在性, 保留显式零值的覆盖身份.
     static bool HasClearcoatOverride(const PrimitiveOverride &value) noexcept
@@ -47,6 +55,12 @@ namespace Physara::Scene
         return value.material.clearcoatFactor || value.material.clearcoatRoughnessFactor ||
             value.material.clearcoatNormalScale || value.textures[Coat] || value.textures[CoatRoughness] ||
             value.textures[CoatNormal];
+    }
+
+    /// @brief 稀疏方向输入也有身份, 显式零强度不会清除其它字段.
+    static bool HasAnisotropyOverride(const PrimitiveOverride &value) noexcept
+    {
+        return value.material.anisotropyStrength || value.material.anisotropyRotation || value.textures[Anisotropy];
     }
 
     /// @brief 源切线属于基底法线槽的 UV, 只有独立清漆槽时取该槽的 UV.
@@ -149,6 +163,14 @@ namespace Physara::Scene
         if (v.sheenRoughnessFactor && !unit(*v.sheenRoughnessFactor))
         {
             return "Sheen roughness factor must be finite and in [0, 1]";
+        }
+        if (v.anisotropyStrength && !unit(*v.anisotropyStrength))
+        {
+            return "Anisotropy strength must be finite and in [0, 1]";
+        }
+        if (v.anisotropyRotation && !std::isfinite(*v.anisotropyRotation))
+        {
+            return "Anisotropy rotation must be finite radians";
         }
         using Alpha = Asset::ModelAlpha;
         if (v.alphaMode && *v.alphaMode != Alpha::Opaque && *v.alphaMode != Alpha::Mask && *v.alphaMode != Alpha::Blend)
@@ -254,6 +276,11 @@ namespace Physara::Scene
         {
             return Core::BoundedText("Sheen overrides require a compatible lit metallic-roughness material");
         }
+        const bool anisotropyOverride = HasAnisotropyOverride(value);
+        if (anisotropyOverride && (base.unlit || base.hasSpecularGlossinessExtension))
+        {
+            return Core::BoundedText("Anisotropy overrides require a compatible lit metallic-roughness material");
+        }
         for (std::size_t i = 0; i < value.textures.size(); ++i)
         {
             if (!value.textures[i])
@@ -272,23 +299,31 @@ namespace Physara::Scene
                 return detail;
             }
         }
-        if (base.hasClearcoatExtension || coatOverride)
+        const bool clearcoat = base.hasClearcoatExtension || coatOverride;
+        const bool anisotropy = base.hasAnisotropyExtension || anisotropyOverride;
+        const auto strength = value.material.anisotropyStrength.value_or(base.anisotropyStrength);
+        if (strength > 0 && (clearcoat || HasSheenColor(value.material.sheenColorFactor.value_or(base.sheenColorFactor))))
+        {
+            return Core::BoundedText("Anisotropy combined with clearcoat or active sheen is unsupported");
+        }
+        if (clearcoat || anisotropy)
         {
             const auto baseUv = NormalUv(base, &value, Normal);
-            const auto coatUv = NormalUv(base, &value, CoatNormal);
-            if (coatUv && !baseUv && !primitive.hasSourceTangent)
+            const auto coatUv = clearcoat ? NormalUv(base, &value, CoatNormal) : std::nullopt;
+            if (!baseUv && !primitive.hasSourceTangent && (anisotropy || coatUv))
             {
-                return Core::BoundedText("Clearcoat normal texture requires source tangents or a usable base normal frame");
+                return Core::BoundedText(anisotropy ? "Anisotropy requires source tangents or a usable base normal frame" :
+                    "Clearcoat normal texture requires source tangents or a usable base normal frame");
             }
-            // 核心覆盖可能只校验过 UV 存在性. 首次启用清漆时完整确认它的有效框架.
-            const auto *confirmed = previous && (base.hasClearcoatExtension || HasClearcoatOverride(*previous)) ?
-                previous : nullptr;
+            // 核心覆盖可能只校验过 UV 存在性. 曾由扩展确认的基础框架, 可由同一 UV 继续使用.
+            const auto *confirmed = previous && (base.hasClearcoatExtension || HasClearcoatOverride(*previous) ||
+                base.hasAnisotropyExtension || HasAnisotropyOverride(*previous)) ? previous : nullptr;
             if (auto error = NormalFrameError(primitive, base, Normal, baseUv, confirmed))
             {
                 return error;
             }
             // 同一 UV 的两槽共用未变换切线. 各自的采样变换在着色时应用, 此处只需校验一次角点框架.
-            if (coatUv != baseUv)
+            if (coatUv && coatUv != baseUv)
             {
                 return NormalFrameError(primitive, base, CoatNormal, coatUv, confirmed);
             }
@@ -317,6 +352,8 @@ namespace Physara::Scene
         out.clearcoatNormalScale = value.clearcoatNormalScale.value_or(out.clearcoatNormalScale);
         out.sheenColorFactor = value.sheenColorFactor.value_or(out.sheenColorFactor);
         out.sheenRoughnessFactor = value.sheenRoughnessFactor.value_or(out.sheenRoughnessFactor);
+        out.anisotropyStrength = value.anisotropyStrength.value_or(out.anisotropyStrength);
+        out.anisotropyRotation = value.anisotropyRotation.value_or(out.anisotropyRotation);
     }
 
     /// @brief 解析源图像和 sampler, 可分别以实例值替换.
@@ -381,8 +418,9 @@ namespace Physara::Scene
                                  value->material.specularColorFactor || value->textures[Specular] ||
                                  value->textures[SpecularColor];
         }
-        // Draw 在纹理采样前选择角色. 显式零覆盖也要先压过源因子, 之后才判断是否需要 sheen 颜色.
-        result.sheen = std::ranges::any_of(result.values.sheenColorFactor, [](float component) { return component > 0; });
+        // 显式零值先覆盖源因子, Draw 再从有效颜色和强度选角色. 方向图 B 只影响单个片元.
+        result.sheen = HasSheenColor(result.values.sheenColorFactor);
+        result.anisotropy = result.values.anisotropyStrength > 0;
         result.sourceTangentUv = SourceTangentUv(result.values, primitive);
         for (std::size_t i = 0; i < base.size(); ++i)
         {

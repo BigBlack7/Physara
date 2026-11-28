@@ -440,6 +440,10 @@ namespace Physara::Renderer::Detail
     // 各颜色程序有独立原生槽. 扩展角色沿同一光照种类复用 PerView/PerPass 绑定.
     static std::size_t LightingIndex(ProductShader role) noexcept
     {
+        if (Shader::IsAnisotropyProgram(role))
+        {
+            return ForwardColorPrograms - Shader::AnisotropyProgramCount + Shader::AnisotropyProgramIndex(role);
+        }
         if (Shader::IsSheenProgram(role))
         {
             return BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramCount +
@@ -461,6 +465,11 @@ namespace Physara::Renderer::Detail
     /// @brief 扩展颜色按同一受光顺序排列, 跳过仅用于诊断的三项.
     static LightingProgram LightingKind(ProductShader role) noexcept
     {
+        if (Shader::IsAnisotropyProgram(role))
+        {
+            const auto index = Shader::AnisotropyProgramIndex(role);
+            return static_cast<LightingProgram>(index < 3 ? index : index + 3);
+        }
         if (Shader::IsSheenProgram(role))
         {
             const auto index = Shader::SheenProgramIndex(role) % Shader::ClearcoatProgramCount;
@@ -477,7 +486,8 @@ namespace Physara::Renderer::Detail
 
     bool IsFroxelProgram(ProductShader role) noexcept
     {
-        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role) || Shader::IsSheenProgram(role))
+        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role) ||
+            Shader::IsSheenProgram(role) || Shader::IsAnisotropyProgram(role))
         {
             return UsesFroxels(LightingKind(role));
         }
@@ -626,6 +636,10 @@ namespace Physara::Renderer::Detail
         {
             path = &paths.sheenColors[Shader::SheenProgramIndex(role)];
         }
+        else if (Shader::IsAnisotropyProgram(role))
+        {
+            path = &paths.anisotropyColors[Shader::AnisotropyProgramIndex(role)];
+        }
         colors[index] = LoadProgram(owner.device, role, *path, packages, StaticAbi::AbiHash);
     }
 
@@ -707,6 +721,7 @@ namespace Physara::Renderer::Detail
             case MaterialColorProfile::Clearcoat: first = ProductShader::StaticForwardClearcoat; break;
             case MaterialColorProfile::Sheen: first = ProductShader::StaticForwardSheen; break;
             case MaterialColorProfile::SheenClearcoat: first = ProductShader::StaticForwardSheenClearcoat; break;
+            case MaterialColorProfile::Anisotropy: first = ProductShader::StaticForwardAnisotropy; break;
             default: break;
             }
             role = static_cast<ProductShader>(std::size_t(first) + (index < 3 ? index : index - 3));

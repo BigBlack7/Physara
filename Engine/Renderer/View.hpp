@@ -275,7 +275,7 @@ namespace Physara::Renderer
     struct OpaqueProduction
     {
         std::array<char, 64> forwardColor{}, forwardExtensionColor{}, clearcoatColor{}, sky{}, earlyDepth{}, shadowDepth{},
-            coreSurface{}, surfaceAux{}, deferredColor{}, sheenColor{}, sheenClearcoatColor{};
+            coreSurface{}, surfaceAux{}, deferredColor{}, sheenColor{}, sheenClearcoatColor{}, anisotropyColor{};
         RHI::Format color = RHI::Format::UNKNOWN;
         RHI::Format depth = RHI::Format::UNKNOWN;
         std::uint32_t samples = 1;
@@ -312,7 +312,7 @@ namespace Physara::Renderer
         bool diagnostic;
     };
 
-    enum class MaterialLayer : std::uint8_t { Clearcoat, Sheen };
+    enum class MaterialLayer : std::uint8_t { Clearcoat, Sheen, Anisotropy };
 
     /// @brief 源槽由实体代及其固定模型版本共同解释, 可在帧槽复用后与 Inspector 选择比对.
     struct RenderedMaterialTarget
@@ -324,20 +324,21 @@ namespace Physara::Renderer
         bool operator==(const RenderedMaterialTarget &) const = default;
     };
 
-    /// @brief 已录入正常颜色计划的叠层 Draw. 两层同时为真时使用同一个组合程序.
+    /// @brief 正常颜色计划中的扩展 Draw. clearcoat 与 sheen 可共用组合程序, anisotropy 独占颜色角色.
     struct RenderedLayerDraw
     {
         RenderedMaterialTarget target;
         bool clearcoat;
         bool sheen;
+        bool anisotropy = false;
     };
     using RenderedLayerDraws = std::shared_ptr<const std::vector<RenderedLayerDraw>>;
 
-    /// @brief 同一正常颜色候选的 Draw 身份和三个实际族摘要. 绘制记录经接受后成为只读快照.
+    /// @brief 同一正常颜色候选的 Draw 身份和实际族摘要. 绘制记录经接受后成为只读快照.
     struct RenderedLayerColors
     {
         RenderedLayerDraws draws;
-        std::array<char, 64> clearcoat{}, sheen{}, sheenClearcoat{};
+        std::array<char, 64> clearcoat{}, sheen{}, sheenClearcoat{}, anisotropy{};
 
         /// @return 目标在本帧确有这层受光时借出其程序摘要, 否则返回空.
         [[nodiscard]] const std::array<char, 64> *Program(const RenderedMaterialTarget &target,

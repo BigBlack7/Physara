@@ -34,6 +34,10 @@ void main()
 
         // 保留的片元只构造一份表面参数. 正交相机共用反视线方向, 透视相机从当前片元指向眼点.
         PixelParams pixel = BuildPixelParams(inputs, kernel);
+#ifdef PHYSARA_ANISOTROPY
+        vec3 axis = ResolveAnisotropyAxis(geometry.shadingNormal, inputs.anisotropyDirection);
+        PrepareAnisotropy(pixel, inputs.anisotropyStrength, geometry.shadingNormal, axis);
+#endif
         // 基点按实例平坦传递, 相对偏移的高低位分别插值. 同一表面位置供观察向量和每盏局部灯使用.
         LightingSurface surface = LightingSurface(vLightingAnchor,
             LightingPosition(vLightingOffsetHigh, vLightingOffsetLow, vec3(0.0)));

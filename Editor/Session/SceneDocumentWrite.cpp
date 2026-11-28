@@ -109,6 +109,8 @@ namespace Physara::Editor::Detail
         Set(node, "clearcoatNormalScale", value.clearcoatNormalScale);
         Set(node, "sheenColorFactor", value.sheenColorFactor);
         Set(node, "sheenRoughnessFactor", value.sheenRoughnessFactor);
+        Set(node, "anisotropyStrength", value.anisotropyStrength);
+        Set(node, "anisotropyRotation", value.anisotropyRotation);
         if (value.alphaMode)
         {
             using Mode = Asset::ModelAlpha;

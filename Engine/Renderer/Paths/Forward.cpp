@@ -306,6 +306,7 @@ namespace Physara::Renderer
                     case Color::Clearcoat: return production.clearcoatColor;
                     case Color::Sheen: return production.sheenColor;
                     case Color::SheenClearcoat: return production.sheenClearcoatColor;
+                    case Color::Anisotropy: return production.anisotropyColor;
                     default: return production.forwardColor;
                     }
                 }();
@@ -338,7 +339,7 @@ namespace Physara::Renderer
     {
         const auto &production = view.production;
         if (!production.clearcoatColor.front() && !production.sheenColor.front() &&
-            !production.sheenClearcoatColor.front())
+            !production.sheenClearcoatColor.front() && !production.anisotropyColor.front())
         {
             return {};
         }
@@ -348,12 +349,13 @@ namespace Physara::Renderer
         {
             const bool clearcoat = Detail::UsesClearcoat(draw.color);
             const bool sheen = Detail::UsesSheen(draw.color);
-            if (clearcoat || sheen)
+            const bool anisotropy = draw.color == Detail::MaterialColorProfile::Anisotropy;
+            if (clearcoat || sheen || anisotropy)
             {
                 const auto &primitive = scene.primitives[draw.source];
                 const auto &model = *scene.models[primitive.model];
                 layers.push_back({{scene.objects[primitive.object].entity, model.asset, model.revision,
-                                   primitive.sourceSlot}, clearcoat, sheen});
+                                   primitive.sourceSlot}, clearcoat, sheen, anisotropy});
             }
         }
         assert(!layers.empty());

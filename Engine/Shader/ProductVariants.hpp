@@ -92,6 +92,18 @@ namespace Physara::Shader
         StaticForwardPlusSheenClearcoatShadows,
         StaticForwardPlusSheenClearcoatPhysicalShadows,
         StaticForwardPlusSheenClearcoatIblShadows,
+        StaticForwardAnisotropy,
+        StaticForwardAnisotropyPhysical,
+        StaticForwardAnisotropyIbl,
+        StaticForwardAnisotropyShadows,
+        StaticForwardAnisotropyPhysicalShadows,
+        StaticForwardAnisotropyIblShadows,
+        StaticForwardPlusAnisotropy,
+        StaticForwardPlusAnisotropyPhysical,
+        StaticForwardPlusAnisotropyIbl,
+        StaticForwardPlusAnisotropyShadows,
+        StaticForwardPlusAnisotropyPhysicalShadows,
+        StaticForwardPlusAnisotropyIblShadows,
         Count
     };
 
@@ -100,6 +112,7 @@ namespace Physara::Shader
     inline constexpr std::string_view IorSpecularField = "PHYSARA_IOR_SPECULAR";
     inline constexpr std::string_view ClearcoatField = "PHYSARA_CLEARCOAT";
     inline constexpr std::string_view SheenField = "PHYSARA_SHEEN";
+    inline constexpr std::string_view AnisotropyField = "PHYSARA_ANISOTROPY";
     inline constexpr std::size_t IorSpecularProgramCount =
         std::size_t(ProductShader::StaticForwardPlusIorSpecularIblShadows) -
         std::size_t(ProductShader::StaticForwardIorSpecular) + 1;
@@ -134,13 +147,13 @@ namespace Physara::Shader
         return std::size_t(role) - std::size_t(ProductShader::StaticForwardClearcoat);
     }
 
-    inline constexpr std::size_t SheenProgramCount = std::size_t(ProductShader::Count) -
-        std::size_t(ProductShader::StaticForwardSheen);
+    inline constexpr std::size_t SheenProgramCount = std::size_t(ProductShader::StaticForwardPlusSheenClearcoatIblShadows) -
+        std::size_t(ProductShader::StaticForwardSheen) + 1;
     static_assert(SheenProgramCount == 2 * ClearcoatProgramCount);
 
     [[nodiscard]] constexpr bool IsSheenProgram(ProductShader role) noexcept
     {
-        return role >= ProductShader::StaticForwardSheen && role < ProductShader::Count;
+        return role >= ProductShader::StaticForwardSheen && role <= ProductShader::StaticForwardPlusSheenClearcoatIblShadows;
     }
 
     /// @brief 两个 sheen 颜色族共用受光顺序, 仅组合族同时消费清漆框架.
@@ -155,6 +168,23 @@ namespace Physara::Shader
         return std::size_t(role) - std::size_t(ProductShader::StaticForwardSheen);
     }
 
+    inline constexpr std::size_t AnisotropyProgramCount =
+        std::size_t(ProductShader::StaticForwardPlusAnisotropyIblShadows) -
+        std::size_t(ProductShader::StaticForwardAnisotropy) + 1;
+    static_assert(AnisotropyProgramCount == IorSpecularProgramCount);
+
+    [[nodiscard]] constexpr bool IsAnisotropyProgram(ProductShader role) noexcept
+    {
+        return role >= ProductShader::StaticForwardAnisotropy && role <= ProductShader::StaticForwardPlusAnisotropyIblShadows;
+    }
+
+    /// @brief 全灯及 Froxel 角色沿原有三种光照模式和阴影组合顺序.
+    /// @pre IsAnisotropyProgram(role) 成立.
+    [[nodiscard]] constexpr std::size_t AnisotropyProgramIndex(ProductShader role) noexcept
+    {
+        return std::size_t(role) - std::size_t(ProductShader::StaticForwardAnisotropy);
+    }
+
     /// @brief 固定产品角色及获准的结构值. 零表示相应 define 缺席.
     struct VariantKey
     {
@@ -163,6 +193,7 @@ namespace Physara::Shader
         std::uint32_t iorSpecular = 0;
         std::uint32_t clearcoat = 0;
         std::uint32_t sheen = 0;
+        std::uint32_t anisotropy = 0;
         bool operator==(const VariantKey &) const noexcept = default;
     };
 

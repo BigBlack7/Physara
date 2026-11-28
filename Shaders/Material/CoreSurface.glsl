@@ -1,7 +1,7 @@
 #ifndef PHYSARA_CORE_SURFACE_GLSL
 #define PHYSARA_CORE_SURFACE_GLSL
 
-// 从有效 glTF 通道派生各向同性波瓣参数. 共享粗糙度过滤, 视角相关的 DFG 项由 BRDF 层准备.
+// 从有效 glTF 通道派生基底波瓣参数. 共享粗糙度过滤, 视角相关的 DFG 项由 BRDF 层准备.
 #include <Source/Material/MaterialInputs.glsl>
 
 // 色值为线性 RGB. 核心使用已混合的漫反射色和 F0, F90 固定为 1; 扩展保留未混合的基色.
@@ -18,7 +18,7 @@ struct PixelParams
     float metallic;
     float perceptualRoughness;
     float alpha;
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
     bool iorSpecularBase;
 #endif
 #ifdef PHYSARA_CLEARCOAT
@@ -32,6 +32,12 @@ struct PixelParams
     float sheenAlpha;
     float sheenScale; // 零表示当前片元无 sheen 波瓣, 否则为逐灯方向归一乘数.
     float sheenAlbedo; // 限制到 [0, 1] 的匹配 Charlie/Neubelt 方向反照率.
+#endif
+#ifdef PHYSARA_ANISOTROPY
+    vec3 anisotropyTangent;
+    vec3 anisotropyBitangent;
+    float anisotropyAlphaT; // 垂直方向的 alphaB 沿用基底 alpha.
+    float anisotropyStrength; // 等轴或无可用方向时为零.
 #endif
 };
 
@@ -49,7 +55,7 @@ float FilterCoreRoughness(float roughness, float kernel)
 // 叠层程序从材质数据选择实际基底, 专用 IOR/specular 角色固定其基底.
 bool UsesIorSpecular(PixelParams pixel)
 {
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
     return pixel.iorSpecularBase;
 #elif defined(PHYSARA_IOR_SPECULAR)
     return true;
@@ -65,7 +71,7 @@ PixelParams CorePixelParams(vec3 baseColor, float metallic, float filteredRoughn
                        mix(vec3(0.04), baseColor, metallic),
                        1.0, baseColor, vec3(0.04), 1.0, metallic,
                        filteredRoughness, filteredRoughness * filteredRoughness
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
                        , false
 #endif
 #ifdef PHYSARA_CLEARCOAT
@@ -73,6 +79,9 @@ PixelParams CorePixelParams(vec3 baseColor, float metallic, float filteredRoughn
 #endif
 #ifdef PHYSARA_SHEEN
                        , vec3(0.0), MinPerceptualRoughness, MinPerceptualRoughness * MinPerceptualRoughness, 0.0, 0.0
+#endif
+#ifdef PHYSARA_ANISOTROPY
+                       , vec3(0.0), vec3(0.0), filteredRoughness * filteredRoughness, 0.0
 #endif
                        );
 }
@@ -82,7 +91,7 @@ PixelParams BuildPixelParams(MaterialInputs inputs, float kernel)
 {
     float roughness = FilterCoreRoughness(inputs.perceptualRoughness, kernel);
     PixelParams pixel = CorePixelParams(inputs.baseColor.rgb, inputs.metallic, roughness);
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
     pixel.iorSpecularBase = inputs.iorSpecularBase;
 #endif
 #ifdef PHYSARA_CLEARCOAT
@@ -111,6 +120,21 @@ PixelParams BuildPixelParams(MaterialInputs inputs, float kernel)
 #endif
     return pixel;
 }
+
+#ifdef PHYSARA_ANISOTROPY
+// KHR_materials_anisotropy 增加沿纹理方向的 alpha. alpha 已由同一几何过滤和粗糙度下限产生.
+void PrepareAnisotropy(inout PixelParams pixel, float strength, vec3 normal, vec3 axis)
+{
+    float alphaT = mix(pixel.alpha, 1.0, strength * strength);
+    if (alphaT > pixel.alpha && dot(axis, axis) > 0.0)
+    {
+        pixel.anisotropyTangent = axis;
+        pixel.anisotropyBitangent = cross(normal, axis);
+        pixel.anisotropyAlphaT = alphaT;
+        pixel.anisotropyStrength = strength;
+    }
+}
+#endif
 
 #ifdef PHYSARA_CLEARCOAT
 const float CoatF0 = 0.04;

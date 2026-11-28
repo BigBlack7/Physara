@@ -157,7 +157,7 @@ namespace Physara::Renderer::Detail
         if (a.baseColor != b.baseColor || a.emissive != b.emissive || a.surface != b.surface ||
             a.normalBasis != b.normalBasis || a.alphaCutoff != b.alphaCutoff || a.masked != b.masked ||
             a.unlit != b.unlit || a.ior != b.ior || a.specular != b.specular || a.clearcoat != b.clearcoat ||
-            a.coatNormalBasis != b.coatNormalBasis || a.sheen != b.sheen)
+            a.coatNormalBasis != b.coatNormalBasis || a.sheen != b.sheen || a.anisotropy != b.anisotropy)
         {
             return false;
         }
@@ -189,6 +189,12 @@ namespace Physara::Renderer::Detail
                          material.iorSpecular ? 1.f : 0.f};
         out.sheen = {source.sheenColorFactor[0], source.sheenColorFactor[1], source.sheenColorFactor[2],
                      source.sheenRoughnessFactor};
+        if (material.anisotropy)
+        {
+            // 材质行存旋转矩阵的第一列. 片元共享这对 cos/sin, 方向纹理仍按自己的 UV 仿射取样.
+            out.anisotropy = {source.anisotropyStrength, std::cos(source.anisotropyRotation),
+                              std::sin(source.anisotropyRotation), material.iorSpecular ? 1.f : 0.f};
+        }
         static_assert(out.uvX.size() == Scene::MaterialSlotCount && out.uvY.size() == Scene::MaterialSlotCount);
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
@@ -252,7 +258,8 @@ namespace Physara::Renderer::Detail
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
             if ((i >= IorSpecularTextureCount && i < ClearcoatTextureCount && !coatEnabled) ||
-                (i >= ClearcoatTextureCount && !material.sheen))
+                (i >= ClearcoatTextureCount && i < SheenTextureCount && !material.sheen) ||
+                (i >= SheenTextureCount && !material.anisotropy))
             {
                 continue;
             }
@@ -261,7 +268,8 @@ namespace Physara::Renderer::Detail
                 const auto uv = slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
                 auto &attributes = i < CoreMaterialTextureCount ? result.attributes :
                     i < IorSpecularTextureCount ? result.specularAttributes :
-                    i < ClearcoatTextureCount ? result.coatAttributes : result.sheenAttributes;
+                    i < ClearcoatTextureCount ? result.coatAttributes :
+                    i < SheenTextureCount ? result.sheenAttributes : result.anisotropyAttributes;
                 attributes |= uv;
                 if (i < AuxSurfaceTextureCount && (i != 0 || masked))
                 {
@@ -286,7 +294,12 @@ namespace Physara::Renderer::Detail
         }
         result.iorSpecularBase = material.iorSpecular;
         using Color = MaterialColorProfile;
-        result.color = material.sheen ? (material.clearcoat ? Color::SheenClearcoat : Color::Sheen) :
+        if (material.anisotropy)
+        {
+            result.anisotropyAttributes |= VertexTangent;
+        }
+        result.color = material.anisotropy ? Color::Anisotropy :
+            material.sheen ? (material.clearcoat ? Color::SheenClearcoat : Color::Sheen) :
             material.clearcoat ? Color::Clearcoat : material.iorSpecular ? Color::IorSpecular : Color::Core;
         const auto &baseColor = material.textures.front();
         if (masked && baseColor)
@@ -323,7 +336,8 @@ namespace Physara::Renderer::Detail
                           StaticAbi::ClearcoatRoughnessTextureSlot == StaticAbi::ClearcoatRoughnessTextureIndex + 1 &&
                           StaticAbi::ClearcoatNormalTextureSlot == StaticAbi::ClearcoatNormalTextureIndex + 1 &&
                           StaticAbi::SheenColorTextureSlot == StaticAbi::SheenColorTextureIndex + 1 &&
-                          StaticAbi::SheenRoughnessTextureSlot == StaticAbi::SheenRoughnessTextureIndex + 1);
+                          StaticAbi::SheenRoughnessTextureSlot == StaticAbi::SheenRoughnessTextureIndex + 1 &&
+                          StaticAbi::AnisotropyTextureSlot == StaticAbi::AnisotropyTextureIndex + 1);
             const auto slot = i + (i >= StaticAbi::MaterialTableSlot ? 1u : 0u);
             bindings.AddItem(RHI::BindingSetItem::Texture_SRV(slot, row.textures[i]->texture.Get())
                 .SetSubresources(row.textures[i]->sampling));
@@ -345,7 +359,7 @@ namespace Physara::Renderer::Detail
         {
             return OpaqueSurfaceRoute::Unlit;
         }
-        return material.iorSpecular || material.clearcoat || material.sheen ?
+        return material.iorSpecular || material.clearcoat || material.sheen || material.anisotropy ?
             OpaqueSurfaceRoute::OpaqueForwardExtension : OpaqueSurfaceRoute::CoreDeferred;
     }
 
@@ -725,10 +739,12 @@ namespace Physara::Renderer::Detail
         }
         // 按实际角色取顶点流. 独立辅助表面无需颜色 UV, 即使本行已由颜色帧补齐.
         const bool coatColor = UsesClearcoat(color);
+        const bool anisotropyColor = color == MaterialColorProfile::Anisotropy;
         auto attributes = std::uint8_t(requirements.attributes |
             (litColor && requirements.iorSpecularBase ? requirements.specularAttributes : 0) |
             (coatColor ? requirements.coatAttributes : 0) |
-            (UsesSheen(color) ? requirements.sheenAttributes : 0));
+            (UsesSheen(color) ? requirements.sheenAttributes : 0) |
+            (anisotropyColor ? requirements.anisotropyAttributes : 0));
         if (coverageOnly)
         {
             attributes = requirements.shadowAttributes;
@@ -745,9 +761,13 @@ namespace Physara::Renderer::Detail
                 Asset::TangentSource::Original : static_cast<Asset::TangentSource>(uv);
         };
         const bool primaryIsCoat = requirements.normalUv < 0 && coatColor;
-        const auto primary = (attributes & VertexTangent) != 0 ?
-            selectTangent(primaryIsCoat ? requirements.coatNormalUv : requirements.normalUv) :
-            Asset::TangentSource::Absent;
+        auto primary = Asset::TangentSource::Absent;
+        if ((attributes & VertexTangent) != 0)
+        {
+            // 方向图沿用基础框架. 无基底法线槽时, 可用的源切线已在资产或编辑边界确认.
+            primary = anisotropyColor && requirements.normalUv < 0 ? Asset::TangentSource::Original :
+                selectTangent(primaryIsCoat ? requirements.coatNormalUv : requirements.normalUv);
+        }
         const auto secondary = (attributes & VertexCoatTangent) != 0 ?
             selectTangent(requirements.coatNormalUv) : Asset::TangentSource::Absent;
         // 只有清漆法线时沿主切线地址取样. 两槽共用 UV 时也只存一条流, 变换仍由各自的材质槽提供.

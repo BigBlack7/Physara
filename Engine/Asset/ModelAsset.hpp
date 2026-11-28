@@ -103,6 +103,7 @@ namespace Physara::Asset
         ClearcoatNormal,
         SheenColor,
         SheenRoughness,
+        Anisotropy,
         Count
     };
 
@@ -126,6 +127,14 @@ namespace Physara::Asset
         Opaque,
         Mask,
         Blend
+    };
+
+    /// @brief 固定源材质省略可选各向异性时的冲突层. 清漆与 sheen 都冲突时优先记录清漆.
+    enum class AnisotropySourceFallback : std::uint8_t
+    {
+        None,
+        Clearcoat,
+        Sheen
     };
 
     /// @brief 核心材质及本阶段支持的扩展值. 因子在线性域, slots 缺席时按 glTF 缺省采样值解释.
@@ -158,6 +167,10 @@ namespace Physara::Asset
         std::array<float, 3> sheenColorFactor{};
         float sheenRoughnessFactor{};
         bool hasSheenExtension = false; ///< 保留源声明, 有效颜色因子决定是否准备 sheen 受光.
+        float anisotropyStrength{}; ///< [0, 1] 的源因子. 方向图 B 在片元采样后才参与强度计算.
+        float anisotropyRotation{}; ///< 源弧度, 正向从切线转向副切线.
+        bool hasAnisotropyExtension = false; ///< 通过组合检查的源声明, 包含零强度.
+        AnisotropySourceFallback anisotropySourceFallback{}; ///< 随固定模型保留, 独立于实例覆盖和摘要容量.
     };
 
     /// @brief 原始透视参数, yfov 为弧度, 裁剪距离为米. 空 zfar 为无限远, 空 aspectRatio 由 View 决定.

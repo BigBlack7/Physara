@@ -151,12 +151,13 @@ namespace Physara::Renderer::Detail
         const bool froxels = IsFroxelProgram(role);
         const bool clearcoat = Shader::UsesClearcoatFrame(role);
         const bool sheen = Shader::IsSheenProgram(role);
+        const bool anisotropy = Shader::IsAnisotropyProgram(role);
         const bool aux = role == ProductShader::StaticSurfaceAux;
         const auto attachments = SurfaceAttachments(role);
         for (const auto &module : package.modules)
         {
             const bool fragment = module.stage == Shader::Stage::Fragment;
-            if (clearcoat || sheen)
+            if (clearcoat || sheen || anisotropy)
             {
                 // 完整颜色配方保留两套 UV 及表面/照明插值. 清漆组合再取得自身切线及其跨阶段传递.
                 static constexpr std::array<std::string_view, 7> Attributes{
@@ -166,7 +167,7 @@ namespace Physara::Renderer::Detail
                     "vLightingOffsetLow", "vMaterialRow", "vCoatTangent"};
                 const auto attributes = std::span(Attributes).first(Attributes.size() - (clearcoat ? 0u : 1u));
                 const auto varyings = std::span(Varyings).first(Varyings.size() - (clearcoat ? 0u : 1u));
-                const auto *layer = clearcoat ? "clearcoat" : "sheen";
+                const auto *layer = clearcoat ? "clearcoat" : sheen ? "sheen" : "anisotropy";
                 if (const auto failure = CheckLayerIo(module, fragment ? varyings : attributes, layer, true))
                 {
                     return failure;
@@ -174,6 +175,16 @@ namespace Physara::Renderer::Detail
                 if (!fragment)
                 {
                     if (const auto failure = CheckLayerIo(module, varyings, layer, false))
+                    {
+                        return failure;
+                    }
+                }
+                if (anisotropy)
+                {
+                    // 世界空间两轴由顶点写出并在片元插值. 两端分别检查, 以便将缺项定位到对应阶段.
+                    static constexpr std::array<std::string_view, 2> DirectionFrame{
+                        "vAnisotropyTangent", "vAnisotropyBitangent"};
+                    if (const auto failure = CheckLayerIo(module, DirectionFrame, layer, fragment))
                     {
                         return failure;
                     }
@@ -284,6 +295,14 @@ namespace Physara::Renderer::Detail
             };
             static constexpr auto SheenMaterial = withSheen(IorSpecularMaterial);
             static constexpr auto SheenClearcoatMaterial = withSheen(ClearcoatMaterial);
+            static constexpr auto AnisotropyMaterial = []
+            {
+                std::array<std::string_view, IorSpecularMaterial.size() + 2> all{};
+                std::ranges::copy(IorSpecularMaterial, all.begin());
+                all[IorSpecularMaterial.size()] = "anisotropyImage";
+                all.back() = "anisotropySampler";
+                return all;
+            }();
             std::span<const std::string_view> material = ColorMaterial;
             if (sheen)
             {
@@ -293,6 +312,10 @@ namespace Physara::Renderer::Detail
             else if (clearcoat)
             {
                 material = ClearcoatMaterial;
+            }
+            else if (anisotropy)
+            {
+                material = AnisotropyMaterial;
             }
             else if (Shader::IsIorSpecularProgram(role))
             {
@@ -748,7 +771,8 @@ namespace Physara::Renderer::Detail
         device.candidateShaders = std::move(candidate);
     }
 
-    /// @brief 用本轮剩余额度验证变化的 sheen 包, 包括未选角色. 临时阶段对象在每次预检结束时释放.
+    /// @brief 用本轮剩余额度验证变化的 sheen 与 anisotropy 包, 包括未选角色.
+    /// 临时阶段对象在每次预检结束时释放.
     static void AdvanceCandidateAdmission(ForwardDevice &device, std::optional<ShaderPipelineRequest> &checking)
     {
         auto &input = *device.candidateInput;

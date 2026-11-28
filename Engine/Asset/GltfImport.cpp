@@ -3,6 +3,7 @@
 /// @file
 /// @brief 先收集静态模型全部有效输入并比较指纹, 内容变化后才分配几何和像素候选.
 
+#include <algorithm>
 #include <utility>
 
 #include "GltfGeometry.hpp"
@@ -61,6 +62,11 @@ namespace Physara::Asset::Gltf
         resources.AppendInputFiles(record.inputFiles);
         mesh.Build(limits.modelGeometryBytes, *geometry, storage->reservation.bytes);
         tables.DecodeImages(limits, pixels, stop);
+        if (std::ranges::any_of(record.materials, &ModelMaterial::hasAnisotropyExtension))
+        {
+            record.supportReport.Append(record.supportReport.View().empty() ? "" : "\n");
+            record.supportReport.Append("Supported CPU extension: KHR_materials_anisotropy (metallic-roughness base)");
+        }
         CheckStop(stop);
         return {std::move(storage), &record};
     }

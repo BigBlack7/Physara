@@ -20,7 +20,9 @@
     "SheenRoughnessTextureIndex": 11,
     "SheenColorTextureSlot": 11,
     "SheenRoughnessTextureSlot": 12,
-    "SheenReflectionSlot": 6
+    "SheenReflectionSlot": 6,
+    "AnisotropyTextureIndex": 12,
+    "AnisotropyTextureSlot": 13
   },
   "blocks": [
     {
@@ -172,8 +174,8 @@
         { "name": "emissive", "type": "float4" },
         { "name": "surface", "type": "float4" },
         { "name": "normalBasis", "type": "float4" },
-        { "name": "uvX", "type": "float4", "array": 12 },
-        { "name": "uvY", "type": "float4", "array": 12 },
+        { "name": "uvX", "type": "float4", "array": 13 },
+        { "name": "uvY", "type": "float4", "array": 13 },
         { "name": "alphaCutoff", "type": "float32" },
         { "name": "masked", "type": "uint32" },
         { "name": "unlit", "type": "uint32" },
@@ -181,7 +183,8 @@
         { "name": "specular", "type": "float4" },
         { "name": "clearcoat", "type": "float4" },
         { "name": "coatNormalBasis", "type": "float4" },
-        { "name": "sheen", "type": "float4" }
+        { "name": "sheen", "type": "float4" },
+        { "name": "anisotropy", "type": "float4" }
       ]
     },
     {
@@ -232,6 +235,8 @@
     { "name": "sheenColorSampler", "kind": "sampler", "set": 2, "slot": 11, "stages": ["fragment"] },
     { "name": "sheenRoughnessImage", "kind": "texture2d", "set": 2, "slot": 12, "stages": ["fragment"] },
     { "name": "sheenRoughnessSampler", "kind": "sampler", "set": 2, "slot": 12, "stages": ["fragment"] },
+    { "name": "anisotropyImage", "kind": "texture2d", "set": 2, "slot": 13, "stages": ["fragment"] },
+    { "name": "anisotropySampler", "kind": "sampler", "set": 2, "slot": 13, "stages": ["fragment"] },
     { "name": "lightRows", "kind": "structured-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardLight", "capacity": 16384 },
     { "name": "environment", "kind": "constant-buffer", "set": 3, "slot": 0, "stages": ["fragment"], "block": "ForwardEnvironment" },
     { "name": "dfgImage", "kind": "texture2d", "set": 3, "slot": 1, "stages": ["fragment"] },
@@ -260,6 +265,8 @@
     { "stage": "vertex", "direction": "out", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
     { "stage": "vertex", "direction": "out", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
     { "stage": "vertex", "direction": "out", "name": "vCoatTangent", "location": 9, "type": "float4" },
+    { "stage": "vertex", "direction": "out", "name": "vAnisotropyTangent", "location": 10, "type": "float3" },
+    { "stage": "vertex", "direction": "out", "name": "vAnisotropyBitangent", "location": 11, "type": "float3" },
     { "stage": "vertex", "direction": "out", "name": "vMaterialRow", "location": 8, "type": "uint32", "interpolation": "flat" },
     { "stage": "fragment", "direction": "in", "name": "vColor", "location": 0, "type": "float4" },
     { "stage": "fragment", "direction": "in", "name": "vUv0", "location": 1, "type": "float2" },
@@ -270,6 +277,8 @@
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetHigh", "location": 6, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vLightingOffsetLow", "location": 7, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vCoatTangent", "location": 9, "type": "float4" },
+    { "stage": "fragment", "direction": "in", "name": "vAnisotropyTangent", "location": 10, "type": "float3" },
+    { "stage": "fragment", "direction": "in", "name": "vAnisotropyBitangent", "location": 11, "type": "float3" },
     { "stage": "fragment", "direction": "in", "name": "vMaterialRow", "location": 8, "type": "uint32", "interpolation": "flat" },
     { "stage": "fragment", "direction": "out", "name": "outColor", "location": 0, "type": "float4" },
     { "stage": "fragment", "direction": "out", "name": "outFlags", "location": 1, "type": "uint32" },

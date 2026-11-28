@@ -226,6 +226,7 @@ namespace Physara::Renderer::Detail
         std::uint8_t specularAttributes{}; ///< 只有扩展受光角色需要的附加 UV.
         std::uint8_t coatAttributes{}; ///< 清漆颜色额外读取的流. 两套有效 UV 不同时包含第二条切线.
         std::uint8_t sheenAttributes{}; ///< sheen 两个槽额外读取的 UV, 与切线框架无关.
+        std::uint8_t anisotropyAttributes{}; ///< 颜色专用的基础切线和方向图 UV.
         std::int8_t coatNormalUv = -1; ///< 负值表示本次颜色准备无需清漆法线框架.
         MaterialColorProfile color{};
         bool iorSpecularBase{};
@@ -251,6 +252,7 @@ namespace Physara::Renderer::Detail
         MaterialBinding binding;
         OpaqueSurfaceRoute route = OpaqueSurfaceRoute::CoreDeferred;
         std::uint32_t sampledSlots{}; ///< 原生角色所需的采样槽位集合, 含该角色的占位.
+        std::array<std::byte, 8> abiAlignmentPadding{}; ///< 13 槽的 CPU 句柄之后, 将生成材质行对齐到 16 B.
         StaticAbi::ForwardMaterial values{};
     };
 
@@ -420,6 +422,8 @@ namespace Physara::Renderer::Detail
     inline constexpr std::size_t ClearcoatTextureCount = StaticAbi::SheenColorTextureIndex;
     static_assert(ClearcoatTextureCount == std::size_t(Asset::MaterialSlot::SheenColor));
     static_assert(StaticAbi::SheenRoughnessTextureIndex == std::size_t(Asset::MaterialSlot::SheenRoughness));
+    inline constexpr std::size_t SheenTextureCount = StaticAbi::AnisotropyTextureIndex;
+    static_assert(SheenTextureCount == std::size_t(Asset::MaterialSlot::Anisotropy));
     static_assert(Scene::MaterialSlotCount < 32);
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
     inline constexpr std::size_t AuxSurfaceTextureCount = std::size_t(Asset::MaterialSlot::Normal) + 1;
@@ -430,17 +434,20 @@ namespace Physara::Renderer::Detail
         return (1u << count) - 1;
     }
 
-    /// @brief 颜色角色的采样槽集合, 图读与上传使用同一配方. 单独 sheen 跳过清漆图像.
+    /// @brief 颜色角色的采样槽集合, 图读与上传使用同一配方. 各向异性在基底槽外单独取方向槽.
+    /// 共用颜色角色始终保留 ABI 所需的基底绑定, 无实际纹理的槽由材质准备提供占位.
     [[nodiscard]] constexpr std::uint32_t ColorTextureSlots(MaterialColorProfile profile) noexcept
     {
-        constexpr auto SheenSlots = MaterialTexturePrefix(Scene::MaterialSlotCount) &
+        constexpr auto SheenSlots = MaterialTexturePrefix(SheenTextureCount) &
                                     ~MaterialTexturePrefix(ClearcoatTextureCount);
         switch (profile)
         {
         case MaterialColorProfile::IorSpecular: return MaterialTexturePrefix(IorSpecularTextureCount);
         case MaterialColorProfile::Clearcoat: return MaterialTexturePrefix(ClearcoatTextureCount);
         case MaterialColorProfile::Sheen: return MaterialTexturePrefix(IorSpecularTextureCount) | SheenSlots;
-        case MaterialColorProfile::SheenClearcoat: return MaterialTexturePrefix(Scene::MaterialSlotCount);
+        case MaterialColorProfile::SheenClearcoat: return MaterialTexturePrefix(SheenTextureCount);
+        case MaterialColorProfile::Anisotropy:
+            return MaterialTexturePrefix(IorSpecularTextureCount) | (1u << StaticAbi::AnisotropyTextureIndex);
         default: return MaterialTexturePrefix(CoreMaterialTextureCount);
         }
     }

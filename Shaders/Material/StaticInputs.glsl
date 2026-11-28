@@ -32,7 +32,9 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
     const int strengthSlot = int(SpecularTextureIndex);
     const int colorSlot = int(SpecularColorTextureIndex);
     vec4 specular = PHYSARA_FORWARD_MATERIAL.specular;
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_ANISOTROPY)
+    bool iorSpecularBase = PHYSARA_FORWARD_MATERIAL.anisotropy.w != 0.0;
+#elif defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
     bool iorSpecularBase = PHYSARA_FORWARD_MATERIAL.clearcoat.w != 0.0;
 #else
     const bool iorSpecularBase = true;
@@ -81,12 +83,27 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
         sheen.a *= textureGrad(sampler2D(sheenRoughnessImage, sheenRoughnessSampler), uv.uv, uv.dx, uv.dy).a;
     }
 #endif
+#ifdef PHYSARA_ANISOTROPY
+    vec4 anisotropy = PHYSARA_FORWARD_MATERIAL.anisotropy;
+    vec2 direction = vec2(1.0, 0.0);
+    float strength = anisotropy.x;
+    const int directionSlot = int(AnisotropyTextureIndex);
+    if (HasMaterialTexture(directionSlot))
+    {
+        // UV 仿射只选择采样位置, RG 在 Primitive 的基础 T/B 内解释. B 是线性强度乘数.
+        MaterialUvSample uv = MaterialUv(directionSlot, gradients);
+        vec3 sampleValue = textureGrad(sampler2D(anisotropyImage, anisotropySampler), uv.uv, uv.dx, uv.dy).rgb;
+        direction = UnitOr(vec3(2.0 * sampleValue.rg - 1.0, 0.0), vec3(1.0, 0.0, 0.0)).xy;
+        strength *= sampleValue.b;
+    }
+    direction = mat2(anisotropy.y, anisotropy.z, -anisotropy.z, anisotropy.y) * direction;
+#endif
     return MaterialInputs(baseColor, roughnessMetallic.x, roughnessMetallic.y,
                           mix(1.0, occlusion, PHYSARA_FORWARD_MATERIAL.surface.z)
 #ifdef PHYSARA_HAS_SPECULAR_INPUTS
                           , PHYSARA_FORWARD_MATERIAL.ior, specular.w, specular.rgb
 #endif
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
                           , iorSpecularBase
 #endif
 #ifdef PHYSARA_CLEARCOAT
@@ -94,6 +111,9 @@ MaterialInputs SampleMaterialInputs(vec4 baseColor, MaterialUvGradients gradient
 #endif
 #ifdef PHYSARA_SHEEN
                           , sheen.rgb, sheen.a
+#endif
+#ifdef PHYSARA_ANISOTROPY
+                          , strength, direction
 #endif
                           );
 }

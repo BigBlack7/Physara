@@ -51,6 +51,7 @@ vec4 TransformMaterialTangent(ForwardObject object, vec4 tangent, vec3 basis)
     return vec4(mat3(object.worldFromLocal) * mapped, tangent.w * basis.z * object.orientation);
 }
 
+// 以实例记录定位对象和材质, 输出共用的裁剪位置及当前颜色角色所需的世界空间框架.
 void FetchStaticVertex()
 {
     // canonical 实例索引已包含本命令的首实例. 实例块给出对象页和材质页各自的行号.
@@ -84,5 +85,11 @@ void FetchStaticVertex()
         vec3 basis = materialRows.records[vMaterialRow].coatNormalBasis.xyz;
         vCoatTangent = TransformMaterialTangent(object, aCoatTangent, basis);
     }
+#endif
+#ifdef PHYSARA_ANISOTROPY
+    // 两条原轴同时经过实例线性变换. 保留相对轴长, 片元旋转后的斜轴才能随非均匀缩放变化.
+    mat3 worldLinear = mat3(object.worldFromLocal);
+    vAnisotropyTangent = worldLinear * aTangent.xyz;
+    vAnisotropyBitangent = worldLinear * (cross(aNormal, aTangent.xyz) * aTangent.w);
 #endif
 }

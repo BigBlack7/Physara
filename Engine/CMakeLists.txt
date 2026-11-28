@@ -85,7 +85,14 @@ set(sheenPrograms
     StaticForwardPlusSheenClearcoat StaticForwardPlusSheenClearcoatPhysical StaticForwardPlusSheenClearcoatIbl
     StaticForwardPlusSheenClearcoatShadows StaticForwardPlusSheenClearcoatPhysicalShadows StaticForwardPlusSheenClearcoatIblShadows
 )
-foreach(program IN LISTS iorSpecularPrograms clearcoatPrograms sheenPrograms)
+# 各向异性共用核心和 IOR/specular 基底, 只新增一组全灯/Froxel 颜色包.
+set(anisotropyPrograms
+    StaticForwardAnisotropy StaticForwardAnisotropyPhysical StaticForwardAnisotropyIbl
+    StaticForwardAnisotropyShadows StaticForwardAnisotropyPhysicalShadows StaticForwardAnisotropyIblShadows
+    StaticForwardPlusAnisotropy StaticForwardPlusAnisotropyPhysical StaticForwardPlusAnisotropyIbl
+    StaticForwardPlusAnisotropyShadows StaticForwardPlusAnisotropyPhysicalShadows StaticForwardPlusAnisotropyIblShadows
+)
+foreach(program IN LISTS iorSpecularPrograms clearcoatPrograms sheenPrograms anisotropyPrograms)
     physara_add_shader_program(${program} StaticForward ../Shaders/Passes/Forward/${program}.json ../Shaders PRODUCT)
 endforeach()
 # 核心屏幕光照使用相同的灯光 ABI. 每个 role 只建立一个 RGBA16F 全屏 Pipeline.
@@ -147,12 +154,13 @@ target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_IOR_SPECULAR_PROGRAMS "${iorSpecularPrograms}")
 set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_CLEARCOAT_PROGRAMS "${clearcoatPrograms}")
 set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_SHEEN_PROGRAMS "${sheenPrograms}")
+set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_ANISOTROPY_PROGRAMS "${anisotropyPrograms}")
 foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms}
-        ${surfacePreviewPrograms} ${iorSpecularPrograms} ${clearcoatPrograms} ${sheenPrograms})
+        ${surfacePreviewPrograms} ${iorSpecularPrograms} ${clearcoatPrograms} ${sheenPrograms} ${anisotropyPrograms})
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

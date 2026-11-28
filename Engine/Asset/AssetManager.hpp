@@ -127,7 +127,8 @@ namespace Physara::Asset
         ClearcoatRoughness,
         ClearcoatNormal,
         SheenColor,
-        SheenRoughness
+        SheenRoughness,
+        Anisotropy ///< 线性 RG 是切线方向, B 是强度, A 不参与采样.
     };
 
     enum class ImageDomain

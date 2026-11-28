@@ -1,7 +1,7 @@
 #ifndef PHYSARA_MATERIAL_INPUTS_GLSL
 #define PHYSARA_MATERIAL_INPUTS_GLSL
 
-#if defined(PHYSARA_IOR_SPECULAR) || defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_IOR_SPECULAR) || defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
 #define PHYSARA_HAS_SPECULAR_INPUTS
 #endif
 
@@ -20,7 +20,7 @@ struct MaterialInputs
     float specularWeight;
     vec3 specularColor;
 #endif
-#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN)
+#if defined(PHYSARA_CLEARCOAT) || defined(PHYSARA_SHEEN) || defined(PHYSARA_ANISOTROPY)
     bool iorSpecularBase;
 #endif
 #ifdef PHYSARA_CLEARCOAT
@@ -30,6 +30,10 @@ struct MaterialInputs
 #ifdef PHYSARA_SHEEN
     vec3 sheenColor;
     float sheenRoughness;
+#endif
+#ifdef PHYSARA_ANISOTROPY
+    float anisotropyStrength;
+    vec2 anisotropyDirection; // 已按材质弧度旋转, 仍在 Primitive 的基础切线空间.
 #endif
 };
 

@@ -229,6 +229,42 @@ namespace Physara::Shader
         {{ProductShader::StaticForwardPlusSheenClearcoatIblShadows, 2, 0, 1, 1},
          "StaticForwardPlusSheenClearcoatIblShadows", "StaticForward", "Passes/Forward/StaticForwardPlusSheenClearcoatIblShadows.json",
          "Passes/Forward/Static.vert", "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardAnisotropy, 0, 0, 0, 0, 1},
+         "StaticForwardAnisotropy", "StaticForward", "Passes/Forward/StaticForwardAnisotropy.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardAnisotropyPhysical, 1, 0, 0, 0, 1},
+         "StaticForwardAnisotropyPhysical", "StaticForward", "Passes/Forward/StaticForwardAnisotropyPhysical.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardAnisotropyIbl, 2, 0, 0, 0, 1},
+         "StaticForwardAnisotropyIbl", "StaticForward", "Passes/Forward/StaticForwardAnisotropyIbl.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardAnisotropyShadows, 0, 0, 0, 0, 1},
+         "StaticForwardAnisotropyShadows", "StaticForward", "Passes/Forward/StaticForwardAnisotropyShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardAnisotropyPhysicalShadows, 1, 0, 0, 0, 1},
+         "StaticForwardAnisotropyPhysicalShadows", "StaticForward", "Passes/Forward/StaticForwardAnisotropyPhysicalShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardAnisotropyIblShadows, 2, 0, 0, 0, 1},
+         "StaticForwardAnisotropyIblShadows", "StaticForward", "Passes/Forward/StaticForwardAnisotropyIblShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropy, 0, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropy", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropy.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropyPhysical, 1, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropyPhysical", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropyPhysical.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropyIbl, 2, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropyIbl", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropyIbl.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropyShadows, 0, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropyShadows", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropyShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropyPhysicalShadows, 1, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropyPhysicalShadows", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropyPhysicalShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusAnisotropyIblShadows, 2, 0, 0, 0, 1},
+         "StaticForwardPlusAnisotropyIblShadows", "StaticForward", "Passes/Forward/StaticForwardPlusAnisotropyIblShadows.json",
+         "Passes/Forward/Static.vert", "Passes/Forward/FroxelShadowColor.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.
@@ -282,7 +318,7 @@ namespace Physara::Shader
             std::pair{PhysicalLightingField, &VariantKey::physicalLighting},
             std::pair{IorSpecularField, &VariantKey::iorSpecular},
             std::pair{ClearcoatField, &VariantKey::clearcoat},
-            std::pair{SheenField, &VariantKey::sheen}};
+            std::pair{SheenField, &VariantKey::sheen}, std::pair{AnisotropyField, &VariantKey::anisotropy}};
         for (const auto &field : fields)
         {
             const auto found = std::ranges::find_if(members, [&](const auto &entry) { return entry.first == field.name; });

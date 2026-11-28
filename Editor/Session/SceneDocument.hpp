@@ -24,16 +24,17 @@ namespace Physara::Editor::Detail
     /// @brief v1 的 textures 对象按材质槽寻址. 下标与 Scene 的稀疏覆盖数组一致.
     inline constexpr std::array<std::string_view, Scene::MaterialSlotCount> DocumentTextureSlots{
         "baseColor", "metallicRoughness", "normal", "occlusion", "emissive", "specular", "specularColor",
-        "clearcoat", "clearcoatRoughness", "clearcoatNormal", "sheenColor", "sheenRoughness"};
+        "clearcoat", "clearcoatRoughness", "clearcoatNormal", "sheenColor", "sheenRoughness", "anisotropy"};
     /// @brief 外置图像引用另存 use. 遮蔽与金属粗糙度两个槽共用同一线性数据用途.
-    inline constexpr std::array<std::pair<std::string_view, Asset::ImageUse>, 11> DocumentTextureUses{{
+    inline constexpr std::array<std::pair<std::string_view, Asset::ImageUse>, 12> DocumentTextureUses{{
         {"baseColor", Asset::ImageUse::BaseColor},
         {"occlusionRoughnessMetallic", Asset::ImageUse::OcclusionRoughnessMetallic},
         {"normal", Asset::ImageUse::Normal}, {"emissive", Asset::ImageUse::Emissive},
         {"specular", Asset::ImageUse::Specular}, {"specularColor", Asset::ImageUse::SpecularColor},
         {"clearcoat", Asset::ImageUse::Clearcoat}, {"clearcoatRoughness", Asset::ImageUse::ClearcoatRoughness},
         {"clearcoatNormal", Asset::ImageUse::ClearcoatNormal},
-        {"sheenColor", Asset::ImageUse::SheenColor}, {"sheenRoughness", Asset::ImageUse::SheenRoughness}
+        {"sheenColor", Asset::ImageUse::SheenColor}, {"sheenRoughness", Asset::ImageUse::SheenRoughness},
+        {"anisotropy", Asset::ImageUse::Anisotropy}
     }};
 
     /// @brief 指向 entities 中实例根的未解析模型引用. scene 和摘要共同限定源节点的解释版本.

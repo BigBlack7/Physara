@@ -34,6 +34,8 @@ namespace Physara::Scene
         std::optional<float> clearcoatNormalScale;
         std::optional<std::array<float, 3>> sheenColorFactor;
         std::optional<float> sheenRoughnessFactor;
+        std::optional<float> anisotropyStrength; ///< 空值继承源强度, 显式 0 选择等向基底.
+        std::optional<float> anisotropyRotation; ///< 弧度, 空值继承源角度.
 
         bool operator==(const MaterialOverride &) const = default;
     };
@@ -97,6 +99,7 @@ namespace Physara::Scene
         bool iorSpecular{}; ///< 源声明或当前显式覆盖启用扩展模型.
         bool clearcoat{}; ///< 声明或覆盖启用清漆角色, 层强度仍由有效输入决定.
         bool sheen{}; ///< 至少一个有效颜色因子大于零, 当前材质需要 sheen 受光.
+        bool anisotropy{}; ///< 采样前强度大于零时选择方向性颜色角色. 无方向图时仍需基础切线.
     };
 
     /// @brief 从固定模型解析已验证的稀疏覆盖. value 为空时解析标准源材质.
