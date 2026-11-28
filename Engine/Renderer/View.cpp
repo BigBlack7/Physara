@@ -711,7 +711,7 @@ namespace Physara::Renderer
                           ResolveDisplaySettings(displayMode, prepared.requestedAa), prepared.layouts.render,
                           prepared.layouts.display.outputExtent, shaderGeneration, cascades,
                           prepared.shadowStatistics.requestRevision, local ? std::optional{*local} : std::nullopt,
-                          0, shadowWork, prepared.opaquePath, compatiblePredecessor}};
+                          0, shadowWork, prepared.opaquePath, compatiblePredecessor, production.clearcoatColor}};
         m_Reason = ViewSettingReason::SubmissionPending;
         return outputs;
     }
@@ -832,6 +832,15 @@ namespace Physara::Renderer
             // 测试图恢复为空文档时只替换显示色, 不伪造一次新的场景渲染记录.
             outputs.m_Output->scene->submission = ticket;
             m_RenderedScene = outputs.m_Output->scene;
+            // 材质诊断更新当前显示帧. 只有实际清漆受光提交更新本场景的清漆票据.
+            if (IsLitPreview(scene->mode) && scene->clearcoatColor.front() != '\0')
+            {
+                m_LastClearcoatColor = RenderedClearcoatColor{scene->scene, scene->clearcoatColor, ticket};
+            }
+            else if (m_LastClearcoatColor && m_LastClearcoatColor->scene != scene->scene)
+            {
+                m_LastClearcoatColor.reset();
+            }
             if (m_RenderedScene->directionalCascades != 0 || m_RenderedScene->localShadow)
             {
                 m_LastShadowDiagnostic = RenderedShadowDiagnostic{m_RenderedScene->scene, m_ShadowDiagnostic, ticket};

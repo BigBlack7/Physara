@@ -50,6 +50,7 @@ namespace Physara::Asset
         std::uint32_t material{};
         std::array<bool, 2> hasUv{};
         bool hasTangent{};
+        bool hasSourceTangent{}; ///< 源 NORMAL/TANGENT 配对有效, 可独立于基底 normal 槽提供框架.
         std::optional<ModelBounds> bounds;
         std::vector<ModelVertex> vertices;
         std::vector<std::uint32_t> indices;
@@ -97,6 +98,9 @@ namespace Physara::Asset
         Emissive,
         Specular,
         SpecularColor,
+        Clearcoat,
+        ClearcoatRoughness,
+        ClearcoatNormal,
         Count
     };
 
@@ -144,6 +148,11 @@ namespace Physara::Asset
         std::array<float, 3> specularColorFactor{1, 1, 1};
         bool hasIorExtension = false; ///< 空扩展对象仍表示启用相应材质模型.
         bool hasSpecularExtension = false;
+        float clearcoatFactor{};
+        float clearcoatRoughnessFactor{};
+        float clearcoatNormalScale = 1;
+        bool hasClearcoatExtension = false; ///< 空扩展保留声明身份, 缺省层权重为零.
+        bool hasSpecularGlossinessExtension = false; ///< 核心回退仍保留用于实例扩展排斥的源声明.
     };
 
     /// @brief 原始透视参数, yfov 为弧度, 裁剪距离为米. 空 zfar 为无限远, 空 aspectRatio 由 View 决定.

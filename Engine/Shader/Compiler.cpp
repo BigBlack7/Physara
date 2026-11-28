@@ -272,6 +272,8 @@ namespace Physara::Shader
                     std::to_string(approved.physicalLighting));
             require("requested PHYSARA_IOR_SPECULAR", std::to_string(requested.iorSpecular),
                     std::to_string(approved.iorSpecular));
+            require("requested PHYSARA_CLEARCOAT", std::to_string(requested.clearcoat),
+                    std::to_string(approved.clearcoat));
         }
     }
 

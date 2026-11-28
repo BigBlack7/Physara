@@ -14,16 +14,18 @@
 
 namespace Physara::Renderer::Detail
 {
-    // 每张表按 8 种顶点布局, 4 种绕序/剔面组合及 4 个表面阶段编址. 两个深度角色共用首张表.
-    // 核心及辅助表面在常规表后各占 32 槽. 随后的屏幕照明区以角色为下标, 无顶点布局和绕序变体.
+    // 每张表按属性位, 绕序/剔面及表面阶段编址. 两个深度角色共用首张表.
+    // 核心及辅助表面各占一阶段. 随后的屏幕照明区以角色为下标, 无顶点布局和绕序变体.
     // 深度和 GBuffer 预览各占一个屏幕槽. 设备计数上界还涵盖天空和四个显示阶段的两种目标格式.
-    inline constexpr std::size_t GeometryPhaseSlots = 8 * 4;
+    inline constexpr std::size_t GeometryLayoutCount = 16;
+    inline constexpr std::size_t GeometryPhaseSlots = GeometryLayoutCount * 4;
     inline constexpr std::size_t GeometryPipelineSlots = GeometryPhaseSlots * 4;
     // 基础颜色表的前九项各有 set 3 配方, 后六项使用 Froxel set 0 并复用对应的 set 3.
     // IOR/specular 另占颜色 Pipeline 槽, 光照绑定仍由相同的灯表, 环境和阴影组合决定.
     inline constexpr std::size_t ForwardPerPassLayouts = 9;
     inline constexpr std::size_t BaseForwardColorPrograms = ForwardPerPassLayouts + 6;
-    inline constexpr std::size_t ForwardColorPrograms = BaseForwardColorPrograms + Shader::IorSpecularProgramCount;
+    inline constexpr std::size_t ForwardColorPrograms =
+        BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramCount;
     inline constexpr std::size_t CorePipelineBase = GeometryPipelineSlots * ForwardColorPrograms;
     inline constexpr std::size_t SurfaceAuxPipelineBase = CorePipelineBase + GeometryPhaseSlots;
     inline constexpr std::size_t DeferredPipelineBase = SurfaceAuxPipelineBase + GeometryPhaseSlots;
@@ -36,6 +38,9 @@ namespace Physara::Renderer::Detail
     inline constexpr std::uint32_t PreviewControlsSlot = 0;
     inline constexpr std::uint32_t PreviewDepthSlot = 0;
     inline constexpr std::uint32_t PreviewGBufferSlot = 1;
+
+    /// @brief 已冻结的受光颜色结构. 清漆角色内另以材质数据选择基底.
+    enum class MaterialColorProfile : std::uint8_t { Core, IorSpecular, Clearcoat };
 
     [[nodiscard]] constexpr bool IsDeferredLighting(Shader::ProductShader role) noexcept
     {

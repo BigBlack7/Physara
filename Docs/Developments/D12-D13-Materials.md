@@ -29,9 +29,11 @@
 
 **职责位置：** Asset、Materials、Shaders/Material/BRDF/Lighting。**前置：** [D12-T01](#d12-t01)。**架构依据：** [8.5](../Architecture.md#materials)、[8.6](../Architecture.md#lighting)、[8.2](../Architecture.md#geometry)。
 
-- [ ] 导入 clearcoat 因子、roughness、独立 normal 与纹理变换，生成有限 profile 和 GPU 参数。
-- [ ] 实现上层微表面与基底衰减、直接光及配套 IBL，核对双法线、几何可见性和 clearcoat 对 emission 的叠层衰减。
-- [ ] 验证参考材质、法线极值、base+coat 能量近似及 Deferred SurfaceAux 覆盖，补 Inspector/历史失效回归。
+2026-11-28 已通过验收并归档。 [最终验证](../../openspec/changes/archive/2026-11-28-add-clearcoat-material-profile/tasks.md#final-verification) · [OpenSpec 归档](../../openspec/changes/archive/2026-11-28-add-clearcoat-material-profile/tasks.md#archive-closeout)
+
+- [x] 导入 clearcoat 因子、roughness、独立 normal 与纹理变换，生成有限 profile 和 GPU 参数。
+- [x] 实现上层微表面与基底衰减、直接光及配套 IBL，核对双法线、几何可见性和 clearcoat 对 emission 的叠层衰减。
+- [x] 验证参考材质、法线极值、base+coat 能量近似及 Deferred SurfaceAux 覆盖，补 Inspector/历史失效回归。
 
 **完成条件：** 清漆层在三路径和两类光照中有一致物理语义，扩展不增加全局 GBuffer 附件。
 

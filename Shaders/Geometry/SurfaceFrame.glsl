@@ -9,23 +9,30 @@ vec3 GeometricNormal()
     return UnitOr(vNormal, vec3(0.0, 0.0, 1.0));
 }
 
-// 由插值的逆转置法线和仿射切线构造表面. usesNormalMap 为真时 tangentNormal 须已解码及规范化.
-// vTangent.w 已包含源切线, 有效 UV 和实例的手性; Pipeline 已将实例镜像计入 gl_FrontFacing.
-// 几何法线插值为零时回退世界 +Z, 框架变换结果为零时回退该几何法线, 最后才处理背面.
+// 使用独立槽提供的切线和手性, 避免把一个槽的法线扰动传给另一个槽.
+vec3 ApplyMappedNormal(vec3 geometricNormal, vec4 frameTangent, vec3 tangentNormal)
+{
+    vec3 tangent = UnitOr(frameTangent.xyz, vec3(0.0));
+    tangent = UnitOr(tangent - geometricNormal * dot(geometricNormal, tangent), vec3(0.0));
+    vec3 bitangent = cross(geometricNormal, tangent) * (frameTangent.w < 0.0 ? -1.0 : 1.0);
+    return UnitOr(mat3(tangent, bitangent, geometricNormal) * tangentNormal, geometricNormal);
+}
+
+// 两层各自从未扰动的几何法线构造表面. Pipeline 已将实例镜像计入 gl_FrontFacing.
 SurfaceGeometry PrepareSurfaceGeometry(vec3 tangentNormal, bool usesNormalMap)
 {
     vec3 geometricNormal = GeometricNormal();
     vec3 shadingNormal = geometricNormal;
     if (usesNormalMap)
     {
-        vec3 tangent = UnitOr(vTangent.xyz, vec3(0.0));
-        tangent = UnitOr(tangent - geometricNormal * dot(geometricNormal, tangent), vec3(0.0));
-        vec3 bitangent = cross(geometricNormal, tangent) * (vTangent.w < 0.0 ? -1.0 : 1.0);
-        // 重正交后按已有手性重建副切线. 若贴图方向经整个框架变换后为零, 使用几何法线回退.
-        shadingNormal = UnitOr(mat3(tangent, bitangent, geometricNormal) * tangentNormal, geometricNormal);
+        shadingNormal = ApplyMappedNormal(geometricNormal, vTangent, tangentNormal);
     }
     // 有效正面已考虑实例绕序. 双面翻转在完成贴图求值后作用于着色法线一次.
-    return SurfaceGeometry(geometricNormal, gl_FrontFacing ? shadingNormal : -shadingNormal);
+    return SurfaceGeometry(geometricNormal, gl_FrontFacing ? shadingNormal : -shadingNormal
+#ifdef PHYSARA_CLEARCOAT
+        , gl_FrontFacing ? geometricNormal : -geometricNormal, gl_FrontFacing ? geometricNormal : -geometricNormal
+#endif
+    );
 }
 
 // 输入为 PrepareSurfaceGeometry 的单位 geometricNormal, 返回 [0, 0.04] 的 alpha 平方域增量.

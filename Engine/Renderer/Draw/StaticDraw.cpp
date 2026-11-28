@@ -156,7 +156,8 @@ namespace Physara::Renderer::Detail
     {
         if (a.baseColor != b.baseColor || a.emissive != b.emissive || a.surface != b.surface ||
             a.normalBasis != b.normalBasis || a.alphaCutoff != b.alphaCutoff || a.masked != b.masked ||
-            a.unlit != b.unlit || a.ior != b.ior || a.specular != b.specular)
+            a.unlit != b.unlit || a.ior != b.ior || a.specular != b.specular || a.clearcoat != b.clearcoat ||
+            a.coatNormalBasis != b.coatNormalBasis)
         {
             return false;
         }
@@ -184,6 +185,8 @@ namespace Physara::Renderer::Detail
         out.ior = source.ior;
         out.specular = {source.specularColorFactor[0], source.specularColorFactor[1], source.specularColorFactor[2],
                         source.specularFactor};
+        out.clearcoat = {source.clearcoatFactor, source.clearcoatRoughnessFactor, source.clearcoatNormalScale,
+                         material.iorSpecular ? 1.f : 0.f};
         static_assert(out.uvX.size() == Scene::MaterialSlotCount && out.uvY.size() == Scene::MaterialSlotCount);
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
@@ -198,13 +201,14 @@ namespace Physara::Renderer::Detail
             const auto s = std::sin(slot.rotationRadians);
             out.uvX[i].value = {c * slot.scale[0], -s * slot.scale[1], slot.offset[0], float(slot.texCoord)};
             out.uvY[i].value = {s * slot.scale[0], c * slot.scale[1], slot.offset[1], 0.f};
-            if (i == NormalSlot)
+            if (i == NormalSlot || i == CoatNormalSlot)
             {
                 // 此预览 profile 用 Q=R*diag(signX,signY) 的逆确定框架朝向.
                 // scale 的绝对值只改变采样频率, 零轴沿正向作常量坐标采样, 不在此对完整 UV 仿射求逆.
                 const auto sx = slot.scale[0] < 0.f ? -1.f : 1.f;
                 const auto sy = slot.scale[1] < 0.f ? -1.f : 1.f;
-                out.normalBasis = {sx * c, -sy * s, sx * sy, 0.f};
+                auto &basis = i == NormalSlot ? out.normalBasis : out.coatNormalBasis;
+                basis = {sx * c, -sy * s, sx * sy, 0.f};
             }
         }
         return out;
@@ -242,12 +246,18 @@ namespace Physara::Renderer::Detail
     {
         MaterialGeometry result{.doubleSided = material.values.doubleSided};
         const bool masked = material.values.alphaMode == Asset::ModelAlpha::Mask;
+        const bool coatEnabled = material.values.clearcoatFactor > 0.f;
         for (std::size_t i = 0; i < material.textures.size(); ++i)
         {
+            if (i >= IorSpecularTextureCount && !coatEnabled)
+            {
+                break;
+            }
             if (const auto &slot = material.textures[i])
             {
                 const auto uv = slot->slot.texCoord == 0 ? VertexUv0 : VertexUv1;
-                auto &attributes = i < CoreMaterialTextureCount ? result.attributes : result.specularAttributes;
+                auto &attributes = i < CoreMaterialTextureCount ? result.attributes :
+                    (i < IorSpecularTextureCount ? result.specularAttributes : result.coatAttributes);
                 attributes |= uv;
                 if (i < AuxSurfaceTextureCount && (i != 0 || masked))
                 {
@@ -261,6 +271,18 @@ namespace Physara::Renderer::Detail
             result.surfaceAttributes |= VertexTangent;
             result.normalUv = static_cast<std::int8_t>(normal->slot.texCoord);
         }
+        if (const auto &normal = material.textures[CoatNormalSlot]; coatEnabled && normal)
+        {
+            result.coatAttributes |= VertexTangent;
+            result.coatNormalUv = static_cast<std::int8_t>(normal->slot.texCoord);
+            if (result.normalUv >= 0 && result.normalUv != result.coatNormalUv)
+            {
+                result.coatAttributes |= VertexCoatTangent;
+            }
+        }
+        result.iorSpecularBase = material.iorSpecular;
+        result.color = material.clearcoat ? MaterialColorProfile::Clearcoat :
+            (material.iorSpecular ? MaterialColorProfile::IorSpecular : MaterialColorProfile::Core);
         const auto &baseColor = material.textures.front();
         if (masked && baseColor)
         {
@@ -284,21 +306,18 @@ namespace Physara::Renderer::Detail
             return;
         }
         // 集合绑定整张材质页. 即使实例的数值行不同, 页和采样组合相同时也可共用该集合.
-        // UV 数组按材质槽连续编号. 构造设备绑定时要跳过 t5 的材质表, 扩展图像及 sampler 落在 6 和 7.
+        // UV 数组按材质槽连续编号. 扩展的图像和 sampler 绑定跳过固定的 t5 材质表.
         RHI::BindingSetDesc bindings;
         bindings.AddItem(RHI::BindingSetItem::StructuredBuffer_SRV(StaticAbi::MaterialTableSlot,
                                                                   row.storage.page->buffer.Get()));
         for (std::uint32_t i = 0; i < row.textures.size(); ++i)
         {
-            auto slot = i;
-            if (i == StaticAbi::SpecularTextureIndex)
-            {
-                slot = StaticAbi::SpecularTextureSlot;
-            }
-            else if (i == StaticAbi::SpecularColorTextureIndex)
-            {
-                slot = StaticAbi::SpecularColorTextureSlot;
-            }
+            static_assert(StaticAbi::SpecularTextureSlot == StaticAbi::SpecularTextureIndex + 1 &&
+                          StaticAbi::SpecularColorTextureSlot == StaticAbi::SpecularColorTextureIndex + 1 &&
+                          StaticAbi::ClearcoatTextureSlot == StaticAbi::ClearcoatTextureIndex + 1 &&
+                          StaticAbi::ClearcoatRoughnessTextureSlot == StaticAbi::ClearcoatRoughnessTextureIndex + 1 &&
+                          StaticAbi::ClearcoatNormalTextureSlot == StaticAbi::ClearcoatNormalTextureIndex + 1);
+            const auto slot = i + (i >= StaticAbi::MaterialTableSlot ? 1u : 0u);
             bindings.AddItem(RHI::BindingSetItem::Texture_SRV(slot, row.textures[i]->texture.Get())
                 .SetSubresources(row.textures[i]->sampling));
             bindings.AddItem(RHI::BindingSetItem::Sampler(slot, row.samplers[i].Get()));
@@ -319,7 +338,8 @@ namespace Physara::Renderer::Detail
         {
             return OpaqueSurfaceRoute::Unlit;
         }
-        return material.iorSpecular ? OpaqueSurfaceRoute::OpaqueForwardExtension : OpaqueSurfaceRoute::CoreDeferred;
+        return material.iorSpecular || material.clearcoat ?
+            OpaqueSurfaceRoute::OpaqueForwardExtension : OpaqueSurfaceRoute::CoreDeferred;
     }
 
     /// @brief 准备新覆盖代或补齐缓存行的实际采样槽. 相同字段及绑定沿用原存储.
@@ -340,6 +360,16 @@ namespace Physara::Renderer::Detail
         assert(first < sampledSlots && sampledSlots <= textures.size());
         for (std::size_t i = first; i < sampledSlots; ++i)
         {
+            const bool unusedSpecular = i >= CoreMaterialTextureCount && i < IorSpecularTextureCount &&
+                !geometry.iorSpecularBase;
+            const bool unusedCoat = i >= IorSpecularTextureCount && values.clearcoat[0] == 0.f;
+            if (unusedSpecular || unusedCoat)
+            {
+                // 核心基底的镜面扩展槽与零强度的清漆槽只补原生绑定.
+                textures[i] = textures[first];
+                samplers[i] = samplers[first];
+                continue;
+            }
             const auto &active = material.textures[i];
             const auto sampler = EffectiveSampler(active ? active->sampler : Asset::ModelSampler{});
             samplers[i] = PrepareSampler(device, sampler);
@@ -373,7 +403,7 @@ namespace Physara::Renderer::Detail
         auto row = std::make_shared<MaterialRow>(device.capacity, rowBytes, true);
         row->values = values;
         row->route = route;
-        row->sampledSlots = sampledSlots;
+        row->sampledSlots = static_cast<std::uint32_t>(sampledSlots);
         row->textures = std::move(textures);
         row->samplers = std::move(samplers);
         device.AllocateSlice(row->storage, *row, GraphUsage::ShaderRead, std::uint8_t(TableLayout::Materials),
@@ -392,10 +422,12 @@ namespace Physara::Renderer::Detail
 
     /// @brief GPU 顶点只打包选中的流. 静态索引的源空间和绕序保持不变.
     static void PackVertices(std::span<std::byte> target, const Asset::ModelPrimitive &primitive,
-                             std::uint8_t attributes, const VertexLayout &layout) noexcept
+                             std::uint8_t attributes, const VertexLayout &layout,
+                             std::span<const std::array<float, 4>> coatTangents) noexcept
     {
-        for (const auto &vertex : primitive.vertices)
+        for (std::size_t i = 0; i < primitive.vertices.size(); ++i)
         {
+            const auto &vertex = primitive.vertices[i];
             const auto store = [&](std::size_t slot, const auto &field)
             {
                 std::memcpy(target.data() + layout.offsets[slot], field.data(), sizeof(field));
@@ -415,6 +447,10 @@ namespace Physara::Renderer::Detail
             {
                 store(5, vertex.tangent);
             }
+            if (!coatTangents.empty())
+            {
+                store(6, coatTangents[i]);
+            }
             target = target.subspan(layout.stride);
         }
     }
@@ -423,7 +459,7 @@ namespace Physara::Renderer::Detail
 
     /// @brief 优先重用同版及同布局几何. 有效 normal UV 变化时用共享导入算法生成新的接缝索引.
     static GeometryResult PrepareGeometry(ForwardDevice &device, UploadBatch &uploads, const GeometryKey &key,
-                                          const Asset::ModelPrimitive &source)
+                                          const Asset::ModelPrimitive &source, bool primaryIsCoat)
     {
         if (const auto found = device.geometry.find(key);
             found != device.geometry.end() && device.Current(*found->second))
@@ -431,12 +467,13 @@ namespace Physara::Renderer::Detail
             device.Use(*found->second);
             return found->second;
         }
-        std::optional<Asset::ModelPrimitive> rebuilt;
-        const auto tangentUv = std::get<4>(key);
-        if (tangentUv >= 0)
+        std::optional<Asset::NormalUvGeometry> rebuilt;
+        const auto primary = static_cast<Asset::TangentSource>(std::get<4>(key));
+        const auto secondary = static_cast<Asset::TangentSource>(std::get<5>(key));
+        if (primary >= Asset::TangentSource::Uv0 || secondary != Asset::TangentSource::Absent)
         {
-            auto result = Asset::BuildNormalUvGeometry(source, static_cast<std::uint32_t>(tangentUv),
-                                                       ForwardUploadBudget);
+            auto result = Asset::BuildNormalUvGeometry(source, primary, secondary, Asset::StaticTangentWorkLimit,
+                primaryIsCoat ? "clearcoatNormalTexture.texCoord" : "normalTexture.texCoord");
             if (const auto *error = std::get_if<Asset::AssetFailure>(&result))
             {
                 if (error->reason == Asset::AssetError::ModelByteLimit)
@@ -445,9 +482,9 @@ namespace Physara::Renderer::Detail
                 }
                 return error->description;
             }
-            rebuilt = std::get<Asset::ModelPrimitive>(std::move(result));
+            rebuilt = std::get<Asset::NormalUvGeometry>(std::move(result));
         }
-        const auto &primitive = rebuilt ? *rebuilt : source;
+        const auto &primitive = rebuilt ? rebuilt->primitive : source;
         const auto attributes = std::get<3>(key);
         const auto layout = StaticVertexLayout(attributes);
         const auto indexBytes = std::as_bytes(std::span(primitive.indices));
@@ -467,7 +504,9 @@ namespace Physara::Renderer::Detail
         device.AllocateSlice(geometry->indices, *geometry, GraphUsage::IndexBuffer, 0, indexBytes.size(),
                              sizeof(std::uint32_t));
         std::vector<std::byte> packed(vertexBytes);
-        PackVertices(packed, primitive, attributes, layout);
+        PackVertices(packed, primitive, attributes, layout,
+                     rebuilt ? std::span<const std::array<float, 4>>(rebuilt->coatTangents) :
+                         std::span<const std::array<float, 4>>{});
         const auto &vertices = geometry->vertices;
         const auto &indices = geometry->indices;
         // 两项写入共用几何代, 各自携带目的页偏移. 确认时须同时找到顶点和索引的生产 Pass.
@@ -617,8 +656,9 @@ namespace Physara::Renderer::Detail
         {
             std::get<4>(key) = MaterialUse::OpaqueAuxiliary;
         }
-        const bool iorSpecularColor = litColor && route == OpaqueSurfaceRoute::OpaqueForwardExtension;
-        auto sampled = iorSpecularColor ? Scene::MaterialSlotCount : CoreMaterialTextureCount;
+        const auto requirements = cached ? cached->geometry : MaterialRequirements(*material);
+        const auto color = litColor ? requirements.color : MaterialColorProfile::Core;
+        auto sampled = ColorTextureCount(color);
         if (coverageOnly)
         {
             sampled = CoverageTextureCount;
@@ -654,7 +694,6 @@ namespace Physara::Renderer::Detail
                 material = &*sourceMaterial;
             }
         }
-        const auto requirements = cached ? cached->geometry : MaterialRequirements(*material);
 
         // 固定源局部基点构成缓存键. 世界 FP32 基点及余量只在对象真实换代时编码.
         assert(source.bounds);
@@ -675,7 +714,10 @@ namespace Physara::Renderer::Detail
             return;
         }
         // 按实际角色取顶点流. 独立辅助表面无需颜色 UV, 即使本行已由颜色帧补齐.
-        auto attributes = std::uint8_t(requirements.attributes | (iorSpecularColor ? requirements.specularAttributes : 0));
+        const bool coatColor = color == MaterialColorProfile::Clearcoat;
+        auto attributes = std::uint8_t(requirements.attributes |
+            (litColor && requirements.iorSpecularBase ? requirements.specularAttributes : 0) |
+            (coatColor ? requirements.coatAttributes : 0));
         if (coverageOnly)
         {
             attributes = requirements.shadowAttributes;
@@ -684,16 +726,23 @@ namespace Physara::Renderer::Detail
         {
             attributes = requirements.surfaceAttributes;
         }
-        std::int8_t tangentUv = -1;
-        // 原切线只有在记录的 UV 与有效 normal 槽匹配时复用, 替换框架另建几何而不修改资产.
-        const auto &sourceNormal = model.materials[ref.material].slots[NormalSlot];
-        if ((attributes & VertexTangent) != 0 &&
-            (!source.hasTangent || !sourceNormal || sourceNormal->texCoord != std::uint32_t(requirements.normalUv)))
+        const auto &sourceSlots = model.materials[ref.material].slots;
+        const auto &sourceNormal = sourceSlots[NormalSlot] ? sourceSlots[NormalSlot] : sourceSlots[CoatNormalSlot];
+        const auto selectTangent = [&](std::int8_t uv)
         {
-            tangentUv = requirements.normalUv;
-        }
-        auto geometry = PrepareGeometry(device, frame.uploads, {version, ref.mesh, ref.sourceSlot, attributes, tangentUv},
-                                        source);
+            return source.hasTangent && sourceNormal && sourceNormal->texCoord == static_cast<std::uint32_t>(uv) ?
+                Asset::TangentSource::Original : static_cast<Asset::TangentSource>(uv);
+        };
+        const bool primaryIsCoat = requirements.normalUv < 0 && coatColor;
+        const auto primary = (attributes & VertexTangent) != 0 ?
+            selectTangent(primaryIsCoat ? requirements.coatNormalUv : requirements.normalUv) :
+            Asset::TangentSource::Absent;
+        const auto secondary = (attributes & VertexCoatTangent) != 0 ?
+            selectTangent(requirements.coatNormalUv) : Asset::TangentSource::Absent;
+        // 只有清漆法线时沿主切线地址取样. 两槽共用 UV 时也只存一条流, 变换仍由各自的材质槽提供.
+        auto geometry = PrepareGeometry(device, frame.uploads, {version, ref.mesh, ref.sourceSlot, attributes,
+                                        static_cast<std::int8_t>(primary), static_cast<std::int8_t>(secondary)},
+                                        source, primaryIsCoat);
         if (const auto *error = std::get_if<Core::BoundedText>(&geometry))
         {
             DescribeSkipped(frame, model, ref, error->View());
@@ -760,8 +809,8 @@ namespace Physara::Renderer::Detail
         frame.draws.push_back({std::get<std::shared_ptr<GeometryRef>>(std::move(geometry)), std::move(instance),
             slot->second, {}, {}, {}, static_cast<std::uint32_t>(
                 GeometryRequest(attributes, mirror, doubleSided, phase, LightingProgram::Legacy).variant +
-                (iorSpecularColor ? GeometryPipelineSlots : 0)),
-            -z, index, attributes, mirror, doubleSided, iorSpecularColor});
+                std::size_t(color) * GeometryPipelineSlots),
+            -z, index, attributes, mirror, doubleSided, color});
     }
 
     /// @brief 核心和阴影按状态排序, 采样集合按首次可见顺序编号.
@@ -1006,7 +1055,7 @@ namespace Physara::Renderer::Detail
                                             SurfacePhase phase) noexcept
     {
         return GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, phase, frame.environment.program,
-                               draw.iorSpecularColor);
+                               draw.color);
     }
 
     /// @brief 按批首材质选择表面写入角色. 取余保留布局, 绕序及剔面, 去掉颜色阶段的等深只读状态.
@@ -1061,7 +1110,7 @@ namespace Physara::Renderer::Detail
         if (UsesForwardColor(needs, route))
         {
             visit(GeometryRequest(draw.attributes, draw.mirrored, draw.doubleSided, ColorPhase(needs), program,
-                                  draw.iorSpecularColor));
+                                  draw.color));
         }
         if (needs.NeedsEarlyDepth())
         {

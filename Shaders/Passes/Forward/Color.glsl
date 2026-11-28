@@ -22,7 +22,14 @@ void main()
         vec3 tangentNormal = mapped ? SampleTangentNormal(gradients) : vec3(0.0, 0.0, 1.0);
         SurfaceGeometry geometry = PrepareSurfaceGeometry(tangentNormal, mapped);
         MaterialInputs inputs = SampleMaterialInputs(baseColor, gradients);
-        vec3 emission = PreExposeEmission(SampleEmissive(gradients), perView.preExposure);
+        vec3 emission = SampleEmissive(gradients);
+#ifdef PHYSARA_CLEARCOAT
+        if (inputs.coatStrength > 0.0 && HasMaterialTexture(int(ClearcoatNormalTextureIndex)))
+        {
+            vec3 normal = ApplyMappedNormal(geometry.geometricNormal, vCoatTangent, SampleCoatTangentNormal(gradients));
+            geometry.coatNormal = gl_FrontFacing ? normal : -normal;
+        }
+#endif
         ApplyCoverage(baseColor.a);
 
         // 保留的片元只构造一份表面参数. 正交相机共用反视线方向, 透视相机从当前片元指向眼点.
@@ -34,7 +41,13 @@ void main()
         // 透视分支只取眼点与表面之差的方向. 三项同时缩小到四分之一, 归一化后比例抵消.
         vec3 viewDirection = perView.orthographic != 0u ? perView.orthographicDirection :
             UnitOr(LightingDelta(eye, surface, 0.25), geometry.shadingNormal);
-        vec3 result = EvaluateOpaqueLighting(pixel, geometry, viewDirection, surface, emission, inputs.occlusion,
+#ifdef PHYSARA_CLEARCOAT
+        PrepareClearcoatWeight(pixel, geometry.coatNormal, viewDirection);
+        // 基底发射先经过与光照相同的出射透过率, 再进入预曝光累加. 下方材质预览仍读取原始发射.
+        emission *= 1.0 - pixel.coatWeight;
+#endif
+        vec3 result = EvaluateOpaqueLighting(pixel, geometry, viewDirection, surface,
+                                             PreExposeEmission(emission, perView.preExposure), inputs.occlusion,
                                              NoScreenLighting
 #ifdef PHYSARA_FORWARD_FROXELS
                                              , QuerySurfaceFroxelCell(surface)

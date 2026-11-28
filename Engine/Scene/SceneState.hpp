@@ -87,7 +87,9 @@ namespace Physara::Scene
     [[nodiscard]] const Asset::ModelPrimitive *FindPrimitive(const Asset::ModelMesh &mesh,
                                                               std::uint32_t slot) noexcept;
     /// @brief 按固定源叠加语义检查材质值, 纹理用途和 UV, 返回首个拒绝原因.
+    /// @param previous 同一固定模型及 Primitive 的已提交覆盖, 用于复用输入相同的切线校验.
     [[nodiscard]] std::optional<Core::BoundedText> ValidateOverride(const Asset::ModelRecord &model,
                                                                     const Asset::ModelPrimitive &primitive,
-                                                                    const PrimitiveOverride &value);
+                                                                    const PrimitiveOverride &value,
+                                                                    const PrimitiveOverride *previous = nullptr);
 }

@@ -284,11 +284,13 @@ namespace Physara::Renderer
                 {
                     continue;
                 }
-                auto &digest = draw.iorSpecularColor ? production.forwardExtensionColor : production.forwardColor;
+                auto &digest = draw.color == Detail::MaterialColorProfile::Clearcoat ? production.clearcoatColor :
+                    (draw.color == Detail::MaterialColorProfile::IorSpecular ?
+                        production.forwardExtensionColor : production.forwardColor);
                 if (digest.front() == '\0')
                 {
                     const auto key = Detail::GeometryRequest(0, false, false, Detail::SurfacePhase::Combined,
-                                                              view.environment.program, draw.iorSpecularColor);
+                                                              view.environment.program, draw.color);
                     store(digest, key.role);
                 }
             }
@@ -1517,7 +1519,7 @@ namespace Physara::Renderer
             }
             static_cast<void>(ReadColorBuffer(graph, versions, reads, work.instanceBlocks[batch.instanceBlock]->buffer,
                                              GraphUsage::ShaderRead));
-            auto slots = color && draw.iorSpecularColor ? material.textures.size() : Detail::CoreMaterialTextureCount;
+            auto slots = color ? Detail::ColorTextureCount(draw.color) : Detail::CoreMaterialTextureCount;
             if (surfaceWrite && surfaces == RasterSurfaces::Auxiliary)
             {
                 // 原生 SurfaceAux 配方含 MASK 基色绑定. 独立 OPAQUE 行把该槽指向同一行的表面图像,

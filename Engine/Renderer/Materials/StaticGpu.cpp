@@ -419,6 +419,10 @@ namespace Physara::Renderer::Detail
     // 各颜色程序有独立原生槽. 扩展角色沿同一光照种类复用 PerView/PerPass 绑定.
     static std::size_t LightingIndex(ProductShader role) noexcept
     {
+        if (Shader::IsClearcoatProgram(role))
+        {
+            return BaseForwardColorPrograms + Shader::IorSpecularProgramCount + Shader::ClearcoatProgramIndex(role);
+        }
         if (Shader::IsIorSpecularProgram(role))
         {
             return BaseForwardColorPrograms + Shader::IorSpecularProgramIndex(role);
@@ -431,9 +435,10 @@ namespace Physara::Renderer::Detail
     /// @brief 扩展颜色按同一受光顺序排列, 跳过仅用于诊断的三项.
     static LightingProgram LightingKind(ProductShader role) noexcept
     {
-        if (Shader::IsIorSpecularProgram(role))
+        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role))
         {
-            const auto index = Shader::IorSpecularProgramIndex(role);
+            const auto index = Shader::IsClearcoatProgram(role) ?
+                Shader::ClearcoatProgramIndex(role) : Shader::IorSpecularProgramIndex(role);
             return static_cast<LightingProgram>(index < 3 ? index : index + 3);
         }
         return static_cast<LightingProgram>(LightingIndex(role));
@@ -441,7 +446,7 @@ namespace Physara::Renderer::Detail
 
     bool IsFroxelProgram(ProductShader role) noexcept
     {
-        if (Shader::IsIorSpecularProgram(role))
+        if (Shader::IsIorSpecularProgram(role) || Shader::IsClearcoatProgram(role))
         {
             return UsesFroxels(LightingKind(role));
         }
@@ -546,9 +551,16 @@ namespace Physara::Renderer::Detail
         const std::array<const std::filesystem::path *, ForwardPerPassLayouts> inputs{
             &paths.color, &paths.physical, &paths.ibl, &paths.cascadePreview, &paths.spotShadowPreview,
             &paths.pointShadowPreview, &paths.colorShadows, &paths.physicalShadows, &paths.iblShadows};
-        const auto &path = Shader::IsIorSpecularProgram(role) ? paths.iorSpecularColors[Shader::IorSpecularProgramIndex(role)] :
-            (UsesFroxels(kind) ? paths.froxelColors[lightIndex - ForwardPerPassLayouts] : *inputs[lightIndex]);
-        auto program = LoadProgram(owner.device, role, path, packages, StaticAbi::AbiHash);
+        const auto *path = UsesFroxels(kind) ? &paths.froxelColors[lightIndex - ForwardPerPassLayouts] : inputs[lightIndex];
+        if (Shader::IsIorSpecularProgram(role))
+        {
+            path = &paths.iorSpecularColors[Shader::IorSpecularProgramIndex(role)];
+        }
+        else if (Shader::IsClearcoatProgram(role))
+        {
+            path = &paths.clearcoatColors[Shader::ClearcoatProgramIndex(role)];
+        }
+        auto program = LoadProgram(owner.device, role, *path, packages, StaticAbi::AbiHash);
         PrepareLightLayout(owner, kind);
         colors[index] = std::move(program);
     }
@@ -589,7 +601,7 @@ namespace Physara::Renderer::Detail
     VertexLayout StaticVertexLayout(std::uint8_t attributes) noexcept
     {
         // position/normal/color 固定, 未使用 UV 和 tangent 共享已有字段的输入地址, 不增加存储.
-        VertexLayout layout{{0, 12, 24, 0, 0, 24}, 40};
+        VertexLayout layout{{0, 12, 24, 0, 0, 24, 24}, 40};
         for (std::uint32_t i = 0; i < 3; ++i)
         {
             if ((attributes & (1u << i)) != 0)
@@ -598,13 +610,20 @@ namespace Physara::Renderer::Detail
                 layout.stride += i == 2 ? 16 : 8;
             }
         }
+        // 同 UV 的两层各自做仿射取向, 顶点输入可借用同一未变换切线.
+        layout.offsets[6] = layout.offsets[5];
+        if ((attributes & VertexCoatTangent) != 0)
+        {
+            layout.offsets[6] = layout.stride;
+            layout.stride += 16;
+        }
         return layout;
     }
 
     ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided, SurfacePhase phase,
-                                          LightingProgram kind, bool iorSpecular) noexcept
+                                          LightingProgram kind, MaterialColorProfile color) noexcept
     {
-        assert(layout < 8);
+        assert(layout < GeometryLayoutCount);
         auto role = LightingRoles[std::size_t(kind)];
         if (phase == SurfacePhase::Depth)
         {
@@ -614,14 +633,15 @@ namespace Physara::Renderer::Detail
         {
             role = ProductShader::StaticShadowDepth;
         }
-        else if (iorSpecular)
+        else if (color != MaterialColorProfile::Core)
         {
             assert(!IsShadowPreview(kind));
             const auto index = std::size_t(kind);
-            role = static_cast<ProductShader>(std::size_t(ProductShader::StaticForwardIorSpecular) +
-                                              (index < 3 ? index : index - 3));
+            const auto first = color == MaterialColorProfile::Clearcoat ?
+                ProductShader::StaticForwardClearcoat : ProductShader::StaticForwardIorSpecular;
+            role = static_cast<ProductShader>(std::size_t(first) + (index < 3 ? index : index - 3));
         }
-        const auto raster = (doubleSided ? 16u : 0u) + (mirrored ? 8u : 0u);
+        const auto raster = ((doubleSided ? 2u : 0u) + (mirrored ? 1u : 0u)) * GeometryLayoutCount;
         return {role, std::size_t(phase) * GeometryPhaseSlots + raster + layout};
     }
 
@@ -847,9 +867,10 @@ namespace Physara::Renderer::Detail
             return;
         }
         const auto phase = static_cast<SurfacePhase>(key.variant / GeometryPhaseSlots);
-        const auto layout = static_cast<std::uint8_t>(key.variant % 8);
-        const bool mirrored = (key.variant & 8) != 0;
-        const bool doubleSided = (key.variant & 16) != 0;
+        const auto layout = static_cast<std::uint8_t>(key.variant % GeometryLayoutCount);
+        const auto raster = key.variant / GeometryLayoutCount;
+        const bool mirrored = (raster & 1) != 0;
+        const bool doubleSided = (raster & 2) != 0;
         const bool depthOnly = IsDepthRole(key.role);
         const bool shadow = phase == SurfacePhase::ShadowDepth;
         const auto attachments = SurfaceAttachments(key.role);
@@ -883,9 +904,10 @@ namespace Physara::Renderer::Detail
         if (!inputLayouts[layout])
         {
             const auto storage = StaticVertexLayout(layout);
-            constexpr std::array names{"Position", "Normal", "Color", "UV0", "UV1", "Tangent"};
+            constexpr std::array names{"Position", "Normal", "Color", "UV0", "UV1", "Tangent", "CoatTangent"};
             constexpr std::array formats{RHI::Format::RGB32_FLOAT, RHI::Format::RGB32_FLOAT,
-                RHI::Format::RGBA32_FLOAT, RHI::Format::RG32_FLOAT, RHI::Format::RG32_FLOAT, RHI::Format::RGBA32_FLOAT};
+                RHI::Format::RGBA32_FLOAT, RHI::Format::RG32_FLOAT, RHI::Format::RG32_FLOAT, RHI::Format::RGBA32_FLOAT,
+                RHI::Format::RGBA32_FLOAT};
             std::array<RHI::VertexAttributeDesc, names.size()> attributes;
             for (std::size_t i = 0; i < attributes.size(); ++i)
             {

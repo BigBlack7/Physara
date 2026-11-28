@@ -96,6 +96,25 @@ namespace Physara::Renderer::Detail
         return std::nullopt;
     }
 
+    /// @brief 检查清漆颜色依赖的活动 IO. 格式、位置和插值已由包的 ABI 验证.
+    static std::optional<Shader::Failure> CheckClearcoatIo(const Shader::ShaderModule &module,
+        std::span<const std::string_view> names, bool input) noexcept
+    {
+        const auto &active = input ? module.inputs : module.outputs;
+        for (const auto name : names)
+        {
+            if (std::ranges::find(active, name, &Shader::IoReflection::name) == active.end())
+            {
+                Core::BoundedText issue(module.sourcePath);
+                issue.Append(module.stage == Shader::Stage::Vertex ? " [vertex]: " : " [fragment]: ");
+                issue.Append(input ? "missing active clearcoat input: " : "missing active clearcoat output: ");
+                issue.Append(name);
+                return Shader::Failure{Shader::ErrorCode::InterfaceMismatch, {.description = issue}};
+            }
+        }
+        return std::nullopt;
+    }
+
     /// @brief 用各角色的附件位置与绑定配方核对包中已验证的活动反射.
     /// 冷包在创建设备程序前检查. 热重载在建立候选表前检查全部角色, 包括本帧没有绘制的角色.
     static std::optional<Shader::Failure> CheckStaticForwardResources(const Shader::ShaderPackage &package,
@@ -108,11 +127,34 @@ namespace Physara::Renderer::Detail
         const auto groups = OpaqueProgramResources(role);
         const bool perPass = std::ranges::any_of(groups, [](const auto &group) { return group.set == 3; });
         const bool froxels = IsFroxelProgram(role);
+        const bool clearcoat = Shader::IsClearcoatProgram(role);
         const bool aux = role == ProductShader::StaticSurfaceAux;
         const auto attachments = SurfaceAttachments(role);
         for (const auto &module : package.modules)
         {
             const bool fragment = module.stage == Shader::Stage::Fragment;
+            if (clearcoat)
+            {
+                // 完整颜色配方按材质行选择 UV 和框架. 包须保留两套坐标和切线, 以及表面与光照使用的插值量.
+                static constexpr std::array<std::string_view, 7> Attributes{
+                    "aPosition", "aNormal", "aColor", "aUv0", "aUv1", "aTangent", "aCoatTangent"};
+                static constexpr std::array<std::string_view, 10> Varyings{
+                    "vColor", "vUv0", "vUv1", "vNormal", "vTangent", "vLightingAnchor", "vLightingOffsetHigh",
+                    "vLightingOffsetLow", "vMaterialRow", "vCoatTangent"};
+                const auto inputs = fragment ? std::span<const std::string_view>(Varyings) :
+                    std::span<const std::string_view>(Attributes);
+                if (const auto failure = CheckClearcoatIo(module, inputs, true))
+                {
+                    return failure;
+                }
+                if (!fragment)
+                {
+                    if (const auto failure = CheckClearcoatIo(module, Varyings, false))
+                    {
+                        return failure;
+                    }
+                }
+            }
             if (fragment)
             {
                 // 活动输出按 location 排序且类型已由共享 ABI 核对. 角色决定从 0 开始实际绑定几个附件.
@@ -197,8 +239,25 @@ namespace Physara::Renderer::Detail
                 std::ranges::copy(extra, all.begin() + ColorMaterial.size());
                 return all;
             }();
-            const auto material = Shader::IsIorSpecularProgram(role) ?
-                std::span<const std::string_view>(IorSpecularMaterial) : std::span<const std::string_view>(ColorMaterial);
+            static constexpr auto ClearcoatMaterial = []
+            {
+                constexpr std::array<std::string_view, 6> extra{"clearcoatImage", "clearcoatSampler",
+                    "clearcoatRoughnessImage", "clearcoatRoughnessSampler", "clearcoatNormalImage",
+                    "clearcoatNormalSampler"};
+                std::array<std::string_view, IorSpecularMaterial.size() + extra.size()> all{};
+                std::ranges::copy(IorSpecularMaterial, all.begin());
+                std::ranges::copy(extra, all.begin() + IorSpecularMaterial.size());
+                return all;
+            }();
+            std::span<const std::string_view> material = ColorMaterial;
+            if (clearcoat)
+            {
+                material = ClearcoatMaterial;
+            }
+            else if (Shader::IsIorSpecularProgram(role))
+            {
+                material = IorSpecularMaterial;
+            }
             const std::array color{
                 Shader::ExpectedActiveResources{Shader::Stage::Fragment, 0,
                     froxels ? std::span<const std::string_view>(FroxelViewResources) :

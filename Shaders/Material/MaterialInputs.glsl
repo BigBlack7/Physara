@@ -1,6 +1,10 @@
 #ifndef PHYSARA_MATERIAL_INPUTS_GLSL
 #define PHYSARA_MATERIAL_INPUTS_GLSL
 
+#if defined(PHYSARA_IOR_SPECULAR) || defined(PHYSARA_CLEARCOAT)
+#define PHYSARA_HAS_SPECULAR_INPUTS
+#endif
+
 // 取样层交给派生参数层的有效 glTF 通道, 不携带资源绑定, 灯或视向.
 // 核心字段在 [0, 1] 内. 扩展 IOR 和线性镜面色保留已验证的标准输入范围.
 // baseColor.rgb 为线性颜色, alpha 保留覆盖率; 不预乘 alpha 或曝光.
@@ -11,10 +15,15 @@ struct MaterialInputs
     float perceptualRoughness;
     float metallic;
     float occlusion;
-#ifdef PHYSARA_IOR_SPECULAR
+#ifdef PHYSARA_HAS_SPECULAR_INPUTS
     float ior;
     float specularWeight;
     vec3 specularColor;
+#endif
+#ifdef PHYSARA_CLEARCOAT
+    float coatStrength;
+    float coatRoughness;
+    bool iorSpecularBase;
 #endif
 };
 

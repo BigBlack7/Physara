@@ -21,6 +21,7 @@ namespace Physara::Asset::Gltf
         std::array<std::optional<Accessor>, 2> uv;
         std::optional<Accessor> color;
         std::optional<Accessor> index;
+        std::optional<std::uint32_t> coatNormalUv;
     };
 
     /// @brief 先从所选节点解析唯一 mesh 和实际依赖, 再在内容指纹变化时组装拥有型几何.

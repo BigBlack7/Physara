@@ -111,6 +111,7 @@ namespace Physara::Asset
 
     using ImageVersion = std::shared_ptr<const ImageRecord>;
 
+    /// @brief 由采样槽指定像素的解释. 清漆强度取线性 R, 粗糙度取线性 G, 法线独立解码 RGB.
     enum class ImageUse
     {
         BaseColor,
@@ -120,7 +121,10 @@ namespace Physara::Asset
         OcclusionRoughnessMetallic,
         LinearData,
         Specular,
-        SpecularColor
+        SpecularColor,
+        Clearcoat,
+        ClearcoatRoughness,
+        ClearcoatNormal
     };
 
     enum class ImageDomain

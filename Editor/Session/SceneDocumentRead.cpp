@@ -320,7 +320,7 @@ namespace Physara::Editor::Detail
     {
         field.Object({"baseColor", "metallic", "roughness", "emissive", "emissiveStrength", "normalScale",
                       "occlusionStrength", "alphaMode", "alphaCutoff", "doubleSided", "ior", "specularFactor",
-                      "specularColorFactor"});
+                      "specularColorFactor", "clearcoatFactor", "clearcoatRoughnessFactor", "clearcoatNormalScale"});
         Scene::MaterialOverride value;
         if (const auto color = field.Optional("baseColor"))
         {
@@ -336,6 +336,15 @@ namespace Physara::Editor::Detail
         value.occlusionStrength = OptionalFloat(field, "occlusionStrength");
         value.emissiveStrength = OptionalFloat(field, "emissiveStrength");
         value.alphaCutoff = OptionalFloat(field, "alphaCutoff");
+        value.clearcoatNormalScale = OptionalFloat(field, "clearcoatNormalScale");
+        if (const auto strength = field.Optional("clearcoatFactor"))
+        {
+            value.clearcoatFactor = MaterialFactor(*strength, 0, 1);
+        }
+        if (const auto roughness = field.Optional("clearcoatRoughnessFactor"))
+        {
+            value.clearcoatRoughnessFactor = MaterialFactor(*roughness, 0, 1);
+        }
         constexpr auto FloatMax = std::numeric_limits<float>::max();
         if (const auto ior = field.Optional("ior"))
         {

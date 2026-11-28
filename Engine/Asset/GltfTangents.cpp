@@ -1,4 +1,5 @@
 #include "GltfTangents.hpp"
+#include "StaticTangents.hpp"
 
 /// @file
 /// @brief 在进入固定 C 算法前约束 float32 数值范围和工作空间, 取得可校验的逐角点切线.
@@ -145,9 +146,9 @@ namespace Physara::Asset::Gltf
         }
     }
 
-    std::vector<std::array<float, 4>>
-    GenerateTangents(std::span<const ModelVertex> vertices, std::span<const std::uint32_t> indices,
-                     std::uint32_t uv, std::string_view location, std::size_t scratchLimit, std::stop_token stop)
+    /// @brief 确定与固定切线算法相同的坐标数值域.
+    static TangentInput MakeInput(std::span<const ModelVertex> vertices, std::span<const std::uint32_t> indices,
+                                  std::uint32_t uv, std::stop_token stop)
     {
         float positionMagnitude = 0;
         float uvMagnitude = 0;
@@ -167,7 +168,14 @@ namespace Physara::Asset::Gltf
                 uvMagnitude = (std::max)(uvMagnitude, std::abs(x));
             }
         }
-        TangentInput input{vertices, indices, {}, uv, ScaleFor(positionMagnitude), ScaleFor(uvMagnitude)};
+        return {vertices, indices, {}, uv, ScaleFor(positionMagnitude), ScaleFor(uvMagnitude)};
+    }
+
+    std::vector<std::array<float, 4>>
+    GenerateTangents(std::span<const ModelVertex> vertices, std::span<const std::uint32_t> indices,
+                     std::uint32_t uv, std::string_view location, std::size_t scratchLimit, std::stop_token stop)
+    {
+        auto input = MakeInput(vertices, indices, uv, stop);
         CheckMikkScratch(input, location, scratchLimit, stop);
         for (std::size_t i = 0; i < indices.size(); i += 3)
         {
@@ -228,5 +236,27 @@ namespace Physara::Asset::Gltf
             }
         }
         return tangents;
+    }
+}
+
+namespace Physara::Asset
+{
+    std::optional<AssetFailure> ValidateNormalUvFrame(const ModelPrimitive &primitive, std::uint32_t uv,
+                                                      std::string_view location)
+    {
+        try
+        {
+            if (primitive.indices.empty())
+            {
+                Gltf::Reject(AssetError::UnsupportedModel, location, "Cannot generate tangents without triangles");
+            }
+            // 使用实际角点结果校验投影后的单位框架, 保留生成器的失败原因.
+            (void)Gltf::GenerateTangents(primitive.vertices, primitive.indices, uv, location, StaticTangentWorkLimit, {});
+            return std::nullopt;
+        }
+        catch (const Gltf::ImportFailure &failure)
+        {
+            return failure.error;
+        }
     }
 }

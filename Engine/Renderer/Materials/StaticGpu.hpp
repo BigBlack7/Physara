@@ -24,8 +24,9 @@ namespace Physara::Renderer::Detail
 
     inline constexpr std::size_t ForwardUploadBudget = 64 * 1024 * 1024;
     inline constexpr std::size_t ForwardUploadItems = 4096;
-    inline constexpr std::uint8_t VertexUv0 = 1, VertexUv1 = 2, VertexTangent = 4;
+    inline constexpr std::uint8_t VertexUv0 = 1, VertexUv1 = 2, VertexTangent = 4, VertexCoatTangent = 8;
     inline constexpr std::size_t NormalSlot = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
+    inline constexpr std::size_t CoatNormalSlot = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatNormal);
     inline constexpr auto WorkingFormat = RHI::Format::RGBA16_FLOAT;
     inline constexpr auto DepthFormat = RHI::Format::D32;
     inline constexpr auto DisplayFormat = RHI::Format::SRGBA8_UNORM;
@@ -39,8 +40,8 @@ namespace Physara::Renderer::Detail
     {
         return {id.index, id.generation, revision.value};
     }
-    /// @brief 模型版本, 紧凑 mesh, 源 Primitive 槽, 属性位和重建切线的 UV. UV=-1 表示沿用源几何.
-    using GeometryKey = std::tuple<AssetVersionKey, std::uint32_t, std::uint32_t, std::uint8_t, std::int8_t>;
+    /// @brief 模型版本, mesh, 源槽, 属性位和两个切线来源. 负值分别标识源或无附加切线.
+    using GeometryKey = std::tuple<AssetVersionKey, std::uint32_t, std::uint32_t, std::uint8_t, std::int8_t, std::int8_t>;
     /// @brief 外置标志, 固定资产版本, 源 image 下标, 颜色域及完整 mip 策略, sampler 另行共享.
     using TextureKey = std::tuple<bool, AssetVersionKey, std::uint32_t, Asset::ImageDomain, bool>;
     using ObjectKey = std::array<std::uint64_t, 4>; ///< Scene 与对象各自的槽和分配代.
@@ -138,7 +139,7 @@ namespace Physara::Renderer::Detail
     /// @brief 仅存此布局实际消费的 UV 与切线. 缺席的输入位置绑定到不会被材质读取的字段.
     struct VertexLayout
     {
-        std::array<std::uint32_t, 6> offsets{};
+        std::array<std::uint32_t, 7> offsets{};
         std::uint32_t stride = 0;
     };
 
@@ -223,6 +224,10 @@ namespace Physara::Renderer::Detail
         std::uint8_t surfaceAttributes{}; ///< SurfaceAux 使用的 MASK, 粗糙度及法线相关属性.
         std::uint8_t shadowAttributes{}; ///< 写阴影时仅依赖 MASK 实际使用的 UV.
         std::uint8_t specularAttributes{}; ///< 只有扩展受光角色需要的附加 UV.
+        std::uint8_t coatAttributes{}; ///< 清漆颜色额外读取的流. 两套有效 UV 不同时包含第二条切线.
+        std::int8_t coatNormalUv = -1; ///< 负值表示本次颜色准备无需清漆法线框架.
+        MaterialColorProfile color{};
+        bool iorSpecularBase{};
     };
 
     /// @brief 保活期间唯一的视图及 sampler 组合. 仅用于查找相等组合, 不是绘制排序值.
@@ -243,9 +248,9 @@ namespace Physara::Renderer::Detail
         PageSlice storage;
         SamplingKey sampling;
         MaterialBinding binding;
-        StaticAbi::ForwardMaterial values{};
         OpaqueSurfaceRoute route = OpaqueSurfaceRoute::CoreDeferred;
-        std::size_t sampledSlots{}; ///< 原生角色所需的有效绑定前缀长度, 含该角色的占位. 命中时核对内容就绪.
+        std::uint32_t sampledSlots{}; ///< 原生角色所需的有效绑定前缀长度, 含该角色的占位.
+        StaticAbi::ForwardMaterial values{};
     };
 
     /// @brief 路由和版本只属于当前缓存, 已准备的 Draw 独立保有 GPU 行.
@@ -397,8 +402,23 @@ namespace Physara::Renderer::Detail
     inline constexpr std::size_t CoreMaterialTextureCount = StaticAbi::SpecularTextureIndex;
     static_assert(CoreMaterialTextureCount == std::size_t(Asset::MaterialSlot::Specular));
     static_assert(StaticAbi::SpecularColorTextureIndex == std::size_t(Asset::MaterialSlot::SpecularColor));
+    inline constexpr std::size_t IorSpecularTextureCount = StaticAbi::ClearcoatTextureIndex;
+    static_assert(IorSpecularTextureCount == std::size_t(Asset::MaterialSlot::Clearcoat));
+    static_assert(StaticAbi::ClearcoatRoughnessTextureIndex == std::size_t(Asset::MaterialSlot::ClearcoatRoughness));
+    static_assert(StaticAbi::ClearcoatNormalTextureIndex == CoatNormalSlot);
     inline constexpr std::size_t CoverageTextureCount = 1; ///< 覆盖配方只读取材质首槽的基色.
     inline constexpr std::size_t AuxSurfaceTextureCount = std::size_t(Asset::MaterialSlot::Normal) + 1;
+
+    /// @brief 颜色角色的连续材质槽范围, 图读与上传使用同一边界.
+    [[nodiscard]] constexpr std::size_t ColorTextureCount(MaterialColorProfile profile) noexcept
+    {
+        switch (profile)
+        {
+        case MaterialColorProfile::IorSpecular: return IorSpecularTextureCount;
+        case MaterialColorProfile::Clearcoat: return Scene::MaterialSlotCount;
+        default: return CoreMaterialTextureCount;
+        }
+    }
 
     /// @brief 返回该角色额外核对的活动资源组, 供冷包和热候选共用.
     /// Aux 明列片元的三个纹理槽及材质行. Core 的空组由调用方补上完整的静态材质合同.
@@ -440,7 +460,7 @@ namespace Physara::Renderer::Detail
         std::uint8_t attributes;
         bool mirrored;
         bool doubleSided;
-        bool iorSpecularColor{}; ///< 当前 Draw 的受光颜色使用扩展产品角色.
+        MaterialColorProfile color{}; ///< 当前 Draw 使用的色角色, 与表面路由独立.
     };
 
     /// @brief 相邻兼容状态的一次 indexed indirect 调用, 使用本 View 的实例块及参数区段.
@@ -603,7 +623,7 @@ namespace Physara::Renderer::Detail
         std::string skyContent;
         RHI::BindingLayoutHandle skyLayout;
         RHI::GraphicsPipelineHandle skyPipeline;
-        std::array<RHI::InputLayoutHandle, 8> inputLayouts;
+        std::array<RHI::InputLayoutHandle, GeometryLayoutCount> inputLayouts;
         std::array<RHI::GraphicsPipelineHandle, ScenePipelineCount> pipelines;
 
     private:
@@ -755,7 +775,7 @@ namespace Physara::Renderer::Detail
     /// @brief 把实际阶段及光照角色和固定状态映射到一个无碰撞的准备槽.
     [[nodiscard]] ShaderPipelineRequest GeometryRequest(std::uint8_t layout, bool mirrored, bool doubleSided,
                                                         SurfacePhase phase, LightingProgram kind,
-                                                        bool iorSpecular = false) noexcept;
+                                                        MaterialColorProfile color = MaterialColorProfile::Core) noexcept;
     /// @brief 分配 Common 进出的普通缓冲. 只读表从结构步长定义角色, 内容尚未初始化.
     [[nodiscard]] RHI::BufferHandle AllocateBuffer(RHI::Device &device, GraphUsage usage, std::size_t size,
         std::uint32_t stride = 0, const char *name = "Forward buffer");

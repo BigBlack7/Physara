@@ -43,6 +43,14 @@ void FetchLightingOffset(ForwardObject object, out vec3 offset, out vec3 low)
     low = SumRemainder(shifted, remainder, high);
 }
 
+// 两个法线槽各自按采样仿射变换原切线, 再经世界线性变换. 手性包含 UV 和实例的朝向.
+vec4 TransformMaterialTangent(ForwardObject object, vec4 tangent, vec3 basis)
+{
+    vec3 bitangent = cross(aNormal, tangent.xyz) * tangent.w;
+    vec3 mapped = tangent.xyz * basis.x + bitangent * basis.y;
+    return vec4(mat3(object.worldFromLocal) * mapped, tangent.w * basis.z * object.orientation);
+}
+
 void FetchStaticVertex()
 {
     // canonical 实例索引已包含本命令的首实例. 实例块给出对象页和材质页各自的行号.
@@ -65,9 +73,16 @@ void FetchStaticVertex()
     if (materialRows.records[vMaterialRow].uvX[2].w >= 0.0)
     {
         // Q 的逆给出采样坐标第一轴在原单位切线框架中的方向.
-        vec3 localBitangent = cross(aNormal, aTangent.xyz) * aTangent.w;
         vec3 basis = materialRows.records[vMaterialRow].normalBasis.xyz;
-        vec3 mappedTangent = aTangent.xyz * basis.x + localBitangent * basis.y;
-        vTangent = vec4(mat3(object.worldFromLocal) * mappedTangent, aTangent.w * basis.z * object.orientation);
+        vTangent = TransformMaterialTangent(object, aTangent, basis);
     }
+#ifdef PHYSARA_CLEARCOAT
+    vCoatTangent = vec4(0.0);
+    if (materialRows.records[vMaterialRow].clearcoat.x > 0.0 &&
+        materialRows.records[vMaterialRow].uvX[ClearcoatNormalTextureIndex].w >= 0.0)
+    {
+        vec3 basis = materialRows.records[vMaterialRow].coatNormalBasis.xyz;
+        vCoatTangent = TransformMaterialTangent(object, aCoatTangent, basis);
+    }
+#endif
 }

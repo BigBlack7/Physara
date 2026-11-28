@@ -56,12 +56,25 @@ namespace Physara::Shader
         StaticForwardPlusIorSpecularShadows,
         StaticForwardPlusIorSpecularPhysicalShadows,
         StaticForwardPlusIorSpecularIblShadows,
+        StaticForwardClearcoat,
+        StaticForwardClearcoatPhysical,
+        StaticForwardClearcoatIbl,
+        StaticForwardClearcoatShadows,
+        StaticForwardClearcoatPhysicalShadows,
+        StaticForwardClearcoatIblShadows,
+        StaticForwardPlusClearcoat,
+        StaticForwardPlusClearcoatPhysical,
+        StaticForwardPlusClearcoatIbl,
+        StaticForwardPlusClearcoatShadows,
+        StaticForwardPlusClearcoatPhysicalShadows,
+        StaticForwardPlusClearcoatIblShadows,
         Count
     };
 
     inline constexpr std::size_t ProductShaderCount = static_cast<std::size_t>(ProductShader::Count);
     inline constexpr std::string_view PhysicalLightingField = "PHYSARA_PHYSICAL_LIGHTING";
     inline constexpr std::string_view IorSpecularField = "PHYSARA_IOR_SPECULAR";
+    inline constexpr std::string_view ClearcoatField = "PHYSARA_CLEARCOAT";
     inline constexpr std::size_t IorSpecularProgramCount =
         std::size_t(ProductShader::StaticForwardPlusIorSpecularIblShadows) -
         std::size_t(ProductShader::StaticForwardIorSpecular) + 1;
@@ -79,12 +92,30 @@ namespace Physara::Shader
         return std::size_t(role) - std::size_t(ProductShader::StaticForwardIorSpecular);
     }
 
+    inline constexpr std::size_t ClearcoatProgramCount =
+        std::size_t(ProductShader::StaticForwardPlusClearcoatIblShadows) -
+        std::size_t(ProductShader::StaticForwardClearcoat) + 1;
+    static_assert(ClearcoatProgramCount == IorSpecularProgramCount);
+
+    [[nodiscard]] constexpr bool IsClearcoatProgram(ProductShader role) noexcept
+    {
+        return role >= ProductShader::StaticForwardClearcoat && role <= ProductShader::StaticForwardPlusClearcoatIblShadows;
+    }
+
+    /// @brief 按与 IOR/specular 相同的全灯/Froxel 受光顺序索引清漆颜色程序.
+    /// @pre IsClearcoatProgram(role) 成立.
+    [[nodiscard]] constexpr std::size_t ClearcoatProgramIndex(ProductShader role) noexcept
+    {
+        return std::size_t(role) - std::size_t(ProductShader::StaticForwardClearcoat);
+    }
+
     /// @brief 固定产品角色及获准的结构值. 零表示相应 define 缺席.
     struct VariantKey
     {
         ProductShader role = ProductShader::Count;
         std::uint32_t physicalLighting = 0;
         std::uint32_t iorSpecular = 0;
+        std::uint32_t clearcoat = 0;
         bool operator==(const VariantKey &) const noexcept = default;
     };
 

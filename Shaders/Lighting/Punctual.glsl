@@ -76,7 +76,17 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
     }
 
     float noL = clamp(dot(geometry.shadingNormal, L), 0.0, 1.0);
+#ifdef PHYSARA_CLEARCOAT
+    float coatNoL = 0.0;
+    if (pixel.coatWeight > 0.0 && CoatFacesView(geometry, viewDirection) &&
+        dot(geometry.facingGeometricNormal, L) > 0.0)
+    {
+        coatNoL = clamp(dot(geometry.coatNormal, L), 0.0, 1.0);
+    }
+    if ((noL == 0.0 && coatNoL == 0.0) || attenuation == 0.0)
+#else
     if (noL == 0.0 || attenuation == 0.0)
+#endif
     {
         return vec3(0.0);
     }
@@ -92,11 +102,22 @@ vec3 EvaluateDirect(ForwardLight light, uint lightIndex, bool directional, Pixel
     float weight = (noL * attenuation) * (intensityMantissa * exposureMantissa) /
                    (distanceMantissa * distanceMantissa);
     vec3 specular = lobes.specular * specularCompensation.base;
-#ifdef PHYSARA_IOR_SPECULAR
-    specular += lobes.metalSpecular * specularCompensation.metal;
+    if (UsesIorSpecular(pixel))
+    {
+        specular += lobes.metalSpecular * specularCompensation.metal;
+    }
+    vec3 response = (lobes.diffuse + specular) * light.color * weight;
+#ifdef PHYSARA_CLEARCOAT
+    response *= 1.0 - pixel.coatWeight;
+    if (coatNoL > 0.0)
+    {
+        float coat = EvaluateCoatBrdf(pixel, geometry.coatNormal, viewDirection, L, coatNoL);
+        float coatIncident = (coatNoL * attenuation) * (intensityMantissa * exposureMantissa) /
+                             (distanceMantissa * distanceMantissa);
+        response += light.color * (coat * specularCompensation.coat * pixel.coatWeight * coatIncident);
+    }
 #endif
-    return ScaleWorkingLight((lobes.diffuse + specular) * light.color * weight,
-                             intensityExponent + exposureExponent - 2 * distanceExponent);
+    return ScaleWorkingLight(response, intensityExponent + exposureExponent - 2 * distanceExponent);
 }
 
 // 以预曝光自发光为起值, 按完整灯表的前缀顺序累加. 完整模式使用两个有效段, Froxel 使用方向灯段.

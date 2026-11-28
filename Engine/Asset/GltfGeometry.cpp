@@ -11,6 +11,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <tuple>
 #include <utility>
 
 namespace Physara::Asset::Gltf
@@ -37,7 +38,7 @@ namespace Physara::Asset::Gltf
         const auto material = tables.Material(field.Field("material"));
         PrimitivePlan out{field, material, topology, {},
                           Accessor(accessors, position.Index(), resources, Attribute::Position, stop),
-                          {}, {}, {}, {}, {}};
+                          {}, {}, {}, {}, {}, {}};
         const bool draco = static_cast<bool>(field.Field("extensions").Field("KHR_draco_mesh_compression"));
         auto requireFallback = [draco](const Accessor &value)
         {
@@ -73,7 +74,8 @@ namespace Physara::Asset::Gltf
         const auto &surface = record.materials[material];
         constexpr std::array<std::string_view, static_cast<std::size_t>(MaterialSlot::Count)> Slots{
             "baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture",
-            "specularTexture", "specularColorTexture"};
+            "specularTexture", "specularColorTexture", "clearcoatTexture", "clearcoatRoughnessTexture",
+            "clearcoatNormalTexture"};
         for (std::size_t i = 0; i < surface.slots.size(); ++i)
         {
             if (const auto &slot = surface.slots[i]; slot)
@@ -87,7 +89,16 @@ namespace Physara::Asset::Gltf
                 {
                     out.normalUv = slot->texCoord;
                 }
+                else if (i == static_cast<std::size_t>(MaterialSlot::ClearcoatNormal))
+                {
+                    out.coatNormalUv = slot->texCoord;
+                }
             }
+        }
+        if (out.coatNormalUv && !out.tangent && !out.normalUv)
+        {
+            field.Field("clearcoatNormalTexture").Error("Clearcoat normal requires NORMAL and TANGENT or a base normal map",
+                                                        AssetError::UnsupportedModel);
         }
         return out;
     }
@@ -320,15 +331,25 @@ namespace Physara::Asset::Gltf
         }
     }
 
-    /// @brief 生成的切线只在源下标和整个角点结果相同的情况下共享顶点.
+    /// @brief 以源下标和两套角点切线为联合键. 任一层的方向或手性有接缝就拆点, 两条流共用一份索引.
+    /// 空切线 span 从源顶点取值. coatVertices 为空时只按第一套切线拆点.
     /// @note reserve 在分配输出顶点前检查调用方预算, 导入与 Renderer 重建各自承担保有责任.
     template <typename Reserve>
     static void SplitTangents(std::span<const ModelVertex> source, std::span<const std::array<float, 4>> tangents,
-                              ModelPrimitive &out, Reserve &&reserve, std::stop_token stop)
+                              ModelPrimitive &out, Reserve &&reserve, std::stop_token stop,
+                              std::span<const std::array<float, 4>> coat = {},
+                              std::vector<std::array<float, 4>> *coatVertices = nullptr)
     {
-        std::vector<std::uint32_t> order(tangents.size());
+        std::vector<std::uint32_t> order(out.indices.size());
         std::iota(order.begin(), order.end(), std::uint32_t{0});
-        auto key = [&](std::uint32_t corner) { return std::pair(out.indices[corner], tangents[corner]); };
+        auto key = [&](std::uint32_t corner)
+        {
+            const auto index = out.indices[corner];
+            const auto first = tangents.empty() ? source[index].tangent : tangents[corner];
+            const auto second = coatVertices ? (coat.empty() ? source[index].tangent : coat[corner]) :
+                std::array<float, 4>{};
+            return std::tuple(index, first, second);
+        };
         std::ranges::sort(order, [&](auto a, auto b) { return key(a) < key(b); });
         CheckStop(stop);
 
@@ -341,12 +362,25 @@ namespace Physara::Asset::Gltf
                 ++count;
             }
         }
-        reserve(count * sizeof(ModelVertex));
+        reserve(count * (sizeof(ModelVertex) + (coatVertices ? sizeof(coatVertices->front()) : 0)));
         out.vertices.resize(count);
+        if (coatVertices)
+        {
+            coatVertices->resize(count);
+        }
+        auto store = [&](std::uint32_t index, const auto &value)
+        {
+            const auto &[sourceIndex, first, second] = value;
+            out.vertices[index] = source[sourceIndex];
+            out.vertices[index].tangent = first;
+            if (coatVertices)
+            {
+                (*coatVertices)[index] = second;
+            }
+        };
         auto previous = key(order.front());
         std::uint32_t index = 0;
-        out.vertices[index] = source[previous.first];
-        out.vertices[index].tangent = previous.second;
+        store(index, previous);
         for (std::size_t i = 0; i < order.size(); ++i)
         {
             if (i % 4096 == 0)
@@ -358,8 +392,7 @@ namespace Physara::Asset::Gltf
             if (current != previous)
             {
                 ++index;
-                out.vertices[index] = source[current.first];
-                out.vertices[index].tangent = current.second;
+                store(index, current);
                 previous = current;
             }
             out.indices[corner] = index;
@@ -419,6 +452,7 @@ namespace Physara::Asset::Gltf
         out.sourceSlot = slot;
         out.material = plan.material;
         out.hasUv = {plan.uv[0].has_value(), plan.uv[1].has_value()};
+        out.hasSourceTangent = plan.tangent.has_value();
         auto source = ReadVertices(plan, stop);
         BuildTriangles(plan, source, static_cast<std::size_t>(faces), out, stop);
         if (out.indices.empty())
@@ -453,6 +487,13 @@ namespace Physara::Asset::Gltf
             CompactVertices(source, out, budget, plan.field, stop);
         }
         out.hasTangent = plan.tangent.has_value() || plan.normalUv.has_value();
+        if (plan.coatNormalUv && plan.normalUv && plan.coatNormalUv != plan.normalUv)
+        {
+            // 源/生成切线属于基底 UV. 在发布前确认另一组 UV 可生成清漆框架.
+            const auto coatSlot = plan.field.Field("clearcoatNormalTexture");
+            (void)GenerateTangents(out.vertices, out.indices, *plan.coatNormalUv, coatSlot.Location(),
+                                   tangentScratch, stop);
+        }
         return out;
     }
 
@@ -478,33 +519,47 @@ namespace Physara::Asset::Gltf
 
 namespace Physara::Asset
 {
-    std::variant<ModelPrimitive, AssetFailure> BuildNormalUvGeometry(
-        const ModelPrimitive &primitive, std::uint32_t uv, std::size_t workLimit)
+    std::variant<NormalUvGeometry, AssetFailure> BuildNormalUvGeometry(
+        const ModelPrimitive &primitive, TangentSource primary, TangentSource secondary, std::size_t workLimit,
+        std::string_view primaryLocation)
     {
-        assert(uv < primitive.hasUv.size() && primitive.hasUv[uv] && !primitive.indices.empty());
-        constexpr std::string_view location = "normalTexture.texCoord";
+        assert(primary != TangentSource::Absent && !primitive.indices.empty());
+        constexpr std::string_view coatLocation = "clearcoatNormalTexture.texCoord";
         try
         {
-            // 先取得有效 UV 的逐角点结果, 再复制索引并拆分接缝; 任一失败仅丢弃局部结果.
-            const auto tangents = Gltf::GenerateTangents(primitive.vertices, primitive.indices, uv, location,
-                                                        workLimit, {});
-            ModelPrimitive out;
+            const auto generate = [&](TangentSource source, std::string_view field, std::size_t limit)
+            {
+                if (source < TangentSource::Uv0)
+                {
+                    return std::vector<std::array<float, 4>>{};
+                }
+                const auto uv = static_cast<std::uint32_t>(source);
+                assert(uv < primitive.hasUv.size() && primitive.hasUv[uv]);
+                return Gltf::GenerateTangents(primitive.vertices, primitive.indices, uv, field, limit, {});
+            };
+            const auto primaryTangents = generate(primary, primaryLocation, workLimit);
+            const auto primaryBytes = primaryTangents.size() * sizeof(std::array<float, 4>);
+            const auto coatTangents = generate(secondary, coatLocation, workLimit - primaryBytes);
+            NormalUvGeometry result;
+            auto &out = result.primitive;
             out.indices = primitive.indices;
             // 两份索引分别用于输出及排序. 角点数组在整个拆点阶段存活.
-            const auto working = tangents.size() * (sizeof(tangents.front()) + 2 * sizeof(std::uint32_t));
-            Gltf::SplitTangents(primitive.vertices, tangents, out, [&](std::size_t bytes)
+            const auto working = primaryBytes + coatTangents.size() * sizeof(std::array<float, 4>) +
+                out.indices.size() * (2 * sizeof(std::uint32_t));
+            Gltf::SplitTangents(primitive.vertices, primaryTangents, out, [&](std::size_t bytes)
             {
                 if (working > workLimit || bytes > workLimit - working)
                 {
-                    Gltf::Reject(AssetError::ModelByteLimit, location, "Tangent split exceeds the geometry work budget");
+                    Gltf::Reject(AssetError::ModelByteLimit, secondary == TangentSource::Absent ?
+                        primaryLocation : coatLocation, "Tangent split exceeds the geometry work budget");
                 }
-            }, {});
+            }, {}, coatTangents, secondary == TangentSource::Absent ? nullptr : &result.coatTangents);
             out.sourceSlot = primitive.sourceSlot;
             out.material = primitive.material;
             out.hasUv = primitive.hasUv;
             out.hasTangent = true;
             out.bounds = primitive.bounds;
-            return out;
+            return result;
         }
         catch (const Gltf::ImportFailure &failure)
         {

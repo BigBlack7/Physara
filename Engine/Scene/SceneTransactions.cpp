@@ -7,6 +7,7 @@
 #include <cassert>
 #include <charconv>
 #include <limits>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -389,17 +390,32 @@ namespace Physara::Scene
         /// @brief 检查覆盖的源槽顺序与有效采样语义, 不重新解码已发布的模型或图像.
         void ValidateOverrides(const Entry &entry, const EntityRecord &next) const
         {
+            if (next.overrides.empty())
+            {
+                return;
+            }
+            const auto &model = Record(entry.instance).model;
+            const auto &mesh = model->meshes[*entry.source->mesh];
+            std::span<const PrimitiveOverride> previous;
+            // 文档候选与新实体没有已确认的覆盖. 仅借用同一不可变来源下的活动记录.
+            if (!entry.created && entry.node->instance == entry.instance && entry.node->sourceNode == entry.source &&
+                entry.instance->record.model == model)
+            {
+                previous = entry.node->record.overrides;
+            }
             std::optional<std::uint32_t> last;
             for (const auto &value : next.overrides)
             {
-                const auto &model = *Record(entry.instance).model;
-                const auto &mesh = model.meshes[*entry.source->mesh];
                 const auto *primitive = FindPrimitive(mesh, value.primitiveSlot);
                 if (!primitive || (last && value.primitiveSlot <= *last))
                 {
                     RejectPrimitiveOverride(next.id, value.primitiveSlot, "Invalid or repeated Primitive slot");
                 }
-                if (auto error = ValidateOverride(model, *primitive, value))
+                const auto old = std::ranges::lower_bound(previous, value.primitiveSlot, {},
+                                                          &PrimitiveOverride::primitiveSlot);
+                const auto *confirmed = old != previous.end() && old->primitiveSlot == value.primitiveSlot ?
+                    &*old : nullptr;
+                if (auto error = ValidateOverride(*model, *primitive, value, confirmed))
                 {
                     RejectPrimitiveOverride(next.id, value.primitiveSlot, error->View());
                 }

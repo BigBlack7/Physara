@@ -31,7 +31,7 @@ vec3 EvaluateOpaqueLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 vi
 {
     SpecularCompensation compensation = UnitSpecularCompensation;
 #ifdef PHYSARA_PHYSICAL_LIGHTING
-    LightingDfgTerms terms = PrepareLightingDfg(pixel, geometry.shadingNormal, viewDirection);
+    LightingDfgTerms terms = PrepareLightingDfg(pixel, geometry, viewDirection);
     compensation = terms.directSpecular;
 #endif
 #ifdef PHYSARA_FORWARD_FROXELS
@@ -40,7 +40,7 @@ vec3 EvaluateOpaqueLighting(PixelParams pixel, SurfaceGeometry geometry, vec3 vi
     vec3 result = EvaluateLighting(pixel, geometry, viewDirection, surface, preExposedEmission, compensation);
 #endif
 #if PHYSARA_PHYSICAL_LIGHTING == 2
-    result += EvaluateIbl(pixel, geometry.shadingNormal, viewDirection, min(materialAo, screen.ao), terms,
+    result += EvaluateIbl(pixel, geometry, viewDirection, min(materialAo, screen.ao), terms,
                           screen.reflectionConfidence, screen.preExposedReflection);
 #endif
     return min(result, vec3(MaxWorkingLight));

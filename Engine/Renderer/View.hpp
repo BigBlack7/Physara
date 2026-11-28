@@ -272,7 +272,7 @@ namespace Physara::Renderer
     /// @brief HDR 和深度实际生产接口. 摘要包含已用程序的 ABI 及内容, 空元素表示该阶段未被用到.
     struct OpaqueProduction
     {
-        std::array<char, 64> forwardColor{}, forwardExtensionColor{}, sky{}, earlyDepth{}, shadowDepth{},
+        std::array<char, 64> forwardColor{}, forwardExtensionColor{}, clearcoatColor{}, sky{}, earlyDepth{}, shadowDepth{},
             coreSurface{}, surfaceAux{}, deferredColor{};
         RHI::Format color = RHI::Format::UNKNOWN;
         RHI::Format depth = RHI::Format::UNKNOWN;
@@ -331,6 +331,7 @@ namespace Physara::Renderer
         std::optional<RenderedShadows> shadows;
         OpaquePath opaquePath = OpaquePath::Forward; ///< 本颜色代采用的策略, 与请求及准备状态分别保存.
         std::uint64_t compatiblePredecessor{}; ///< 同一 View 此次可接续的受光提交, 零表示需重新开始.
+        std::array<char, 64> clearcoatColor{}; ///< 本次正常颜色实际使用的清漆程序摘要.
     };
 
     /// @brief 最近一次成功诊断的身份. 普通画面替换颜色后仍可显示这次诊断的记录.
@@ -338,6 +339,14 @@ namespace Physara::Renderer
     {
         Scene::SceneId scene;
         ShadowDiagnostic selection;
+        std::uint64_t submission;
+    };
+
+    /// @brief 最近获接受的清漆受光身份, 同一场景的材质诊断可以替换显示色并保留该记录.
+    struct RenderedClearcoatColor
+    {
+        Scene::SceneId scene;
+        std::array<char, 64> program;
         std::uint64_t submission;
     };
 
@@ -359,7 +368,7 @@ namespace Physara::Renderer
         std::array<Layer, MaxShadowLayers> layers{};
         const RHI::Device *device{};
         Core::BoundedText program;
-        std::bitset<32> variants; ///< 深度角色的 8 种顶点布局及 4 种绕序/剔面组合, 空组只有清除.
+        std::bitset<64> variants; ///< 沿固定几何槽寻址, 阴影只登记覆盖实际使用的布局.
         std::optional<Core::BoundedText> degradation; ///< 随该组生产确认的 caster 跳过摘要, 与主表面独立.
         GraphRetainedResource retained;
         std::size_t drawBatches{}; ///< 本候选中为该数组组织的深度批次, 只读导入时为零.
@@ -487,6 +496,11 @@ namespace Physara::Renderer
         /// @brief 借用最近一次已接受的真实场景记录, 测试图和安全 UI 不推进此值; 后续 Publish 可替换它.
         /// @note 记录可能属于上一文档. 使用前须核对 Scene 身份及相关版本; 当前显示说明用 AcceptedScenePreview.
         [[nodiscard]] const std::optional<RenderedScene> &LastRenderedScene() const noexcept { return m_RenderedScene; }
+        /// @brief 借用同一场景最后接受的清漆受光票据. 借用至下一次 Publish 或 View 销毁.
+        [[nodiscard]] const RenderedClearcoatColor *LastClearcoatColor(Scene::SceneId scene) const noexcept
+        {
+            return m_LastClearcoatColor && m_LastClearcoatColor->scene == scene ? &*m_LastClearcoatColor : nullptr;
+        }
         /// @brief 借用最后一次获接受的阴影诊断及票据. 展示历史时须核对 Scene, 当前颜色另见 AcceptedScenePreview.
         [[nodiscard]] const std::optional<RenderedShadowDiagnostic> &LastShadowDiagnostic() const noexcept
         {
@@ -656,6 +670,7 @@ namespace Physara::Renderer
         mutable std::optional<ShadowDepthSet> m_ShadowDepth; ///< 当前 View 已接受的只读深度数组.
         std::optional<ViewOutput> m_Accepted;
         std::optional<RenderedScene> m_RenderedScene;
+        std::optional<RenderedClearcoatColor> m_LastClearcoatColor;
         std::optional<RenderedShadowDiagnostic> m_LastShadowDiagnostic;
     };
 }

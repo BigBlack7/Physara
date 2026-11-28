@@ -67,7 +67,14 @@ set(iorSpecularPrograms
     StaticForwardPlusIorSpecular StaticForwardPlusIorSpecularPhysical StaticForwardPlusIorSpecularIbl
     StaticForwardPlusIorSpecularShadows StaticForwardPlusIorSpecularPhysicalShadows StaticForwardPlusIorSpecularIblShadows
 )
-foreach(program IN LISTS iorSpecularPrograms)
+# 同一组清漆颜色角色同时接收核心及 IOR/specular 基底, 仅受光路径引用这些包.
+set(clearcoatPrograms
+    StaticForwardClearcoat StaticForwardClearcoatPhysical StaticForwardClearcoatIbl
+    StaticForwardClearcoatShadows StaticForwardClearcoatPhysicalShadows StaticForwardClearcoatIblShadows
+    StaticForwardPlusClearcoat StaticForwardPlusClearcoatPhysical StaticForwardPlusClearcoatIbl
+    StaticForwardPlusClearcoatShadows StaticForwardPlusClearcoatPhysicalShadows StaticForwardPlusClearcoatIblShadows
+)
+foreach(program IN LISTS iorSpecularPrograms clearcoatPrograms)
     physara_add_shader_program(${program} StaticForward ../Shaders/Passes/Forward/${program}.json ../Shaders PRODUCT)
 endforeach()
 # 核心屏幕光照使用相同的灯光 ABI. 每个 role 只建立一个 RGBA16F 全屏 Pipeline.
@@ -127,12 +134,13 @@ target_compile_options(PhysaraRenderer PRIVATE /W4 /WX /utf-8 /permissive-)
 
 # Runtime 通过同一生成目标定位配置包, Renderer 只依赖生成的编译期接口.
 set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_IOR_SPECULAR_PROGRAMS "${iorSpecularPrograms}")
+set_property(TARGET PhysaraRenderer PROPERTY PHYSARA_CLEARCOAT_PROGRAMS "${clearcoatPrograms}")
 foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
         StaticForwardIblShadows StaticForwardPlus StaticForwardPlusPhysical StaticForwardPlusIbl
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows ${deferredPrograms}
-        ${surfacePreviewPrograms} ${iorSpecularPrograms})
+        ${surfacePreviewPrograms} ${iorSpecularPrograms} ${clearcoatPrograms})
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_PACKAGE" "${${program}Package}")
     set_property(TARGET PhysaraRenderer PROPERTY "PHYSARA_${program}_TARGET" "${${program}PackageTarget}")
 endforeach()

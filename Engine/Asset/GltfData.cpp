@@ -153,10 +153,23 @@ namespace Physara::Asset::Gltf
         const auto unlit = extensions.Field("KHR_materials_unlit");
         const auto ior = extensions.Field("KHR_materials_ior");
         const auto specular = extensions.Field("KHR_materials_specular");
+        const auto clearcoat = extensions.Field("KHR_materials_clearcoat");
+        const auto coatNormal = clearcoat.Field("clearcoatNormalTexture");
         unlit.Object();
         ior.Object();
         specular.Object();
+        clearcoat.Object();
         const auto specularGlossiness = extensions.Field("KHR_materials_pbrSpecularGlossiness");
+        // 在 Unlit 的基色专用分支之前判定同材质排斥. 空扩展对象也保留声明身份.
+        if (clearcoat && (unlit || specularGlossiness))
+        {
+            clearcoat.Error("Clearcoat cannot be combined with KHR_materials_unlit or KHR_materials_pbrSpecularGlossiness");
+        }
+        material.hasSpecularGlossinessExtension = static_cast<bool>(specularGlossiness);
+        material.hasClearcoatExtension = static_cast<bool>(clearcoat);
+        material.clearcoatFactor = Scalar(clearcoat.Field("clearcoatFactor"), 0, 0, 1);
+        material.clearcoatRoughnessFactor = Scalar(clearcoat.Field("clearcoatRoughnessFactor"), 0, 0, 1);
+        material.clearcoatNormalScale = Scalar(coatNormal.Field("scale"), 1, -FloatMax, FloatMax);
         if ((ior || specular) && (unlit || specularGlossiness))
         {
             (unlit ? unlit : specularGlossiness).Error(
@@ -227,6 +240,9 @@ namespace Physara::Asset::Gltf
         add(MaterialSlot::Emissive, field.Field("emissiveTexture"), ImageUse::Emissive);
         add(MaterialSlot::Specular, specular.Field("specularTexture"), ImageUse::Specular);
         add(MaterialSlot::SpecularColor, specular.Field("specularColorTexture"), ImageUse::SpecularColor);
+        add(MaterialSlot::Clearcoat, clearcoat.Field("clearcoatTexture"), ImageUse::Clearcoat);
+        add(MaterialSlot::ClearcoatRoughness, clearcoat.Field("clearcoatRoughnessTexture"), ImageUse::ClearcoatRoughness);
+        add(MaterialSlot::ClearcoatNormal, coatNormal, ImageUse::ClearcoatNormal);
         return material;
     }
 

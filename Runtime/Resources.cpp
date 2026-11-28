@@ -64,6 +64,11 @@ namespace Physara::Runtime
         {
             result.forward.iorSpecularColors[i] = (directory / IorSpecularPackageRelatives[i]).lexically_normal();
         }
+        static_assert(std::size(ClearcoatPackageRelatives) == Shader::ClearcoatProgramCount);
+        for (std::size_t i = 0; i < result.forward.clearcoatColors.size(); ++i)
+        {
+            result.forward.clearcoatColors[i] = (directory / ClearcoatPackageRelatives[i]).lexically_normal();
+        }
         return result;
     }
 }

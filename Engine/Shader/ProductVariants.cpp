@@ -121,6 +121,42 @@ namespace Physara::Shader
         {{ProductShader::StaticForwardPlusIorSpecularIblShadows, 2, 1}, "StaticForwardPlusIorSpecularIblShadows", "StaticForward",
          "Passes/Forward/StaticForwardPlusIorSpecularIblShadows.json", "Passes/Forward/Static.vert",
          "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardClearcoat, 0, 0, 1}, "StaticForwardClearcoat", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoat.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardClearcoatPhysical, 1, 0, 1}, "StaticForwardClearcoatPhysical", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoatPhysical.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardClearcoatIbl, 2, 0, 1}, "StaticForwardClearcoatIbl", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoatIbl.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/Color.frag"},
+        {{ProductShader::StaticForwardClearcoatShadows, 0, 0, 1}, "StaticForwardClearcoatShadows", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoatShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardClearcoatPhysicalShadows, 1, 0, 1}, "StaticForwardClearcoatPhysicalShadows", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoatPhysicalShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardClearcoatIblShadows, 2, 0, 1}, "StaticForwardClearcoatIblShadows", "StaticForward",
+         "Passes/Forward/StaticForwardClearcoatIblShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/ShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoat, 0, 0, 1}, "StaticForwardPlusClearcoat", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoat.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoatPhysical, 1, 0, 1}, "StaticForwardPlusClearcoatPhysical", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoatPhysical.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoatIbl, 2, 0, 1}, "StaticForwardPlusClearcoatIbl", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoatIbl.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoatShadows, 0, 0, 1}, "StaticForwardPlusClearcoatShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoatShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoatPhysicalShadows, 1, 0, 1}, "StaticForwardPlusClearcoatPhysicalShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoatPhysicalShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
+        {{ProductShader::StaticForwardPlusClearcoatIblShadows, 2, 0, 1}, "StaticForwardPlusClearcoatIblShadows", "StaticForward",
+         "Passes/Forward/StaticForwardPlusClearcoatIblShadows.json", "Passes/Forward/Static.vert",
+         "Passes/Forward/FroxelShadowColor.frag"},
     }};
 
     // 名称查找和按枚举索引须落在同一项, 重名或错位在构建目录时就会报错.
@@ -172,7 +208,8 @@ namespace Physara::Shader
         VariantKey key{program->key.role};
         constexpr std::array members{
             std::pair{PhysicalLightingField, &VariantKey::physicalLighting},
-            std::pair{IorSpecularField, &VariantKey::iorSpecular}};
+            std::pair{IorSpecularField, &VariantKey::iorSpecular},
+            std::pair{ClearcoatField, &VariantKey::clearcoat}};
         for (const auto &field : fields)
         {
             const auto found = std::ranges::find_if(members, [&](const auto &entry) { return entry.first == field.name; });

@@ -268,6 +268,9 @@ namespace Physara::Asset
             return ImageSampling{ImageDomain::Srgb, AlphaMeaning::Ignored};
         case ImageUse::Normal:
         case ImageUse::OcclusionRoughnessMetallic:
+        case ImageUse::Clearcoat:
+        case ImageUse::ClearcoatRoughness:
+        case ImageUse::ClearcoatNormal:
             return ImageSampling{ImageDomain::LinearData, AlphaMeaning::Ignored};
         case ImageUse::LinearData:
         case ImageUse::Specular:

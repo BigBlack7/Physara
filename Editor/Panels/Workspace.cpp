@@ -1089,7 +1089,7 @@ namespace Physara::Editor::Detail
                     if (state.scene)
                     {
                         DrawPhysicalInspector(*state.scene, state.selection, state.physicalResource,
-                                              allowEdits && state.view, frame);
+                                              allowEdits && state.view, frame, state.view);
                     }
                     if (state.view)
                     {

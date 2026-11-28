@@ -15,6 +15,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
 
+#include "Viewport/Viewport.hpp"
 #include "Workspace.hpp"
 
 namespace Physara::Editor::Detail
@@ -22,7 +23,8 @@ namespace Physara::Editor::Detail
     static constexpr auto Enter = ImGuiInputTextFlags_EnterReturnsTrue;
     static constexpr std::array TextureNames{"Base color texture [sRGB]", "Texture [Roughness = G, Metallic = B]",
         "Normal texture [linear]", "Occlusion texture [R]", "Emissive texture [sRGB]",
-        "Specular strength texture [A]", "Specular color texture [sRGB]"};
+        "Specular strength texture [A]", "Specular color texture [sRGB]", "Clearcoat strength texture [R]",
+        "Clearcoat roughness texture [G]", "Clearcoat normal texture [linear]"};
     static_assert(TextureNames.size() == Scene::MaterialSlotCount);
     static constexpr double DegreesPerRadian = 180.0 / std::numbers::pi;
 
@@ -257,9 +259,57 @@ namespace Physara::Editor::Detail
         ImGui::TreePop();
     }
 
+    /// @brief 展示当前 View 的颜色准备与上次正常提交, 只引用当前场景的清漆程序.
+    static void DrawClearcoatOutput(const Scene::Scene &scene, const Renderer::View &view)
+    {
+        const auto preview = view.Preview();
+        const auto *current = view.AcceptedScenePreview();
+        const bool matchesRequest = current && current->scene == scene.Id() &&
+            current->contentRevision == scene.Versions().renderContent &&
+            current->documentRevision == view.DocumentRevision() && current->mode == preview &&
+            current->shadowRequestRevision == view.ShadowRequestRevision();
+        // 阴影诊断保留基础受光模式. 依据实际显示的诊断类型和请求代, 区分切换前的旧帧与同代退路.
+        const bool displaysShadow = current && (current->directionalCascades || current->localShadow);
+        const bool requestsShadow = !std::holds_alternative<std::monostate>(view.RequestedShadowDiagnostic());
+        if (requestsShadow && !matchesRequest)
+        {
+            ImGui::TextUnformatted("Waiting for the requested shadow diagnostic.");
+        }
+        else if (requestsShadow && displaysShadow)
+        {
+            ImGui::TextWrapped("%s diagnostic is active.", ScenePreviewName(*current));
+        }
+        else if (!Renderer::IsLitPreview(preview))
+        {
+            ImGui::TextWrapped("%s preview does not request clearcoat lighting.",
+                               PreviewNames[static_cast<std::size_t>(preview)]);
+        }
+        else
+        {
+            const auto status = view.OpaqueSettings(scene.Id());
+            if (status.detail)
+            {
+                ImGui::TextWrapped("Clearcoat view preparation: %s", status.detail->View().data());
+            }
+            else if (!matchesRequest || displaysShadow || current->opaquePath != status.requested)
+            {
+                ImGui::TextUnformatted("Clearcoat view is awaiting a matching lit frame.");
+            }
+            else if (current->clearcoatColor.front() == '\0')
+            {
+                ImGui::TextUnformatted("The accepted lit frame has no clearcoat color.");
+            }
+        }
+        if (const auto *last = view.LastClearcoatColor(scene.Id()))
+        {
+            ImGui::Text("Last clearcoat color: %.12s (frame %llu)", last->program.data(),
+                        static_cast<unsigned long long>(last->submission));
+        }
+    }
+
     /// @brief 逐槽读取有效表面, 同源的其它实例不参与本次意图构建.
     static void DrawSurface(const Scene::Scene &scene, SurfaceTarget target, const Scene::EntityRecord &record,
-                            const Asset::ModelPrimitive &primitive, WorkspaceFrame &frame)
+                            const Asset::ModelPrimitive &primitive, WorkspaceFrame &frame, const Renderer::View *view)
     {
         const auto effective = scene.Material(target.entity, target.primitive);
         if (!effective)
@@ -273,6 +323,14 @@ namespace Physara::Editor::Detail
         if (effective->iorSpecular)
         {
             ImGui::TextUnformatted("IOR/specular lighting profile");
+        }
+        if (effective->clearcoat)
+        {
+            ImGui::TextUnformatted("Clearcoat lighting profile");
+            if (view)
+            {
+                DrawClearcoatOutput(scene, *view);
+            }
         }
         DrawMaterialField("Base color (linear RGBA)", target, &Material::baseColor, sparse, value.baseColor, frame);
         if (!value.unlit)
@@ -296,6 +354,15 @@ namespace Physara::Editor::Detail
             DrawMaterialField("Specular factor", target, &Material::specularFactor, sparse, value.specularFactor, frame);
             DrawMaterialField("Specular color (linear RGB)", target, &Material::specularColorFactor, sparse,
                               value.specularColorFactor, frame);
+            if (!value.hasSpecularGlossinessExtension)
+            {
+                DrawMaterialField("Clearcoat factor", target, &Material::clearcoatFactor, sparse,
+                                  value.clearcoatFactor, frame);
+                DrawMaterialField("Clearcoat roughness", target, &Material::clearcoatRoughnessFactor, sparse,
+                                  value.clearcoatRoughnessFactor, frame);
+                DrawMaterialField("Clearcoat normal scale", target, &Material::clearcoatNormalScale, sparse,
+                                  value.clearcoatNormalScale, frame);
+            }
         }
         DrawAlpha(target, sparse, value.alphaMode, frame);
         if (value.alphaMode == Asset::ModelAlpha::Mask)
@@ -303,7 +370,9 @@ namespace Physara::Editor::Detail
             DrawMaterialField("Alpha cutoff", target, &Material::alphaCutoff, sparse, value.alphaCutoff, frame);
         }
         DrawMaterialField("Double sided", target, &Material::doubleSided, sparse, value.doubleSided, frame);
-        for (std::size_t i = 0; i < (value.unlit ? 1 : TextureNames.size()); ++i)
+        const auto textures = value.unlit ? 1 : value.hasSpecularGlossinessExtension ?
+            static_cast<std::size_t>(Asset::MaterialSlot::Clearcoat) : TextureNames.size();
+        for (std::size_t i = 0; i < textures; ++i)
         {
             DrawTexture({target, static_cast<Asset::MaterialSlot>(i)}, primitive, effective->textures[i],
                         over ? over->textures[i] : std::nullopt, frame);
@@ -480,7 +549,8 @@ namespace Physara::Editor::Detail
     }
 
     void DrawPhysicalInspector(const Scene::Scene &scene, std::optional<Scene::EntityHandle> selected,
-                               const PhysicalResourceStatus &resource, bool allowEdits, WorkspaceFrame &frame)
+                               const PhysicalResourceStatus &resource, bool allowEdits, WorkspaceFrame &frame,
+                               const Renderer::View *view)
     {
         PushIdentity(scene.Id().generation);
         ImGui::BeginDisabled(!allowEdits);
@@ -508,7 +578,7 @@ namespace Physara::Editor::Detail
                         if (ImGui::TreeNode("Surface", "Primitive %u", primitive.sourceSlot))
                         {
                             DrawSurface(scene, {*selected, model.asset, model.revision, primitive.sourceSlot},
-                                        entity->record, primitive, frame);
+                                        entity->record, primitive, frame, view);
                             ImGui::TreePop();
                         }
                         ImGui::PopID();

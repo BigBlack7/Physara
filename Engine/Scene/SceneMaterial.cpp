@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cmath>
 
+#include <Asset/StaticTangents.hpp>
 #include <Core/ResourceIO.hpp>
 
 namespace Physara::Scene
@@ -25,8 +26,32 @@ namespace Physara::Scene
         {Asset::ImageUse::OcclusionRoughnessMetallic, "Occlusion"},
         {Asset::ImageUse::Emissive, "Emissive"},
         {Asset::ImageUse::Specular, "Specular strength"},
-        {Asset::ImageUse::SpecularColor, "Specular color"}
+        {Asset::ImageUse::SpecularColor, "Specular color"},
+        {Asset::ImageUse::Clearcoat, "Clearcoat strength"},
+        {Asset::ImageUse::ClearcoatRoughness, "Clearcoat roughness"},
+        {Asset::ImageUse::ClearcoatNormal, "Clearcoat normal"}
     }};
+
+    static constexpr auto Normal = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
+    static constexpr auto Coat = static_cast<std::size_t>(Asset::MaterialSlot::Clearcoat);
+    static constexpr auto CoatRoughness = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatRoughness);
+    static constexpr auto CoatNormal = static_cast<std::size_t>(Asset::MaterialSlot::ClearcoatNormal);
+
+    /// @brief 采用扩展字段或槽的存在性, 保留显式零值的覆盖身份.
+    static bool HasClearcoatOverride(const PrimitiveOverride &value) noexcept
+    {
+        return value.material.clearcoatFactor || value.material.clearcoatRoughnessFactor ||
+            value.material.clearcoatNormalScale || value.textures[Coat] || value.textures[CoatRoughness] ||
+            value.textures[CoatNormal];
+    }
+
+    /// @brief 源切线属于基底法线槽的 UV, 只有独立清漆槽时取该槽的 UV.
+    static std::optional<std::uint32_t> SourceTangentUv(const Asset::ModelMaterial &base,
+                                                        const Asset::ModelPrimitive &primitive) noexcept
+    {
+        const auto &slot = base.slots[Normal] ? base.slots[Normal] : base.slots[CoatNormal];
+        return primitive.hasTangent && slot ? std::optional(slot->texCoord) : std::nullopt;
+    }
 
     Asset::ImageUse TextureUse(Asset::MaterialSlot slot) noexcept
     {
@@ -101,6 +126,18 @@ namespace Physara::Scene
         {
             return "Linear specular color must have finite, nonnegative RGB components";
         }
+        if (v.clearcoatFactor && !unit(*v.clearcoatFactor))
+        {
+            return "Clearcoat factor must be finite and in [0, 1]";
+        }
+        if (v.clearcoatRoughnessFactor && !unit(*v.clearcoatRoughnessFactor))
+        {
+            return "Clearcoat roughness factor must be finite and in [0, 1]";
+        }
+        if (v.clearcoatNormalScale && !std::isfinite(*v.clearcoatNormalScale))
+        {
+            return "Clearcoat normal scale must be finite";
+        }
         using Alpha = Asset::ModelAlpha;
         if (v.alphaMode && *v.alphaMode != Alpha::Opaque && *v.alphaMode != Alpha::Mask && *v.alphaMode != Alpha::Blend)
         {
@@ -154,14 +191,50 @@ namespace Physara::Scene
         return nullptr;
     }
 
+    /// @brief 取得法线槽的有效 UV. 新建槽沿用 glTF 的 UV0 缺省, 空槽没有坐标需求.
+    static std::optional<std::uint32_t> NormalUv(const Asset::ModelMaterial &base,
+                                                const PrimitiveOverride *value, std::size_t slot) noexcept
+    {
+        const auto source = base.slots[slot] ? std::optional(base.slots[slot]->texCoord) : std::nullopt;
+        if (value && value->textures[slot])
+        {
+            return value->textures[slot]->texCoord.value_or(source.value_or(0));
+        }
+        return source;
+    }
+
+    /// @brief 继承已确认的同 UV 框架. 未确认的有效 UV 通过角点生成校验, 失败定位到实际槽.
+    static std::optional<Core::BoundedText> NormalFrameError(const Asset::ModelPrimitive &primitive,
+        const Asset::ModelMaterial &base, std::size_t slot, std::optional<std::uint32_t> uv,
+        const PrimitiveOverride *previous)
+    {
+        if (!uv || (previous && uv == NormalUv(base, previous, slot)) || uv == NormalUv(base, nullptr, slot) ||
+            uv == SourceTangentUv(base, primitive))
+        {
+            return std::nullopt;
+        }
+        const auto location = slot == CoatNormal ? "clearcoatNormalTexture.texCoord" : "normalTexture.texCoord";
+        if (const auto error = Asset::ValidateNormalUvFrame(primitive, *uv, location))
+        {
+            return error->description;
+        }
+        return std::nullopt;
+    }
+
     std::optional<Core::BoundedText> ValidateOverride(const Asset::ModelRecord &model,
                                                      const Asset::ModelPrimitive &primitive,
-                                                     const PrimitiveOverride &value)
+                                                     const PrimitiveOverride &value,
+                                                     const PrimitiveOverride *previous)
     {
         const auto &base = model.materials[primitive.material];
         if (const auto *error = MaterialError(value.material, base))
         {
             return Core::BoundedText(error);
+        }
+        const bool coatOverride = HasClearcoatOverride(value);
+        if (coatOverride && (base.unlit || base.hasSpecularGlossinessExtension))
+        {
+            return Core::BoundedText("Clearcoat overrides require a compatible lit metallic-roughness material");
         }
         for (std::size_t i = 0; i < value.textures.size(); ++i)
         {
@@ -179,6 +252,27 @@ namespace Physara::Scene
                 detail.Append(" texture: ");
                 detail.Append(error);
                 return detail;
+            }
+        }
+        if (base.hasClearcoatExtension || coatOverride)
+        {
+            const auto baseUv = NormalUv(base, &value, Normal);
+            const auto coatUv = NormalUv(base, &value, CoatNormal);
+            if (coatUv && !baseUv && !primitive.hasSourceTangent)
+            {
+                return Core::BoundedText("Clearcoat normal texture requires source tangents or a usable base normal frame");
+            }
+            // 核心覆盖可能只校验过 UV 存在性. 首次启用清漆时完整确认它的有效框架.
+            const auto *confirmed = previous && (base.hasClearcoatExtension || HasClearcoatOverride(*previous)) ?
+                previous : nullptr;
+            if (auto error = NormalFrameError(primitive, base, Normal, baseUv, confirmed))
+            {
+                return error;
+            }
+            // 同一 UV 的两槽共用未变换切线. 各自的采样变换在着色时应用, 此处只需校验一次角点框架.
+            if (coatUv != baseUv)
+            {
+                return NormalFrameError(primitive, base, CoatNormal, coatUv, confirmed);
             }
         }
         return std::nullopt;
@@ -200,6 +294,9 @@ namespace Physara::Scene
         out.ior = value.ior.value_or(out.ior);
         out.specularFactor = value.specularFactor.value_or(out.specularFactor);
         out.specularColorFactor = value.specularColorFactor.value_or(out.specularColorFactor);
+        out.clearcoatFactor = value.clearcoatFactor.value_or(out.clearcoatFactor);
+        out.clearcoatRoughnessFactor = value.clearcoatRoughnessFactor.value_or(out.clearcoatRoughnessFactor);
+        out.clearcoatNormalScale = value.clearcoatNormalScale.value_or(out.clearcoatNormalScale);
     }
 
     /// @brief 解析源图像和 sampler, 可分别以实例值替换.
@@ -254,6 +351,7 @@ namespace Physara::Scene
         EffectiveMaterial result{model.materials[primitive.material], {}, {}};
         const auto &base = result.values.slots;
         result.iorSpecular = result.values.hasIorExtension || result.values.hasSpecularExtension;
+        result.clearcoat = result.values.hasClearcoatExtension || (value && HasClearcoatOverride(*value));
         if (value)
         {
             ApplyMaterial(result.values, value->material);
@@ -263,11 +361,7 @@ namespace Physara::Scene
                                  value->material.specularColorFactor || value->textures[Specular] ||
                                  value->textures[SpecularColor];
         }
-        constexpr auto Normal = static_cast<std::size_t>(Asset::MaterialSlot::Normal);
-        if (primitive.hasTangent && base[Normal])
-        {
-            result.sourceTangentUv = base[Normal]->texCoord;
-        }
+        result.sourceTangentUv = SourceTangentUv(result.values, primitive);
         for (std::size_t i = 0; i < base.size(); ++i)
         {
             const auto *over = value && value->textures[i] ? &*value->textures[i] : nullptr;

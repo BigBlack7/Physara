@@ -104,6 +104,9 @@ namespace Physara::Editor::Detail
         Set(node, "ior", value.ior);
         Set(node, "specularFactor", value.specularFactor);
         Set(node, "specularColorFactor", value.specularColorFactor);
+        Set(node, "clearcoatFactor", value.clearcoatFactor);
+        Set(node, "clearcoatRoughnessFactor", value.clearcoatRoughnessFactor);
+        Set(node, "clearcoatNormalScale", value.clearcoatNormalScale);
         if (value.alphaMode)
         {
             using Mode = Asset::ModelAlpha;

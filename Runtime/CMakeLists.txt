@@ -11,6 +11,7 @@ add_dependencies(Physara ${editorUiPackageTarget})
 # 将 Renderer 登记的全部包纳入产品构建. 帧前按实际受光或诊断角色加载对应包.
 set(forwardResourcePaths "")
 get_target_property(iorSpecularPrograms PhysaraRenderer PHYSARA_IOR_SPECULAR_PROGRAMS)
+get_target_property(clearcoatPrograms PhysaraRenderer PHYSARA_CLEARCOAT_PROGRAMS)
 foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth ForwardDisplay StaticForwardPhysical StaticForwardIbl ForwardSky
         DisplayColorGrading DisplayFxaa DisplayScale StaticShadowDepth StaticCascadePreview
         StaticSpotShadowPreview StaticPointShadowPreview StaticForwardShadows StaticForwardPhysicalShadows
@@ -18,7 +19,7 @@ foreach(program StaticForward StaticCoreGBuffer StaticSurfaceAux StaticDepth For
         StaticForwardPlusShadows StaticForwardPlusPhysicalShadows StaticForwardPlusIblShadows
         DeferredLighting DeferredLightingPhysical DeferredLightingIbl DeferredLightingShadows
         DeferredLightingPhysicalShadows DeferredLightingIblShadows SurfaceDepthPreview SurfaceGBufferPreview
-        ${iorSpecularPrograms})
+        ${iorSpecularPrograms} ${clearcoatPrograms})
     get_target_property(${program}Package PhysaraRenderer "PHYSARA_${program}_PACKAGE")
     get_target_property(packageTarget PhysaraRenderer "PHYSARA_${program}_TARGET")
     add_dependencies(Physara ${packageTarget})
@@ -30,10 +31,14 @@ set(iorSpecularResourcePaths "")
 foreach(program IN LISTS iorSpecularPrograms)
     string(APPEND iorSpecularResourcePaths "        ${program}PackageRelative,\n")
 endforeach()
+set(clearcoatResourcePaths "")
+foreach(program IN LISTS clearcoatPrograms)
+    string(APPEND clearcoatResourcePaths "        ${program}PackageRelative,\n")
+endforeach()
 # 每个构建配置生成自己的私有路径头. Resources.cpp 以 Win32 查询到的 exe 目录为基准拼接.
 # CPU 资产根直接使用该 exe 目录, 不把开发机的项目源目录写入产品.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>/RuntimeResources.hpp"
-    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}    inline constexpr const char *IorSpecularPackageRelatives[]{\n${iorSpecularResourcePaths}    };\n}\n")
+    CONTENT "#pragma once\nnamespace Physara::Runtime\n{\n    inline constexpr auto EditorUiPackageRelative = \"$<PATH:RELATIVE_PATH,${editorUiPackage},$<TARGET_FILE_DIR:Physara>>\";\n${forwardResourcePaths}    inline constexpr const char *IorSpecularPackageRelatives[]{\n${iorSpecularResourcePaths}    };\n    inline constexpr const char *ClearcoatPackageRelatives[]{\n${clearcoatResourcePaths}    };\n}\n")
 target_include_directories(Physara PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Private/$<CONFIG>")
 # Runtime 装配开发会话的 Shader 源观察, 编译依赖保持在 Shader 模块中.
 target_link_libraries(Physara PRIVATE PhysaraPlatform PhysaraCore PhysaraAsset PhysaraScene PhysaraEditor PhysaraRenderer

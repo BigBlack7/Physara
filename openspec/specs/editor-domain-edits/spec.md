@@ -143,6 +143,8 @@ Inspector SHALL 按选中实体的固定源版本列出可编辑的源 Primitive
 
 从源 glTF 继承 IOR=0 的材质 SHALL 显示兼容模式，其源 IOR 字段为只读，specular 强度、颜色和纹理可按标准编辑。普通实例 IOR 覆盖 SHALL 使用有限可表示的 `ior >= 1`。声明或编辑扩展字段之后，界面 SHALL 可辨认继承或覆盖、当前准备状态及最后正常接受的着色结果。改变有效材质的编辑 SHALL 沿静态内容版本合同使相关 View 的不兼容历史失效。
 
+Inspector SHALL 为当前 lit metallic-roughness 实例提供 clearcoat 强度、感知粗糙度和独立清漆 normal scale，以及强度、粗糙度、清漆法线三个槽的继承值和稀疏编辑。提交、清除和恢复 SHALL 使用同一个有效材质校验，按目标 Primitive 检查槽用途、UV、切线空间、因子与材质组合。清漆与基底法线的字段和纹理 SHALL 可独立编辑。已声明或覆盖的清漆 SHALL 在 Inspector 中显示对应实际准备状态及最后正常接受的颜色身份。
+
 #### Scenario: Edit and reset one inherited surface field
 - **WHEN** 同一模型被实例化两次，用户在其中一个 Primitive 上写入 roughness 覆盖、清除该字段，然后撤销清除
 - **THEN** 该实例后续被接受的帧先使用覆盖，再使用源 roughness，最后恢复覆盖；该 Primitive 的其它覆盖、另一实例及共享源保持原值
@@ -158,6 +160,14 @@ Inspector SHALL 按选中实体的固定源版本列出可编辑的源 Primitive
 #### Scenario: Inspect compatibility IOR and reject an invalid override
 - **WHEN** 一个源材质使用 IOR=0，随后通过实例编辑尝试改变其 IOR，或者在普通实例上提交显式零 IOR
 - **THEN** 兼容材质显示源模式，越过规则的请求交付定位到字段的原因，现有实例覆盖和有效渲染版本保有原来的资格
+
+#### Scenario: Apply and clear clearcoat on one instance with an existing base profile
+- **WHEN** 两个实例共享固定的无清漆源，用户在一个实例上设置清漆因子和贴图，清除覆盖，随后 Undo 和 Redo
+- **THEN** 该实例的颜色和路由跟随清漆或继承的基底，各次有效内容变更使相关 View 的不兼容历史失效，另一个实例和共享源按自己的材质渲染
+
+#### Scenario: Retain the current clearcoat edit when the target cannot use its normal slot
+- **WHEN** 用户为现有 lit 实例提交使用不可用 UV 或无法取得切线框架的清漆法线覆盖
+- **THEN** 面板定位被拒绝的槽和原因，原来接受的稀疏覆盖、场景修订、历史及可读帧保有资格
 
 ### Requirement: Edit punctual light parameters with explicit units
 
